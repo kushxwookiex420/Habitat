@@ -1,4 +1,4 @@
-name: Habitat Audrey Update Build
+name: Habitat Audrey Full Build
 
 on: [workflow_dispatch]
 
@@ -7,7 +7,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
+      - name: Checkout Habitat
         uses: actions/checkout@v4
 
       - name: Set up Java 17
@@ -19,54 +19,518 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      - name: Extract Habitat
+      - name: Extract Habitat project
+        shell: bash
         run: |
+          set -e
+
           rm -rf habitat-project
           mkdir -p habitat-project
+
           unzip -q Habitat-Android-Project.zip -d habitat-project
 
-      - name: Find Android project
-        run: |
-          GRADLEW=$(find habitat-project -name gradlew -print -quit)
+          echo "Habitat project extracted."
+
+          echo "Searching for Gradle wrapper..."
+          GRADLEW=$(find habitat-project -type f -name gradlew -print -quit)
 
           if [ -z "$GRADLEW" ]; then
-            echo "ERROR: gradlew was not found."
-            echo "Project contents:"
-            find habitat-project -maxdepth 5 -type f | head -100
+            echo "ERROR: No gradlew file found."
+            echo "Project files:"
+            find habitat-project -maxdepth 6 -type f | head -200
             exit 1
           fi
 
           PROJECT_DIR=$(dirname "$GRADLEW")
 
-          echo "Found Gradle wrapper:"
+          echo "Gradle wrapper found:"
           echo "$GRADLEW"
-          echo "Project directory:"
+
+          echo "Android project:"
           echo "$PROJECT_DIR"
 
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
-      - name: Build Habitat Audrey
+      - name: Locate Android app
+        shell: bash
         run: |
-          cd "$PROJECT_DIR"
-          chmod +x gradlew
-          ./gradlew assembleDebug
+          set -e
 
-      - name: Find APK
-        run: |
-          APK=$(find "$PROJECT_DIR" -path "*/build/outputs/apk/debug/app-debug.apk" -print -quit)
+          APP_DIR=$(find "$PROJECT_DIR" -type f -name build.gradle -o -type f -name build.gradle.kts | head -1 | xargs -r dirname)
 
-          if [ -z "$APK" ]; then
-            echo "ERROR: APK was not found."
-            find "$PROJECT_DIR" -type f -name "*.apk"
+          if [ -z "$APP_DIR" ]; then
+            echo "ERROR: Android app module not found."
+            find "$PROJECT_DIR" -maxdepth 5 -type f | head -200
             exit 1
           fi
 
-          echo "APK found:"
+          echo "APP_DIR=$APP_DIR"
+          echo "APP_DIR=$APP_DIR" >> "$GITHUB_ENV"
+
+          MAIN=$(find "$APP_DIR/src/main" -type f -name MainActivity.kt -print -quit)
+
+          if [ -z "$MAIN" ]; then
+            MAIN=$(find "$APP_DIR/src/main" -type f -name MainActivity.java -print -quit)
+          fi
+
+          if [ -z "$MAIN" ]; then
+            echo "ERROR: MainActivity was not found."
+            find "$APP_DIR/src/main" -type f | head -200
+            exit 1
+          fi
+
+          echo "MAIN=$MAIN"
+          echo "MAIN=$MAIN" >> "$GITHUB_ENV"
+
+      - name: Prepare Audrey resources
+        shell: bash
+        run: |
+          set -e
+
+          MAIN_DIR="$APP_DIR/src/main"
+          RES_DIR="$MAIN_DIR/res"
+          DRAWABLE_DIR="$RES_DIR/drawable-nodpi"
+
+          mkdir -p "$DRAWABLE_DIR"
+
+          # Create a fallback Audrey image resource so the build never
+          # fails merely because the artwork has not yet been uploaded.
+          cat > "$DRAWABLE_DIR/lucia.xml" <<'EOF'
+          <vector xmlns:android="http://schemas.android.com/apk/res/android"
+              android:width="1080dp"
+              android:height="1920dp"
+              android:viewportWidth="1080"
+              android:viewportHeight="1920">
+
+              <path
+                  android:fillColor="#10101A"
+                  android:pathData="M0,0 L1080,0 L1080,1920 L0,1920 Z" />
+
+              <path
+                  android:fillColor="#24124A"
+                  android:pathData="M0,250 L1080,0 L1080,850 L0,1100 Z" />
+
+              <path
+                  android:fillColor="#0B5264"
+                  android:pathData="M0,1050 L1080,750 L1080,1920 L0,1920 Z" />
+
+          </vector>
+          EOF
+
+          # If the real Audrey/Lucia artwork exists in the repository,
+          # use it instead of the fallback.
+          if [ -f "lucia.png" ]; then
+            rm -f "$DRAWABLE_DIR/lucia.xml"
+            cp "lucia.png" "$DRAWABLE_DIR/lucia.png"
+            echo "Real Audrey artwork installed."
+          else
+            echo "No lucia.png found; using built-in fallback artwork."
+          fi
+
+      - name: Create Audrey brain
+        shell: bash
+        run: |
+          set -e
+
+          MAIN_DIR="$APP_DIR/src/main"
+          PACKAGE_DIR=$(dirname "$MAIN")
+
+          cat > "$PACKAGE_DIR/AudreyBrain.kt" <<'EOF'
+          package com.habitat.core
+
+          import android.content.Context
+          import org.json.JSONArray
+          import org.json.JSONObject
+
+          class AudreyBrain(private val context: Context) {
+
+              private val prefs =
+                  context.getSharedPreferences("habitat_memory", Context.MODE_PRIVATE)
+
+              fun status(): String {
+                  return "Local memory ready\nBrain adapter ready\nAI backend ready for connection"
+              }
+
+              fun remember(userMessage: String, assistantMessage: String) {
+                  val history = JSONArray(
+                      prefs.getString("conversation_history", "[]")
+                  )
+
+                  val item = JSONObject()
+                  item.put("user", userMessage)
+                  item.put("assistant", assistantMessage)
+                  item.put("time", System.currentTimeMillis())
+
+                  history.put(item)
+
+                  while (history.length() > 50) {
+                      val trimmed = JSONArray()
+
+                      for (i in 1 until history.length()) {
+                          trimmed.put(history.get(i))
+                      }
+
+                      prefs.edit()
+                          .putString(
+                              "conversation_history",
+                              trimmed.toString()
+                          )
+                          .apply()
+
+                      return
+                  }
+
+                  prefs.edit()
+                      .putString(
+                          "conversation_history",
+                          history.toString()
+                      )
+                      .apply()
+              }
+
+              fun respond(message: String): String {
+                  val text = message.lowercase()
+
+                  return when {
+                      text.contains("hello") ||
+                      text.contains("hi") ||
+                      text.contains("hey") ->
+                          "I'm here. Habitat is online."
+
+                      text.contains("status") ->
+                          status()
+
+                      text.contains("remember") ->
+                          "Got it. I'll keep that in Habitat's local memory."
+
+                      text.contains("who are you") ->
+                          "I'm Audrey, the companion interface for Habitat."
+
+                      else ->
+                          "Habitat received your message. My local brain is connected and ready for the AI backend."
+                  }
+              }
+          }
+          EOF
+
+      - name: Build Audrey interface
+        shell: bash
+        run: |
+          set -e
+
+          MAIN_DIR="$APP_DIR/src/main"
+          PACKAGE_DIR=$(dirname "$MAIN")
+
+          # Read the existing package name so this works even if the
+          # original project uses a different package namespace.
+          PACKAGE=$(grep -m1 '^package ' "$MAIN" | sed 's/^package //;s/[[:space:]]*$//')
+
+          if [ -z "$PACKAGE" ]; then
+            echo "ERROR: Could not determine Kotlin package."
+            head -20 "$MAIN"
+            exit 1
+          fi
+
+          echo "Using package: $PACKAGE"
+
+          cat > "$PACKAGE_DIR/AudreyBrain.kt" <<EOF
+          package $PACKAGE
+
+          import android.content.Context
+          import org.json.JSONArray
+          import org.json.JSONObject
+
+          class AudreyBrain(private val context: Context) {
+
+              private val prefs =
+                  context.getSharedPreferences("habitat_memory", Context.MODE_PRIVATE)
+
+              fun status(): String {
+                  return "Local memory ready\\nBrain adapter ready\\nAI backend ready for connection"
+              }
+
+              fun remember(userMessage: String, assistantMessage: String) {
+                  val history = JSONArray(
+                      prefs.getString("conversation_history", "[]")
+                  )
+
+                  val item = JSONObject()
+                  item.put("user", userMessage)
+                  item.put("assistant", assistantMessage)
+                  item.put("time", System.currentTimeMillis())
+
+                  history.put(item)
+
+                  while (history.length() > 50) {
+                      val trimmed = JSONArray()
+
+                      for (i in 1 until history.length()) {
+                          trimmed.put(history.get(i))
+                      }
+
+                      prefs.edit()
+                          .putString(
+                              "conversation_history",
+                              trimmed.toString()
+                          )
+                          .apply()
+
+                      return
+                  }
+
+                  prefs.edit()
+                      .putString(
+                          "conversation_history",
+                          history.toString()
+                      )
+                      .apply()
+              }
+
+              fun respond(message: String): String {
+                  val text = message.lowercase()
+
+                  return when {
+                      text.contains("hello") ||
+                      text.contains("hi") ||
+                      text.contains("hey") ->
+                          "I'm here. Habitat is online."
+
+                      text.contains("status") ->
+                          status()
+
+                      text.contains("remember") ->
+                          "Got it. I'll keep that in Habitat's local memory."
+
+                      text.contains("who are you") ->
+                          "I'm Audrey, the companion interface for Habitat."
+
+                      else ->
+                          "Habitat received your message. My local brain is connected and ready for the AI backend."
+                  }
+              }
+          }
+          EOF
+
+          cat > "$MAIN" <<EOF
+          package $PACKAGE
+
+          import android.app.Activity
+          import android.os.Bundle
+          import android.graphics.Color
+          import android.graphics.Typeface
+          import android.view.Gravity
+          import android.view.View
+          import android.view.Window
+          import android.view.WindowManager
+          import android.view.inputmethod.EditorInfo
+          import android.widget.EditText
+          import android.widget.FrameLayout
+          import android.widget.ImageView
+          import android.widget.LinearLayout
+          import android.widget.TextView
+
+          class MainActivity : Activity() {
+
+              private lateinit var input: EditText
+              private lateinit var chat: TextView
+              private lateinit var brain: AudreyBrain
+
+              override fun onCreate(savedInstanceState: Bundle?) {
+                  super.onCreate(savedInstanceState)
+
+                  brain = AudreyBrain(this)
+
+                  hideSystemUI()
+
+                  val root = FrameLayout(this)
+                  root.setBackgroundColor(Color.BLACK)
+
+                  val artwork = ImageView(this)
+                  artwork.setImageResource(R.drawable.lucia)
+                  artwork.scaleType = ImageView.ScaleType.CENTER_CROP
+
+                  root.addView(
+                      artwork,
+                      FrameLayout.LayoutParams(
+                          FrameLayout.LayoutParams.MATCH_PARENT,
+                          FrameLayout.LayoutParams.MATCH_PARENT
+                      )
+                  )
+
+                  val overlay = LinearLayout(this)
+                  overlay.orientation = LinearLayout.VERTICAL
+                  overlay.setPadding(32, 40, 32, 28)
+                  overlay.gravity = Gravity.BOTTOM
+
+                  val title = TextView(this)
+                  title.text = "AUDREY"
+                  title.textSize = 26f
+                  title.typeface = Typeface.DEFAULT_BOLD
+                  title.setTextColor(Color.WHITE)
+                  title.setPadding(18, 10, 18, 2)
+
+                  val subtitle = TextView(this)
+                  subtitle.text = "HABITAT • PERSONAL AI ENVIRONMENT"
+                  subtitle.textSize = 12f
+                  subtitle.setTextColor(Color.LTGRAY)
+                  subtitle.setPadding(18, 0, 18, 12)
+
+                  chat = TextView(this)
+                  chat.text = "Habitat online.\\n\\n" + brain.status()
+                  chat.textSize = 16f
+                  chat.setTextColor(Color.WHITE)
+                  chat.setPadding(20, 18, 20, 18)
+
+                  input = EditText(this)
+                  input.hint = "Talk to Audrey..."
+                  input.textSize = 16f
+                  input.singleLine = true
+                  input.imeOptions = EditorInfo.IME_ACTION_SEND
+                  input.setTextColor(Color.WHITE)
+                  input.setHintTextColor(Color.LTGRAY)
+                  input.setPadding(22, 0, 22, 0)
+
+                  input.setOnEditorActionListener { _, actionId, _ ->
+                      if (actionId == EditorInfo.IME_ACTION_SEND) {
+                          sendMessage()
+                          true
+                      } else {
+                          false
+                      }
+                  }
+
+                  input.setOnClickListener {
+                      input.imeOptions = EditorInfo.IME_ACTION_SEND
+                  }
+
+                  overlay.addView(title)
+                  overlay.addView(subtitle)
+                  overlay.addView(chat)
+
+                  overlay.addView(
+                      input,
+                      LinearLayout.LayoutParams(
+                          FrameLayout.LayoutParams.MATCH_PARENT,
+                          64
+                      )
+                  )
+
+                  root.addView(
+                      overlay,
+                      FrameLayout.LayoutParams(
+                          FrameLayout.LayoutParams.MATCH_PARENT,
+                          FrameLayout.LayoutParams.WRAP_CONTENT,
+                          Gravity.BOTTOM
+                      )
+                  )
+
+                  setContentView(root)
+              }
+
+              private fun sendMessage() {
+                  val message = input.text.toString().trim()
+
+                  if (message.isEmpty()) return
+
+                  val response = brain.respond(message)
+
+                  chat.text =
+                      "YOU: $message\\n\\nAUDREY: $response"
+
+                  brain.remember(message, response)
+
+                  input.text = ""
+              }
+
+              private fun hideSystemUI() {
+                  window.setFlags(
+                      WindowManager.LayoutParams.FLAG_FULLSCREEN,
+                      WindowManager.LayoutParams.FLAG_FULLSCREEN
+                  )
+
+                  window.decorView.systemUiVisibility =
+                      View.SYSTEM_UI_FLAG_FULLSCREEN or
+                      View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or
+                      View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or
+                      View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or
+                      View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION or
+                      View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+              }
+          }
+          EOF
+
+      - name: Add Internet permission
+        shell: bash
+        run: |
+          set -e
+
+          MANIFEST="$APP_DIR/src/main/AndroidManifest.xml"
+
+          if [ -f "$MANIFEST" ]; then
+
+            if ! grep -q 'android.permission.INTERNET' "$MANIFEST"; then
+              sed -i 's#<manifest #<manifest xmlns:tools="http://schemas.android.com/tools" #' "$MANIFEST" || true
+
+              sed -i '/<manifest/a\
+              <uses-permission android:name="android.permission.INTERNET"/>' "$MANIFEST"
+            fi
+
+          else
+            echo "ERROR: AndroidManifest.xml not found."
+            exit 1
+          fi
+
+      - name: Verify project
+        shell: bash
+        run: |
+          set -e
+
+          echo "Project: $PROJECT_DIR"
+          echo "App: $APP_DIR"
+          echo "MainActivity: $MAIN"
+
+          test -f "$PROJECT_DIR/gradlew"
+          test -f "$MAIN"
+          test -f "$APP_DIR/src/main/AndroidManifest.xml"
+
+          echo "Habitat verification passed."
+
+      - name: Build Habitat Audrey APK
+        shell: bash
+        run: |
+          set -e
+
+          cd "$PROJECT_DIR"
+
+          chmod +x gradlew
+
+          ./gradlew assembleDebug --stacktrace
+
+      - name: Locate APK
+        shell: bash
+        run: |
+          set -e
+
+          APK=$(find "$PROJECT_DIR" \
+            -type f \
+            -name "app-debug.apk" \
+            -print \
+            | head -1)
+
+          if [ -z "$APK" ]; then
+            echo "ERROR: APK was not created."
+            find "$PROJECT_DIR" -type f -name "*.apk" -print
+            exit 1
+          fi
+
+          echo "APK:"
           echo "$APK"
+
           echo "APK_PATH=$APK" >> "$GITHUB_ENV"
 
-      - name: Upload Habitat APK
+      - name: Upload Habitat Audrey APK
         uses: actions/upload-artifact@v4
         with:
-          name: Habitat-Audrey-Update
+          name: Habitat-Audrey-Full-Build
           path: ${{ env.APK_PATH }}
+          if-no-files-found: error
