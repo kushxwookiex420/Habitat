@@ -1,17 +1,17 @@
-name: Habitat Inspect
+name: Habitat Audrey Build
 
 on:
   workflow_dispatch:
 
 jobs:
-  inspect:
+  build:
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Java 17
+      - name: Set up Java
         uses: actions/setup-java@v5
         with:
           distribution: temurin
@@ -27,58 +27,51 @@ jobs:
           mkdir -p extracted
           unzip -o Habitat-Android-Project.zip -d extracted
 
-      - name: Locate Android project
+      - name: Find Android project
         run: |
-          PROJECT_DIR=$(find . -name "settings.gradle.kts" -type f | head -1 | xargs dirname)
+          PROJECT_DIR=$(find extracted -name "settings.gradle.kts" -type f | head -1 | xargs dirname)
 
           if [ -z "$PROJECT_DIR" ]; then
             echo "ERROR: Could not find settings.gradle.kts"
             exit 1
           fi
 
-          echo "Found Android project at:"
-          echo "$PROJECT_DIR"
-
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+          echo "Found project at: $PROJECT_DIR"
 
-      - name: Fix Kotlin source
+      - name: Check MainActivity
         run: |
           MAIN_FILE="$PROJECT_DIR/app/src/main/java/com/habitat/core/MainActivity.kt"
 
           if [ ! -f "$MAIN_FILE" ]; then
-            echo "ERROR: MainActivity.kt not found:"
-            echo "$MAIN_FILE"
+            echo "ERROR: MainActivity.kt not found"
+            find "$PROJECT_DIR/app/src/main/java" -type f -name "*.kt" -print
             exit 1
           fi
 
-          echo "Fixing MainActivity.kt..."
+          echo "MainActivity found:"
+          echo "$MAIN_FILE"
 
-          sed -i 's/\bnow\b/now()/g' "$MAIN_FILE"
+          echo "Checking first 25 lines only:"
+          sed -n '1,25p' "$MAIN_FILE"
 
-          echo "MainActivity.kt fix applied."
-
-      - name: Configure Android project
-        run: |
-          cd "$PROJECT_DIR"
-
-          cat > gradle.properties <<'EOF'
-          org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
-          android.useAndroidX=true
-          kotlin.code.style=official
-          EOF
-
-      - name: Build APK
+      - name: Build Habitat
         run: |
           cd "$PROJECT_DIR"
 
           echo "Building Habitat..."
-          echo "Project directory: $PROJECT_DIR"
+          echo "Project directory: $PWD"
 
           gradle assembleDebug --stacktrace
 
-      - name: Upload APK
+      - name: Find APK
+        run: |
+          echo "Searching for APK..."
+          find "$PROJECT_DIR" -type f -name "*.apk" -print
+
+      - name: Upload Habitat APK
         uses: actions/upload-artifact@v4
         with:
           name: Habitat-Audrey-Debug
-          path: ${{ env.PROJECT_DIR }}/app/build/outputs/apk/debug/app-debug.apk
+          path: "${{ env.PROJECT_DIR }}/app/build/outputs/apk/debug/*.apk"
           if-no-files-found: error
