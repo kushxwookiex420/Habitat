@@ -39,54 +39,50 @@ jobs:
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
           echo "Project: $PROJECT_DIR"
 
-      - name: Repair MainActivity timestamp
+      - name: Fix exact Kotlin timestamp syntax
         run: |
           MAIN_FILE="$PROJECT_DIR/app/src/main/java/com/habitat/core/MainActivity.kt"
 
-          echo "Before repair:"
-          nl -ba "$MAIN_FILE" | sed -n '10,35p'
+          echo "Checking source..."
+
+          grep -n '\[\$now()\]' "$MAIN_FILE" || true
 
           python3 - "$MAIN_FILE" <<'PY'
           import sys
-          import re
 
           path = sys.argv[1]
 
           with open(path, "r", encoding="utf-8") as f:
-              lines = f.readlines()
+              text = f.read()
 
-          # Protect the function declaration.
-          for i, line in enumerate(lines):
-              if "private fun now()" in line:
-                  print("Protected function declaration at line", i + 1)
+          old = '[$now()]'
+          new = '[${now()}]'
 
-          # The compiler identified line 27.
-          # Only repair a bare `now` used as a value on that line.
-          if len(lines) >= 27:
-              line = lines[26]
+          if old not in text:
+              print("ERROR: Expected [$now()] pattern was not found.")
+              sys.exit(1)
 
-              if "private fun now()" not in line:
-                  fixed = re.sub(r'(?<![\w.])now(?!\s*\()', 'now()', line)
-
-                  if fixed != line:
-                      lines[26] = fixed
-                      print("Repaired line 27.")
-                  else:
-                      print("Line 27 did not contain a bare now reference.")
-              else:
-                  print("Line 27 is the function declaration; no change made.")
+          text = text.replace(old, new, 1)
 
           with open(path, "w", encoding="utf-8") as f:
-              f.writelines(lines)
+              f.write(text)
+
+          print("SUCCESS: Changed [$now()] to [${now()}].")
           PY
 
-          echo "After repair:"
-          nl -ba "$MAIN_FILE" | sed -n '10,35p'
+          echo "Verified source:"
+          nl -ba "$MAIN_FILE" | sed -n '24,29p'
 
       - name: Build Habitat
         run: |
           cd "$PROJECT_DIR"
+          echo "Building Habitat..."
           gradle assembleDebug --stacktrace
+
+      - name: Find APK
+        run: |
+          echo "Searching for APK..."
+          find "$PROJECT_DIR" -type f -name "*.apk" -print
 
       - name: Upload Habitat APK
         uses: actions/upload-artifact@v4
