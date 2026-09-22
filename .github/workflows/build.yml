@@ -15,12 +15,12 @@ jobs:
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: '17'
+          java-version: "17"
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: '8.9'
+          gradle-version: "8.9"
 
       - name: Create Habitat Android project
         run: |
@@ -112,8 +112,8 @@ jobs:
 
                   <activity
                       android:name=".MainActivity"
-                      android:screenOrientation="portrait"
                       android:exported="true"
+                      android:screenOrientation="portrait"
                       android:windowSoftInputMode="adjustResize">
 
                       <intent-filter>
@@ -156,7 +156,10 @@ jobs:
           import android.view.Gravity
           import android.view.KeyEvent
           import android.view.View
+          import android.view.ViewGroup.LayoutParams
           import android.view.inputmethod.EditorInfo
+          import android.view.inputmethod.InputMethodManager
+          import android.content.Context
           import android.widget.Button
           import android.widget.EditText
           import android.widget.FrameLayout
@@ -196,7 +199,8 @@ jobs:
                   val root = FrameLayout(this)
                   root.setBackgroundColor(Color.rgb(4, 7, 11))
 
-                  val background = CommandCenterView()
+                  val background = CommandCenterView(this)
+
                   root.addView(
                       background,
                       FrameLayout.LayoutParams(
@@ -209,23 +213,25 @@ jobs:
                   main.orientation = LinearLayout.VERTICAL
                   main.setPadding(18, 18, 18, 12)
 
-                  val mainParams = FrameLayout.LayoutParams(
-                      FrameLayout.LayoutParams.MATCH_PARENT,
-                      FrameLayout.LayoutParams.MATCH_PARENT
+                  root.addView(
+                      main,
+                      FrameLayout.LayoutParams(
+                          FrameLayout.LayoutParams.MATCH_PARENT,
+                          FrameLayout.LayoutParams.MATCH_PARENT
+                      )
                   )
-
-                  root.addView(main, mainParams)
 
                   val header = LinearLayout(this)
                   header.orientation = LinearLayout.HORIZONTAL
                   header.gravity = Gravity.CENTER_VERTICAL
 
-                  val headerParams = LinearLayout.LayoutParams(
-                      LinearLayout.LayoutParams.MATCH_PARENT,
-                      LinearLayout.LayoutParams.WRAP_CONTENT
+                  main.addView(
+                      header,
+                      LinearLayout.LayoutParams(
+                          LinearLayout.LayoutParams.MATCH_PARENT,
+                          LinearLayout.LayoutParams.WRAP_CONTENT
+                      )
                   )
-
-                  main.addView(header, headerParams)
 
                   val title = TextView(this)
                   title.text = "HABITAT"
@@ -275,7 +281,12 @@ jobs:
                   main.addView(subtitle, subtitleParams)
 
                   val core = TextView(this)
-                  core.text = "\n                 ◉\n             AUDREY CORE\n          INTELLIGENCE ACTIVE\n"
+
+                  core.text =
+                      "\n                 ◉\n" +
+                      "             AUDREY CORE\n" +
+                      "          INTELLIGENCE ACTIVE\n"
+
                   core.gravity = Gravity.CENTER
                   core.textSize = 15f
                   core.setTextColor(Color.rgb(100, 230, 255))
@@ -304,11 +315,17 @@ jobs:
                   )
 
                   chatTitleParams.bottomMargin = 6
-                  main.addView(chatTitle, chatTitleParams)
+
+                  main.addView(
+                      chatTitle,
+                      chatTitleParams
+                  )
 
                   scrollView = ScrollView(this)
                   scrollView.isFillViewport = true
-                  scrollView.setBackgroundColor(Color.argb(130, 5, 10, 16))
+                  scrollView.setBackgroundColor(
+                      Color.argb(150, 5, 10, 16)
+                  )
 
                   chatBox = LinearLayout(this)
                   chatBox.orientation = LinearLayout.VERTICAL
@@ -316,9 +333,9 @@ jobs:
 
                   scrollView.addView(
                       chatBox,
-                      ScrollView.LayoutParams(
-                          ScrollView.LayoutParams.MATCH_PARENT,
-                          ScrollView.LayoutParams.WRAP_CONTENT
+                      LayoutParams(
+                          LayoutParams.MATCH_PARENT,
+                          LayoutParams.WRAP_CONTENT
                       )
                   )
 
@@ -328,7 +345,10 @@ jobs:
                       1f
                   )
 
-                  main.addView(scrollView, scrollParams)
+                  main.addView(
+                      scrollView,
+                      scrollParams
+                  )
 
                   addMessage(
                       "AUDREY",
@@ -349,7 +369,10 @@ jobs:
                   talkLabelParams.topMargin = 8
                   talkLabelParams.bottomMargin = 4
 
-                  main.addView(talkLabel, talkLabelParams)
+                  main.addView(
+                      talkLabel,
+                      talkLabelParams
+                  )
 
                   val inputPanel = LinearLayout(this)
                   inputPanel.orientation = LinearLayout.HORIZONTAL
@@ -360,22 +383,40 @@ jobs:
                       LinearLayout.LayoutParams.WRAP_CONTENT
                   )
 
-                  main.addView(inputPanel, inputPanelParams)
+                  main.addView(
+                      inputPanel,
+                      inputPanelParams
+                  )
 
                   input = EditText(this)
 
                   input.setSingleLine(true)
-                  input.imeOptions = EditorInfo.IME_ACTION_SEND
+
+                  input.imeOptions =
+                      EditorInfo.IME_ACTION_SEND
+
                   input.inputType =
                       android.text.InputType.TYPE_CLASS_TEXT or
                       android.text.InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
 
                   input.hint = "Type a message..."
                   input.textSize = 16f
+
                   input.setTextColor(Color.WHITE)
-                  input.setHintTextColor(Color.rgb(110, 125, 140))
-                  input.setPadding(14, 12, 14, 12)
-                  input.setBackgroundColor(Color.rgb(15, 22, 30))
+                  input.setHintTextColor(
+                      Color.rgb(110, 125, 140)
+                  )
+
+                  input.setPadding(
+                      14,
+                      12,
+                      14,
+                      12
+                  )
+
+                  input.setBackgroundColor(
+                      Color.rgb(15, 22, 30)
+                  )
 
                   val inputParams = LinearLayout.LayoutParams(
                       0,
@@ -383,9 +424,13 @@ jobs:
                       1f
                   )
 
-                  inputPanel.addView(input, inputParams)
+                  inputPanel.addView(
+                      input,
+                      inputParams
+                  )
 
                   sendButton = Button(this)
+
                   sendButton.text = "SEND"
                   sendButton.textSize = 12f
                   sendButton.setTextColor(Color.WHITE)
@@ -398,12 +443,19 @@ jobs:
 
                   sendParams.leftMargin = 8
 
-                  inputPanel.addView(sendButton, sendParams)
+                  inputPanel.addView(
+                      sendButton,
+                      sendParams
+                  )
 
                   val enterHint = TextView(this)
+
                   enterHint.text = "ENTER = SEND"
                   enterHint.textSize = 9f
-                  enterHint.setTextColor(Color.rgb(90, 110, 125))
+                  enterHint.setTextColor(
+                      Color.rgb(90, 110, 125)
+                  )
+
                   enterHint.typeface = Typeface.MONOSPACE
 
                   val enterHintParams = LinearLayout.LayoutParams(
@@ -413,7 +465,10 @@ jobs:
 
                   enterHintParams.topMargin = 3
 
-                  main.addView(enterHint, enterHintParams)
+                  main.addView(
+                      enterHint,
+                      enterHintParams
+                  )
 
                   sendButton.setOnClickListener {
                       sendMessage()
@@ -429,9 +484,12 @@ jobs:
                               event.action == KeyEvent.ACTION_DOWN
                           )
                       ) {
+
                           sendMessage()
                           true
+
                       } else {
+
                           false
                       }
                   }
@@ -442,9 +500,12 @@ jobs:
                           keyCode == KeyEvent.KEYCODE_ENTER &&
                           event.action == KeyEvent.ACTION_DOWN
                       ) {
+
                           sendMessage()
                           true
+
                       } else {
+
                           false
                       }
                   }
@@ -454,15 +515,18 @@ jobs:
                   input.requestFocus()
 
                   input.postDelayed({
+
                       val imm =
-                          getSystemService(INPUT_METHOD_SERVICE)
-                              as android.view.inputmethod.InputMethodManager
+                          getSystemService(
+                              Context.INPUT_METHOD_SERVICE
+                          ) as InputMethodManager
 
                       imm.showSoftInput(
                           input,
-                          android.view.inputmethod.InputMethodManager.SHOW_IMPLICIT
+                          InputMethodManager.SHOW_IMPLICIT
                       )
-                  }, 350)
+
+                  }, 500)
               }
 
               private fun addMessage(
@@ -472,11 +536,19 @@ jobs:
 
                   val text = TextView(this)
 
-                  text.text = "$speaker  ›  $message"
+                  text.text =
+                      "$speaker  ›  $message"
+
                   text.textSize = 14f
                   text.setTextColor(Color.WHITE)
                   text.typeface = Typeface.MONOSPACE
-                  text.setPadding(8, 8, 8, 8)
+
+                  text.setPadding(
+                      8,
+                      8,
+                      8,
+                      8
+                  )
 
                   val params = LinearLayout.LayoutParams(
                       LinearLayout.LayoutParams.MATCH_PARENT,
@@ -485,16 +557,22 @@ jobs:
 
                   params.bottomMargin = 4
 
-                  chatBox.addView(text, params)
+                  chatBox.addView(
+                      text,
+                      params
+                  )
 
                   scrollView.post {
-                      scrollView.fullScroll(View.FOCUS_DOWN)
+                      scrollView.fullScroll(
+                          View.FOCUS_DOWN
+                      )
                   }
               }
 
               private fun sendMessage() {
 
-                  val message = input.text.toString().trim()
+                  val message =
+                      input.text.toString().trim()
 
                   if (message.isEmpty()) {
                       return
@@ -502,10 +580,17 @@ jobs:
 
                   input.setText("")
 
-                  addMessage("YOU", message)
+                  addMessage(
+                      "YOU",
+                      message
+                  )
 
-                  statusText.text = "● AUDREY THINKING..."
-                  statusText.setTextColor(Color.rgb(255, 210, 80))
+                  statusText.text =
+                      "● AUDREY THINKING..."
+
+                  statusText.setTextColor(
+                      Color.rgb(255, 210, 80)
+                  )
 
                   sendButton.isEnabled = false
                   input.isEnabled = false
@@ -514,12 +599,15 @@ jobs:
 
                       try {
 
-                          val url = URL(BACKEND_URL)
+                          val url =
+                              URL(BACKEND_URL)
 
                           val connection =
-                              url.openConnection() as HttpURLConnection
+                              url.openConnection()
+                                  as HttpURLConnection
 
                           connection.requestMethod = "POST"
+
                           connection.setRequestProperty(
                               "Content-Type",
                               "application/json"
@@ -536,13 +624,18 @@ jobs:
 
                           val json = JSONObject()
 
-                          json.put("message", message)
+                          json.put(
+                              "message",
+                              message
+                          )
 
                           connection.outputStream.use { output ->
+
                               output.write(
-                                  json.toString().toByteArray(
-                                      Charsets.UTF_8
-                                  )
+                                  json.toString()
+                                      .toByteArray(
+                                          Charsets.UTF_8
+                                      )
                               )
                           }
 
@@ -550,20 +643,30 @@ jobs:
                               connection.responseCode
 
                           val stream =
-                              if (responseCode in 200..299) {
+                              if (
+                                  responseCode in 200..299
+                              ) {
+
                                   connection.inputStream
+
                               } else {
+
                                   connection.errorStream
                               }
 
                           val responseText =
                               if (stream != null) {
+
                                   BufferedReader(
-                                      InputStreamReader(stream)
+                                      InputStreamReader(
+                                          stream
+                                      )
                                   ).use { reader ->
                                       reader.readText()
                                   }
+
                               } else {
+
                                   ""
                               }
 
@@ -574,17 +677,27 @@ jobs:
                               sendButton.isEnabled = true
                               input.isEnabled = true
 
-                              statusText.text = "● AUDREY ONLINE"
+                              statusText.text =
+                                  "● AUDREY ONLINE"
+
                               statusText.setTextColor(
-                                  Color.rgb(80, 255, 180)
+                                  Color.rgb(
+                                      80,
+                                      255,
+                                      180
+                                  )
                               )
 
-                              if (responseCode in 200..299) {
+                              if (
+                                  responseCode in 200..299
+                              ) {
 
                                   try {
 
                                       val response =
-                                          JSONObject(responseText)
+                                          JSONObject(
+                                              responseText
+                                          )
 
                                       val reply =
                                           response.optString(
@@ -597,14 +710,21 @@ jobs:
 
                                       addMessage(
                                           "AUDREY",
-                                          if (reply.isBlank()) {
+                                          if (
+                                              reply.isBlank()
+                                          ) {
+
                                               "I received that, but the backend returned an empty response."
+
                                           } else {
+
                                               reply
                                           }
                                       )
 
-                                  } catch (e: Exception) {
+                                  } catch (
+                                      e: Exception
+                                  ) {
 
                                       addMessage(
                                           "AUDREY",
@@ -623,16 +743,24 @@ jobs:
                               }
                           }
 
-                      } catch (e: Exception) {
+                      } catch (
+                          e: Exception
+                      ) {
 
                           runOnUiThread {
 
                               sendButton.isEnabled = true
                               input.isEnabled = true
 
-                              statusText.text = "● BACKEND ERROR"
+                              statusText.text =
+                                  "● BACKEND ERROR"
+
                               statusText.setTextColor(
-                                  Color.rgb(255, 90, 90)
+                                  Color.rgb(
+                                      255,
+                                      90,
+                                      90
+                                  )
                               )
 
                               addMessage(
@@ -644,26 +772,43 @@ jobs:
                   }
               }
 
-              private inner class CommandCenterView : View(this@MainActivity) {
+              private inner class CommandCenterView(
+                  context: Context
+              ) : View(context) {
 
-                  private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+                  private val paint =
+                      Paint(Paint.ANTI_ALIAS_FLAG)
 
-                  override fun onDraw(canvas: Canvas) {
+                  override fun onDraw(
+                      canvas: Canvas
+                  ) {
 
                       super.onDraw(canvas)
 
-                      val width = width.toFloat()
-                      val height = height.toFloat()
+                      val width =
+                          width.toFloat()
 
-                      paint.style = Paint.Style.STROKE
+                      val height =
+                          height.toFloat()
+
+                      paint.style =
+                          Paint.Style.STROKE
+
                       paint.strokeWidth = 1f
-                      paint.color = Color.rgb(15, 45, 60)
+
+                      paint.color =
+                          Color.rgb(
+                              15,
+                              45,
+                              60
+                          )
 
                       val spacing = 45f
 
                       var x = 0f
 
                       while (x < width) {
+
                           canvas.drawLine(
                               x,
                               0f,
@@ -671,12 +816,14 @@ jobs:
                               height,
                               paint
                           )
+
                           x += spacing
                       }
 
                       var y = 0f
 
                       while (y < height) {
+
                           canvas.drawLine(
                               0f,
                               y,
@@ -684,15 +831,27 @@ jobs:
                               y,
                               paint
                           )
+
                           y += spacing
                       }
 
-                      paint.style = Paint.Style.STROKE
-                      paint.strokeWidth = 3f
-                      paint.color = Color.rgb(20, 120, 150)
+                      paint.style =
+                          Paint.Style.STROKE
 
-                      val centerX = width / 2f
-                      val centerY = height * 0.32f
+                      paint.strokeWidth = 3f
+
+                      paint.color =
+                          Color.rgb(
+                              20,
+                              120,
+                              150
+                          )
+
+                      val centerX =
+                          width / 2f
+
+                      val centerY =
+                          height * 0.32f
 
                       canvas.drawCircle(
                           centerX,
@@ -708,8 +867,15 @@ jobs:
                           paint
                       )
 
-                      paint.style = Paint.Style.FILL
-                      paint.color = Color.rgb(70, 220, 255)
+                      paint.style =
+                          Paint.Style.FILL
+
+                      paint.color =
+                          Color.rgb(
+                              70,
+                              220,
+                              255
+                          )
 
                       canvas.drawCircle(
                           centerX,
@@ -718,7 +884,9 @@ jobs:
                           paint
                       )
 
-                      paint.style = Paint.Style.STROKE
+                      paint.style =
+                          Paint.Style.STROKE
+
                       paint.strokeWidth = 2f
 
                       canvas.drawLine(
@@ -737,7 +905,13 @@ jobs:
                           paint
                       )
 
-                      paint.color = Color.rgb(10, 65, 85)
+                      paint.color =
+                          Color.rgb(
+                              10,
+                              65,
+                              85
+                          )
+
                       paint.strokeWidth = 1f
 
                       canvas.drawRect(
@@ -751,6 +925,11 @@ jobs:
               }
           }
           EOF
+
+      - name: Verify no unresolved bare LayoutParams
+        working-directory: habitat-project/HabitatAndroid
+        run: |
+          grep -n "LayoutParams" app/src/main/java/com/habitat/MainActivity.kt || true
 
       - name: Build APK
         working-directory: habitat-project/HabitatAndroid
