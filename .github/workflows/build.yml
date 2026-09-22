@@ -29,11 +29,9 @@ jobs:
       - name: Fix MainActivity
         run: |
           FILE="habitat-project/HabitatAndroid/app/src/main/java/com/habitat/core/MainActivity.kt"
-          echo "=== BEFORE FIX ==="
-          grep -n "now" "$FILE" || true
-          perl -pi -e 's/\.now(?!\s*\()/\.now()/g' "$FILE"
-          echo "=== AFTER FIX ==="
-          grep -n "now" "$FILE" || true
+          sed -i 's/\$now()/\${now()}/g' "$FILE"
+          echo "=== FIXED LINE ==="
+          sed -n '27p' "$FILE"
 
       - name: Build Habitat APK
         working-directory: habitat-project/HabitatAndroid
