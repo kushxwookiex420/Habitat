@@ -39,7 +39,7 @@ jobs:
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
           echo "Project: $PROJECT_DIR"
 
-      - name: Connect Habitat to Audrey brain
+      - name: Install Audrey Android brain
         run: |
           MAIN_FILE="$PROJECT_DIR/app/src/main/java/com/habitat/core/MainActivity.kt"
           MANIFEST="$PROJECT_DIR/app/src/main/AndroidManifest.xml"
@@ -51,6 +51,8 @@ jobs:
           import android.os.Bundle
           import android.graphics.Color
           import android.view.Gravity
+          import android.view.KeyEvent
+          import android.view.inputmethod.EditorInfo
           import android.widget.Button
           import android.widget.EditText
           import android.widget.LinearLayout
@@ -73,7 +75,10 @@ jobs:
               private val history = mutableListOf<Pair<String, String>>()
 
               private fun now() =
-                  SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(Date())
+                  SimpleDateFormat(
+                      "yyyy-MM-dd HH:mm:ss",
+                      Locale.US
+                  ).format(Date())
 
               override fun onCreate(savedInstanceState: Bundle?) {
                   super.onCreate(savedInstanceState)
@@ -105,6 +110,11 @@ jobs:
                       setHintTextColor(Color.GRAY)
                       setTextColor(Color.WHITE)
                       setSingleLine(false)
+                      imeOptions = EditorInfo.IME_ACTION_SEND
+                      inputType =
+                          android.text.InputType.TYPE_CLASS_TEXT or
+                          android.text.InputType.TYPE_TEXT_FLAG_CAP_SENTENCES or
+                          android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE
                       setBackgroundColor(Color.rgb(25, 27, 35))
                       setPadding(20, 18, 20, 18)
                   }
@@ -113,19 +123,120 @@ jobs:
                       text = "SEND"
                   }
 
+                  val sendMessage = {
+                      val msg = input.text.toString().trim()
+
+                      if (msg.isNotEmpty()) {
+                          input.text.clear()
+                          send.isEnabled = false
+                          status.text = "● AUDREY THINKING..."
+                          status.setTextColor(
+                              Color.rgb(255, 210, 90)
+                          )
+
+                          log.text =
+                              "${log.text}\n[${now()}] YOU: $msg\nAudrey: Thinking..."
+
+                          thread {
+                              val result = askAudrey(msg)
+
+                              runOnUiThread {
+                                  send.isEnabled = true
+
+                                  if (result.startsWith("ERROR:")) {
+                                      status.text =
+                                          "● BRAIN CONNECTION ERROR"
+
+                                      status.setTextColor(
+                                          Color.rgb(255, 100, 100)
+                                      )
+
+                                      log.text =
+                                          "${log.text}\nAudrey: $result\n"
+                                  } else {
+                                      status.text =
+                                          "● AUDREY BRAIN ONLINE"
+
+                                      status.setTextColor(
+                                          Color.rgb(100, 220, 150)
+                                      )
+
+                                      history.add(msg to result)
+
+                                      log.text =
+                                          "${log.text}\nAudrey: $result\n"
+                                  }
+
+                                  val imm =
+                                      getSystemService(
+                                          Context.INPUT_METHOD_SERVICE
+                                      ) as InputMethodManager
+
+                                  imm.hideSoftInputFromWindow(
+                                      input.windowToken,
+                                      0
+                                  )
+                              }
+                          }
+                      }
+                  }
+
+                  send.setOnClickListener {
+                      sendMessage()
+                  }
+
+                  input.setOnEditorActionListener {
+                      _,
+                      actionId,
+                      event ->
+
+                      val enterPressed =
+                          event != null &&
+                          event.keyCode == KeyEvent.KEYCODE_ENTER &&
+                          event.action == KeyEvent.ACTION_DOWN
+
+                      if (
+                          actionId == EditorInfo.IME_ACTION_SEND ||
+                          enterPressed
+                      ) {
+                          sendMessage()
+                          true
+                      } else {
+                          false
+                      }
+                  }
+
                   log = TextView(this).apply {
-                      text = "Ready. Human authority: ACTIVE\n"
+                      text =
+                          "Ready. Human authority: ACTIVE\n"
+
                       textSize = 14f
                       setTextColor(Color.LTGRAY)
                       setPadding(0, 24, 0, 0)
                   }
 
-                  val row = LinearLayout(this).apply {
-                      orientation = LinearLayout.HORIZONTAL
+                  val row =
+                      LinearLayout(this).apply {
+                          orientation =
+                              LinearLayout.HORIZONTAL
                   }
 
-                  row.addView(input, LinearLayout.LayoutParams(0, 120, 1f))
-                  row.addView(send, LinearLayout.LayoutParams(130, 120))
+                  row.addView(
+                      input,
+                      LinearLayout.LayoutParams(
+                          0,
+                          120,
+                          1f
+                      )
+                  )
+
+                  row.addView(
+                      send,
+                      LinearLayout.LayoutParams(
+                          130,
+                          120
+                      )
+                  )
 
                   root.addView(title)
                   root.addView(status)
@@ -133,110 +244,111 @@ jobs:
                   root.addView(log)
 
                   setContentView(root)
-
-                  send.setOnClickListener {
-                      val msg = input.text.toString().trim()
-
-                      if (msg.isEmpty()) return@setOnClickListener
-
-                      input.text.clear()
-                      send.isEnabled = false
-                      status.text = "● AUDREY THINKING..."
-                      status.setTextColor(Color.rgb(255, 210, 90))
-
-                      log.text =
-                          "${log.text}\n[${now()}] YOU: $msg\nAudrey: Thinking..."
-
-                      thread {
-                          val result = askAudrey(msg)
-
-                          runOnUiThread {
-                              send.isEnabled = true
-
-                              if (result.startsWith("ERROR:")) {
-                                  status.text = "● BRAIN CONNECTION ERROR"
-                                  status.setTextColor(Color.rgb(255, 100, 100))
-                                  log.text =
-                                      "${log.text}\nAudrey: $result\n"
-                              } else {
-                                  status.text = "● AUDREY BRAIN ONLINE"
-                                  status.setTextColor(Color.rgb(100, 220, 150))
-
-                                  history.add(msg to result)
-
-                                  log.text =
-                                      "${log.text}\nAudrey: $result\n"
-                              }
-
-                              val imm =
-                                  getSystemService(Context.INPUT_METHOD_SERVICE)
-                                      as InputMethodManager
-
-                              imm.hideSoftInputFromWindow(input.windowToken, 0)
-                          }
-                      }
-                  }
               }
 
-              private fun askAudrey(message: String): String {
+              private fun askAudrey(
+                  message: String
+              ): String {
+
                   return try {
+
                       val url =
-                          URL("https://habitat-cr46.onrender.com/chat")
+                          URL(
+                              "https://habitat-cr46.onrender.com/chat"
+                          )
 
                       val connection =
-                          url.openConnection() as HttpURLConnection
+                          url.openConnection()
+                              as HttpURLConnection
 
                       connection.requestMethod = "POST"
                       connection.connectTimeout = 20000
                       connection.readTimeout = 60000
                       connection.doOutput = true
+
                       connection.setRequestProperty(
                           "Content-Type",
                           "application/json"
                       )
+
                       connection.setRequestProperty(
                           "Accept",
                           "application/json"
                       )
 
-                      val historyJson = JSONArray()
+                      val historyJson =
+                          JSONArray()
 
                       history.takeLast(20).forEach { pair ->
+
                           val item = JSONObject()
-                          item.put("user", pair.first)
-                          item.put("assistant", pair.second)
+
+                          item.put(
+                              "user",
+                              pair.first
+                          )
+
+                          item.put(
+                              "assistant",
+                              pair.second
+                          )
+
                           historyJson.put(item)
                       }
 
-                      val body = JSONObject()
-                      body.put("message", message)
-                      body.put("history", historyJson)
+                      val body =
+                          JSONObject()
+
+                      body.put(
+                          "message",
+                          message
+                      )
+
+                      body.put(
+                          "history",
+                          historyJson
+                      )
 
                       connection.outputStream.use { output ->
+
                           output.write(
-                              body.toString().toByteArray(Charsets.UTF_8)
+                              body.toString()
+                                  .toByteArray(
+                                      Charsets.UTF_8
+                                  )
                           )
                       }
 
-                      val responseCode = connection.responseCode
+                      val responseCode =
+                          connection.responseCode
 
                       val stream =
-                          if (responseCode in 200..299) {
+                          if (
+                              responseCode in 200..299
+                          ) {
                               connection.inputStream
                           } else {
                               connection.errorStream
                           }
 
                       val responseText =
-                          stream?.bufferedReader()?.use { it.readText() } ?: ""
+                          stream
+                              ?.bufferedReader()
+                              ?.use {
+                                  it.readText()
+                              }
+                              ?: ""
 
                       connection.disconnect()
 
-                      if (responseCode !in 200..299) {
+                      if (
+                          responseCode !in 200..299
+                      ) {
                           return "ERROR: Brain returned HTTP $responseCode"
                       }
 
-                      val json = JSONObject(responseText)
+                      val json =
+                          JSONObject(responseText)
 
                       json.optString(
                           "response",
@@ -244,7 +356,11 @@ jobs:
                       )
 
                   } catch (e: Exception) {
-                      "ERROR: ${e.message ?: "Unable to reach Habitat brain."}"
+
+                      "ERROR: ${
+                          e.message
+                              ?: "Unable to reach Habitat brain."
+                      }"
                   }
               }
           }
@@ -262,8 +378,13 @@ jobs:
 
           if permission not in text:
               marker = '<application'
+
               if marker in text:
-                  text = text.replace(marker, permission + '\n\n    ' + marker, 1)
+                  text = text.replace(
+                      marker,
+                      permission + '\n\n    ' + marker,
+                      1
+                  )
               else:
                   text = text.replace(
                       '<manifest',
@@ -277,24 +398,19 @@ jobs:
           print("SUCCESS: Internet permission enabled.")
           PY
 
-          echo "Audrey Android source installed."
-          echo "Manifest permission verified."
-          nl -ba "$MAIN_FILE" | sed -n '1,25p'
-
       - name: Build Habitat
         run: |
           cd "$PROJECT_DIR"
-          echo "Building Habitat with Audrey brain connection..."
+          echo "Building Habitat..."
           gradle assembleDebug --stacktrace
 
       - name: Find APK
         run: |
-          echo "Searching for APK..."
           find "$PROJECT_DIR" -type f -name "*.apk" -print
 
       - name: Upload Habitat APK
         uses: actions/upload-artifact@v4
         with:
-          name: Habitat-Audrey-Brain-Debug
+          name: Habitat-Audrey-Enter-Send
           path: "${{ env.PROJECT_DIR }}/app/build/outputs/apk/debug/*.apk"
           if-no-files-found: error
