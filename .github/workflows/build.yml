@@ -189,9 +189,11 @@ jobs:
           import android.graphics.Paint
           import android.graphics.Typeface
           import android.view.Gravity
+          import android.view.KeyEvent
           import android.view.View
           import android.view.WindowManager
           import android.view.inputmethod.EditorInfo
+          import android.widget.Button
           import android.widget.EditText
           import android.widget.FrameLayout
           import android.widget.LinearLayout
@@ -363,7 +365,7 @@ jobs:
                   )
 
                   /*
-                   * Audrey interface silhouette
+                   * Temporary Audrey display
                    */
 
                   paint.style =
@@ -496,18 +498,13 @@ jobs:
 
           class MainActivity : Activity() {
 
-              private lateinit var brain:
-                  AudreyBrain
+              private lateinit var brain: AudreyBrain
 
-              private lateinit var chat:
-                  TextView
+              private lateinit var chat: TextView
 
-              private lateinit var input:
-                  EditText
+              private lateinit var input: EditText
 
-              /*
-               * Audrey's secure backend.
-               */
+              private lateinit var sendButton: Button
 
               private val BACKEND_URL =
                   "https://habitat-cr46.onrender.com/chat"
@@ -551,7 +548,7 @@ jobs:
 
                   panel.setBackgroundColor(
                       Color.argb(
-                          190,
+                          205,
                           4,
                           7,
                           18
@@ -637,6 +634,35 @@ jobs:
                       0
                   )
 
+                  sendButton =
+                      Button(this)
+
+                  sendButton.text =
+                      "SEND"
+
+                  sendButton.textSize =
+                      13f
+
+                  sendButton.setTextColor(
+                      Color.WHITE
+                  )
+
+                  sendButton.setBackgroundColor(
+                      Color.rgb(
+                          20,
+                          100,
+                          140
+                      )
+                  )
+
+                  sendButton.setOnClickListener {
+                      sendMessage()
+                  }
+
+                  /*
+                   * Samsung keyboard SEND action.
+                   */
+
                   input.setOnEditorActionListener {
                       _, actionId, _ ->
 
@@ -655,22 +681,85 @@ jobs:
                       }
                   }
 
-                  panel.addView(title)
-                  panel.addView(status)
-                  panel.addView(chat)
+                  /*
+                   * Physical/keyboard ENTER key.
+                   */
+
+                  input.setOnKeyListener {
+                      _, keyCode, event ->
+
+                      if (
+                          keyCode ==
+                          KeyEvent.KEYCODE_ENTER &&
+                          event.action ==
+                          KeyEvent.ACTION_DOWN
+                      ) {
+
+                          sendMessage()
+
+                          true
+
+                      } else {
+
+                          false
+                      }
+                  }
 
                   panel.addView(
-                      input,
+                      title
+                  )
+
+                  panel.addView(
+                      status
+                  )
+
+                  panel.addView(
+                      chat
+                  )
+
+                  val inputRow =
+                      LinearLayout(this)
+
+                  inputRow.orientation =
+                      LinearLayout.HORIZONTAL
+
+                  inputRow.gravity =
+                      Gravity.CENTER_VERTICAL
+
+                  val inputParams =
                       LinearLayout.LayoutParams(
-                          LinearLayout.LayoutParams.MATCH_PARENT,
+                          0,
+                          70,
+                          1f
+                      )
+
+                  inputRow.addView(
+                      input,
+                      inputParams
+                  )
+
+                  val buttonParams =
+                      LinearLayout.LayoutParams(
+                          120,
                           70
                       )
+
+                  buttonParams.leftMargin =
+                      12
+
+                  inputRow.addView(
+                      sendButton,
+                      buttonParams
+                  )
+
+                  panel.addView(
+                      inputRow
                   )
 
                   val params =
                       FrameLayout.LayoutParams(
                           FrameLayout.LayoutParams.MATCH_PARENT,
-                          440
+                          460
                       )
 
                   params.gravity =
@@ -681,7 +770,9 @@ jobs:
                       params
                   )
 
-                  setContentView(root)
+                  setContentView(
+                      root
+                  )
               }
 
               private fun sendMessage() {
@@ -691,7 +782,9 @@ jobs:
                           .toString()
                           .trim()
 
-                  if (message.isEmpty()) {
+                  if (
+                      message.isEmpty()
+                  ) {
                       return
                   }
 
@@ -703,9 +796,12 @@ jobs:
 
                   thread {
 
+                      var connection:
+                          HttpURLConnection? = null
+
                       try {
 
-                          val connection =
+                          connection =
                               URL(
                                   BACKEND_URL
                               ).openConnection()
@@ -722,6 +818,11 @@ jobs:
 
                           connection.setRequestProperty(
                               "Content-Type",
+                              "application/json"
+                          )
+
+                          connection.setRequestProperty(
+                              "Accept",
                               "application/json"
                           )
 
@@ -745,16 +846,40 @@ jobs:
                               .use {
                                   it.write(
                                       body.toString()
-                                          .toByteArray()
+                                          .toByteArray(
+                                              Charsets.UTF_8
+                                          )
                                   )
                               }
 
+                          val responseCode =
+                              connection.responseCode
+
+                          val stream =
+                              if (
+                                  responseCode in 200..299
+                              ) {
+                                  connection.inputStream
+                              } else {
+                                  connection.errorStream
+                              }
+
                           val responseText =
-                              connection.inputStream
-                                  .bufferedReader()
-                                  .use {
+                              stream
+                                  ?.bufferedReader()
+                                  ?.use {
                                       it.readText()
                                   }
+                                  ?: ""
+
+                          if (
+                              responseCode !in 200..299
+                          ) {
+
+                              throw Exception(
+                                  "Server HTTP $responseCode: $responseText"
+                              )
+                          }
 
                           val json =
                               JSONObject(
@@ -764,8 +889,17 @@ jobs:
                           val answer =
                               json.optString(
                                   "response",
-                                  "No response received."
+                                  ""
                               )
+
+                          if (
+                              answer.isBlank()
+                          ) {
+
+                              throw Exception(
+                                  "Server returned no response."
+                              )
+                          }
 
                           brain.remember(
                               message,
@@ -779,7 +913,9 @@ jobs:
                                   "AUDREY:\n$answer"
                           }
 
-                      } catch (error: Exception) {
+                      } catch (
+                          error: Exception
+                      ) {
 
                           val fallback =
                               brain.localResponse(
@@ -796,8 +932,16 @@ jobs:
                               chat.text =
                                   "YOU:\n$message\n\n" +
                                   "AUDREY:\n$fallback\n\n" +
-                                  "AI BACKEND CONNECTION ERROR"
+                                  "CONNECTION ERROR:\n" +
+                                  (
+                                      error.message
+                                          ?: "Unknown error"
+                                  )
                           }
+
+                      } finally {
+
+                          connection?.disconnect()
                       }
                   }
               }
@@ -832,7 +976,7 @@ jobs:
           cat > habitat-backend/package.json <<'EOF'
           {
             "name": "habitat-audrey-backend",
-            "version": "0.5.1",
+            "version": "0.5.2",
             "private": true,
             "type": "module",
             "scripts": {
@@ -895,7 +1039,8 @@ jobs:
                 brain: "ready",
                 backend: "ready",
                 apiKeyConfigured:
-                  Boolean(apiKey)
+                  Boolean(apiKey),
+                model
               });
 
             }
@@ -905,9 +1050,17 @@ jobs:
             "/chat",
             async (req, res) => {
 
+              console.log(
+                "CHAT REQUEST RECEIVED"
+              );
+
               try {
 
                 if (!apiKey) {
+
+                  console.error(
+                    "OPENAI_API_KEY missing"
+                  );
 
                   return res.status(500).json({
                     error:
@@ -929,6 +1082,11 @@ jobs:
                   });
 
                 }
+
+                console.log(
+                  "User message:",
+                  message
+                );
 
                 const history =
                   Array.isArray(
@@ -964,17 +1122,27 @@ jobs:
                     input
                   });
 
+                const answer =
+                  response.output_text;
+
+                console.log(
+                  "AI RESPONSE RECEIVED"
+                );
+
                 res.json({
-                  response:
-                    response.output_text
+                  response: answer
                 });
 
               } catch (error) {
 
-                console.error(error);
+                console.error(
+                  "AI ERROR:",
+                  error
+                );
 
                 res.status(500).json({
                   error:
+                    error?.message ||
                     "AI backend error"
                 });
 
@@ -1008,6 +1176,8 @@ jobs:
           echo "Local memory: READY"
           echo "Brain adapter: READY"
           echo "AI backend URL: CONFIGURED"
+          echo "Send button: READY"
+          echo "Keyboard Enter: READY"
           echo "Command center: READY"
           echo "====================================="
 
@@ -1043,6 +1213,6 @@ jobs:
       - name: Upload Habitat APK
         uses: actions/upload-artifact@v4
         with:
-          name: Habitat-Audrey-v0.5.1
+          name: Habitat-Audrey-v0.5.2
           path: ${{ env.APK_PATH }}
           if-no-files-found: error
