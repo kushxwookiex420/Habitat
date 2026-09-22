@@ -1,6 +1,7 @@
-name: Habitat Audrey Full Build
+name: Habitat Audrey AI Build
 
-on: [workflow_dispatch]
+on:
+  workflow_dispatch:
 
 jobs:
   build:
@@ -28,6 +29,7 @@ jobs:
 
           rm -rf habitat-project
           mkdir -p habitat-project
+
           unzip -q Habitat-Android-Project.zip -d habitat-project
 
           PROJECT_DIR="habitat-project/HabitatAndroid"
@@ -42,7 +44,7 @@ jobs:
           echo "APP_DIR=$APP_DIR" >> "$GITHUB_ENV"
           echo "MAIN_DIR=$MAIN_DIR" >> "$GITHUB_ENV"
 
-      - name: Detect MainActivity
+      - name: Detect Android package
         shell: bash
         run: |
           set -e
@@ -61,43 +63,18 @@ jobs:
           echo "PACKAGE=$PACKAGE" >> "$GITHUB_ENV"
           echo "PACKAGE_DIR=$PACKAGE_DIR" >> "$GITHUB_ENV"
 
-          echo "Package: $PACKAGE"
+          echo "Android package: $PACKAGE"
 
-      - name: Prepare Audrey artwork
+      - name: Add Internet permission
         shell: bash
         run: |
           set -e
 
-          DRAWABLE_DIR="$MAIN_DIR/res/drawable-nodpi"
-          mkdir -p "$DRAWABLE_DIR"
+          MANIFEST="$MAIN_DIR/AndroidManifest.xml"
 
-          if [ -f "lucia.png" ]; then
-            cp "lucia.png" "$DRAWABLE_DIR/lucia.png"
-            echo "Audrey artwork installed."
-          else
-            echo "No lucia.png found. Creating fallback artwork."
-
-            cat > "$DRAWABLE_DIR/lucia.xml" <<'EOF'
-          <vector xmlns:android="http://schemas.android.com/apk/res/android"
-              android:width="1080dp"
-              android:height="1920dp"
-              android:viewportWidth="1080"
-              android:viewportHeight="1920">
-
-              <path
-                  android:fillColor="#090914"
-                  android:pathData="M0,0 L1080,0 L1080,1920 L0,1920 Z"/>
-
-              <path
-                  android:fillColor="#24124A"
-                  android:pathData="M0,300 L1080,0 L1080,850 L0,1150 Z"/>
-
-              <path
-                  android:fillColor="#083C52"
-                  android:pathData="M0,1100 L1080,800 L1080,1920 L0,1920 Z"/>
-
-          </vector>
-          EOF
+          if ! grep -q "android.permission.INTERNET" "$MANIFEST"; then
+            sed -i '/<manifest/a\
+            <uses-permission android:name="android.permission.INTERNET"/>' "$MANIFEST"
           fi
 
       - name: Create Audrey brain
@@ -105,8 +82,8 @@ jobs:
         run: |
           set -e
 
-          cat > "$PACKAGE_DIR/AudreyBrain.kt" <<EOF
-          package $PACKAGE
+          cat > "$PACKAGE_DIR/AudreyBrain.kt" <<'EOF'
+          __PACKAGE__
 
           import android.content.Context
           import org.json.JSONArray
@@ -115,53 +92,64 @@ jobs:
           class AudreyBrain(private val context: Context) {
 
               private val prefs =
-                  context.getSharedPreferences("habitat_memory", Context.MODE_PRIVATE)
+                  context.getSharedPreferences(
+                      "habitat_memory",
+                      Context.MODE_PRIVATE
+                  )
 
               fun status(): String {
-                  return "Local memory ready\\nBrain adapter ready\\nAI backend ready for connection"
+                  return "LOCAL MEMORY: READY\n" +
+                         "BRAIN ADAPTER: READY\n" +
+                         "AI BACKEND: READY FOR CONNECTION"
               }
 
-              fun remember(userMessage: String, assistantMessage: String) {
+              fun remember(user: String, assistant: String) {
+
                   val history = JSONArray(
-                      prefs.getString("conversation_history", "[]")
+                      prefs.getString(
+                          "history",
+                          "[]"
+                      )
                   )
 
                   val item = JSONObject()
-                  item.put("user", userMessage)
-                  item.put("assistant", assistantMessage)
-                  item.put("time", System.currentTimeMillis())
+
+                  item.put("user", user)
+                  item.put("assistant", assistant)
+                  item.put(
+                      "time",
+                      System.currentTimeMillis()
+                  )
 
                   history.put(item)
 
-                  while (history.length() > 50) {
-                      val trimmed = JSONArray()
-
-                      for (i in 1 until history.length()) {
-                          trimmed.put(history.get(i))
-                      }
-
-                      prefs.edit()
-                          .putString(
-                              "conversation_history",
-                              trimmed.toString()
-                          )
-                          .apply()
-
-                      return
+                  while (history.length() > 100) {
+                      history.remove(0)
                   }
 
                   prefs.edit()
                       .putString(
-                          "conversation_history",
+                          "history",
                           history.toString()
                       )
                       .apply()
               }
 
-              fun respond(message: String): String {
+              fun getHistory(): JSONArray {
+                  return JSONArray(
+                      prefs.getString(
+                          "history",
+                          "[]"
+                      )
+                  )
+              }
+
+              fun localResponse(message: String): String {
+
                   val text = message.lowercase()
 
                   return when {
+
                       text.contains("hello") ||
                       text.contains("hi") ||
                       text.contains("hey") ->
@@ -171,105 +159,405 @@ jobs:
                           status()
 
                       text.contains("remember") ->
-                          "Got it. I'll keep that in Habitat's local memory."
+                          "I'll keep that in Habitat's local memory."
 
                       text.contains("who are you") ->
-                          "I'm Audrey, the companion interface for Habitat."
+                          "I'm Audrey — the companion interface for Habitat."
 
                       else ->
-                          "Habitat received your message. My local brain is connected and ready for the AI backend."
+                          "Habitat received your message. " +
+                          "The AI backend is ready to be connected."
                   }
               }
           }
           EOF
 
-      - name: Create Audrey interface
+          sed -i "s#__PACKAGE__#package $PACKAGE#" \
+            "$PACKAGE_DIR/AudreyBrain.kt"
+
+      - name: Create futuristic Habitat interface
         shell: bash
         run: |
           set -e
 
-          cat > "$MAIN" <<EOF
-          package $PACKAGE
+          cat > "$MAIN" <<'EOF'
+          __PACKAGE__
 
           import android.app.Activity
           import android.os.Bundle
+          import android.graphics.Canvas
           import android.graphics.Color
+          import android.graphics.Paint
           import android.graphics.Typeface
-          import android.text.InputType
           import android.view.Gravity
           import android.view.View
           import android.view.WindowManager
           import android.view.inputmethod.EditorInfo
           import android.widget.EditText
           import android.widget.FrameLayout
-          import android.widget.ImageView
           import android.widget.LinearLayout
           import android.widget.TextView
+          import android.widget.Toast
+          import java.net.HttpURLConnection
+          import java.net.URL
+          import kotlin.concurrent.thread
+
+          class HabitatScene(context: android.content.Context) :
+              View(context) {
+
+              private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+
+              override fun onDraw(canvas: Canvas) {
+                  super.onDraw(canvas)
+
+                  val w = width.toFloat()
+                  val h = height.toFloat()
+
+                  canvas.drawColor(Color.rgb(5, 7, 18))
+
+                  // Neon atmospheric panels
+                  paint.color = Color.rgb(15, 28, 55)
+                  canvas.drawRect(0f, 0f, w, h * .52f, paint)
+
+                  paint.color = Color.rgb(8, 15, 30)
+                  canvas.drawRect(0f, h * .52f, w, h, paint)
+
+                  // City lights
+                  paint.color = Color.rgb(35, 90, 150)
+
+                  var x = 20f
+
+                  while (x < w) {
+                      val buildingWidth = 45f
+                      val buildingHeight =
+                          80f + ((x * 7) % 210f)
+
+                      canvas.drawRect(
+                          x,
+                          h * .48f - buildingHeight,
+                          x + buildingWidth,
+                          h * .48f,
+                          paint
+                      )
+
+                      x += 60f
+                  }
+
+                  // Horizon glow
+                  paint.color = Color.rgb(40, 160, 210)
+                  canvas.drawRect(
+                      0f,
+                      h * .48f,
+                      w,
+                      h * .485f,
+                      paint
+                  )
+
+                  // Desk
+                  paint.color = Color.rgb(22, 24, 34)
+
+                  canvas.drawRect(
+                      w * .08f,
+                      h * .70f,
+                      w * .92f,
+                      h * .74f,
+                      paint
+                  )
+
+                  paint.color = Color.rgb(15, 17, 25)
+
+                  canvas.drawRect(
+                      w * .13f,
+                      h * .74f,
+                      w * .18f,
+                      h,
+                      paint
+                  )
+
+                  canvas.drawRect(
+                      w * .82f,
+                      h * .74f,
+                      w * .87f,
+                      h,
+                      paint
+                  )
+
+                  // Holographic screen
+                  paint.color = Color.argb(
+                      80,
+                      40,
+                      200,
+                      255
+                  )
+
+                  canvas.drawRect(
+                      w * .25f,
+                      h * .30f,
+                      w * .75f,
+                      h * .58f,
+                      paint
+                  )
+
+                  paint.style = Paint.Style.STROKE
+                  paint.strokeWidth = 3f
+                  paint.color = Color.rgb(70, 220, 255)
+
+                  canvas.drawRect(
+                      w * .25f,
+                      h * .30f,
+                      w * .75f,
+                      h * .58f,
+                      paint
+                  )
+
+                  // Audrey silhouette / companion station
+                  paint.style = Paint.Style.FILL
+                  paint.color = Color.rgb(18, 20, 32)
+
+                  canvas.drawCircle(
+                      w * .50f,
+                      h * .52f,
+                      w * .075f,
+                      paint
+                  )
+
+                  canvas.drawRoundRect(
+                      w * .43f,
+                      h * .57f,
+                      w * .57f,
+                      h * .72f,
+                      40f,
+                      40f,
+                      paint
+                  )
+
+                  // Neon HUD lines
+                  paint.color = Color.rgb(70, 220, 255)
+
+                  for (i in 0..5) {
+                      val yy =
+                          h * .12f + i * 42f
+
+                      canvas.drawRect(
+                          w * .06f,
+                          yy,
+                          w * .06f + 130f,
+                          yy + 3f,
+                          paint
+                      )
+                  }
+
+                  for (i in 0..4) {
+                      val yy =
+                          h * .18f + i * 52f
+
+                      canvas.drawRect(
+                          w * .77f,
+                          yy,
+                          w * .94f,
+                          yy + 3f,
+                          paint
+                      )
+                  }
+
+                  paint.color = Color.WHITE
+                  paint.textSize = 28f
+                  paint.typeface = Typeface.DEFAULT_BOLD
+
+                  canvas.drawText(
+                      "HABITAT",
+                      w * .06f,
+                      h * .10f,
+                      paint
+                  )
+
+                  paint.textSize = 14f
+                  paint.typeface = Typeface.DEFAULT
+
+                  canvas.drawText(
+                      "AUDREY // COMMAND CENTER",
+                      w * .06f,
+                      h * .125f,
+                      paint
+                  )
+
+                  paint.color = Color.rgb(70, 220, 255)
+                  paint.textSize = 13f
+
+                  canvas.drawText(
+                      "BRAIN ONLINE",
+                      w * .78f,
+                      h * .10f,
+                      paint
+                  )
+
+                  canvas.drawText(
+                      "MEMORY ONLINE",
+                      w * .78f,
+                      h * .125f,
+                      paint
+                  )
+
+                  canvas.drawText(
+                      "AI LINK READY",
+                      w * .78f,
+                      h * .15f,
+                      paint
+                  )
+
+                  paint.style = Paint.Style.FILL
+              }
+          }
 
           class MainActivity : Activity() {
 
-              private lateinit var input: EditText
-              private lateinit var chat: TextView
               private lateinit var brain: AudreyBrain
+              private lateinit var chat: TextView
+              private lateinit var input: EditText
 
-              override fun onCreate(savedInstanceState: Bundle?) {
+              /*
+               * IMPORTANT:
+               * Do NOT put an OpenAI API key here.
+               *
+               * This URL is intentionally blank until the
+               * secure Habitat backend is deployed.
+               */
+              private val BACKEND_URL = ""
+
+              override fun onCreate(
+                  savedInstanceState: Bundle?
+              ) {
                   super.onCreate(savedInstanceState)
 
                   brain = AudreyBrain(this)
 
                   hideSystemUI()
 
-                  val root = FrameLayout(this)
-                  root.setBackgroundColor(Color.BLACK)
+                  val root =
+                      FrameLayout(this)
 
-                  val artwork = ImageView(this)
-                  artwork.setImageResource(R.drawable.lucia)
-                  artwork.scaleType = ImageView.ScaleType.CENTER_CROP
+                  val scene =
+                      HabitatScene(this)
 
                   root.addView(
-                      artwork,
+                      scene,
                       FrameLayout.LayoutParams(
                           FrameLayout.LayoutParams.MATCH_PARENT,
                           FrameLayout.LayoutParams.MATCH_PARENT
                       )
                   )
 
-                  val overlay = LinearLayout(this)
-                  overlay.orientation = LinearLayout.VERTICAL
-                  overlay.setPadding(32, 40, 32, 28)
-                  overlay.gravity = Gravity.BOTTOM
+                  val panel =
+                      LinearLayout(this)
 
-                  val title = TextView(this)
-                  title.text = "AUDREY"
-                  title.textSize = 26f
-                  title.typeface = Typeface.DEFAULT_BOLD
-                  title.setTextColor(Color.WHITE)
-                  title.setPadding(18, 10, 18, 2)
+                  panel.orientation =
+                      LinearLayout.VERTICAL
 
-                  val subtitle = TextView(this)
-                  subtitle.text = "HABITAT • PERSONAL AI ENVIRONMENT"
-                  subtitle.textSize = 12f
-                  subtitle.setTextColor(Color.LTGRAY)
-                  subtitle.setPadding(18, 0, 18, 12)
+                  panel.setPadding(
+                      28,
+                      20,
+                      28,
+                      22
+                  )
 
-                  chat = TextView(this)
-                  chat.text = "Habitat online.\\n\\n" + brain.status()
-                  chat.textSize = 16f
-                  chat.setTextColor(Color.WHITE)
-                  chat.setPadding(20, 18, 20, 18)
+                  panel.setBackgroundColor(
+                      Color.argb(
+                          185,
+                          5,
+                          8,
+                          18
+                      )
+                  )
 
-                  input = EditText(this)
-                  input.hint = "Talk to Audrey..."
-                  input.textSize = 16f
+                  val title =
+                      TextView(this)
+
+                  title.text =
+                      "AUDREY"
+
+                  title.textSize = 24f
+
+                  title.typeface =
+                      Typeface.DEFAULT_BOLD
+
+                  title.setTextColor(
+                      Color.WHITE
+                  )
+
+                  val status =
+                      TextView(this)
+
+                  status.text =
+                      "HABITAT ONLINE • " +
+                      "BRAIN READY"
+
+                  status.textSize = 11f
+
+                  status.setTextColor(
+                      Color.rgb(
+                          90,
+                          220,
+                          255
+                      )
+                  )
+
+                  chat =
+                      TextView(this)
+
+                  chat.text =
+                      "Good morning. " +
+                      "I'm Audrey.\n\n" +
+                      brain.status()
+
+                  chat.textSize = 15f
+
+                  chat.setTextColor(
+                      Color.WHITE
+                  )
+
+                  chat.setPadding(
+                      12,
+                      18,
+                      12,
+                      18
+                  )
+
+                  input =
+                      EditText(this)
+
+                  input.hint =
+                      "Talk to Audrey..."
+
+                  input.textSize =
+                      16f
+
                   input.setSingleLine(true)
-                  input.inputType = InputType.TYPE_CLASS_TEXT
-                  input.imeOptions = EditorInfo.IME_ACTION_SEND
-                  input.setTextColor(Color.WHITE)
-                  input.setHintTextColor(Color.LTGRAY)
-                  input.setPadding(22, 0, 22, 0)
 
-                  input.setOnEditorActionListener { _, actionId, _ ->
-                      if (actionId == EditorInfo.IME_ACTION_SEND) {
+                  input.imeOptions =
+                      EditorInfo.IME_ACTION_SEND
+
+                  input.setTextColor(
+                      Color.WHITE
+                  )
+
+                  input.setHintTextColor(
+                      Color.LTGRAY
+                  )
+
+                  input.setPadding(
+                      20,
+                      0,
+                      20,
+                      0
+                  )
+
+                  input.setOnEditorActionListener {
+                      _, actionId, _ ->
+
+                      if (
+                          actionId ==
+                          EditorInfo.IME_ACTION_SEND
+                      ) {
                           sendMessage()
                           true
                       } else {
@@ -277,46 +565,169 @@ jobs:
                       }
                   }
 
-                  overlay.addView(title)
-                  overlay.addView(subtitle)
-                  overlay.addView(chat)
+                  panel.addView(title)
 
-                  overlay.addView(
-                      input,
+                  panel.addView(status)
+
+                  panel.addView(
+                      chat,
                       LinearLayout.LayoutParams(
-                          FrameLayout.LayoutParams.MATCH_PARENT,
-                          64
+                          LinearLayout.LayoutParams.MATCH_PARENT,
+                          0,
+                          1f
                       )
                   )
 
-                  root.addView(
-                      overlay,
+                  panel.addView(
+                      input,
+                      LinearLayout.LayoutParams(
+                          LinearLayout.LayoutParams.MATCH_PARENT,
+                          70
+                      )
+                  )
+
+                  val panelParams =
                       FrameLayout.LayoutParams(
                           FrameLayout.LayoutParams.MATCH_PARENT,
-                          FrameLayout.LayoutParams.WRAP_CONTENT,
-                          Gravity.BOTTOM
+                          430
                       )
+
+                  panelParams.gravity =
+                      Gravity.BOTTOM
+
+                  root.addView(
+                      panel,
+                      panelParams
                   )
 
                   setContentView(root)
               }
 
               private fun sendMessage() {
-                  val message = input.text.toString().trim()
 
-                  if (message.isEmpty()) return
+                  val message =
+                      input.text
+                          .toString()
+                          .trim()
 
-                  val response = brain.respond(message)
+                  if (message.isEmpty()) {
+                      return
+                  }
 
                   chat.text =
-                      "YOU: \$message\\n\\nAUDREY: \$response"
-
-                  brain.remember(message, response)
+                      "YOU:\n$message\n\n" +
+                      "AUDREY:\nThinking..."
 
                   input.text.clear()
+
+                  if (BACKEND_URL.isBlank()) {
+
+                      val response =
+                          brain.localResponse(
+                              message
+                          )
+
+                      chat.text =
+                          "YOU:\n$message\n\n" +
+                          "AUDREY:\n$response"
+
+                      brain.remember(
+                          message,
+                          response
+                      )
+
+                      return
+                  }
+
+                  thread {
+
+                      try {
+
+                          val url =
+                              URL(BACKEND_URL)
+
+                          val connection =
+                              url.openConnection()
+                                  as HttpURLConnection
+
+                          connection.requestMethod =
+                              "POST"
+
+                          connection.setRequestProperty(
+                              "Content-Type",
+                              "application/json"
+                          )
+
+                          connection.doOutput =
+                              true
+
+                          val body =
+                              org.json.JSONObject()
+
+                          body.put(
+                              "message",
+                              message
+                          )
+
+                          body.put(
+                              "history",
+                              brain.getHistory()
+                          )
+
+                          connection.outputStream
+                              .use {
+                                  it.write(
+                                      body.toString()
+                                          .toByteArray()
+                                  )
+                              }
+
+                          val responseText =
+                              connection.inputStream
+                                  .bufferedReader()
+                                  .use {
+                                      it.readText()
+                                  }
+
+                          val json =
+                              org.json.JSONObject(
+                                  responseText
+                              )
+
+                          val answer =
+                              json.optString(
+                                  "response",
+                                  "No response."
+                              )
+
+                          brain.remember(
+                              message,
+                              answer
+                          )
+
+                          runOnUiThread {
+
+                              chat.text =
+                                  "YOU:\n$message\n\n" +
+                                  "AUDREY:\n$answer"
+                          }
+
+                      } catch (e: Exception) {
+
+                          runOnUiThread {
+
+                              chat.text =
+                                  "YOU:\n$message\n\n" +
+                                  "AUDREY:\n" +
+                                  "Backend connection failed.\n\n" +
+                                  "Local brain remains online."
+                          }
+                      }
+                  }
               }
 
               private fun hideSystemUI() {
+
                   window.setFlags(
                       WindowManager.LayoutParams.FLAG_FULLSCREEN,
                       WindowManager.LayoutParams.FLAG_FULLSCREEN
@@ -333,26 +744,178 @@ jobs:
           }
           EOF
 
-      - name: Add Internet permission
+          sed -i "s#__PACKAGE__#package $PACKAGE#" "$MAIN"
+
+      - name: Create secure AI backend
         shell: bash
         run: |
           set -e
 
-          MANIFEST="$MAIN_DIR/AndroidManifest.xml"
+          mkdir -p habitat-backend
 
-          if ! grep -q "android.permission.INTERNET" "$MANIFEST"; then
-            sed -i '/<manifest/a\
-              <uses-permission android:name="android.permission.INTERNET"/>' "$MANIFEST"
-          fi
+          cat > habitat-backend/package.json <<'EOF'
+          {
+            "name": "habitat-audrey-backend",
+            "version": "0.5.0",
+            "private": true,
+            "type": "module",
+            "scripts": {
+              "start": "node server.mjs"
+            },
+            "dependencies": {
+              "express": "^5.1.0",
+              "openai": "^5.20.0"
+            }
+          }
+          EOF
 
-      - name: Build Habitat Audrey
+          cat > habitat-backend/server.mjs <<'EOF'
+          import express from "express";
+          import OpenAI from "openai";
+
+          const app = express();
+
+          app.use(express.json({ limit: "1mb" }));
+
+          const port =
+            process.env.PORT || 8080;
+
+          const client =
+            new OpenAI({
+              apiKey:
+                process.env.OPENAI_API_KEY
+            });
+
+          app.get("/health", (req, res) => {
+
+            res.json({
+              habitat: "online",
+              brain: "ready",
+              backend: "ready"
+            });
+
+          });
+
+          app.post("/chat", async (req, res) => {
+
+            try {
+
+              const message =
+                String(
+                  req.body?.message || ""
+                ).trim();
+
+              if (!message) {
+
+                return res.status(400).json({
+                  error: "message required"
+                });
+
+              }
+
+              const history =
+                Array.isArray(
+                  req.body?.history
+                )
+                  ? req.body.history
+                  : [];
+
+              const recentHistory =
+                history.slice(-20);
+
+              const context =
+                recentHistory
+                  .map(item =>
+                    `USER: ${item.user}\nAUDREY: ${item.assistant}`
+                  )
+                  .join("\n\n");
+
+              const prompt =
+                context
+                  ? `Previous Habitat memory:\n\n${context}\n\nUSER NOW:\n${message}`
+                  : message;
+
+              const response =
+                await client.responses.create({
+
+                  model:
+                    "gpt-5.6-luna",
+
+                  instructions:
+                    "You are Audrey, the AI companion and intelligence layer for Habitat. Be helpful, direct, natural, and remember that Habitat is the user's personal AI environment.",
+
+                  input:
+                    prompt
+                });
+
+              res.json({
+                response:
+                  response.output_text
+              });
+
+            } catch (error) {
+
+              console.error(error);
+
+              res.status(500).json({
+                error:
+                  "AI backend error"
+              });
+
+            }
+
+          });
+
+          app.listen(
+            port,
+            "0.0.0.0",
+            () => {
+
+              console.log(
+                `Habitat backend listening on ${port}`
+              );
+
+            }
+          );
+          EOF
+
+          cat > habitat-backend/README.md <<'EOF'
+          # Habitat Audrey AI Backend
+
+          This is the secure server-side AI layer for Habitat.
+
+          Required environment variable:
+
+          OPENAI_API_KEY
+
+          Start:
+
+          npm install
+          npm start
+
+          Then configure the Android app's BACKEND_URL to:
+
+          http://YOUR_SERVER:8080/chat
+
+          Never put the OpenAI API key inside the Android APK.
+          EOF
+
+      - name: Build Habitat
         shell: bash
         run: |
           set -e
 
           cd "$PROJECT_DIR"
 
-          echo "Starting Habitat Audrey build..."
+          echo "======================================"
+          echo " HABITAT / AUDREY v0.5"
+          echo "======================================"
+          echo "Brain: READY"
+          echo "Memory: READY"
+          echo "AI adapter: READY"
+          echo "Backend source: INCLUDED"
+          echo "Futuristic command center: INCLUDED"
+          echo "======================================"
 
           gradle assembleDebug --stacktrace
 
@@ -368,7 +931,10 @@ jobs:
 
           if [ -z "$APK" ]; then
             echo "ERROR: APK was not created."
-            find "$PROJECT_DIR" -type f -name "*.apk" -print
+            find "$PROJECT_DIR" \
+              -type f \
+              -name "*.apk" \
+              -print
             exit 1
           fi
 
@@ -380,6 +946,13 @@ jobs:
       - name: Upload Habitat Audrey APK
         uses: actions/upload-artifact@v4
         with:
-          name: Habitat-Audrey-Full-Build
+          name: Habitat-Audrey-v0.5
           path: ${{ env.APK_PATH }}
+          if-no-files-found: error
+
+      - name: Upload AI backend source
+        uses: actions/upload-artifact@v4
+        with:
+          name: Habitat-Audrey-AI-Backend
+          path: habitat-backend
           if-no-files-found: error
