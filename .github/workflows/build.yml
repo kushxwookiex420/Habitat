@@ -32,55 +32,61 @@ jobs:
           PROJECT_DIR=$(find extracted -name "settings.gradle.kts" -type f | head -1 | xargs dirname)
 
           if [ -z "$PROJECT_DIR" ]; then
-            echo "ERROR: Could not find Android project"
+            echo "ERROR: Android project not found"
             exit 1
           fi
 
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-          echo "Found project at: $PROJECT_DIR"
+          echo "Project: $PROJECT_DIR"
 
-      - name: Fix known Kotlin timestamp call
+      - name: Repair MainActivity timestamp
         run: |
           MAIN_FILE="$PROJECT_DIR/app/src/main/java/com/habitat/core/MainActivity.kt"
 
-          if [ ! -f "$MAIN_FILE" ]; then
-            echo "ERROR: MainActivity.kt not found"
-            exit 1
-          fi
+          echo "Before repair:"
+          nl -ba "$MAIN_FILE" | sed -n '10,35p'
 
           python3 - "$MAIN_FILE" <<'PY'
           import sys
+          import re
 
           path = sys.argv[1]
 
           with open(path, "r", encoding="utf-8") as f:
-              text = f.read()
+              lines = f.readlines()
 
-          old = 'log.append("\\n[" + now + "]")'
-          new = 'log.append("\\n[" + now() + "]")'
+          # Protect the function declaration.
+          for i, line in enumerate(lines):
+              if "private fun now()" in line:
+                  print("Protected function declaration at line", i + 1)
 
-          if old in text:
-              text = text.replace(old, new, 1)
-              print("Fixed timestamp call.")
-          else:
-              print("Exact timestamp pattern not found.")
-              print("Leaving source unchanged.")
+          # The compiler identified line 27.
+          # Only repair a bare `now` used as a value on that line.
+          if len(lines) >= 27:
+              line = lines[26]
+
+              if "private fun now()" not in line:
+                  fixed = re.sub(r'(?<![\w.])now(?!\s*\()', 'now()', line)
+
+                  if fixed != line:
+                      lines[26] = fixed
+                      print("Repaired line 27.")
+                  else:
+                      print("Line 27 did not contain a bare now reference.")
+              else:
+                  print("Line 27 is the function declaration; no change made.")
 
           with open(path, "w", encoding="utf-8") as f:
-              f.write(text)
+              f.writelines(lines)
           PY
+
+          echo "After repair:"
+          nl -ba "$MAIN_FILE" | sed -n '10,35p'
 
       - name: Build Habitat
         run: |
           cd "$PROJECT_DIR"
-          echo "Building Habitat..."
-          echo "Project directory: $PWD"
           gradle assembleDebug --stacktrace
-
-      - name: Find APK
-        run: |
-          echo "Searching for APK..."
-          find "$PROJECT_DIR" -type f -name "*.apk" -print
 
       - name: Upload Habitat APK
         uses: actions/upload-artifact@v4
