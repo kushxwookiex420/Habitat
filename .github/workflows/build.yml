@@ -8,16 +8,18 @@ jobs:
 
     steps:
       - name: Checkout Habitat
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Java 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
 
-      - name: Set up Gradle
+      - name: Set up Gradle 8.9
         uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
 
       - name: Extract Habitat project
         shell: bash
@@ -29,73 +31,48 @@ jobs:
 
           unzip -q Habitat-Android-Project.zip -d habitat-project
 
-          echo "Habitat project extracted."
+          PROJECT_DIR="habitat-project/HabitatAndroid"
+          APP_DIR="$PROJECT_DIR/app"
+          MAIN_DIR="$APP_DIR/src/main"
 
-          echo "Searching for Gradle wrapper..."
-          GRADLEW=$(find habitat-project -type f -name gradlew -print -quit)
-
-          if [ -z "$GRADLEW" ]; then
-            echo "ERROR: No gradlew file found."
-            echo "Project files:"
-            find habitat-project -maxdepth 6 -type f | head -200
-            exit 1
-          fi
-
-          PROJECT_DIR=$(dirname "$GRADLEW")
-
-          echo "Gradle wrapper found:"
-          echo "$GRADLEW"
-
-          echo "Android project:"
-          echo "$PROJECT_DIR"
+          test -f "$PROJECT_DIR/settings.gradle.kts"
+          test -f "$APP_DIR/build.gradle.kts"
+          test -f "$MAIN_DIR/AndroidManifest.xml"
 
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-
-      - name: Locate Android app
-        shell: bash
-        run: |
-          set -e
-
-          APP_DIR=$(find "$PROJECT_DIR" -type f -name build.gradle -o -type f -name build.gradle.kts | head -1 | xargs -r dirname)
-
-          if [ -z "$APP_DIR" ]; then
-            echo "ERROR: Android app module not found."
-            find "$PROJECT_DIR" -maxdepth 5 -type f | head -200
-            exit 1
-          fi
-
-          echo "APP_DIR=$APP_DIR"
           echo "APP_DIR=$APP_DIR" >> "$GITHUB_ENV"
+          echo "MAIN_DIR=$MAIN_DIR" >> "$GITHUB_ENV"
 
-          MAIN=$(find "$APP_DIR/src/main" -type f -name MainActivity.kt -print -quit)
+          echo "Habitat project found:"
+          echo "$PROJECT_DIR"
 
-          if [ -z "$MAIN" ]; then
-            MAIN=$(find "$APP_DIR/src/main" -type f -name MainActivity.java -print -quit)
-          fi
+      - name: Show Gradle and project status
+        run: |
+          gradle --version
 
-          if [ -z "$MAIN" ]; then
-            echo "ERROR: MainActivity was not found."
-            find "$APP_DIR/src/main" -type f | head -200
-            exit 1
-          fi
+          echo "Settings:"
+          cat "$PROJECT_DIR/settings.gradle.kts"
 
-          echo "MAIN=$MAIN"
-          echo "MAIN=$MAIN" >> "$GITHUB_ENV"
+          echo "App build file:"
+          cat "$APP_DIR/build.gradle.kts"
 
-      - name: Prepare Audrey resources
+      - name: Prepare Audrey artwork
         shell: bash
         run: |
           set -e
 
-          MAIN_DIR="$APP_DIR/src/main"
-          RES_DIR="$MAIN_DIR/res"
-          DRAWABLE_DIR="$RES_DIR/drawable-nodpi"
+          DRAWABLE_DIR="$MAIN_DIR/res/drawable-nodpi"
 
           mkdir -p "$DRAWABLE_DIR"
 
-          # Create a fallback Audrey image resource so the build never
-          # fails merely because the artwork has not yet been uploaded.
-          cat > "$DRAWABLE_DIR/lucia.xml" <<'EOF'
+          if [ -f "lucia.png" ]; then
+            cp "lucia.png" "$DRAWABLE_DIR/lucia.png"
+            echo "Audrey artwork installed."
+          else
+            echo "No lucia.png in repository."
+            echo "Creating fallback Audrey background."
+
+            cat > "$DRAWABLE_DIR/lucia.xml" <<'EOF'
           <vector xmlns:android="http://schemas.android.com/apk/res/android"
               android:width="1080dp"
               android:height="1920dp"
@@ -103,135 +80,54 @@ jobs:
               android:viewportHeight="1920">
 
               <path
-                  android:fillColor="#10101A"
+                  android:fillColor="#090914"
                   android:pathData="M0,0 L1080,0 L1080,1920 L0,1920 Z" />
 
               <path
                   android:fillColor="#24124A"
-                  android:pathData="M0,250 L1080,0 L1080,850 L0,1100 Z" />
+                  android:pathData="M0,300 L1080,0 L1080,850 L0,1150 Z" />
 
               <path
-                  android:fillColor="#0B5264"
-                  android:pathData="M0,1050 L1080,750 L1080,1920 L0,1920 Z" />
+                  android:fillColor="#083C52"
+                  android:pathData="M0,1100 L1080,800 L1080,1920 L0,1920 Z" />
 
           </vector>
           EOF
-
-          # If the real Audrey/Lucia artwork exists in the repository,
-          # use it instead of the fallback.
-          if [ -f "lucia.png" ]; then
-            rm -f "$DRAWABLE_DIR/lucia.xml"
-            cp "lucia.png" "$DRAWABLE_DIR/lucia.png"
-            echo "Real Audrey artwork installed."
-          else
-            echo "No lucia.png found; using built-in fallback artwork."
           fi
+
+      - name: Detect MainActivity package
+        shell: bash
+        run: |
+          set -e
+
+          MAIN=$(find "$MAIN_DIR" -type f -name "MainActivity.kt" -print -quit)
+
+          if [ -z "$MAIN" ]; then
+            echo "ERROR: MainActivity.kt was not found."
+            find "$MAIN_DIR" -type f | head -200
+            exit 1
+          fi
+
+          PACKAGE=$(grep -m1 '^package ' "$MAIN" | sed 's/^package //')
+
+          if [ -z "$PACKAGE" ]; then
+            echo "ERROR: Could not determine package name."
+            exit 1
+          fi
+
+          PACKAGE_DIR=$(dirname "$MAIN")
+
+          echo "MAIN=$MAIN" >> "$GITHUB_ENV"
+          echo "PACKAGE=$PACKAGE" >> "$GITHUB_ENV"
+          echo "PACKAGE_DIR=$PACKAGE_DIR" >> "$GITHUB_ENV"
+
+          echo "MainActivity: $MAIN"
+          echo "Package: $PACKAGE"
 
       - name: Create Audrey brain
         shell: bash
         run: |
           set -e
-
-          MAIN_DIR="$APP_DIR/src/main"
-          PACKAGE_DIR=$(dirname "$MAIN")
-
-          cat > "$PACKAGE_DIR/AudreyBrain.kt" <<'EOF'
-          package com.habitat.core
-
-          import android.content.Context
-          import org.json.JSONArray
-          import org.json.JSONObject
-
-          class AudreyBrain(private val context: Context) {
-
-              private val prefs =
-                  context.getSharedPreferences("habitat_memory", Context.MODE_PRIVATE)
-
-              fun status(): String {
-                  return "Local memory ready\nBrain adapter ready\nAI backend ready for connection"
-              }
-
-              fun remember(userMessage: String, assistantMessage: String) {
-                  val history = JSONArray(
-                      prefs.getString("conversation_history", "[]")
-                  )
-
-                  val item = JSONObject()
-                  item.put("user", userMessage)
-                  item.put("assistant", assistantMessage)
-                  item.put("time", System.currentTimeMillis())
-
-                  history.put(item)
-
-                  while (history.length() > 50) {
-                      val trimmed = JSONArray()
-
-                      for (i in 1 until history.length()) {
-                          trimmed.put(history.get(i))
-                      }
-
-                      prefs.edit()
-                          .putString(
-                              "conversation_history",
-                              trimmed.toString()
-                          )
-                          .apply()
-
-                      return
-                  }
-
-                  prefs.edit()
-                      .putString(
-                          "conversation_history",
-                          history.toString()
-                      )
-                      .apply()
-              }
-
-              fun respond(message: String): String {
-                  val text = message.lowercase()
-
-                  return when {
-                      text.contains("hello") ||
-                      text.contains("hi") ||
-                      text.contains("hey") ->
-                          "I'm here. Habitat is online."
-
-                      text.contains("status") ->
-                          status()
-
-                      text.contains("remember") ->
-                          "Got it. I'll keep that in Habitat's local memory."
-
-                      text.contains("who are you") ->
-                          "I'm Audrey, the companion interface for Habitat."
-
-                      else ->
-                          "Habitat received your message. My local brain is connected and ready for the AI backend."
-                  }
-              }
-          }
-          EOF
-
-      - name: Build Audrey interface
-        shell: bash
-        run: |
-          set -e
-
-          MAIN_DIR="$APP_DIR/src/main"
-          PACKAGE_DIR=$(dirname "$MAIN")
-
-          # Read the existing package name so this works even if the
-          # original project uses a different package namespace.
-          PACKAGE=$(grep -m1 '^package ' "$MAIN" | sed 's/^package //;s/[[:space:]]*$//')
-
-          if [ -z "$PACKAGE" ]; then
-            echo "ERROR: Could not determine Kotlin package."
-            head -20 "$MAIN"
-            exit 1
-          fi
-
-          echo "Using package: $PACKAGE"
 
           cat > "$PACKAGE_DIR/AudreyBrain.kt" <<EOF
           package $PACKAGE
@@ -311,6 +207,11 @@ jobs:
           }
           EOF
 
+      - name: Create Audrey interface
+        shell: bash
+        run: |
+          set -e
+
           cat > "$MAIN" <<EOF
           package $PACKAGE
 
@@ -320,7 +221,6 @@ jobs:
           import android.graphics.Typeface
           import android.view.Gravity
           import android.view.View
-          import android.view.Window
           import android.view.WindowManager
           import android.view.inputmethod.EditorInfo
           import android.widget.EditText
@@ -399,10 +299,6 @@ jobs:
                       }
                   }
 
-                  input.setOnClickListener {
-                      input.imeOptions = EditorInfo.IME_ACTION_SEND
-                  }
-
                   overlay.addView(title)
                   overlay.addView(subtitle)
                   overlay.addView(chat)
@@ -435,7 +331,7 @@ jobs:
                   val response = brain.respond(message)
 
                   chat.text =
-                      "YOU: $message\\n\\nAUDREY: $response"
+                      "YOU: \$message\\n\\nAUDREY: \$response"
 
                   brain.remember(message, response)
 
@@ -464,49 +360,25 @@ jobs:
         run: |
           set -e
 
-          MANIFEST="$APP_DIR/src/main/AndroidManifest.xml"
+          MANIFEST="$MAIN_DIR/AndroidManifest.xml"
 
-          if [ -f "$MANIFEST" ]; then
-
-            if ! grep -q 'android.permission.INTERNET' "$MANIFEST"; then
-              sed -i 's#<manifest #<manifest xmlns:tools="http://schemas.android.com/tools" #' "$MANIFEST" || true
-
-              sed -i '/<manifest/a\
+          if ! grep -q "android.permission.INTERNET" "$MANIFEST"; then
+            sed -i '/<manifest/a\
               <uses-permission android:name="android.permission.INTERNET"/>' "$MANIFEST"
-            fi
-
-          else
-            echo "ERROR: AndroidManifest.xml not found."
-            exit 1
           fi
 
-      - name: Verify project
-        shell: bash
-        run: |
-          set -e
-
-          echo "Project: $PROJECT_DIR"
-          echo "App: $APP_DIR"
-          echo "MainActivity: $MAIN"
-
-          test -f "$PROJECT_DIR/gradlew"
-          test -f "$MAIN"
-          test -f "$APP_DIR/src/main/AndroidManifest.xml"
-
-          echo "Habitat verification passed."
-
-      - name: Build Habitat Audrey APK
+      - name: Build Habitat Audrey
         shell: bash
         run: |
           set -e
 
           cd "$PROJECT_DIR"
 
-          chmod +x gradlew
+          echo "Starting Habitat Audrey build..."
 
-          ./gradlew assembleDebug --stacktrace
+          gradle assembleDebug --stacktrace
 
-      - name: Locate APK
+      - name: Find APK
         shell: bash
         run: |
           set -e
@@ -514,8 +386,7 @@ jobs:
           APK=$(find "$PROJECT_DIR" \
             -type f \
             -name "app-debug.apk" \
-            -print \
-            | head -1)
+            -print -quit)
 
           if [ -z "$APK" ]; then
             echo "ERROR: APK was not created."
@@ -523,7 +394,7 @@ jobs:
             exit 1
           fi
 
-          echo "APK:"
+          echo "APK CREATED:"
           echo "$APK"
 
           echo "APK_PATH=$APK" >> "$GITHUB_ENV"
