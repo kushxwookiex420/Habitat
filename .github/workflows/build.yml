@@ -1,4 +1,4 @@
-name: Habitat APK Build
+name: Habitat One-Shot Build
 
 on:
   workflow_dispatch:
@@ -11,9 +11,36 @@ jobs:
       - name: Download repository
         uses: actions/checkout@v5
 
-      - name: Extract Habitat project
+      - name: Extract Habitat
         run: |
+          rm -rf habitat-project
           unzip -q Habitat-Android-Project.zip -d habitat-project
+
+      - name: Find Android project
+        run: |
+          echo "Searching for Android project..."
+          find habitat-project -name settings.gradle -o -name settings.gradle.kts
+          find habitat-project -name AndroidManifest.xml
+          find habitat-project -name MainActivity.kt
+
+      - name: Find project directory
+        run: |
+          PROJECT=$(find habitat-project -name settings.gradle -o -name settings.gradle.kts | head -n 1)
+          PROJECT_DIR=$(dirname "$PROJECT")
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+          echo "Android project: $PROJECT_DIR"
+
+      - name: Find application module
+        run: |
+          APP_DIR=$(find "$PROJECT_DIR" -name AndroidManifest.xml | head -n 1 | xargs dirname)
+          echo "APP_DIR=$APP_DIR" >> "$GITHUB_ENV"
+          echo "Application directory: $APP_DIR"
+
+      - name: Find MainActivity
+        run: |
+          MAIN=$(find "$APP_DIR" -name MainActivity.kt | head -n 1)
+          echo "MAIN=$MAIN" >> "$GITHUB_ENV"
+          echo "MainActivity: $MAIN"
 
       - name: Set up Java
         uses: actions/setup-java@v5
@@ -26,26 +53,250 @@ jobs:
         with:
           gradle-version: '8.9'
 
-      - name: Fix MainActivity
+      - name: Create Audrey Brain
         run: |
-          FILE="habitat-project/HabitatAndroid/app/src/main/java/com/habitat/core/MainActivity.kt"
-          sed -i 's/\$now()/\${now()}/g' "$FILE"
+          MAIN_DIR=$(dirname "$MAIN")
 
-      - name: Bump app version
+          cat > "$MAIN_DIR/AudreyBrain.kt" <<'EOF'
+          package com.habitat.core
+
+          import android.content.Context
+          import org.json.JSONObject
+
+          class AudreyBrain(private val context: Context) {
+
+              private val prefs =
+                  context.getSharedPreferences("audrey_memory", Context.MODE_PRIVATE)
+
+              fun remember(message: String) {
+                  val old = prefs.getString("conversation", "") ?: ""
+
+                  val entry = JSONObject()
+                  entry.put("user", message)
+
+                  val updated =
+                      if (old.length > 12000) old.takeLast(10000) else old
+
+                  prefs.edit()
+                      .putString("conversation", updated + "\n" + entry.toString())
+                      .apply()
+              }
+
+              fun respond(message: String): String {
+                  val text = message.trim().lowercase()
+
+                  remember(message)
+
+                  return when {
+                      text.contains("hello") ||
+                      text.contains("hi") ||
+                      text.contains("hey") ->
+                          "Hello. I'm Audrey. Habitat is online."
+
+                      text.contains("who are you") ->
+                          "I'm Audrey, the companion interface for Habitat."
+
+                      text.contains("habitat") ->
+                          "Habitat is my home. My memory and brain adapter are connected."
+
+                      text.contains("remember") ->
+                          "I can store conversation memory locally in this prototype."
+
+                      text.contains("status") ->
+                          "Habitat online. Audrey interface online. Local memory online. Brain adapter ready."
+
+                      else ->
+                          "I heard you. My AI backend isn't connected yet, but my brain adapter is ready for the next connection."
+                  }
+              }
+          }
+          EOF
+
+      - name: Replace MainActivity with Audrey
         run: |
-          FILE="habitat-project/HabitatAndroid/app/build.gradle"
-          if [ -f "$FILE" ]; then
-            sed -i 's/versionCode[[:space:]]*[0-9]*/versionCode 2/' "$FILE"
-            sed -i 's/versionName[[:space:]]*"[^"]*"/versionName "0.2.0"/' "$FILE"
+          MAIN_DIR=$(dirname "$MAIN")
+
+          cat > "$MAIN" <<'EOF'
+          package com.habitat.core
+
+          import android.app.Activity
+          import android.os.Bundle
+          import android.graphics.Color
+          import android.graphics.Typeface
+          import android.view.Gravity
+          import android.view.ViewGroup
+          import android.widget.Button
+          import android.widget.EditText
+          import android.widget.LinearLayout
+          import android.widget.ScrollView
+          import android.widget.TextView
+
+          class MainActivity : Activity() {
+
+              private lateinit var brain: AudreyBrain
+              private lateinit var conversation: TextView
+
+              override fun onCreate(savedInstanceState: Bundle?) {
+                  super.onCreate(savedInstanceState)
+
+                  brain = AudreyBrain(this)
+
+                  val root = LinearLayout(this)
+                  root.orientation = LinearLayout.VERTICAL
+                  root.setBackgroundColor(Color.BLACK)
+                  root.setPadding(28, 28, 28, 28)
+
+                  val title = TextView(this)
+                  title.text = "AUDREY"
+                  title.textSize = 30f
+                  title.setTextColor(Color.WHITE)
+                  title.typeface = Typeface.DEFAULT_BOLD
+                  title.gravity = Gravity.CENTER
+                  title.setPadding(0, 20, 0, 8)
+
+                  val status = TextView(this)
+                  status.text = "HABITAT • ONLINE"
+                  status.textSize = 13f
+                  status.setTextColor(Color.rgb(80, 220, 150))
+                  status.gravity = Gravity.CENTER
+                  status.setPadding(0, 0, 0, 24)
+
+                  val scroll = ScrollView(this)
+
+                  conversation = TextView(this)
+                  conversation.text =
+                      "AUDREY\n\nI'm online.\n\nLocal memory: READY\nBrain adapter: READY\nAI backend: NOT CONNECTED\n\nSay something."
+                  conversation.textSize = 17f
+                  conversation.setTextColor(Color.WHITE)
+                  conversation.setPadding(20, 20, 20, 20)
+
+                  scroll.addView(
+                      conversation,
+                      ViewGroup.LayoutParams(
+                          ViewGroup.LayoutParams.MATCH_PARENT,
+                          ViewGroup.LayoutParams.WRAP_CONTENT
+                      )
+                  )
+
+                  val input = EditText(this)
+                  input.hint = "Talk to Audrey..."
+                  input.setHintTextColor(Color.GRAY)
+                  input.setTextColor(Color.WHITE)
+                  input.setSingleLine(false)
+
+                  val send = Button(this)
+                  send.text = "SEND"
+
+                  send.setOnClickListener {
+                      val message = input.text.toString().trim()
+
+                      if (message.isNotEmpty()) {
+                          val reply = brain.respond(message)
+
+                          conversation.append(
+                              "\n\nYOU\n$message\n\nAUDREY\n$reply"
+                          )
+
+                          input.text.clear()
+                          scroll.post {
+                              scroll.fullScroll(ScrollView.FOCUS_DOWN)
+                          }
+                      }
+                  }
+
+                  root.addView(
+                      title,
+                      LinearLayout.LayoutParams(
+                          ViewGroup.LayoutParams.MATCH_PARENT,
+                          ViewGroup.LayoutParams.WRAP_CONTENT
+                      )
+                  )
+
+                  root.addView(
+                      status,
+                      LinearLayout.LayoutParams(
+                          ViewGroup.LayoutParams.MATCH_PARENT,
+                          ViewGroup.LayoutParams.WRAP_CONTENT
+                      )
+                  )
+
+                  root.addView(
+                      scroll,
+                      LinearLayout.LayoutParams(
+                          ViewGroup.LayoutParams.MATCH_PARENT,
+                          0,
+                          1f
+                      )
+                  )
+
+                  root.addView(
+                      input,
+                      LinearLayout.LayoutParams(
+                          ViewGroup.LayoutParams.MATCH_PARENT,
+                          ViewGroup.LayoutParams.WRAP_CONTENT
+                      )
+                  )
+
+                  root.addView(
+                      send,
+                      LinearLayout.LayoutParams(
+                          ViewGroup.LayoutParams.MATCH_PARENT,
+                          ViewGroup.LayoutParams.WRAP_CONTENT
+                      )
+                  )
+
+                  setContentView(root)
+              }
+          }
+          EOF
+
+      - name: Add internet permission
+        run: |
+          MANIFEST=$(find "$APP_DIR" -name AndroidManifest.xml | head -n 1)
+
+          python3 - "$MANIFEST" <<'PY'
+          import sys
+
+          path = sys.argv[1]
+
+          with open(path, "r", encoding="utf-8") as f:
+              data = f.read()
+
+          permission = '<uses-permission android:name="android.permission.INTERNET" />'
+
+          if "android.permission.INTERNET" not in data:
+              data = data.replace(
+                  "<application",
+                  permission + "\n    <application",
+                  1
+              )
+
+          with open(path, "w", encoding="utf-8") as f:
+              f.write(data)
+          PY
+
+      - name: Bump version
+        run: |
+          GRADLE=$(find "$APP_DIR" -maxdepth 2 \( -name build.gradle -o -name build.gradle.kts \) | head -n 1)
+
+          if [ -f "$GRADLE" ]; then
+            sed -i -E 's/versionCode[[:space:]]*[0-9]+/versionCode 3/' "$GRADLE" || true
+            sed -i -E 's/versionName[[:space:]]*["'\''][^"'\'']+["'\'']/versionName "0.3.0"/' "$GRADLE" || true
           fi
 
-      - name: Build Habitat APK
-        working-directory: habitat-project/HabitatAndroid
+      - name: Build Habitat
+        working-directory: ${{ env.PROJECT_DIR }}
         run: |
           gradle assembleDebug
 
-      - name: Upload Habitat APK
+      - name: Locate APK
+        run: |
+          APK=$(find "$PROJECT_DIR" -path "*/build/outputs/apk/debug/*.apk" | head -n 1)
+          echo "APK=$APK"
+          test -n "$APK"
+
+      - name: Upload Audrey Habitat APK
         uses: actions/upload-artifact@v4
         with:
-          name: Habitat-debug-apk
-          path: habitat-project/HabitatAndroid/app/build/outputs/apk/debug/app-debug.apk
+          name: Habitat-Audrey-0.3.0
+          path: ${{ env.PROJECT_DIR }}/**/build/outputs/apk/debug/*.apk
