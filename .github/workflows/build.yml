@@ -1,4 +1,4 @@
-name: Habitat Audrey Build
+name: Build Habitat Audrey
 
 on:
   workflow_dispatch:
@@ -11,21 +11,21 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Java 17
+      - name: Set up Java
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: "17"
+          java-version: '17'
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: "8.9"
+          gradle-version: '8.9'
 
       - name: Create Habitat Android project
+        shell: bash
         run: |
           rm -rf habitat-project
-
           mkdir -p habitat-project/HabitatAndroid/app/src/main/java/com/habitat
           mkdir -p habitat-project/HabitatAndroid/app/src/main/res/values
 
@@ -77,8 +77,8 @@ jobs:
                   applicationId = "com.habitat"
                   minSdk = 26
                   targetSdk = 35
-                  versionCode = 504
-                  versionName = "0.5.4"
+                  versionCode = 505
+                  versionName = "0.5.5"
               }
 
               compileOptions {
@@ -97,6 +97,23 @@ jobs:
           }
           EOF
 
+          cat > habitat-project/HabitatAndroid/app/src/main/res/values/styles.xml <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <resources>
+
+              <style name="AppTheme" parent="Theme.AppCompat.NoActionBar">
+                  <item name="android:fontFamily">sans</item>
+                  <item name="android:windowLightStatusBar">false</item>
+                  <item name="android:statusBarColor">@android:color/transparent</item>
+                  <item name="android:navigationBarColor">#05070B</item>
+                  <item name="android:windowActionModeOverlay">true</item>
+                  <item name="android:colorAccent">#64D8FF</item>
+                  <item name="android:windowNoTitle">true</item>
+              </style>
+
+          </resources>
+          EOF
+
           cat > habitat-project/HabitatAndroid/app/src/main/AndroidManifest.xml <<'EOF'
           <?xml version="1.0" encoding="utf-8"?>
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
@@ -105,15 +122,15 @@ jobs:
               <uses-permission android:name="android.permission.RECORD_AUDIO" />
 
               <application
-                  android:allowBackup="true"
+                  android:allowBackup="false"
                   android:label="Habitat"
-                  android:supportsRtl="true"
-                  android:theme="@style/AppTheme">
+                  android:theme="@style/AppTheme"
+                  android:resizeableActivity="true">
 
                   <activity
                       android:name=".MainActivity"
-                      android:exported="true"
                       android:screenOrientation="portrait"
+                      android:exported="true"
                       android:windowSoftInputMode="adjustResize">
 
                       <intent-filter>
@@ -128,514 +145,503 @@ jobs:
           </manifest>
           EOF
 
-          cat > habitat-project/HabitatAndroid/app/src/main/res/values/styles.xml <<'EOF'
-          <?xml version="1.0" encoding="utf-8"?>
-          <resources>
-
-              <style name="AppTheme" parent="Theme.AppCompat.DayNight.NoActionBar">
-                  <item name="android:fontFamily">sans</item>
-                  <item name="android:windowLightStatusBar">false</item>
-                  <item name="android:statusBarColor">#05070A</item>
-                  <item name="android:navigationBarColor">#05070A</item>
-                  <item name="android:windowBackground">#05070A</item>
-              </style>
-
-          </resources>
-          EOF
-
-      - name: Create MainActivity
-        run: |
           cat > habitat-project/HabitatAndroid/app/src/main/java/com/habitat/MainActivity.kt <<'EOF'
           package com.habitat
 
-          import android.graphics.Canvas
+          import android.app.Activity
+          import android.content.Context
           import android.graphics.Color
-          import android.graphics.Paint
-          import android.graphics.Typeface
+          import android.graphics.drawable.GradientDrawable
           import android.os.Bundle
           import android.view.Gravity
-          import android.view.KeyEvent
           import android.view.View
-          import android.view.ViewGroup.LayoutParams
+          import android.view.ViewGroup
+          import android.view.Window
+          import android.view.WindowInsets
+          import android.view.WindowInsetsController
           import android.view.inputmethod.EditorInfo
           import android.view.inputmethod.InputMethodManager
-          import android.content.Context
           import android.widget.Button
           import android.widget.EditText
-          import android.widget.FrameLayout
           import android.widget.LinearLayout
           import android.widget.ScrollView
+          import android.widget.Space
           import android.widget.TextView
           import androidx.appcompat.app.AppCompatActivity
+          import androidx.core.view.ViewCompat
           import androidx.core.view.WindowCompat
-          import org.json.JSONObject
-          import java.io.BufferedReader
-          import java.io.InputStreamReader
+          import androidx.core.view.WindowInsetsCompat
+          import androidx.core.view.updatePadding
           import java.net.HttpURLConnection
           import java.net.URL
-          import kotlin.concurrent.thread
+          import java.util.concurrent.Executors
 
           class MainActivity : AppCompatActivity() {
 
-              private val BACKEND_URL =
-                  "https://habitat-cr46.onrender.com/chat"
+              private val backendUrl = "https://habitat-cr46.onrender.com/chat"
 
-              private lateinit var chatBox: LinearLayout
+              private lateinit var root: LinearLayout
+              private lateinit var chatScroll: ScrollView
+              private lateinit var chatColumn: LinearLayout
               private lateinit var input: EditText
               private lateinit var sendButton: Button
               private lateinit var statusText: TextView
-              private lateinit var scrollView: ScrollView
+
+              private val executor = Executors.newSingleThreadExecutor()
+
+              private val bg = Color.rgb(5, 7, 11)
+              private val panel = Color.rgb(12, 16, 24)
+              private val panel2 = Color.rgb(18, 23, 33)
+              private val textMain = Color.rgb(235, 244, 250)
+              private val textDim = Color.rgb(132, 151, 166)
+              private val cyan = Color.rgb(90, 215, 255)
+              private val cyanDark = Color.rgb(18, 65, 82)
 
               override fun onCreate(savedInstanceState: Bundle?) {
                   super.onCreate(savedInstanceState)
 
-                  WindowCompat.setDecorFitsSystemWindows(window, true)
+                  WindowCompat.setDecorFitsSystemWindows(window, false)
+                  window.statusBarColor = Color.TRANSPARENT
+                  window.navigationBarColor = bg
+
+                  if (android.os.Build.VERSION.SDK_INT >= 30) {
+                      window.insetsController?.setSystemBarsAppearance(
+                          0,
+                          WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS
+                      )
+                  }
 
                   buildInterface()
               }
 
+              private fun dp(value: Int): Int {
+                  return (value * resources.displayMetrics.density).toInt()
+              }
+
+              private fun rounded(color: Int, radius: Int): GradientDrawable {
+                  return GradientDrawable().apply {
+                      setColor(color)
+                      cornerRadius = dp(radius).toFloat()
+                  }
+              }
+
               private fun buildInterface() {
 
-                  val root = FrameLayout(this)
-                  root.setBackgroundColor(Color.rgb(4, 7, 11))
-
-                  val background = CommandCenterView(this)
-
-                  root.addView(
-                      background,
-                      FrameLayout.LayoutParams(
-                          FrameLayout.LayoutParams.MATCH_PARENT,
-                          FrameLayout.LayoutParams.MATCH_PARENT
-                      )
-                  )
-
-                  val main = LinearLayout(this)
-                  main.orientation = LinearLayout.VERTICAL
-                  main.setPadding(18, 18, 18, 12)
-
-                  root.addView(
-                      main,
-                      FrameLayout.LayoutParams(
-                          FrameLayout.LayoutParams.MATCH_PARENT,
-                          FrameLayout.LayoutParams.MATCH_PARENT
-                      )
-                  )
-
-                  val header = LinearLayout(this)
-                  header.orientation = LinearLayout.HORIZONTAL
-                  header.gravity = Gravity.CENTER_VERTICAL
-
-                  main.addView(
-                      header,
-                      LinearLayout.LayoutParams(
-                          LinearLayout.LayoutParams.MATCH_PARENT,
-                          LinearLayout.LayoutParams.WRAP_CONTENT
-                      )
-                  )
-
-                  val title = TextView(this)
-                  title.text = "HABITAT"
-                  title.textSize = 25f
-                  title.setTextColor(Color.WHITE)
-                  title.typeface = Typeface.create(
-                      Typeface.MONOSPACE,
-                      Typeface.BOLD
-                  )
-
-                  header.addView(
-                      title,
-                      LinearLayout.LayoutParams(
-                          0,
-                          LinearLayout.LayoutParams.WRAP_CONTENT,
-                          1f
-                      )
-                  )
-
-                  statusText = TextView(this)
-                  statusText.text = "● AUDREY ONLINE"
-                  statusText.textSize = 12f
-                  statusText.setTextColor(Color.rgb(80, 255, 180))
-                  statusText.typeface = Typeface.MONOSPACE
-
-                  header.addView(
-                      statusText,
-                      LinearLayout.LayoutParams(
-                          LinearLayout.LayoutParams.WRAP_CONTENT,
-                          LinearLayout.LayoutParams.WRAP_CONTENT
-                      )
-                  )
-
-                  val subtitle = TextView(this)
-                  subtitle.text =
-                      "PERSONAL AI OPERATING ENVIRONMENT  •  BRAIN LINK"
-                  subtitle.textSize = 10f
-                  subtitle.setTextColor(Color.rgb(130, 150, 170))
-                  subtitle.typeface = Typeface.MONOSPACE
-
-                  val subtitleParams = LinearLayout.LayoutParams(
-                      LinearLayout.LayoutParams.MATCH_PARENT,
-                      LinearLayout.LayoutParams.WRAP_CONTENT
-                  )
-
-                  subtitleParams.topMargin = 5
-                  main.addView(subtitle, subtitleParams)
-
-                  val core = TextView(this)
-
-                  core.text =
-                      "\n                 ◉\n" +
-                      "             AUDREY CORE\n" +
-                      "          INTELLIGENCE ACTIVE\n"
-
-                  core.gravity = Gravity.CENTER
-                  core.textSize = 15f
-                  core.setTextColor(Color.rgb(100, 230, 255))
-                  core.typeface = Typeface.create(
-                      Typeface.MONOSPACE,
-                      Typeface.BOLD
-                  )
-
-                  val coreParams = LinearLayout.LayoutParams(
-                      LinearLayout.LayoutParams.MATCH_PARENT,
-                      170
-                  )
-
-                  coreParams.topMargin = 8
-                  main.addView(core, coreParams)
-
-                  val chatTitle = TextView(this)
-                  chatTitle.text = "▣  CONVERSATION"
-                  chatTitle.textSize = 12f
-                  chatTitle.setTextColor(Color.rgb(100, 230, 255))
-                  chatTitle.typeface = Typeface.MONOSPACE
-
-                  val chatTitleParams = LinearLayout.LayoutParams(
-                      LinearLayout.LayoutParams.MATCH_PARENT,
-                      LinearLayout.LayoutParams.WRAP_CONTENT
-                  )
-
-                  chatTitleParams.bottomMargin = 6
-
-                  main.addView(
-                      chatTitle,
-                      chatTitleParams
-                  )
-
-                  scrollView = ScrollView(this)
-                  scrollView.isFillViewport = true
-                  scrollView.setBackgroundColor(
-                      Color.argb(150, 5, 10, 16)
-                  )
-
-                  chatBox = LinearLayout(this)
-                  chatBox.orientation = LinearLayout.VERTICAL
-                  chatBox.setPadding(12, 12, 12, 12)
-
-                  scrollView.addView(
-                      chatBox,
-                      LayoutParams(
-                          LayoutParams.MATCH_PARENT,
-                          LayoutParams.WRAP_CONTENT
-                      )
-                  )
-
-                  val scrollParams = LinearLayout.LayoutParams(
-                      LinearLayout.LayoutParams.MATCH_PARENT,
-                      0,
-                      1f
-                  )
-
-                  main.addView(
-                      scrollView,
-                      scrollParams
-                  )
-
-                  addMessage(
-                      "AUDREY",
-                      "Habitat loaded. Local memory ready. Brain adapter ready. AI backend ready for connection."
-                  )
-
-                  val talkLabel = TextView(this)
-                  talkLabel.text = "▸  TALK TO AUDREY"
-                  talkLabel.textSize = 11f
-                  talkLabel.setTextColor(Color.rgb(100, 230, 255))
-                  talkLabel.typeface = Typeface.MONOSPACE
-
-                  val talkLabelParams = LinearLayout.LayoutParams(
-                      LinearLayout.LayoutParams.MATCH_PARENT,
-                      LinearLayout.LayoutParams.WRAP_CONTENT
-                  )
-
-                  talkLabelParams.topMargin = 8
-                  talkLabelParams.bottomMargin = 4
-
-                  main.addView(
-                      talkLabel,
-                      talkLabelParams
-                  )
-
-                  val inputPanel = LinearLayout(this)
-                  inputPanel.orientation = LinearLayout.HORIZONTAL
-                  inputPanel.gravity = Gravity.CENTER_VERTICAL
-
-                  val inputPanelParams = LinearLayout.LayoutParams(
-                      LinearLayout.LayoutParams.MATCH_PARENT,
-                      LinearLayout.LayoutParams.WRAP_CONTENT
-                  )
-
-                  main.addView(
-                      inputPanel,
-                      inputPanelParams
-                  )
-
-                  input = EditText(this)
-
-                  input.setSingleLine(true)
-
-                  input.imeOptions =
-                      EditorInfo.IME_ACTION_SEND
-
-                  input.inputType =
-                      android.text.InputType.TYPE_CLASS_TEXT or
-                      android.text.InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
-
-                  input.hint = "Type a message..."
-                  input.textSize = 16f
-
-                  input.setTextColor(Color.WHITE)
-                  input.setHintTextColor(
-                      Color.rgb(110, 125, 140)
-                  )
-
-                  input.setPadding(
-                      14,
-                      12,
-                      14,
-                      12
-                  )
-
-                  input.setBackgroundColor(
-                      Color.rgb(15, 22, 30)
-                  )
-
-                  val inputParams = LinearLayout.LayoutParams(
-                      0,
-                      58,
-                      1f
-                  )
-
-                  inputPanel.addView(
-                      input,
-                      inputParams
-                  )
-
-                  sendButton = Button(this)
-
-                  sendButton.text = "SEND"
-                  sendButton.textSize = 12f
-                  sendButton.setTextColor(Color.WHITE)
-                  sendButton.isAllCaps = false
-
-                  val sendParams = LinearLayout.LayoutParams(
-                      95,
-                      58
-                  )
-
-                  sendParams.leftMargin = 8
-
-                  inputPanel.addView(
-                      sendButton,
-                      sendParams
-                  )
-
-                  val enterHint = TextView(this)
-
-                  enterHint.text = "ENTER = SEND"
-                  enterHint.textSize = 9f
-                  enterHint.setTextColor(
-                      Color.rgb(90, 110, 125)
-                  )
-
-                  enterHint.typeface = Typeface.MONOSPACE
-
-                  val enterHintParams = LinearLayout.LayoutParams(
-                      LinearLayout.LayoutParams.MATCH_PARENT,
-                      LinearLayout.LayoutParams.WRAP_CONTENT
-                  )
-
-                  enterHintParams.topMargin = 3
-
-                  main.addView(
-                      enterHint,
-                      enterHintParams
-                  )
-
-                  sendButton.setOnClickListener {
-                      sendMessage()
+                  root = LinearLayout(this).apply {
+                      orientation = LinearLayout.VERTICAL
+                      setBackgroundColor(bg)
+                      clipChildren = false
+                      clipToPadding = false
                   }
 
-                  input.setOnEditorActionListener { _, actionId, event ->
+                  ViewCompat.setOnApplyWindowInsetsListener(root) { view, insets ->
 
-                      if (
-                          actionId == EditorInfo.IME_ACTION_SEND ||
-                          (
-                              event != null &&
-                              event.keyCode == KeyEvent.KEYCODE_ENTER &&
-                              event.action == KeyEvent.ACTION_DOWN
-                          )
-                      ) {
+                      val bars = insets.getInsets(
+                          WindowInsetsCompat.Type.systemBars()
+                      )
 
-                          sendMessage()
-                          true
+                      val ime = insets.getInsets(
+                          WindowInsetsCompat.Type.ime()
+                      )
 
-                      } else {
+                      val keyboardVisible =
+                          insets.isVisible(WindowInsetsCompat.Type.ime())
 
-                          false
+                      view.updatePadding(
+                          left = dp(16),
+                          right = dp(16),
+                          top = bars.top + dp(10),
+                          bottom = if (keyboardVisible) {
+                              dp(8)
+                          } else {
+                              bars.bottom + dp(10)
+                          }
+                      )
+
+                      if (keyboardVisible) {
+                          chatScroll.post {
+                              chatScroll.fullScroll(View.FOCUS_DOWN)
+                          }
                       }
-                  }
 
-                  input.setOnKeyListener { _, keyCode, event ->
-
-                      if (
-                          keyCode == KeyEvent.KEYCODE_ENTER &&
-                          event.action == KeyEvent.ACTION_DOWN
-                      ) {
-
-                          sendMessage()
-                          true
-
-                      } else {
-
-                          false
-                      }
+                      insets
                   }
 
                   setContentView(root)
 
+                  createHeader()
+                  createAudreyArea()
+                  createChatArea()
+                  createInputArea()
+
+                  ViewCompat.requestApplyInsets(root)
+              }
+
+              private fun createHeader() {
+
+                  val header = LinearLayout(this).apply {
+                      orientation = LinearLayout.HORIZONTAL
+                      gravity = Gravity.CENTER_VERTICAL
+                      setPadding(0, 0, 0, dp(10))
+                  }
+
+                  val brand = TextView(this).apply {
+                      text = "HABITAT"
+                      textSize = 20f
+                      setTextColor(textMain)
+                      typeface = android.graphics.Typeface.DEFAULT_BOLD
+                      letterSpacing = 0.12f
+                  }
+
+                  val spacer = Space(this)
+
+                  statusText = TextView(this).apply {
+                      text = "●  ONLINE"
+                      textSize = 11f
+                      setTextColor(cyan)
+                      letterSpacing = 0.08f
+                  }
+
+                  header.addView(
+                      brand,
+                      LinearLayout.LayoutParams(
+                          0,
+                          ViewGroup.LayoutParams.WRAP_CONTENT,
+                          1f
+                      )
+                  )
+
+                  header.addView(
+                      spacer,
+                      LinearLayout.LayoutParams(
+                          dp(8),
+                          1
+                      )
+                  )
+
+                  header.addView(statusText)
+
+                  root.addView(
+                      header,
+                      LinearLayout.LayoutParams(
+                          ViewGroup.LayoutParams.MATCH_PARENT,
+                          ViewGroup.LayoutParams.WRAP_CONTENT
+                      )
+                  )
+              }
+
+              private fun createAudreyArea() {
+
+                  val card = LinearLayout(this).apply {
+                      orientation = LinearLayout.VERTICAL
+                      gravity = Gravity.CENTER
+                      background = rounded(panel, 28)
+                      setPadding(dp(20), dp(18), dp(20), dp(18))
+                  }
+
+                  val aura = TextView(this).apply {
+                      text = "◉"
+                      textSize = 72f
+                      setTextColor(cyan)
+                      gravity = Gravity.CENTER
+                  }
+
+                  val name = TextView(this).apply {
+                      text = "AUDREY"
+                      textSize = 24f
+                      setTextColor(textMain)
+                      typeface = android.graphics.Typeface.DEFAULT_BOLD
+                      letterSpacing = 0.16f
+                      gravity = Gravity.CENTER
+                  }
+
+                  val role = TextView(this).apply {
+                      text = "HABITAT INTELLIGENCE"
+                      textSize = 10f
+                      setTextColor(textDim)
+                      letterSpacing = 0.16f
+                      gravity = Gravity.CENTER
+                  }
+
+                  val line = View(this).apply {
+                      setBackgroundColor(cyanDark)
+                  }
+
+                  card.addView(
+                      aura,
+                      LinearLayout.LayoutParams(
+                          ViewGroup.LayoutParams.MATCH_PARENT,
+                          dp(86)
+                      )
+                  )
+
+                  card.addView(name)
+
+                  card.addView(
+                      role,
+                      LinearLayout.LayoutParams(
+                          ViewGroup.LayoutParams.MATCH_PARENT,
+                          dp(28)
+                      )
+                  )
+
+                  card.addView(
+                      line,
+                      LinearLayout.LayoutParams(
+                          dp(80),
+                          dp(2)
+                      ).apply {
+                          gravity = Gravity.CENTER
+                      }
+                  )
+
+                  root.addView(
+                      card,
+                      LinearLayout.LayoutParams(
+                          ViewGroup.LayoutParams.MATCH_PARENT,
+                          0,
+                          0.38f
+                      ).apply {
+                          topMargin = dp(4)
+                          bottomMargin = dp(10)
+                      }
+                  )
+              }
+
+              private fun createChatArea() {
+
+                  chatScroll = ScrollView(this).apply {
+                      isFillViewport = true
+                      overScrollMode = View.OVER_SCROLL_NEVER
+                      setBackgroundColor(Color.TRANSPARENT)
+                  }
+
+                  chatColumn = LinearLayout(this).apply {
+                      orientation = LinearLayout.VERTICAL
+                      setPadding(
+                          dp(2),
+                          dp(2),
+                          dp(2),
+                          dp(8)
+                      )
+                  }
+
+                  addMessage(
+                      "Audrey",
+                      "I'm online. What do you need?",
+                      false
+                  )
+
+                  chatScroll.addView(
+                      chatColumn,
+                      ViewGroup.LayoutParams(
+                          ViewGroup.LayoutParams.MATCH_PARENT,
+                          ViewGroup.LayoutParams.MATCH_PARENT
+                      )
+                  )
+
+                  root.addView(
+                      chatScroll,
+                      LinearLayout.LayoutParams(
+                          ViewGroup.LayoutParams.MATCH_PARENT,
+                          0,
+                          0.42f
+                      )
+                  )
+              }
+
+              private fun createInputArea() {
+
+                  val inputPanel = LinearLayout(this).apply {
+                      orientation = LinearLayout.HORIZONTAL
+                      gravity = Gravity.CENTER_VERTICAL
+                      background = rounded(panel2, 22)
+                      setPadding(
+                          dp(12),
+                          dp(8),
+                          dp(8),
+                          dp(8)
+                      )
+                  }
+
+                  input = EditText(this).apply {
+                      hint = "Talk to Audrey..."
+                      hintTextColor = textDim
+                      setTextColor(textMain)
+                      textSize = 16f
+                      singleLine = true
+                      imeOptions = EditorInfo.IME_ACTION_SEND
+                      inputType =
+                          android.text.InputType.TYPE_CLASS_TEXT or
+                          android.text.InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
+                      background = null
+                      setPadding(dp(4), 0, dp(8), 0)
+
+                      setOnEditorActionListener { _, actionId, _ ->
+                          if (actionId == EditorInfo.IME_ACTION_SEND) {
+                              sendMessage()
+                              true
+                          } else {
+                              false
+                          }
+                      }
+                  }
+
+                  sendButton = Button(this).apply {
+                      text = "SEND"
+                      textSize = 11f
+                      setTextColor(Color.BLACK)
+                      typeface = android.graphics.Typeface.DEFAULT_BOLD
+                      background = rounded(cyan, 18)
+                      setPadding(dp(14), 0, dp(14), 0)
+
+                      setOnClickListener {
+                          sendMessage()
+                      }
+                  }
+
+                  inputPanel.addView(
+                      input,
+                      LinearLayout.LayoutParams(
+                          0,
+                          dp(52),
+                          1f
+                      )
+                  )
+
+                  inputPanel.addView(
+                      sendButton,
+                      LinearLayout.LayoutParams(
+                          dp(82),
+                          dp(48)
+                      )
+                  )
+
+                  root.addView(
+                      inputPanel,
+                      LinearLayout.LayoutParams(
+                          ViewGroup.LayoutParams.MATCH_PARENT,
+                          dp(68)
+                      ).apply {
+                          topMargin = dp(8)
+                      }
+                  )
+
                   input.requestFocus()
 
                   input.postDelayed({
-
                       val imm =
-                          getSystemService(
-                              Context.INPUT_METHOD_SERVICE
-                          ) as InputMethodManager
+                          getSystemService(Context.INPUT_METHOD_SERVICE)
+                              as InputMethodManager
 
                       imm.showSoftInput(
                           input,
                           InputMethodManager.SHOW_IMPLICIT
                       )
-
-                  }, 500)
+                  }, 350)
               }
 
               private fun addMessage(
                   speaker: String,
-                  message: String
+                  message: String,
+                  user: Boolean
               ) {
 
-                  val text = TextView(this)
+                  val wrapper = LinearLayout(this).apply {
+                      orientation = LinearLayout.VERTICAL
+                      gravity =
+                          if (user) Gravity.END else Gravity.START
+                      setPadding(0, dp(5), 0, dp(5))
+                  }
 
-                  text.text =
-                      "$speaker  ›  $message"
-
-                  text.textSize = 14f
-                  text.setTextColor(Color.WHITE)
-                  text.typeface = Typeface.MONOSPACE
-
-                  text.setPadding(
-                      8,
-                      8,
-                      8,
-                      8
-                  )
-
-                  val params = LinearLayout.LayoutParams(
-                      LinearLayout.LayoutParams.MATCH_PARENT,
-                      LinearLayout.LayoutParams.WRAP_CONTENT
-                  )
-
-                  params.bottomMargin = 4
-
-                  chatBox.addView(
-                      text,
-                      params
-                  )
-
-                  scrollView.post {
-                      scrollView.fullScroll(
-                          View.FOCUS_DOWN
+                  val label = TextView(this).apply {
+                      text = speaker.uppercase()
+                      textSize = 9f
+                      setTextColor(
+                          if (user) cyan else textDim
                       )
+                      letterSpacing = 0.12f
+                      setPadding(dp(8), 0, dp(8), dp(3))
+                  }
+
+                  val bubble = TextView(this).apply {
+                      text = message
+                      textSize = 15f
+                      setTextColor(textMain)
+                      setPadding(
+                          dp(14),
+                          dp(11),
+                          dp(14),
+                          dp(11)
+                      )
+                      background = rounded(
+                          if (user) cyanDark else panel,
+                          18
+                      )
+                  }
+
+                  wrapper.addView(label)
+
+                  wrapper.addView(
+                      bubble,
+                      LinearLayout.LayoutParams(
+                          ViewGroup.LayoutParams.WRAP_CONTENT,
+                          ViewGroup.LayoutParams.WRAP_CONTENT
+                      ).apply {
+                          maxWidth = dp(310)
+                      }
+                  )
+
+                  chatColumn.addView(wrapper)
+
+                  chatScroll.post {
+                      chatScroll.fullScroll(View.FOCUS_DOWN)
                   }
               }
 
               private fun sendMessage() {
 
-                  val message =
-                      input.text.toString().trim()
+                  val message = input.text.toString().trim()
 
-                  if (message.isEmpty()) {
-                      return
-                  }
+                  if (message.isEmpty()) return
 
                   input.setText("")
 
                   addMessage(
-                      "YOU",
-                      message
-                  )
-
-                  statusText.text =
-                      "● AUDREY THINKING..."
-
-                  statusText.setTextColor(
-                      Color.rgb(255, 210, 80)
+                      "You",
+                      message,
+                      true
                   )
 
                   sendButton.isEnabled = false
-                  input.isEnabled = false
+                  statusText.text = "● THINKING"
 
-                  thread {
+                  executor.execute {
 
                       try {
 
-                          val url =
-                              URL(BACKEND_URL)
-
                           val connection =
-                              url.openConnection()
+                              URL(backendUrl).openConnection()
                                   as HttpURLConnection
 
                           connection.requestMethod = "POST"
+                          connection.connectTimeout = 20000
+                          connection.readTimeout = 60000
+                          connection.doOutput = true
 
                           connection.setRequestProperty(
                               "Content-Type",
                               "application/json"
                           )
 
-                          connection.setRequestProperty(
-                              "Accept",
-                              "application/json"
-                          )
+                          val json =
+                              """{"message":${jsonEscape(message)}}"""
 
-                          connection.connectTimeout = 15000
-                          connection.readTimeout = 30000
-                          connection.doOutput = true
-
-                          val json = JSONObject()
-
-                          json.put(
-                              "message",
-                              message
-                          )
-
-                          connection.outputStream.use { output ->
-
-                              output.write(
-                                  json.toString()
-                                      .toByteArray(
-                                          Charsets.UTF_8
-                                      )
+                          connection.outputStream.use {
+                              it.write(
+                                  json.toByteArray(
+                                      Charsets.UTF_8
+                                  )
                               )
                           }
 
@@ -643,300 +649,179 @@ jobs:
                               connection.responseCode
 
                           val stream =
-                              if (
-                                  responseCode in 200..299
-                              ) {
-
+                              if (responseCode in 200..299) {
                                   connection.inputStream
-
                               } else {
-
                                   connection.errorStream
                               }
 
-                          val responseText =
-                              if (stream != null) {
-
-                                  BufferedReader(
-                                      InputStreamReader(
-                                          stream
-                                      )
-                                  ).use { reader ->
-                                      reader.readText()
-                                  }
-
-                              } else {
-
-                                  ""
-                              }
-
-                          connection.disconnect()
+                          val response =
+                              stream?.bufferedReader()
+                                  ?.use { it.readText() }
+                                  ?: ""
 
                           runOnUiThread {
 
                               sendButton.isEnabled = true
-                              input.isEnabled = true
+                              statusText.text = "● ONLINE"
 
-                              statusText.text =
-                                  "● AUDREY ONLINE"
+                              if (responseCode in 200..299) {
 
-                              statusText.setTextColor(
-                                  Color.rgb(
-                                      80,
-                                      255,
-                                      180
+                                  val reply =
+                                      extractReply(response)
+
+                                  addMessage(
+                                      "Audrey",
+                                      reply,
+                                      false
                                   )
-                              )
-
-                              if (
-                                  responseCode in 200..299
-                              ) {
-
-                                  try {
-
-                                      val response =
-                                          JSONObject(
-                                              responseText
-                                          )
-
-                                      val reply =
-                                          response.optString(
-                                              "reply",
-                                              response.optString(
-                                                  "message",
-                                                  responseText
-                                              )
-                                          )
-
-                                      addMessage(
-                                          "AUDREY",
-                                          if (
-                                              reply.isBlank()
-                                          ) {
-
-                                              "I received that, but the backend returned an empty response."
-
-                                          } else {
-
-                                              reply
-                                          }
-                                      )
-
-                                  } catch (
-                                      e: Exception
-                                  ) {
-
-                                      addMessage(
-                                          "AUDREY",
-                                          responseText.ifBlank {
-                                              "Backend responded successfully, but the response format was unexpected."
-                                          }
-                                      )
-                                  }
 
                               } else {
 
                                   addMessage(
-                                      "SYSTEM",
-                                      "Backend error $responseCode: $responseText"
+                                      "System",
+                                      "Backend error $responseCode",
+                                      false
                                   )
                               }
                           }
 
-                      } catch (
-                          e: Exception
-                      ) {
+                          connection.disconnect()
+
+                      } catch (e: Exception) {
 
                           runOnUiThread {
 
                               sendButton.isEnabled = true
-                              input.isEnabled = true
-
-                              statusText.text =
-                                  "● BACKEND ERROR"
-
-                              statusText.setTextColor(
-                                  Color.rgb(
-                                      255,
-                                      90,
-                                      90
-                                  )
-                              )
+                              statusText.text = "● ONLINE"
 
                               addMessage(
-                                  "SYSTEM",
-                                  "Connection error: ${e.message ?: "Unknown error"}"
+                                  "System",
+                                  "Connection error: ${e.message}",
+                                  false
                               )
                           }
                       }
                   }
               }
 
-              private inner class CommandCenterView(
-                  context: Context
-              ) : View(context) {
+              private fun jsonEscape(value: String): String {
+                  return "\"" +
+                      value
+                          .replace("\\", "\\\\")
+                          .replace("\"", "\\\"")
+                          .replace("\n", "\\n")
+                          .replace("\r", "\\r")
+                          .replace("\t", "\\t") +
+                      "\""
+              }
 
-                  private val paint =
-                      Paint(Paint.ANTI_ALIAS_FLAG)
+              private fun extractReply(json: String): String {
 
-                  override fun onDraw(
-                      canvas: Canvas
-                  ) {
+                  val possibleKeys =
+                      listOf(
+                          "\"reply\"",
+                          "\"output\"",
+                          "\"message\"",
+                          "\"text\""
+                      )
 
-                      super.onDraw(canvas)
+                  for (key in possibleKeys) {
 
-                      val width =
-                          width.toFloat()
+                      val start =
+                          json.indexOf(key)
 
-                      val height =
-                          height.toFloat()
+                      if (start >= 0) {
 
-                      paint.style =
-                          Paint.Style.STROKE
+                          val colon =
+                              json.indexOf(
+                                  ":",
+                                  start + key.length
+                              )
 
-                      paint.strokeWidth = 1f
+                          if (colon >= 0) {
 
-                      paint.color =
-                          Color.rgb(
-                              15,
-                              45,
-                              60
-                          )
+                              var i = colon + 1
 
-                      val spacing = 45f
+                              while (
+                                  i < json.length &&
+                                  json[i].isWhitespace()
+                              ) {
+                                  i++
+                              }
 
-                      var x = 0f
+                              if (
+                                  i < json.length &&
+                                  json[i] == '"'
+                              ) {
 
-                      while (x < width) {
+                                  i++
 
-                          canvas.drawLine(
-                              x,
-                              0f,
-                              x,
-                              height,
-                              paint
-                          )
+                                  val builder =
+                                      StringBuilder()
 
-                          x += spacing
+                                  var escaped = false
+
+                                  while (
+                                      i < json.length
+                                  ) {
+
+                                      val c = json[i]
+
+                                      if (escaped) {
+                                          builder.append(
+                                              when (c) {
+                                                  'n' -> '\n'
+                                                  'r' -> '\r'
+                                                  't' -> '\t'
+                                                  '"' -> '"'
+                                                  '\\' -> '\\'
+                                                  else -> c
+                                              }
+                                          )
+                                          escaped = false
+
+                                      } else if (c == '\\') {
+                                          escaped = true
+
+                                      } else if (c == '"') {
+                                          return builder.toString()
+
+                                      } else {
+                                          builder.append(c)
+                                      }
+
+                                      i++
+                                  }
+                              }
+                          }
                       }
-
-                      var y = 0f
-
-                      while (y < height) {
-
-                          canvas.drawLine(
-                              0f,
-                              y,
-                              width,
-                              y,
-                              paint
-                          )
-
-                          y += spacing
-                      }
-
-                      paint.style =
-                          Paint.Style.STROKE
-
-                      paint.strokeWidth = 3f
-
-                      paint.color =
-                          Color.rgb(
-                              20,
-                              120,
-                              150
-                          )
-
-                      val centerX =
-                          width / 2f
-
-                      val centerY =
-                          height * 0.32f
-
-                      canvas.drawCircle(
-                          centerX,
-                          centerY,
-                          65f,
-                          paint
-                      )
-
-                      canvas.drawCircle(
-                          centerX,
-                          centerY,
-                          42f,
-                          paint
-                      )
-
-                      paint.style =
-                          Paint.Style.FILL
-
-                      paint.color =
-                          Color.rgb(
-                              70,
-                              220,
-                              255
-                          )
-
-                      canvas.drawCircle(
-                          centerX,
-                          centerY,
-                          7f,
-                          paint
-                      )
-
-                      paint.style =
-                          Paint.Style.STROKE
-
-                      paint.strokeWidth = 2f
-
-                      canvas.drawLine(
-                          centerX - 120,
-                          centerY,
-                          centerX + 120,
-                          centerY,
-                          paint
-                      )
-
-                      canvas.drawLine(
-                          centerX,
-                          centerY - 120,
-                          centerX,
-                          centerY + 120,
-                          paint
-                      )
-
-                      paint.color =
-                          Color.rgb(
-                              10,
-                              65,
-                              85
-                          )
-
-                      paint.strokeWidth = 1f
-
-                      canvas.drawRect(
-                          18f,
-                          height - 185f,
-                          width - 18f,
-                          height - 25f,
-                          paint
-                      )
                   }
+
+                  return json
+              }
+
+              override fun onDestroy() {
+                  executor.shutdownNow()
+                  super.onDestroy()
               }
           }
           EOF
 
-      - name: Verify no unresolved bare LayoutParams
+      - name: Verify source
         working-directory: habitat-project/HabitatAndroid
         run: |
-          grep -n "LayoutParams" app/src/main/java/com/habitat/MainActivity.kt || true
+          echo "Checking MainActivity..."
+          grep -n "backendUrl" app/src/main/java/com/habitat/MainActivity.kt
+          grep -n "adjustResize" app/src/main/AndroidManifest.xml
+          grep -n "LayoutParams" app/src/main/java/com/habitat/MainActivity.kt
 
       - name: Build APK
         working-directory: habitat-project/HabitatAndroid
         run: gradle assembleDebug
 
-      - name: Upload Habitat Audrey APK
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: Habitat-Audrey-v0.5.4
+          name: Habitat-Audrey-v0.5.5
           path: habitat-project/HabitatAndroid/app/build/outputs/apk/debug/app-debug.apk
