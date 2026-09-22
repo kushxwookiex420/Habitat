@@ -8,9 +8,6 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # ------------------------------------------------------------
-      # 1. GET HABITAT
-      # ------------------------------------------------------------
       - name: Download repository
         uses: actions/checkout@v5
 
@@ -19,9 +16,6 @@ jobs:
           rm -rf habitat-project
           unzip -q Habitat-Android-Project.zip -d habitat-project
 
-      # ------------------------------------------------------------
-      # 2. FIND ANDROID PROJECT
-      # ------------------------------------------------------------
       - name: Locate Android project
         run: |
           SETTINGS=$(find habitat-project -name settings.gradle -o -name settings.gradle.kts | head -n 1)
@@ -32,11 +26,7 @@ jobs:
           fi
 
           PROJECT_DIR=$(dirname "$SETTINGS")
-
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-
-          echo "Android project:"
-          echo "$PROJECT_DIR"
 
       - name: Locate application
         run: |
@@ -48,11 +38,7 @@ jobs:
           fi
 
           APP_DIR=$(dirname "$MANIFEST")
-
           echo "APP_DIR=$APP_DIR" >> "$GITHUB_ENV"
-
-          echo "Application:"
-          echo "$APP_DIR"
 
       - name: Locate MainActivity
         run: |
@@ -65,12 +51,6 @@ jobs:
 
           echo "MAIN=$MAIN" >> "$GITHUB_ENV"
 
-          echo "MainActivity:"
-          echo "$MAIN"
-
-      # ------------------------------------------------------------
-      # 3. JAVA / GRADLE
-      # ------------------------------------------------------------
       - name: Set up Java
         uses: actions/setup-java@v5
         with:
@@ -82,14 +62,9 @@ jobs:
         with:
           gradle-version: '8.9'
 
-      # ------------------------------------------------------------
-      # 4. CREATE AUDREY BRAIN ADAPTER
-      # ------------------------------------------------------------
-      - name: Create Audrey brain
+      - name: Create Audrey Brain
         run: |
           MAIN_DIR=$(dirname "$MAIN")
-
-          mkdir -p "$MAIN_DIR"
 
           cat > "$MAIN_DIR/AudreyBrain.kt" <<'EOF'
           package com.habitat.core
@@ -101,44 +76,21 @@ jobs:
           class AudreyBrain(private val context: Context) {
 
               private val prefs =
-                  context.getSharedPreferences(
-                      "audrey_brain",
-                      Context.MODE_PRIVATE
-                  )
-
-              private val endpointKey = "brain_endpoint"
-
-              fun setEndpoint(endpoint: String) {
-                  prefs.edit()
-                      .putString(endpointKey, endpoint.trim())
-                      .apply()
-              }
-
-              fun getEndpoint(): String {
-                  return prefs.getString(endpointKey, "") ?: ""
-              }
+                  context.getSharedPreferences("audrey_brain", Context.MODE_PRIVATE)
 
               fun remember(role: String, message: String) {
-
-                  val old = prefs.getString(
-                      "memory",
-                      "[]"
-                  ) ?: "[]"
+                  val raw = prefs.getString("memory", "[]") ?: "[]"
 
                   val array = try {
-                      JSONArray(old)
-                  } catch (_: Exception) {
+                      JSONArray(raw)
+                  } catch (e: Exception) {
                       JSONArray()
                   }
 
                   val item = JSONObject()
-
                   item.put("role", role)
                   item.put("message", message)
-                  item.put(
-                      "time",
-                      System.currentTimeMillis()
-                  )
+                  item.put("time", System.currentTimeMillis())
 
                   array.put(item)
 
@@ -147,77 +99,46 @@ jobs:
                   }
 
                   prefs.edit()
-                      .putString(
-                          "memory",
-                          array.toString()
-                      )
+                      .putString("memory", array.toString())
                       .apply()
               }
 
-              fun getMemory(): JSONArray {
+              fun respond(message: String): String {
+                  remember("user", message)
 
-                  val raw = prefs.getString(
-                      "memory",
-                      "[]"
-                  ) ?: "[]"
+                  val text = message.trim().lowercase()
 
-                  return try {
-                      JSONArray(raw)
-                  } catch (_: Exception) {
-                      JSONArray()
+                  val response = when {
+                      text.contains("hello") ||
+                      text.contains("hi") ||
+                      text.contains("hey") ->
+                          "Hello. I'm Audrey. Habitat is online."
+
+                      text.contains("who are you") ->
+                          "I'm Audrey, the companion interface for Habitat."
+
+                      text.contains("status") ->
+                          "Habitat online. Local memory online. Brain adapter online. AI backend ready for connection."
+
+                      text.contains("remember") ->
+                          "Local persistent memory is enabled."
+
+                      text.contains("habitat") ->
+                          "Habitat is my environment. I'm connected to its brain layer."
+
+                      else ->
+                          "I heard you. The AI backend connection point is ready."
                   }
-              }
 
-              fun demoResponse(message: String): String {
-
-                  val text =
-                      message.trim().lowercase()
-
-                  remember(
-                      "user",
-                      message
-                  )
-
-                  val response =
-                      when {
-
-                          text.contains("hello") ||
-                          text.contains("hi") ||
-                          text.contains("hey") ->
-                              "Hello. I'm Audrey. Habitat is online."
-
-                          text.contains("who are you") ->
-                              "I'm Audrey, the companion interface for Habitat."
-
-                          text.contains("status") ->
-                              "Habitat online. Local memory online. Brain adapter online. AI backend ready for connection."
-
-                          text.contains("remember") ->
-                              "I have local persistent memory enabled in this prototype."
-
-                          text.contains("habitat") ->
-                              "Habitat is my environment. I'm connected to its local brain layer."
-
-                          else ->
-                              "I heard you. The AI backend connection point is ready. Once connected, I'll be able to generate full AI responses."
-                      }
-
-                  remember(
-                      "assistant",
-                      response
-                  )
+                  remember("assistant", response)
 
                   return response
               }
           }
           EOF
 
-      # ------------------------------------------------------------
-      # 5. CREATE FULLSCREEN AUDREY INTERFACE
-      # ------------------------------------------------------------
       - name: Replace MainActivity
         run: |
-
           cat > "$MAIN" <<'EOF'
           package com.habitat.core
 
@@ -240,34 +161,26 @@ jobs:
               private lateinit var brain: AudreyBrain
               private lateinit var conversation: TextView
 
-              override fun onCreate(
-                  savedInstanceState: Bundle?
-              ) {
+              override fun onCreate(savedInstanceState: Bundle?) {
                   super.onCreate(savedInstanceState)
 
                   brain = AudreyBrain(this)
 
                   enableImmersiveMode()
-
                   buildAudreyScreen()
               }
 
               private fun enableImmersiveMode() {
-
                   window.decorView.systemUiVisibility =
-                      (
-                          View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
-                          or View.SYSTEM_UI_FLAG_FULLSCREEN
-                          or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
-                          or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
-                          or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
-                          or View.SYSTEM_UI_FLAG_LAYOUT_STABLE
-                      )
+                      View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or
+                      View.SYSTEM_UI_FLAG_FULLSCREEN or
+                      View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or
+                      View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or
+                      View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION or
+                      View.SYSTEM_UI_FLAG_LAYOUT_STABLE
               }
 
-              override fun onWindowFocusChanged(
-                  hasFocus: Boolean
-              ) {
+              override fun onWindowFocusChanged(hasFocus: Boolean) {
                   super.onWindowFocusChanged(hasFocus)
 
                   if (hasFocus) {
@@ -277,27 +190,13 @@ jobs:
 
               private fun buildAudreyScreen() {
 
-                  /*
-                   * HABITAT FULLSCREEN ENVIRONMENT
-                   *
-                   * The background is intentionally created
-                   * as a dedicated layer so the final Audrey
-                   * artwork can occupy the entire environment.
-                   */
-
-                  val root =
-                      FrameLayout(this)
+                  val root = FrameLayout(this)
 
                   root.setBackgroundColor(
                       Color.rgb(5, 7, 15)
                   )
 
-                  // ------------------------------------------------
-                  // FUTURISTIC ENVIRONMENT LAYER
-                  // ------------------------------------------------
-
-                  val environment =
-                      LinearLayout(this)
+                  val environment = LinearLayout(this)
 
                   environment.orientation =
                       LinearLayout.VERTICAL
@@ -309,32 +208,30 @@ jobs:
                       Color.rgb(5, 7, 15)
                   )
 
-                  val environmentTitle =
-                      TextView(this)
+                  val title = TextView(this)
 
-                  environmentTitle.text =
-                      "HABITAT"
+                  title.text = "AUDREY"
 
-                  environmentTitle.textSize =
-                      12f
+                  title.textSize = 32f
 
-                  environmentTitle.setTextColor(
-                      Color.rgb(70, 220, 180)
+                  title.typeface =
+                      Typeface.DEFAULT_BOLD
+
+                  title.setTextColor(
+                      Color.WHITE
                   )
 
-                  environmentTitle.gravity =
+                  title.gravity =
                       Gravity.CENTER
 
-                  val desk =
-                      TextView(this)
+                  val desk = TextView(this)
 
                   desk.text =
-                      "\n\n\n\n\n\n\n\n\n" +
-                      "        AUDREY WORKSTATION\n\n" +
-                      "        [ AUDREY VISUAL LAYER ]"
+                      "\n\n\n\n\n\n\n" +
+                      "AUDREY WORKSTATION\n\n" +
+                      "[ AUDREY VISUAL LAYER ]"
 
-                  desk.textSize =
-                      20f
+                  desk.textSize = 20f
 
                   desk.setTextColor(
                       Color.WHITE
@@ -343,17 +240,8 @@ jobs:
                   desk.gravity =
                       Gravity.CENTER
 
-                  /*
-                   * This area is the Audrey-at-the-desk
-                   * artwork target.
-                   *
-                   * The actual generated artwork can be
-                   * dropped into this layer later without
-                   * changing the brain architecture.
-                   */
-
                   environment.addView(
-                      environmentTitle,
+                      title,
                       LinearLayout.LayoutParams(
                           ViewGroup.LayoutParams.MATCH_PARENT,
                           ViewGroup.LayoutParams.WRAP_CONTENT
@@ -377,12 +265,7 @@ jobs:
                       )
                   )
 
-                  // ------------------------------------------------
-                  // TOP STATUS
-                  // ------------------------------------------------
-
-                  val top =
-                      LinearLayout(this)
+                  val top = LinearLayout(this)
 
                   top.orientation =
                       LinearLayout.VERTICAL
@@ -397,33 +280,12 @@ jobs:
                       10
                   )
 
-                  val name =
-                      TextView(this)
-
-                  name.text =
-                      "AUDREY"
-
-                  name.textSize =
-                      30f
-
-                  name.typeface =
-                      Typeface.DEFAULT_BOLD
-
-                  name.setTextColor(
-                      Color.WHITE
-                  )
-
-                  name.gravity =
-                      Gravity.CENTER
-
-                  val online =
-                      TextView(this)
+                  val online = TextView(this)
 
                   online.text =
                       "HABITAT • ONLINE"
 
-                  online.textSize =
-                      12f
+                  online.textSize = 12f
 
                   online.setTextColor(
                       Color.rgb(70, 230, 160)
@@ -431,8 +293,6 @@ jobs:
 
                   online.gravity =
                       Gravity.CENTER
-
-                  top.addView(name)
 
                   top.addView(online)
 
@@ -442,20 +302,14 @@ jobs:
                           ViewGroup.LayoutParams.WRAP_CONTENT
                       )
 
-                  topParams.gravity =
-                      Gravity.TOP
+                  topParams.gravity = Gravity.TOP
 
                   root.addView(
                       top,
                       topParams
                   )
 
-                  // ------------------------------------------------
-                  // CHAT PANEL
-                  // ------------------------------------------------
-
-                  val panel =
-                      LinearLayout(this)
+                  val panel = LinearLayout(this)
 
                   panel.orientation =
                       LinearLayout.VERTICAL
@@ -468,16 +322,10 @@ jobs:
                   )
 
                   panel.setBackgroundColor(
-                      Color.argb(
-                          210,
-                          5,
-                          8,
-                          18
-                      )
+                      Color.argb(220, 5, 8, 18)
                   )
 
-                  conversation =
-                      TextView(this)
+                  conversation = TextView(this)
 
                   conversation.text =
                       "AUDREY\n\n" +
@@ -487,8 +335,7 @@ jobs:
                       "AI backend: READY FOR CONNECTION\n\n" +
                       "Talk to me."
 
-                  conversation.textSize =
-                      16f
+                  conversation.textSize = 16f
 
                   conversation.setTextColor(
                       Color.WHITE
@@ -501,12 +348,9 @@ jobs:
                       12
                   )
 
-                  val scroll =
-                      ScrollView(this)
+                  val scroll = ScrollView(this)
 
-                  scroll.addView(
-                      conversation
-                  )
+                  scroll.addView(conversation)
 
                   panel.addView(
                       scroll,
@@ -517,14 +361,12 @@ jobs:
                       )
                   )
 
-                  val inputRow =
-                      LinearLayout(this)
+                  val inputRow = LinearLayout(this)
 
                   inputRow.orientation =
                       LinearLayout.HORIZONTAL
 
-                  val input =
-                      EditText(this)
+                  val input = EditText(this)
 
                   input.hint =
                       "Talk to Audrey..."
@@ -537,31 +379,19 @@ jobs:
                       Color.WHITE
                   )
 
-                  input.setSingleLine(
-                      false
-                  )
+                  val send = Button(this)
 
-                  val send =
-                      Button(this)
-
-                  send.text =
-                      "SEND"
+                  send.text = "SEND"
 
                   send.setOnClickListener {
 
                       val message =
-                          input.text
-                              .toString()
-                              .trim()
+                          input.text.toString().trim()
 
-                      if (
-                          message.isNotEmpty()
-                      ) {
+                      if (message.isNotEmpty()) {
 
                           val response =
-                              brain.demoResponse(
-                                  message
-                              )
+                              brain.respond(message)
 
                           conversation.append(
                               "\n\nYOU\n" +
@@ -597,13 +427,7 @@ jobs:
                       )
                   )
 
-                  panel.addView(
-                      inputRow,
-                      LinearLayout.LayoutParams(
-                          ViewGroup.LayoutParams.MATCH_PARENT,
-                          ViewGroup.LayoutParams.WRAP_CONTENT
-                      )
-                  )
+                  panel.addView(inputRow)
 
                   val panelParams =
                       FrameLayout.LayoutParams(
@@ -624,44 +448,42 @@ jobs:
           }
           EOF
 
-      # ------------------------------------------------------------
-      # 6. INTERNET PERMISSION
-      # ------------------------------------------------------------
       - name: Add Internet permission
         run: |
+          MANIFEST=$(find "$APP_DIR" -name AndroidManifest.xml | head -n 1)
 
-          MANIFEST=$(find "$APP_DIR" \
-            -name AndroidManifest.xml \
-            | head -n 1)
+          if ! grep -q "android.permission.INTERNET" "$MANIFEST"; then
+            sed -i '/<application/i\    <uses-permission android:name="android.permission.INTERNET" />' "$MANIFEST"
+          fi
 
-          python3 - "$MANIFEST" <<'PY'
-          import sys
+      - name: Set version
+        run: |
+          GRADLE_FILE=$(find "$APP_DIR" -maxdepth 2 \( -name build.gradle -o -name build.gradle.kts \) | head -n 1)
 
-          path = sys.argv[1]
+          if [ -f "$GRADLE_FILE" ]; then
+            sed -i -E 's/versionCode[[:space:]]*[0-9]+/versionCode 4/' "$GRADLE_FILE" || true
+            sed -i -E 's/versionName[[:space:]]*["'\''][^"'\'']+["'\'']/versionName "0.4.0"/' "$GRADLE_FILE" || true
+          fi
 
-          with open(
-              path,
-              "r",
-              encoding="utf-8"
-          ) as f:
-              data = f.read()
+      - name: Build Habitat
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          gradle assembleDebug
 
-          permission = (
-              '<uses-permission '
-              'android:name="android.permission.INTERNET" />'
-          )
+      - name: Verify APK
+        run: |
+          APK=$(find "$PROJECT_DIR" -path "*/build/outputs/apk/debug/*.apk" | head -n 1)
 
-          if (
-              "android.permission.INTERNET"
-              not in data
-          ):
-              data = data.replace(
-                  "<application",
-                  permission +
-                  "\n    <application",
-                  1
-              )
+          if [ -z "$APK" ]; then
+            echo "APK was not generated"
+            exit 1
+          fi
 
-          with open(
-              path,
-              "
+          echo "APK generated:"
+          ls -lh "$APK"
+
+      - name: Upload Habitat Audrey APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Habitat-Audrey-0.4.0
+          path: ${{ env.PROJECT_DIR }}/**/build/outputs/apk/debug/*.apk
