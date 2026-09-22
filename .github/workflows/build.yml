@@ -30,10 +30,10 @@ jobs:
         run: |
           FILE="habitat-project/HabitatAndroid/app/src/main/java/com/habitat/core/MainActivity.kt"
           echo "=== BEFORE FIX ==="
-          sed -n '27p' "$FILE"
-          sed -i '27s/\bnow\b/now()/g' "$FILE"
+          grep -n "now" "$FILE" || true
+          perl -pi -e 's/\.now(?!\s*\()/\.now()/g' "$FILE"
           echo "=== AFTER FIX ==="
-          sed -n '27p' "$FILE"
+          grep -n "now" "$FILE" || true
 
       - name: Build Habitat APK
         working-directory: habitat-project/HabitatAndroid
