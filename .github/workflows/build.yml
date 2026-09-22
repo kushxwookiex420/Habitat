@@ -1,542 +1,169 @@
-name: Habitat Audrey Full Build
+name: Habitat Audrey Build
 
-on:
-  workflow_dispatch:
+on: [workflow_dispatch]
 
 jobs:
   build:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - name: Checkout Habitat
-        uses: actions/checkout@v5
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
 
       - name: Extract Habitat project
         run: |
           rm -rf habitat-project
+          mkdir -p habitat-project
           unzip -q Habitat-Android-Project.zip -d habitat-project
 
-          echo "Habitat project:"
-          ls -la habitat-project
+      - name: Configure project
+        run: |
+          PROJECT_DIR="habitat-project/HabitatAndroid"
+          APP_DIR="$PROJECT_DIR/app"
+          MAIN_DIR="$APP_DIR/src/main"
+          MAIN="$MAIN_DIR/java/com/habitat/core/MainActivity.kt"
+          RES_DIR="$MAIN_DIR/res"
 
-          if [ ! -d "habitat-project/HabitatAndroid" ]; then
-            echo "ERROR: HabitatAndroid folder not found."
-            exit 1
+          mkdir -p "$RES_DIR/drawable-nodpi"
+
+          if [ -f "lucia.png" ]; then
+            cp lucia.png "$RES_DIR/drawable-nodpi/lucia.png"
           fi
 
-      - name: Set project paths
-        run: |
-          echo "PROJECT_DIR=habitat-project/HabitatAndroid" >> "$GITHUB_ENV"
-          echo "APP_DIR=habitat-project/HabitatAndroid/app" >> "$GITHUB_ENV"
-          echo "MAIN=habitat-project/HabitatAndroid/app/src/main/java/com/habitat/core/MainActivity.kt" >> "$GITHUB_ENV"
+          cat > "$APP_DIR/src/main/AndroidManifest.xml" <<'EOF'
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <uses-permission android:name="android.permission.INTERNET"/>
+              <application
+                  android:theme="@style/Theme.AppCompat.Light.NoActionBar"
+                  android:label="Habitat">
+                  <activity
+                      android:name=".MainActivity"
+                      android:screenOrientation="portrait"
+                      android:exported="true">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN"/>
+                          <category android:name="android.intent.category.LAUNCHER"/>
+                      </intent-filter>
+                  </activity>
+              </application>
+          </manifest>
+          EOF
 
-      - name: Verify project
-        run: |
-          echo "Checking project..."
+          mkdir -p "$(dirname "$MAIN")"
 
-          test -f "$PROJECT_DIR/settings.gradle" \
-            || test -f "$PROJECT_DIR/settings.gradle.kts"
-
-          test -f "$APP_DIR/src/main/AndroidManifest.xml"
-
-          test -f "$MAIN"
-
-          echo "PROJECT OK"
-          echo "APP: $APP_DIR"
-          echo "MAIN: $MAIN"
-
-      - name: Set up Java
-        uses: actions/setup-java@v5
-        with:
-          distribution: temurin
-          java-version: "17"
-
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: "8.9"
-
-      - name: Install Lucia workstation
-        run: |
-          mkdir -p "$APP_DIR/src/main/res/drawable-nodpi"
-
-          if [ ! -f "lucia.png" ]; then
-            echo "ERROR: lucia.png is missing."
-            echo "Upload the Lucia image to the repository root."
-            exit 1
-          fi
-
-          cp lucia.png \
-            "$APP_DIR/src/main/res/drawable-nodpi/lucia.png"
-
-          echo "LUCIA WORKSTATION INSTALLED"
-
-      - name: Create Audrey brain
-        run: |
-          cat > "$APP_DIR/src/main/java/com/habitat/core/AudreyBrain.kt" <<'EOF'
-package com.habitat.core
-
-import android.content.Context
-import org.json.JSONArray
-import org.json.JSONObject
-
-class AudreyBrain(private val context: Context) {
-
-    private val prefs =
-        context.getSharedPreferences(
-            "audrey_brain",
-            Context.MODE_PRIVATE
-        )
-
-    fun remember(role: String, message: String) {
-
-        val raw =
-            prefs.getString("memory", "[]") ?: "[]"
-
-        val memory =
-            try {
-                JSONArray(raw)
-            } catch (e: Exception) {
-                JSONArray()
-            }
-
-        val item = JSONObject()
-
-        item.put("role", role)
-        item.put("message", message)
-        item.put(
-            "time",
-            System.currentTimeMillis()
-        )
-
-        memory.put(item)
-
-        while (memory.length() > 150) {
-            memory.remove(0)
-        }
-
-        prefs.edit()
-            .putString(
-                "memory",
-                memory.toString()
-            )
-            .apply()
-    }
-
-    fun respond(message: String): String {
-
-        remember("user", message)
-
-        val text =
-            message.trim().lowercase()
-
-        val answer =
-            when {
-
-                text.contains("hello") ||
-                text.contains("hi") ||
-                text.contains("hey") ->
-                    "Hey. Audrey is online. Habitat is ready."
-
-                text.contains("who are you") ->
-                    "I'm Audrey, the AI companion interface for Habitat."
-
-                text.contains("status") ->
-                    "Habitat online. Local memory online. Brain adapter online. AI backend connection ready."
-
-                text.contains("remember") ->
-                    "Local persistent memory is active."
-
-                text.contains("brain") ->
-                    "Brain adapter is online."
-
-                text.contains("habitat") ->
-                    "Habitat is my environment and command center."
-
-                else ->
-                    "I hear you. The Habitat brain received your message."
-            }
-
-        remember("assistant", answer)
-
-        return answer
-    }
-}
-EOF
-
-      - name: Build Audrey interface
-        run: |
           cat > "$MAIN" <<'EOF'
-package com.habitat.core
-
-import android.app.Activity
-import android.os.Bundle
-import android.graphics.Color
-import android.graphics.Typeface
-import android.view.Gravity
-import android.view.KeyEvent
-import android.view.View
-import android.view.ViewGroup
-import android.view.inputmethod.EditorInfo
-import android.widget.Button
-import android.widget.EditText
-import android.widget.FrameLayout
-import android.widget.ImageView
-import android.widget.LinearLayout
-import android.widget.ScrollView
-import android.widget.TextView
-
-class MainActivity : Activity() {
-
-    private lateinit var brain: AudreyBrain
-    private lateinit var chat: TextView
-    private lateinit var scroll: ScrollView
-    private lateinit var input: EditText
-
-    override fun onCreate(
-        savedInstanceState: Bundle?
-    ) {
-        super.onCreate(savedInstanceState)
-
-        brain = AudreyBrain(this)
-
-        immersive()
-        buildHabitat()
-    }
-
-    private fun immersive() {
-
-        window.decorView.systemUiVisibility =
-            View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or
-            View.SYSTEM_UI_FLAG_FULLSCREEN or
-            View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or
-            View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or
-            View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION or
-            View.SYSTEM_UI_FLAG_LAYOUT_STABLE
-    }
-
-    override fun onWindowFocusChanged(
-        hasFocus: Boolean
-    ) {
-        super.onWindowFocusChanged(hasFocus)
-
-        if (hasFocus) {
-            immersive()
-        }
-    }
-
-    private fun buildHabitat() {
-
-        val root =
-            FrameLayout(this)
-
-        /*
-         * AUDREY / LUCIA FUTURISTIC WORKSTATION
-         */
-
-        val scene =
-            ImageView(this)
-
-        scene.setImageResource(
-            R.drawable.lucia
-        )
-
-        scene.scaleType =
-            ImageView.ScaleType.CENTER_CROP
-
-        root.addView(
-            scene,
-            FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.MATCH_PARENT
-            )
-        )
-
-        /*
-         * CINEMATIC OVERLAY
-         */
-
-        val shade =
-            View(this)
-
-        shade.setBackgroundColor(
-            Color.argb(
-                50,
-                0,
-                0,
-                15
-            )
-        )
-
-        root.addView(
-            shade,
-            FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.MATCH_PARENT
-            )
-        )
-
-        /*
-         * TOP HUD
-         */
-
-        val hud =
-            LinearLayout(this)
-
-        hud.orientation =
-            LinearLayout.VERTICAL
-
-        hud.gravity =
-            Gravity.CENTER
-
-        hud.setPadding(
-            20,
-            24,
-            20,
-            10
-        )
-
-        val online =
-            TextView(this)
-
-        online.text =
-            "● HABITAT ONLINE"
-
-        online.textSize = 12f
-
-        online.setTextColor(
-            Color.rgb(
-                80,
-                255,
-                180
-            )
-        )
-
-        online.gravity =
-            Gravity.CENTER
-
-        hud.addView(online)
-
-        val title =
-            TextView(this)
-
-        title.text =
-            "AUDREY"
-
-        title.textSize = 29f
-
-        title.typeface =
-            Typeface.DEFAULT_BOLD
-
-        title.setTextColor(
-            Color.WHITE
-        )
-
-        title.gravity =
-            Gravity.CENTER
-
-        hud.addView(title)
-
-        val subtitle =
-            TextView(this)
-
-        subtitle.text =
-            "HABITAT PERSONAL AI"
-
-        subtitle.textSize = 10f
-
-        subtitle.setTextColor(
-            Color.LTGRAY
-        )
-
-        subtitle.gravity =
-            Gravity.CENTER
-
-        hud.addView(subtitle)
-
-        val hudParams =
-            FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            )
-
-        hudParams.gravity =
-            Gravity.TOP
-
-        root.addView(
-            hud,
-            hudParams
-        )
-
-        /*
-         * CHAT / COMMAND PANEL
-         */
-
-        val panel =
-            LinearLayout(this)
-
-        panel.orientation =
-            LinearLayout.VERTICAL
-
-        panel.setPadding(
-            16,
-            14,
-            16,
-            12
-        )
-
-        panel.setBackgroundColor(
-            Color.argb(
-                225,
-                4,
-                8,
-                18
-            )
-        )
-
-        chat =
-            TextView(this)
-
-        chat.text =
-            "AUDREY\n\n" +
-            "I'm here.\n\n" +
-            "Workstation: ONLINE\n" +
-            "Memory: READY\n" +
-            "Brain adapter: READY\n" +
-            "AI backend: READY\n\n" +
-            "Talk to me."
-
-        chat.textSize = 15f
-
-        chat.setTextColor(
-            Color.WHITE
-        )
-
-        chat.setPadding(
-            8,
-            8,
-            8,
-            8
-        )
-
-        scroll =
-            ScrollView(this)
-
-        scroll.addView(chat)
-
-        panel.addView(
-            scroll,
-            LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                0,
-                1f
-            )
-        )
-
-        /*
-         * MESSAGE BAR
-         */
-
-        val row =
-            LinearLayout(this)
-
-        row.orientation =
-            LinearLayout.HORIZONTAL
-
-        input =
-            EditText(this)
-
-        input.hint =
-            "Talk to Audrey..."
-
-        input.setHintTextColor(
-            Color.GRAY
-        )
-
-        input.setTextColor(
-            Color.WHITE
-        )
-
-        input.singleLine = true
-
-        /*
-         * SAMSUNG ENTER KEY = SEND
-         */
-
-        input.imeOptions =
-            EditorInfo.IME_ACTION_SEND
-
-        val send =
-            Button(this)
-
-        send.text =
-            "SEND"
-
-        send.setOnClickListener {
-            sendMessage()
-        }
-
-        row.addView(
-            input,
-            LinearLayout.LayoutParams(
-                0,
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                1f
-            )
-        )
-
-        row.addView(
-            send,
-            LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            )
-        )
-
-        panel.addView(row)
-
-        input.setOnEditorActionListener {
-            _,
-            actionId,
-            event ->
-
-            val enter =
-                event != null &&
-                event.keyCode ==
-                KeyEvent.KEYCODE_ENTER &&
-                event.action ==
-                KeyEvent.ACTION_DOWN
-
-            if (
-                actionId ==
-                EditorInfo.IME_ACTION_SEND ||
-                enter
-            ) {
-
-                sendMessage()
-
-                true
-
-            } else {
-
-                false
-            }
-        }
-
-        /*
-         * BOTTOM POSITION
-         */
-
-        val panelParams =
-            FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                390
-            )
-
-        panelParams.gravity =
-            Gravity.BOTTOM
-
-        panelParams.setMargins(
-            12,
-            
+          package com.habitat.core
+
+          import android.app.Activity
+          import android.os.Bundle
+          import android.graphics.Color
+          import android.view.Gravity
+          import android.view.inputmethod.EditorInfo
+          import android.widget.*
+
+          class MainActivity : Activity() {
+
+              private lateinit var input: EditText
+              private lateinit var chat: TextView
+
+              override fun onCreate(savedInstanceState: Bundle?) {
+                  super.onCreate(savedInstanceState)
+
+                  window.decorView.systemUiVisibility =
+                      5894
+
+                  val root = FrameLayout(this)
+                  root.setBackgroundColor(Color.BLACK)
+
+                  val image = ImageView(this)
+                  image.setImageResource(R.drawable.lucia)
+                  image.scaleType = ImageView.ScaleType.CENTER_CROP
+                  root.addView(
+                      image,
+                      FrameLayout.LayoutParams(-1, -1)
+                  )
+
+                  val panel = LinearLayout(this)
+                  panel.orientation = LinearLayout.VERTICAL
+                  panel.setPadding(32, 32, 32, 24)
+                  panel.gravity = Gravity.BOTTOM
+
+                  chat = TextView(this)
+                  chat.text = "AUDREY\n\nHabitat online."
+                  chat.setTextColor(Color.WHITE)
+                  chat.textSize = 18f
+                  chat.setPadding(20, 20, 20, 20)
+
+                  input = EditText(this)
+                  input.hint = "Talk to Audrey..."
+                  input.setTextColor(Color.WHITE)
+                  input.setHintTextColor(Color.LTGRAY)
+                  input.singleLine = true
+                  input.imeOptions = EditorInfo.IME_ACTION_SEND
+
+                  input.setOnEditorActionListener { _, actionId, _ ->
+                      if (actionId == EditorInfo.IME_ACTION_SEND) {
+                          sendMessage()
+                          true
+                      } else {
+                          false
+                      }
+                  }
+
+                  panel.addView(chat)
+                  panel.addView(
+                      input,
+                      LinearLayout.LayoutParams(
+                          -1,
+                          60
+                      )
+                  )
+
+                  root.addView(
+                      panel,
+                      FrameLayout.LayoutParams(
+                          -1,
+                          -2,
+                          Gravity.BOTTOM
+                      )
+                  )
+
+                  setContentView(root)
+              }
+
+              private fun sendMessage() {
+                  val message = input.text.toString().trim()
+                  if (message.isEmpty()) return
+
+                  chat.text =
+                      "YOU: $message\n\nAUDREY: I'm here. Habitat received your message."
+
+                  input.text.clear()
+              }
+          }
+          EOF
+
+          if [ -f "$APP_DIR/build.gradle" ]; then
+            sed -i "s/versionName.*/versionName \"0.5.0\"/" "$APP_DIR/build.gradle" || true
+          fi
+
+      - name: Build APK
+        run: |
+          cd habitat-project/HabitatAndroid
+          chmod +x gradlew
+          ./gradlew assembleDebug
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Habitat-Audrey-0.5.0
+          path: habitat-project/HabitatAndroid/app/build/outputs/apk/debug/app-debug.apk
