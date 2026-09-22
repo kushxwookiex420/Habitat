@@ -1,10 +1,17 @@
-name: Habitat Test
+name: Habitat Inspect
 
 on:
   workflow_dispatch:
 
 jobs:
-  test:
+  inspect:
     runs-on: ubuntu-latest
     steps:
-      - run: echo "Habitat build system is alive"
+      - name: Download repository
+        uses: actions/checkout@v4
+
+      - name: Inspect Habitat project
+        run: |
+          unzip -q Habitat-Android-Project.zip -d habitat-project
+          echo "=== HABITAT PROJECT FILES ==="
+          find habitat-project -maxdepth 4 -type f | sort
