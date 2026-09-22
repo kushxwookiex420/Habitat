@@ -78,8 +78,8 @@ jobs:
                   applicationId = "com.habitat"
                   minSdk = 26
                   targetSdk = 35
-                  versionCode = 503
-                  versionName = "0.5.3"
+                  versionCode = 504
+                  versionName = "0.5.4"
               }
 
               compileOptions {
@@ -135,7 +135,6 @@ jobs:
                   parent="android:style/Theme.Material.NoActionBar">
 
                   <item name="android:fontFamily">sans</item>
-                  <item name="android:windowActionModeOverlay">true</item>
                   <item name="android:windowNoTitle">true</item>
                   <item name="android:colorAccent">#00E5FF</item>
                   <item name="android:navigationBarColor">#02040A</item>
@@ -328,9 +327,25 @@ jobs:
                       Color.rgb(70, 255, 180)
                   )
 
-                  top.addView(statusText)
+                  top.addView(
+                      statusText,
+                      LinearLayout.LayoutParams(
+                          LinearLayout.LayoutParams.WRAP_CONTENT,
+                          LinearLayout.LayoutParams.WRAP_CONTENT
+                      )
+                  )
 
-                  hud.addView(top)
+                  hud.addView(
+                      top,
+                      LinearLayout.LayoutParams(
+                          LinearLayout.LayoutParams.MATCH_PARENT,
+                          LinearLayout.LayoutParams.WRAP_CONTENT
+                      )
+                  )
+
+                  /*
+                   * SUBTITLE
+                   */
 
                   val subtitle =
                       TextView(this)
@@ -352,7 +367,13 @@ jobs:
                       dp(8)
                   )
 
-                  hud.addView(subtitle)
+                  hud.addView(
+                      subtitle,
+                      LinearLayout.LayoutParams(
+                          LinearLayout.LayoutParams.MATCH_PARENT,
+                          LinearLayout.LayoutParams.WRAP_CONTENT
+                      )
+                  )
 
                   /*
                    * AUDREY STATUS
@@ -395,10 +416,16 @@ jobs:
                           1
                       )
 
-                  hud.addView(audreyStatus)
+                  hud.addView(
+                      audreyStatus,
+                      LinearLayout.LayoutParams(
+                          LinearLayout.LayoutParams.MATCH_PARENT,
+                          LinearLayout.LayoutParams.WRAP_CONTENT
+                      )
+                  )
 
                   /*
-                   * CHAT
+                   * CHAT SCROLL
                    */
 
                   scroll =
@@ -514,7 +541,7 @@ jobs:
                   inputPanel.background =
                       rounded(
                           Color.argb(
-                              235,
+                              245,
                               4,
                               12,
                               22
@@ -527,6 +554,10 @@ jobs:
                           ),
                           1
                       )
+
+                  /*
+                   * PROMPT
+                   */
 
                   val prompt =
                       TextView(this)
@@ -555,7 +586,17 @@ jobs:
                       dp(6)
                   )
 
-                  inputPanel.addView(prompt)
+                  inputPanel.addView(
+                      prompt,
+                      LinearLayout.LayoutParams(
+                          LinearLayout.LayoutParams.MATCH_PARENT,
+                          LinearLayout.LayoutParams.WRAP_CONTENT
+                      )
+                  )
+
+                  /*
+                   * INPUT ROW
+                   */
 
                   val row =
                       LinearLayout(this)
@@ -567,7 +608,7 @@ jobs:
                       Gravity.CENTER_VERTICAL
 
                   /*
-                   * ACTUAL TYPING BOX
+                   * ACTUAL EDITABLE TEXT FIELD
                    */
 
                   input =
@@ -591,7 +632,9 @@ jobs:
                   input.textSize =
                       16f
 
-                  input.setSingleLine(true)
+                  input.setSingleLine(
+                      true
+                  )
 
                   input.imeOptions =
                       EditorInfo.IME_ACTION_SEND
@@ -629,13 +672,16 @@ jobs:
                           1
                       )
 
-                  row.addView(
-                      input,
+                  val editParams =
                       LinearLayout.LayoutParams(
                           0,
                           dp(56),
                           1f
                       )
+
+                  row.addView(
+                      input,
+                      editParams
                   )
 
                   /*
@@ -677,13 +723,13 @@ jobs:
                           1
                       )
 
-                  val sendParams =
+                  val buttonParams =
                       LinearLayout.LayoutParams(
                           dp(82),
                           dp(56)
                       )
 
-                  sendParams.setMargins(
+                  buttonParams.setMargins(
                       dp(8),
                       0,
                       0,
@@ -692,10 +738,20 @@ jobs:
 
                   row.addView(
                       sendButton,
-                      sendParams
+                      buttonParams
                   )
 
-                  inputPanel.addView(row)
+                  inputPanel.addView(
+                      row,
+                      LinearLayout.LayoutParams(
+                          LinearLayout.LayoutParams.MATCH_PARENT,
+                          dp(56)
+                      )
+                  )
+
+                  /*
+                   * INPUT HELP
+                   */
 
                   val hint =
                       TextView(this)
@@ -721,7 +777,19 @@ jobs:
                       0
                   )
 
-                  inputPanel.addView(hint)
+                  inputPanel.addView(
+                      hint,
+                      LinearLayout.LayoutParams(
+                          LinearLayout.LayoutParams.MATCH_PARENT,
+                          LinearLayout.LayoutParams.WRAP_CONTENT
+                      )
+                  )
+
+                  /*
+                   * IMPORTANT:
+                   * inputPanel itself uses explicit
+                   * LinearLayout.LayoutParams.
+                   */
 
                   hud.addView(
                       inputPanel,
@@ -732,12 +800,16 @@ jobs:
                   )
 
                   /*
-                   * SEND EVENTS
+                   * SEND CLICK
                    */
 
                   sendButton.setOnClickListener {
                       sendMessage()
                   }
+
+                  /*
+                   * SAMSUNG KEYBOARD SEND
+                   */
 
                   input.setOnEditorActionListener {
                           _,
@@ -765,6 +837,10 @@ jobs:
                       }
                   }
 
+                  /*
+                   * PHYSICAL ENTER
+                   */
+
                   input.setOnKeyListener {
                           _,
                           keyCode,
@@ -789,21 +865,17 @@ jobs:
                   setContentView(root)
 
                   /*
-                   * Don't automatically open the keyboard.
-                   * The field remains immediately available.
+                   * Make sure the EditText is usable.
                    */
 
-                  input.requestFocus()
-
-                  handler.postDelayed({
-
-                      input.clearFocus()
-
-                  }, 300)
+                  input.isEnabled = true
+                  input.isClickable = true
+                  input.isFocusable = true
+                  input.isFocusableInTouchMode = true
               }
 
               /*
-               * SEND MESSAGE TO HABITAT BACKEND
+               * SEND MESSAGE
                */
 
               private fun sendMessage() {
@@ -813,7 +885,9 @@ jobs:
                           .toString()
                           .trim()
 
-                  if (message.isEmpty()) {
+                  if (
+                      message.isEmpty()
+                  ) {
                       return
                   }
 
@@ -1004,9 +1078,13 @@ jobs:
                       "AUDREY:\nThinking..."
 
                   val index =
-                      current.lastIndexOf(marker)
+                      current.lastIndexOf(
+                          marker
+                      )
 
-                  if (index >= 0) {
+                  if (
+                      index >= 0
+                  ) {
 
                       chatBox.text =
                           current.substring(
@@ -1031,7 +1109,7 @@ jobs:
               }
 
               /*
-               * JARVIS-STYLE HABITAT COMMAND CENTER
+               * JARVIS COMMAND CENTER
                */
 
               private class CommandCenterView(
@@ -1064,13 +1142,19 @@ jobs:
                       canvas: Canvas
                   ) {
 
-                      super.onDraw(canvas)
+                      super.onDraw(
+                          canvas
+                      )
 
                       val w =
                           width.toFloat()
 
                       val h =
                           height.toFloat()
+
+                      /*
+                       * BACKGROUND
+                       */
 
                       canvas.drawColor(
                           Color.rgb(
@@ -1081,7 +1165,7 @@ jobs:
                       )
 
                       /*
-                       * Ambient command-center glow.
+                       * AMBIENT GLOW
                        */
 
                       val glow =
@@ -1125,7 +1209,7 @@ jobs:
                           null
 
                       /*
-                       * Floor grid.
+                       * FLOOR GRID
                        */
 
                       gridPaint.color =
@@ -1142,7 +1226,9 @@ jobs:
                       var y =
                           horizon
 
-                      while (y < h) {
+                      while (
+                          y < h
+                      ) {
 
                           canvas.drawLine(
                               0f,
@@ -1174,7 +1260,7 @@ jobs:
                       }
 
                       /*
-                       * Audrey holographic core.
+                       * AUDREY CORE RINGS
                        */
 
                       paint.style =
@@ -1216,7 +1302,7 @@ jobs:
                           Paint.Style.FILL
 
                       /*
-                       * Audrey placeholder silhouette.
+                       * AUDREY PLACEHOLDER
                        */
 
                       paint.color =
@@ -1236,7 +1322,7 @@ jobs:
                       )
 
                       /*
-                       * Audrey head / interface glow.
+                       * HEAD / CORE
                        */
 
                       paint.color =
@@ -1270,7 +1356,7 @@ jobs:
                       )
 
                       /*
-                       * Futuristic desk.
+                       * FUTURISTIC DESK
                        */
 
                       paint.color =
@@ -1310,7 +1396,7 @@ jobs:
                       )
 
                       /*
-                       * Holographic side screens.
+                       * HOLOGRAPHIC SCREENS
                        */
 
                       paint.style =
@@ -1351,7 +1437,7 @@ jobs:
                           Paint.Style.FILL
 
                       /*
-                       * HUD labels.
+                       * HUD TEXT
                        */
 
                       paint.color =
@@ -1412,10 +1498,10 @@ jobs:
           mkdir -p habitat-apk
 
           cp habitat-project/HabitatAndroid/app/build/outputs/apk/debug/app-debug.apk \
-             habitat-apk/Habitat-Audrey-v0.5.3.apk
+             habitat-apk/Habitat-Audrey-v0.5.4.apk
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: Habitat-Audrey-v0.5.3
-          path: habitat-apk/Habitat-Audrey-v0.5.3.apk
+          name: Habitat-Audrey-v0.5.4
+          path: habitat-apk/Habitat-Audrey-v0.5.4.apk
