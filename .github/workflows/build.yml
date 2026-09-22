@@ -22,15 +22,33 @@ jobs:
         with:
           gradle-version: '8.9'
 
-      - name: Extract Habitat Android project
+      - name: Extract Habitat project
         run: |
           unzip -o Habitat-Android-Project.zip
-          echo "Habitat project extracted."
-          find habitat-project/HabitatAndroid -maxdepth 5 -type f | sort
+          echo "===== EXTRACTED FILES ====="
+          find . -maxdepth 6 -type f | sort | head -200
+          echo "==========================="
+
+      - name: Locate Android project
+        run: |
+          PROJECT_DIR=$(find . -name "settings.gradle.kts" -type f | head -1 | xargs dirname)
+
+          if [ -z "$PROJECT_DIR" ]; then
+            echo "ERROR: Could not find settings.gradle.kts"
+            exit 1
+          fi
+
+          echo "Android project found at:"
+          echo "$PROJECT_DIR"
+
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
       - name: Configure Android project
         run: |
-          cd habitat-project/HabitatAndroid
+          cd "$PROJECT_DIR"
+
+          mkdir -p app/src/main/java/com/habitat
+          mkdir -p app/src/main/res/values
 
           cat > settings.gradle.kts <<'EOF'
           pluginManagement {
@@ -59,9 +77,6 @@ jobs:
               id("org.jetbrains.kotlin.android") version "2.0.21" apply false
           }
           EOF
-
-          mkdir -p app/src/main/java/com/habitat
-          mkdir -p app/src/main/res/values
 
           cat > app/build.gradle.kts <<'EOF'
           plugins {
@@ -187,18 +202,10 @@ jobs:
               private val bg = Color.rgb(7, 8, 14)
               private val panel = Color.rgb(14, 16, 26)
               private val panel2 = Color.rgb(20, 22, 35)
-
-              private val textMain =
-                  Color.rgb(240, 240, 248)
-
-              private val textDim =
-                  Color.rgb(145, 148, 165)
-
-              private val accent =
-                  Color.rgb(125, 92, 255)
-
-              private val accent2 =
-                  Color.rgb(65, 190, 255)
+              private val textMain = Color.rgb(240, 240, 248)
+              private val textDim = Color.rgb(145, 148, 165)
+              private val accent = Color.rgb(125, 92, 255)
+              private val accent2 = Color.rgb(65, 190, 255)
 
               override fun onCreate(savedInstanceState: Bundle?) {
                   super.onCreate(savedInstanceState)
@@ -235,12 +242,8 @@ jobs:
               private fun buildInterface() {
 
                   val root = LinearLayout(this).apply {
-                      orientation =
-                          LinearLayout.VERTICAL
-
-                      gravity =
-                          Gravity.CENTER_HORIZONTAL
-
+                      orientation = LinearLayout.VERTICAL
+                      gravity = Gravity.CENTER_HORIZONTAL
                       setBackgroundColor(bg)
                   }
 
@@ -267,13 +270,10 @@ jobs:
 
                   val header =
                       LinearLayout(this).apply {
-
                           orientation =
                               LinearLayout.HORIZONTAL
-
                           gravity =
                               Gravity.CENTER_VERTICAL
-
                           setPadding(
                               dp(8),
                               dp(4),
@@ -284,15 +284,11 @@ jobs:
 
                   val title =
                       TextView(this).apply {
-
                           text = "HABITAT"
                           textSize = 22f
-
                           setTextColor(textMain)
-
                           typeface =
                               Typeface.DEFAULT_BOLD
-
                           letterSpacing = 0.12f
                       }
 
@@ -307,21 +303,12 @@ jobs:
 
                   val online =
                       TextView(this).apply {
-
                           text = "● ONLINE"
                           textSize = 12f
-
                           setTextColor(
-                              Color.rgb(
-                                  95,
-                                  235,
-                                  155
-                              )
+                              Color.rgb(95, 235, 155)
                           )
-
-                          gravity =
-                              Gravity.CENTER
-
+                          gravity = Gravity.CENTER
                           setPadding(
                               dp(12),
                               0,
@@ -348,39 +335,25 @@ jobs:
 
                   val hero =
                       LinearLayout(this).apply {
-
                           orientation =
                               LinearLayout.VERTICAL
-
-                          gravity =
-                              Gravity.CENTER
-
+                          gravity = Gravity.CENTER
                           setPadding(
                               dp(10),
                               dp(10),
                               dp(10),
                               dp(10)
                           )
-
                           background =
-                              rounded(
-                                  panel,
-                                  26
-                              )
+                              rounded(panel, 26)
                       }
 
                   val avatar =
                       TextView(this).apply {
-
                           text = "◉"
                           textSize = 54f
-
-                          gravity =
-                              Gravity.CENTER
-
-                          setTextColor(
-                              accent2
-                          )
+                          gravity = Gravity.CENTER
+                          setTextColor(accent2)
                       }
 
                   hero.addView(
@@ -393,20 +366,12 @@ jobs:
 
                   val audrey =
                       TextView(this).apply {
-
                           text = "AUDREY"
                           textSize = 22f
-
-                          gravity =
-                              Gravity.CENTER
-
-                          setTextColor(
-                              textMain
-                          )
-
+                          gravity = Gravity.CENTER
+                          setTextColor(textMain)
                           typeface =
                               Typeface.DEFAULT_BOLD
-
                           letterSpacing = 0.16f
                       }
 
@@ -420,19 +385,11 @@ jobs:
 
                   val intelligence =
                       TextView(this).apply {
-
                           text =
                               "HABITAT INTELLIGENCE"
-
                           textSize = 10f
-
-                          gravity =
-                              Gravity.CENTER
-
-                          setTextColor(
-                              textDim
-                          )
-
+                          gravity = Gravity.CENTER
+                          setTextColor(textDim)
                           letterSpacing = 0.18f
                       }
 
@@ -456,11 +413,8 @@ jobs:
 
                   chatScroll =
                       ScrollView(this).apply {
-
                           isFillViewport = true
-
                           clipToPadding = false
-
                           setBackgroundColor(
                               Color.TRANSPARENT
                           )
@@ -468,13 +422,9 @@ jobs:
 
                   chatContainer =
                       LinearLayout(this).apply {
-
                           orientation =
                               LinearLayout.VERTICAL
-
-                          gravity =
-                              Gravity.BOTTOM
-
+                          gravity = Gravity.BOTTOM
                           setPadding(
                               dp(2),
                               dp(4),
@@ -508,62 +458,43 @@ jobs:
 
                   val inputPanel =
                       LinearLayout(this).apply {
-
                           orientation =
                               LinearLayout.HORIZONTAL
-
                           gravity =
                               Gravity.CENTER_VERTICAL
-
                           setPadding(
                               dp(8),
                               dp(8),
                               dp(8),
                               dp(8)
                           )
-
                           background =
-                              rounded(
-                                  panel2,
-                                  22
-                              )
+                              rounded(panel2, 22)
                       }
 
                   input =
                       EditText(this).apply {
-
                           hint =
                               "Talk to Audrey..."
-
                           setHintTextColor(
                               textDim
                           )
-
                           setTextColor(
                               textMain
                           )
-
                           textSize = 16f
-
                           setSingleLine(true)
-
                           inputType =
                               InputType.TYPE_CLASS_TEXT or
                               InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
-
                           setPadding(
                               dp(14),
                               0,
                               dp(14),
                               0
                           )
-
                           background =
-                              rounded(
-                                  bg,
-                                  16
-                              )
-
+                              rounded(bg, 16)
                           imeOptions =
                               android.view.inputmethod
                                   .EditorInfo
@@ -572,9 +503,7 @@ jobs:
 
                   input.setOnEditorActionListener {
                       _, _, _ ->
-
                       sendMessage()
-
                       true
                   }
 
@@ -591,33 +520,20 @@ jobs:
 
                   sendButton =
                       TextView(this).apply {
-
                           text = "SEND"
                           textSize = 12f
-
-                          gravity =
-                              Gravity.CENTER
-
-                          setTextColor(
-                              Color.WHITE
-                          )
-
+                          gravity = Gravity.CENTER
+                          setTextColor(Color.WHITE)
                           typeface =
                               Typeface.DEFAULT_BOLD
-
                           background =
-                              rounded(
-                                  accent,
-                                  16
-                              )
-
+                              rounded(accent, 16)
                           setPadding(
                               dp(16),
                               0,
                               dp(16),
                               0
                           )
-
                           setOnClickListener {
                               sendMessage()
                           }
@@ -650,16 +566,13 @@ jobs:
 
                   val row =
                       LinearLayout(this).apply {
-
                           orientation =
                               LinearLayout.VERTICAL
-
                           gravity =
                               if (fromUser)
                                   Gravity.END
                               else
                                   Gravity.START
-
                           setPadding(
                               dp(4),
                               dp(5),
@@ -670,17 +583,14 @@ jobs:
 
                   val label =
                       TextView(this).apply {
-
                           text = name
                           textSize = 10f
-
                           setTextColor(
                               if (fromUser)
                                   accent
                               else
                                   accent2
                           )
-
                           setPadding(
                               dp(6),
                               0,
@@ -699,21 +609,15 @@ jobs:
 
                   val bubble =
                       TextView(this).apply {
-
                           text = message
                           textSize = 15f
-
-                          setTextColor(
-                              textMain
-                          )
-
+                          setTextColor(textMain)
                           setPadding(
                               dp(14),
                               dp(10),
                               dp(14),
                               dp(10)
                           )
-
                           background =
                               rounded(
                                   if (fromUser)
@@ -726,7 +630,6 @@ jobs:
                                       panel,
                                   18
                               )
-
                           setMaxWidth(
                               dp(310)
                           )
@@ -817,8 +720,7 @@ jobs:
                           url.openConnection()
                               as HttpURLConnection
 
-                      connection.requestMethod =
-                          "POST"
+                      connection.requestMethod = "POST"
 
                       connection.setRequestProperty(
                           "Content-Type",
@@ -843,7 +745,6 @@ jobs:
 
                       connection.outputStream.use {
                           output ->
-
                           output.write(
                               body.toByteArray(
                                   Charsets.UTF_8
@@ -873,7 +774,6 @@ jobs:
                               JSONObject(response)
 
                           when {
-
                               json.has("reply") ->
                                   json.getString(
                                       "reply"
@@ -917,13 +817,13 @@ jobs:
 
       - name: Build APK
         run: |
-          cd habitat-project/HabitatAndroid
+          cd "$PROJECT_DIR"
           gradle assembleDebug --stacktrace
 
       - name: Prepare APK
         run: |
           mkdir -p output
-          cp habitat-project/HabitatAndroid/app/build/outputs/apk/debug/app-debug.apk \
+          cp "$PROJECT_DIR/app/build/outputs/apk/debug/app-debug.apk" \
              output/Habitat-Audrey-v0.5.5.apk
 
       - name: Upload APK
