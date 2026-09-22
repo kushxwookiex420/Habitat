@@ -12,7 +12,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up Java 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
@@ -25,10 +25,10 @@ jobs:
       - name: Extract Habitat Android project
         run: |
           unzip -o Habitat-Android-Project.zip
-          echo "Project extracted"
-          find . -maxdepth 4 -type f | sort
+          echo "Habitat project extracted."
+          find habitat-project/HabitatAndroid -maxdepth 5 -type f | sort
 
-      - name: Write Android project
+      - name: Configure Android project
         run: |
           cd habitat-project/HabitatAndroid
 
@@ -61,6 +61,7 @@ jobs:
           EOF
 
           mkdir -p app/src/main/java/com/habitat
+          mkdir -p app/src/main/res/values
 
           cat > app/build.gradle.kts <<'EOF'
           plugins {
@@ -128,19 +129,20 @@ jobs:
           </manifest>
           EOF
 
-          mkdir -p app/src/main/res/values
-
           cat > app/src/main/res/values/styles.xml <<'EOF'
           <?xml version="1.0" encoding="utf-8"?>
           <resources>
 
-              <style name="AppTheme" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+              <style name="AppTheme"
+                  parent="Theme.MaterialComponents.DayNight.NoActionBar">
+
                   <item name="android:fontFamily">sans</item>
                   <item name="android:windowLightStatusBar">false</item>
                   <item name="android:statusBarColor">@android:color/transparent</item>
                   <item name="android:navigationBarColor">@android:color/black</item>
                   <item name="android:windowActionModeOverlay">true</item>
                   <item name="android:colorAccent">#7C4DFF</item>
+
               </style>
 
           </resources>
@@ -150,15 +152,13 @@ jobs:
           package com.habitat
 
           import android.graphics.Color
+          import android.graphics.Typeface
           import android.graphics.drawable.GradientDrawable
           import android.os.Bundle
           import android.text.InputType
           import android.view.Gravity
           import android.view.View
           import android.view.ViewGroup
-          import android.view.Window
-          import android.view.WindowInsets
-          import android.view.WindowInsetsController
           import android.widget.EditText
           import android.widget.LinearLayout
           import android.widget.ScrollView
@@ -182,20 +182,31 @@ jobs:
               private val executor = Executors.newSingleThreadExecutor()
 
               private val backendUrl =
-                  "https://habitat-cr45.onrender.com/chat"
+                  "https://habitat-cr46.onrender.com/chat"
 
               private val bg = Color.rgb(7, 8, 14)
               private val panel = Color.rgb(14, 16, 26)
               private val panel2 = Color.rgb(20, 22, 35)
-              private val textMain = Color.rgb(240, 240, 248)
-              private val textDim = Color.rgb(145, 148, 165)
-              private val accent = Color.rgb(125, 92, 255)
-              private val accent2 = Color.rgb(65, 190, 255)
+
+              private val textMain =
+                  Color.rgb(240, 240, 248)
+
+              private val textDim =
+                  Color.rgb(145, 148, 165)
+
+              private val accent =
+                  Color.rgb(125, 92, 255)
+
+              private val accent2 =
+                  Color.rgb(65, 190, 255)
 
               override fun onCreate(savedInstanceState: Bundle?) {
                   super.onCreate(savedInstanceState)
 
-                  WindowCompat.setDecorFitsSystemWindows(window, false)
+                  WindowCompat.setDecorFitsSystemWindows(
+                      window,
+                      false
+                  )
 
                   window.statusBarColor = Color.TRANSPARENT
                   window.navigationBarColor = Color.BLACK
@@ -204,37 +215,49 @@ jobs:
               }
 
               private fun dp(value: Int): Int {
-                  return (value * resources.displayMetrics.density).toInt()
+                  return (
+                      value *
+                      resources.displayMetrics.density
+                  ).toInt()
               }
 
               private fun rounded(
                   color: Int,
-                  radius: Float
+                  radius: Int
               ): GradientDrawable {
                   return GradientDrawable().apply {
                       setColor(color)
-                      cornerRadius = dp(radius.toInt()).toFloat()
+                      cornerRadius =
+                          dp(radius).toFloat()
                   }
               }
 
               private fun buildInterface() {
 
                   val root = LinearLayout(this).apply {
-                      orientation = LinearLayout.VERTICAL
-                      gravity = Gravity.CENTER_HORIZONTAL
+                      orientation =
+                          LinearLayout.VERTICAL
+
+                      gravity =
+                          Gravity.CENTER_HORIZONTAL
+
                       setBackgroundColor(bg)
                   }
 
-                  ViewCompat.setOnApplyWindowInsetsListener(root) { view, insets ->
+                  ViewCompat.setOnApplyWindowInsetsListener(
+                      root
+                  ) { view, insets ->
 
-                      val systemBars =
-                          insets.getInsets(WindowInsetsCompat.Type.systemBars())
+                      val bars =
+                          insets.getInsets(
+                              WindowInsetsCompat.Type.systemBars()
+                          )
 
                       view.setPadding(
                           dp(14),
-                          systemBars.top + dp(8),
+                          bars.top + dp(8),
                           dp(14),
-                          systemBars.bottom + dp(8)
+                          bars.bottom + dp(8)
                       )
 
                       insets
@@ -242,19 +265,36 @@ jobs:
 
                   setContentView(root)
 
-                  val header = LinearLayout(this).apply {
-                      orientation = LinearLayout.HORIZONTAL
-                      gravity = Gravity.CENTER_VERTICAL
-                      setPadding(dp(8), dp(4), dp(8), dp(10))
-                  }
+                  val header =
+                      LinearLayout(this).apply {
 
-                  val title = TextView(this).apply {
-                      text = "HABITAT"
-                      textSize = 22f
-                      setTextColor(textMain)
-                      typeface = android.graphics.Typeface.DEFAULT_BOLD
-                      letterSpacing = 0.12f
-                  }
+                          orientation =
+                              LinearLayout.HORIZONTAL
+
+                          gravity =
+                              Gravity.CENTER_VERTICAL
+
+                          setPadding(
+                              dp(8),
+                              dp(4),
+                              dp(8),
+                              dp(10)
+                          )
+                      }
+
+                  val title =
+                      TextView(this).apply {
+
+                          text = "HABITAT"
+                          textSize = 22f
+
+                          setTextColor(textMain)
+
+                          typeface =
+                              Typeface.DEFAULT_BOLD
+
+                          letterSpacing = 0.12f
+                      }
 
                   header.addView(
                       title,
@@ -265,13 +305,30 @@ jobs:
                       )
                   )
 
-                  val online = TextView(this).apply {
-                      text = "● ONLINE"
-                      textSize = 12f
-                      setTextColor(Color.rgb(95, 235, 155))
-                      gravity = Gravity.CENTER
-                      setPadding(dp(12), 0, dp(12), 0)
-                  }
+                  val online =
+                      TextView(this).apply {
+
+                          text = "● ONLINE"
+                          textSize = 12f
+
+                          setTextColor(
+                              Color.rgb(
+                                  95,
+                                  235,
+                                  155
+                              )
+                          )
+
+                          gravity =
+                              Gravity.CENTER
+
+                          setPadding(
+                              dp(12),
+                              0,
+                              dp(12),
+                              0
+                          )
+                      }
 
                   header.addView(
                       online,
@@ -289,19 +346,42 @@ jobs:
                       )
                   )
 
-                  val hero = LinearLayout(this).apply {
-                      orientation = LinearLayout.VERTICAL
-                      gravity = Gravity.CENTER
-                      setPadding(dp(10), dp(10), dp(10), dp(10))
-                      background = rounded(panel, 26f)
-                  }
+                  val hero =
+                      LinearLayout(this).apply {
 
-                  val avatar = TextView(this).apply {
-                      text = "◉"
-                      textSize = 54f
-                      gravity = Gravity.CENTER
-                      setTextColor(accent2)
-                  }
+                          orientation =
+                              LinearLayout.VERTICAL
+
+                          gravity =
+                              Gravity.CENTER
+
+                          setPadding(
+                              dp(10),
+                              dp(10),
+                              dp(10),
+                              dp(10)
+                          )
+
+                          background =
+                              rounded(
+                                  panel,
+                                  26
+                              )
+                      }
+
+                  val avatar =
+                      TextView(this).apply {
+
+                          text = "◉"
+                          textSize = 54f
+
+                          gravity =
+                              Gravity.CENTER
+
+                          setTextColor(
+                              accent2
+                          )
+                      }
 
                   hero.addView(
                       avatar,
@@ -311,14 +391,24 @@ jobs:
                       )
                   )
 
-                  val audrey = TextView(this).apply {
-                      text = "AUDREY"
-                      textSize = 22f
-                      gravity = Gravity.CENTER
-                      setTextColor(textMain)
-                      typeface = android.graphics.Typeface.DEFAULT_BOLD
-                      letterSpacing = 0.16f
-                  }
+                  val audrey =
+                      TextView(this).apply {
+
+                          text = "AUDREY"
+                          textSize = 22f
+
+                          gravity =
+                              Gravity.CENTER
+
+                          setTextColor(
+                              textMain
+                          )
+
+                          typeface =
+                              Typeface.DEFAULT_BOLD
+
+                          letterSpacing = 0.16f
+                      }
 
                   hero.addView(
                       audrey,
@@ -328,13 +418,23 @@ jobs:
                       )
                   )
 
-                  val intelligence = TextView(this).apply {
-                      text = "HABITAT INTELLIGENCE"
-                      textSize = 10f
-                      gravity = Gravity.CENTER
-                      setTextColor(textDim)
-                      letterSpacing = 0.18f
-                  }
+                  val intelligence =
+                      TextView(this).apply {
+
+                          text =
+                              "HABITAT INTELLIGENCE"
+
+                          textSize = 10f
+
+                          gravity =
+                              Gravity.CENTER
+
+                          setTextColor(
+                              textDim
+                          )
+
+                          letterSpacing = 0.18f
+                      }
 
                   hero.addView(
                       intelligence,
@@ -354,17 +454,34 @@ jobs:
                       }
                   )
 
-                  chatScroll = ScrollView(this).apply {
-                      isFillViewport = true
-                      clipToPadding = false
-                      setBackgroundColor(Color.TRANSPARENT)
-                  }
+                  chatScroll =
+                      ScrollView(this).apply {
 
-                  chatContainer = LinearLayout(this).apply {
-                      orientation = LinearLayout.VERTICAL
-                      gravity = Gravity.BOTTOM
-                      setPadding(dp(2), dp(4), dp(2), dp(8))
-                  }
+                          isFillViewport = true
+
+                          clipToPadding = false
+
+                          setBackgroundColor(
+                              Color.TRANSPARENT
+                          )
+                      }
+
+                  chatContainer =
+                      LinearLayout(this).apply {
+
+                          orientation =
+                              LinearLayout.VERTICAL
+
+                          gravity =
+                              Gravity.BOTTOM
+
+                          setPadding(
+                              dp(2),
+                              dp(4),
+                              dp(2),
+                              dp(8)
+                          )
+                      }
 
                   chatScroll.addView(
                       chatContainer,
@@ -389,30 +506,75 @@ jobs:
                       false
                   )
 
-                  val inputPanel = LinearLayout(this).apply {
-                      orientation = LinearLayout.HORIZONTAL
-                      gravity = Gravity.CENTER_VERTICAL
-                      setPadding(dp(8), dp(8), dp(8), dp(8))
-                      background = rounded(panel2, 22f)
-                  }
+                  val inputPanel =
+                      LinearLayout(this).apply {
 
-                  input = EditText(this).apply {
-                      hint = "Talk to Audrey..."
-                      setHintTextColor(textDim)
-                      setTextColor(textMain)
-                      textSize = 16f
-                      setSingleLine(true)
-                      inputType =
-                          InputType.TYPE_CLASS_TEXT or
-                          InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
-                      setPadding(dp(14), 0, dp(14), 0)
-                      background = rounded(bg, 16f)
-                      imeOptions =
-                          android.view.inputmethod.EditorInfo.IME_ACTION_SEND
-                  }
+                          orientation =
+                              LinearLayout.HORIZONTAL
 
-                  input.setOnEditorActionListener { _, _, _ ->
+                          gravity =
+                              Gravity.CENTER_VERTICAL
+
+                          setPadding(
+                              dp(8),
+                              dp(8),
+                              dp(8),
+                              dp(8)
+                          )
+
+                          background =
+                              rounded(
+                                  panel2,
+                                  22
+                              )
+                      }
+
+                  input =
+                      EditText(this).apply {
+
+                          hint =
+                              "Talk to Audrey..."
+
+                          setHintTextColor(
+                              textDim
+                          )
+
+                          setTextColor(
+                              textMain
+                          )
+
+                          textSize = 16f
+
+                          setSingleLine(true)
+
+                          inputType =
+                              InputType.TYPE_CLASS_TEXT or
+                              InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
+
+                          setPadding(
+                              dp(14),
+                              0,
+                              dp(14),
+                              0
+                          )
+
+                          background =
+                              rounded(
+                                  bg,
+                                  16
+                              )
+
+                          imeOptions =
+                              android.view.inputmethod
+                                  .EditorInfo
+                                  .IME_ACTION_SEND
+                      }
+
+                  input.setOnEditorActionListener {
+                      _, _, _ ->
+
                       sendMessage()
+
                       true
                   }
 
@@ -427,18 +589,39 @@ jobs:
                       }
                   )
 
-                  sendButton = TextView(this).apply {
-                      text = "SEND"
-                      textSize = 12f
-                      gravity = Gravity.CENTER
-                      setTextColor(Color.WHITE)
-                      typeface = android.graphics.Typeface.DEFAULT_BOLD
-                      background = rounded(accent, 16f)
-                      setPadding(dp(16), 0, dp(16), 0)
-                      setOnClickListener {
-                          sendMessage()
+                  sendButton =
+                      TextView(this).apply {
+
+                          text = "SEND"
+                          textSize = 12f
+
+                          gravity =
+                              Gravity.CENTER
+
+                          setTextColor(
+                              Color.WHITE
+                          )
+
+                          typeface =
+                              Typeface.DEFAULT_BOLD
+
+                          background =
+                              rounded(
+                                  accent,
+                                  16
+                              )
+
+                          setPadding(
+                              dp(16),
+                              0,
+                              dp(16),
+                              0
+                          )
+
+                          setOnClickListener {
+                              sendMessage()
+                          }
                       }
-                  }
 
                   inputPanel.addView(
                       sendButton,
@@ -465,21 +648,46 @@ jobs:
                   fromUser: Boolean
               ) {
 
-                  val row = LinearLayout(this).apply {
-                      orientation = LinearLayout.VERTICAL
-                      gravity =
-                          if (fromUser) Gravity.END else Gravity.START
-                      setPadding(dp(4), dp(5), dp(4), dp(5))
-                  }
+                  val row =
+                      LinearLayout(this).apply {
 
-                  val label = TextView(this).apply {
-                      text = name
-                      textSize = 10f
-                      setTextColor(
-                          if (fromUser) accent else accent2
-                      )
-                      setPadding(dp(6), 0, dp(6), dp(3))
-                  }
+                          orientation =
+                              LinearLayout.VERTICAL
+
+                          gravity =
+                              if (fromUser)
+                                  Gravity.END
+                              else
+                                  Gravity.START
+
+                          setPadding(
+                              dp(4),
+                              dp(5),
+                              dp(4),
+                              dp(5)
+                          )
+                      }
+
+                  val label =
+                      TextView(this).apply {
+
+                          text = name
+                          textSize = 10f
+
+                          setTextColor(
+                              if (fromUser)
+                                  accent
+                              else
+                                  accent2
+                          )
+
+                          setPadding(
+                              dp(6),
+                              0,
+                              dp(6),
+                              dp(3)
+                          )
+                      }
 
                   row.addView(
                       label,
@@ -489,23 +697,40 @@ jobs:
                       )
                   )
 
-                  val bubble = TextView(this).apply {
-                      text = message
-                      textSize = 15f
-                      setTextColor(textMain)
-                      setPadding(
-                          dp(14),
-                          dp(10),
-                          dp(14),
-                          dp(10)
-                      )
-                      background = rounded(
-                          if (fromUser) Color.rgb(43, 34, 74)
-                          else panel,
-                          18f
-                      )
-                      setMaxWidth(dp(310))
-                  }
+                  val bubble =
+                      TextView(this).apply {
+
+                          text = message
+                          textSize = 15f
+
+                          setTextColor(
+                              textMain
+                          )
+
+                          setPadding(
+                              dp(14),
+                              dp(10),
+                              dp(14),
+                              dp(10)
+                          )
+
+                          background =
+                              rounded(
+                                  if (fromUser)
+                                      Color.rgb(
+                                          43,
+                                          34,
+                                          74
+                                      )
+                                  else
+                                      panel,
+                                  18
+                              )
+
+                          setMaxWidth(
+                              dp(310)
+                          )
+                      }
 
                   row.addView(
                       bubble,
@@ -518,32 +743,48 @@ jobs:
                   chatContainer.addView(row)
 
                   chatScroll.post {
-                      chatScroll.fullScroll(View.FOCUS_DOWN)
+                      chatScroll.fullScroll(
+                          View.FOCUS_DOWN
+                      )
                   }
               }
 
               private fun sendMessage() {
 
-                  val message = input.text.toString().trim()
+                  val message =
+                      input.text.toString().trim()
 
-                  if (message.isEmpty()) return
+                  if (message.isEmpty()) {
+                      return
+                  }
 
                   input.setText("")
 
-                  addMessage("You", message, true)
+                  addMessage(
+                      "You",
+                      message,
+                      true
+                  )
 
                   sendButton.isEnabled = false
                   sendButton.alpha = 0.5f
 
-                  addMessage("Audrey", "Thinking...", false)
+                  addMessage(
+                      "Audrey",
+                      "Thinking...",
+                      false
+                  )
 
                   executor.execute {
 
-                      val response = callBackend(message)
+                      val response =
+                          callBackend(message)
 
                       runOnUiThread {
 
-                          if (chatContainer.childCount > 0) {
+                          if (
+                              chatContainer.childCount > 0
+                          ) {
                               chatContainer.removeViewAt(
                                   chatContainer.childCount - 1
                               )
@@ -555,51 +796,76 @@ jobs:
                               false
                           )
 
-                          sendButton.isEnabled = true
+                          sendButton.isEnabled =
+                              true
+
                           sendButton.alpha = 1f
                       }
                   }
               }
 
-              private fun callBackend(message: String): String {
+              private fun callBackend(
+                  message: String
+              ): String {
 
                   return try {
 
-                      val url = URL(backendUrl)
+                      val url =
+                          URL(backendUrl)
 
                       val connection =
-                          url.openConnection() as HttpURLConnection
+                          url.openConnection()
+                              as HttpURLConnection
 
-                      connection.requestMethod = "POST"
+                      connection.requestMethod =
+                          "POST"
+
                       connection.setRequestProperty(
                           "Content-Type",
                           "application/json"
                       )
-                      connection.connectTimeout = 30000
-                      connection.readTimeout = 60000
+
+                      connection.connectTimeout =
+                          30000
+
+                      connection.readTimeout =
+                          60000
+
                       connection.doOutput = true
 
-                      val body = JSONObject()
-                          .put("message", message)
-                          .toString()
+                      val body =
+                          JSONObject()
+                              .put(
+                                  "message",
+                                  message
+                              )
+                              .toString()
 
-                      connection.outputStream.use { output ->
+                      connection.outputStream.use {
+                          output ->
+
                           output.write(
-                              body.toByteArray(Charsets.UTF_8)
+                              body.toByteArray(
+                                  Charsets.UTF_8
+                              )
                           )
                       }
 
                       val stream =
-                          if (connection.responseCode in 200..299) {
+                          if (
+                              connection.responseCode
+                              in 200..299
+                          ) {
                               connection.inputStream
                           } else {
                               connection.errorStream
                           }
 
                       val response =
-                          stream.bufferedReader().use {
-                              it.readText()
-                          }
+                          stream.bufferedReader()
+                              .use {
+                                  it.readText()
+                              }
 
                       try {
 
@@ -607,17 +873,26 @@ jobs:
                               JSONObject(response)
 
                           when {
+
                               json.has("reply") ->
-                                  json.getString("reply")
+                                  json.getString(
+                                      "reply"
+                                  )
 
                               json.has("output") ->
-                                  json.getString("output")
+                                  json.getString(
+                                      "output"
+                                  )
 
                               json.has("message") ->
-                                  json.getString("message")
+                                  json.getString(
+                                      "message"
+                                  )
 
                               json.has("text") ->
-                                  json.getString("text")
+                                  json.getString(
+                                      "text"
+                                  )
 
                               else ->
                                   response
@@ -627,10 +902,9 @@ jobs:
                           response
                       }
 
-                  } catch (e: Exception) {
+                  } catch (_: Exception) {
 
-                      "I couldn't reach the Habitat brain right now. " +
-                      "Check the connection and try again."
+                      "I couldn't reach the Habitat brain right now. Check the connection and try again."
                   }
               }
 
@@ -641,21 +915,12 @@ jobs:
           }
           EOF
 
-      - name: Verify source
-        run: |
-          cd habitat-project/HabitatAndroid
-          echo "Checking critical fixes..."
-          grep -n "setHintTextColor" app/src/main/java/com/habitat/MainActivity.kt
-          grep -n "setSingleLine" app/src/main/java/com/habitat/MainActivity.kt
-          grep -n "setMaxWidth" app/src/main/java/com/habitat/MainActivity.kt
-          echo "Verification complete"
-
       - name: Build APK
         run: |
           cd habitat-project/HabitatAndroid
           gradle assembleDebug --stacktrace
 
-      - name: Rename APK
+      - name: Prepare APK
         run: |
           mkdir -p output
           cp habitat-project/HabitatAndroid/app/build/outputs/apk/debug/app-debug.apk \
