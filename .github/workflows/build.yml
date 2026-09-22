@@ -28,7 +28,6 @@ jobs:
 
           rm -rf habitat-project
           mkdir -p habitat-project
-
           unzip -q Habitat-Android-Project.zip -d habitat-project
 
           PROJECT_DIR="habitat-project/HabitatAndroid"
@@ -43,18 +42,26 @@ jobs:
           echo "APP_DIR=$APP_DIR" >> "$GITHUB_ENV"
           echo "MAIN_DIR=$MAIN_DIR" >> "$GITHUB_ENV"
 
-          echo "Habitat project found:"
-          echo "$PROJECT_DIR"
-
-      - name: Show Gradle and project status
+      - name: Detect MainActivity
+        shell: bash
         run: |
-          gradle --version
+          set -e
 
-          echo "Settings:"
-          cat "$PROJECT_DIR/settings.gradle.kts"
+          MAIN=$(find "$MAIN_DIR" -type f -name "MainActivity.kt" -print -quit)
 
-          echo "App build file:"
-          cat "$APP_DIR/build.gradle.kts"
+          if [ -z "$MAIN" ]; then
+            echo "ERROR: MainActivity.kt not found."
+            exit 1
+          fi
+
+          PACKAGE=$(grep -m1 '^package ' "$MAIN" | sed 's/^package //')
+          PACKAGE_DIR=$(dirname "$MAIN")
+
+          echo "MAIN=$MAIN" >> "$GITHUB_ENV"
+          echo "PACKAGE=$PACKAGE" >> "$GITHUB_ENV"
+          echo "PACKAGE_DIR=$PACKAGE_DIR" >> "$GITHUB_ENV"
+
+          echo "Package: $PACKAGE"
 
       - name: Prepare Audrey artwork
         shell: bash
@@ -62,15 +69,13 @@ jobs:
           set -e
 
           DRAWABLE_DIR="$MAIN_DIR/res/drawable-nodpi"
-
           mkdir -p "$DRAWABLE_DIR"
 
           if [ -f "lucia.png" ]; then
             cp "lucia.png" "$DRAWABLE_DIR/lucia.png"
             echo "Audrey artwork installed."
           else
-            echo "No lucia.png in repository."
-            echo "Creating fallback Audrey background."
+            echo "No lucia.png found. Creating fallback artwork."
 
             cat > "$DRAWABLE_DIR/lucia.xml" <<'EOF'
           <vector xmlns:android="http://schemas.android.com/apk/res/android"
@@ -81,48 +86,19 @@ jobs:
 
               <path
                   android:fillColor="#090914"
-                  android:pathData="M0,0 L1080,0 L1080,1920 L0,1920 Z" />
+                  android:pathData="M0,0 L1080,0 L1080,1920 L0,1920 Z"/>
 
               <path
                   android:fillColor="#24124A"
-                  android:pathData="M0,300 L1080,0 L1080,850 L0,1150 Z" />
+                  android:pathData="M0,300 L1080,0 L1080,850 L0,1150 Z"/>
 
               <path
                   android:fillColor="#083C52"
-                  android:pathData="M0,1100 L1080,800 L1080,1920 L0,1920 Z" />
+                  android:pathData="M0,1100 L1080,800 L1080,1920 L0,1920 Z"/>
 
           </vector>
           EOF
           fi
-
-      - name: Detect MainActivity package
-        shell: bash
-        run: |
-          set -e
-
-          MAIN=$(find "$MAIN_DIR" -type f -name "MainActivity.kt" -print -quit)
-
-          if [ -z "$MAIN" ]; then
-            echo "ERROR: MainActivity.kt was not found."
-            find "$MAIN_DIR" -type f | head -200
-            exit 1
-          fi
-
-          PACKAGE=$(grep -m1 '^package ' "$MAIN" | sed 's/^package //')
-
-          if [ -z "$PACKAGE" ]; then
-            echo "ERROR: Could not determine package name."
-            exit 1
-          fi
-
-          PACKAGE_DIR=$(dirname "$MAIN")
-
-          echo "MAIN=$MAIN" >> "$GITHUB_ENV"
-          echo "PACKAGE=$PACKAGE" >> "$GITHUB_ENV"
-          echo "PACKAGE_DIR=$PACKAGE_DIR" >> "$GITHUB_ENV"
-
-          echo "MainActivity: $MAIN"
-          echo "Package: $PACKAGE"
 
       - name: Create Audrey brain
         shell: bash
@@ -219,6 +195,7 @@ jobs:
           import android.os.Bundle
           import android.graphics.Color
           import android.graphics.Typeface
+          import android.text.InputType
           import android.view.Gravity
           import android.view.View
           import android.view.WindowManager
@@ -284,7 +261,8 @@ jobs:
                   input = EditText(this)
                   input.hint = "Talk to Audrey..."
                   input.textSize = 16f
-                  input.singleLine = true
+                  input.setSingleLine(true)
+                  input.inputType = InputType.TYPE_CLASS_TEXT
                   input.imeOptions = EditorInfo.IME_ACTION_SEND
                   input.setTextColor(Color.WHITE)
                   input.setHintTextColor(Color.LTGRAY)
@@ -335,7 +313,7 @@ jobs:
 
                   brain.remember(message, response)
 
-                  input.text = ""
+                  input.text.clear()
               }
 
               private fun hideSystemUI() {
