@@ -32,36 +32,49 @@ jobs:
           PROJECT_DIR=$(find extracted -name "settings.gradle.kts" -type f | head -1 | xargs dirname)
 
           if [ -z "$PROJECT_DIR" ]; then
-            echo "ERROR: Could not find settings.gradle.kts"
+            echo "ERROR: Could not find Android project"
             exit 1
           fi
 
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
           echo "Found project at: $PROJECT_DIR"
 
-      - name: Check MainActivity
+      - name: Fix known Kotlin timestamp call
         run: |
           MAIN_FILE="$PROJECT_DIR/app/src/main/java/com/habitat/core/MainActivity.kt"
 
           if [ ! -f "$MAIN_FILE" ]; then
             echo "ERROR: MainActivity.kt not found"
-            find "$PROJECT_DIR/app/src/main/java" -type f -name "*.kt" -print
             exit 1
           fi
 
-          echo "MainActivity found:"
-          echo "$MAIN_FILE"
+          python3 - "$MAIN_FILE" <<'PY'
+          import sys
 
-          echo "Checking first 25 lines only:"
-          sed -n '1,25p' "$MAIN_FILE"
+          path = sys.argv[1]
+
+          with open(path, "r", encoding="utf-8") as f:
+              text = f.read()
+
+          old = 'log.append("\\n[" + now + "]")'
+          new = 'log.append("\\n[" + now() + "]")'
+
+          if old in text:
+              text = text.replace(old, new, 1)
+              print("Fixed timestamp call.")
+          else:
+              print("Exact timestamp pattern not found.")
+              print("Leaving source unchanged.")
+
+          with open(path, "w", encoding="utf-8") as f:
+              f.write(text)
+          PY
 
       - name: Build Habitat
         run: |
           cd "$PROJECT_DIR"
-
           echo "Building Habitat..."
           echo "Project directory: $PWD"
-
           gradle assembleDebug --stacktrace
 
       - name: Find APK
