@@ -15,4 +15,4 @@ jobs:
           unzip -q Habitat-Android-Project.zip -d habitat-project
           echo "=== HABITAT PROJECT FILES ==="
           find habitat-project -maxdepth 4 -type f | sort
-                    find habitat-project/HabitatAndroid/app -type f          
+                    find habitat-project/HabitatAndroid/app -type f
