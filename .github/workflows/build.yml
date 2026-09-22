@@ -1,4 +1,4 @@
-name: Habitat Audrey Build
+name: Habitat Audrey Update Build
 
 on: [workflow_dispatch]
 
@@ -10,7 +10,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Java
+      - name: Set up Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -19,151 +19,54 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      - name: Extract Habitat project
+      - name: Extract Habitat
         run: |
           rm -rf habitat-project
           mkdir -p habitat-project
           unzip -q Habitat-Android-Project.zip -d habitat-project
 
-      - name: Configure project
+      - name: Find Android project
         run: |
-          PROJECT_DIR="habitat-project/HabitatAndroid"
-          APP_DIR="$PROJECT_DIR/app"
-          MAIN_DIR="$APP_DIR/src/main"
-          MAIN="$MAIN_DIR/java/com/habitat/core/MainActivity.kt"
-          RES_DIR="$MAIN_DIR/res"
+          GRADLEW=$(find habitat-project -name gradlew -print -quit)
 
-          mkdir -p "$RES_DIR/drawable-nodpi"
-
-          if [ -f "lucia.png" ]; then
-            cp lucia.png "$RES_DIR/drawable-nodpi/lucia.png"
+          if [ -z "$GRADLEW" ]; then
+            echo "ERROR: gradlew was not found."
+            echo "Project contents:"
+            find habitat-project -maxdepth 5 -type f | head -100
+            exit 1
           fi
 
-          cat > "$APP_DIR/src/main/AndroidManifest.xml" <<'EOF'
-          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-              <uses-permission android:name="android.permission.INTERNET"/>
-              <application
-                  android:theme="@style/Theme.AppCompat.Light.NoActionBar"
-                  android:label="Habitat">
-                  <activity
-                      android:name=".MainActivity"
-                      android:screenOrientation="portrait"
-                      android:exported="true">
-                      <intent-filter>
-                          <action android:name="android.intent.action.MAIN"/>
-                          <category android:name="android.intent.category.LAUNCHER"/>
-                      </intent-filter>
-                  </activity>
-              </application>
-          </manifest>
-          EOF
+          PROJECT_DIR=$(dirname "$GRADLEW")
 
-          mkdir -p "$(dirname "$MAIN")"
+          echo "Found Gradle wrapper:"
+          echo "$GRADLEW"
+          echo "Project directory:"
+          echo "$PROJECT_DIR"
 
-          cat > "$MAIN" <<'EOF'
-          package com.habitat.core
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
-          import android.app.Activity
-          import android.os.Bundle
-          import android.graphics.Color
-          import android.view.Gravity
-          import android.view.inputmethod.EditorInfo
-          import android.widget.*
-
-          class MainActivity : Activity() {
-
-              private lateinit var input: EditText
-              private lateinit var chat: TextView
-
-              override fun onCreate(savedInstanceState: Bundle?) {
-                  super.onCreate(savedInstanceState)
-
-                  window.decorView.systemUiVisibility =
-                      5894
-
-                  val root = FrameLayout(this)
-                  root.setBackgroundColor(Color.BLACK)
-
-                  val image = ImageView(this)
-                  image.setImageResource(R.drawable.lucia)
-                  image.scaleType = ImageView.ScaleType.CENTER_CROP
-                  root.addView(
-                      image,
-                      FrameLayout.LayoutParams(-1, -1)
-                  )
-
-                  val panel = LinearLayout(this)
-                  panel.orientation = LinearLayout.VERTICAL
-                  panel.setPadding(32, 32, 32, 24)
-                  panel.gravity = Gravity.BOTTOM
-
-                  chat = TextView(this)
-                  chat.text = "AUDREY\n\nHabitat online."
-                  chat.setTextColor(Color.WHITE)
-                  chat.textSize = 18f
-                  chat.setPadding(20, 20, 20, 20)
-
-                  input = EditText(this)
-                  input.hint = "Talk to Audrey..."
-                  input.setTextColor(Color.WHITE)
-                  input.setHintTextColor(Color.LTGRAY)
-                  input.singleLine = true
-                  input.imeOptions = EditorInfo.IME_ACTION_SEND
-
-                  input.setOnEditorActionListener { _, actionId, _ ->
-                      if (actionId == EditorInfo.IME_ACTION_SEND) {
-                          sendMessage()
-                          true
-                      } else {
-                          false
-                      }
-                  }
-
-                  panel.addView(chat)
-                  panel.addView(
-                      input,
-                      LinearLayout.LayoutParams(
-                          -1,
-                          60
-                      )
-                  )
-
-                  root.addView(
-                      panel,
-                      FrameLayout.LayoutParams(
-                          -1,
-                          -2,
-                          Gravity.BOTTOM
-                      )
-                  )
-
-                  setContentView(root)
-              }
-
-              private fun sendMessage() {
-                  val message = input.text.toString().trim()
-                  if (message.isEmpty()) return
-
-                  chat.text =
-                      "YOU: $message\n\nAUDREY: I'm here. Habitat received your message."
-
-                  input.text.clear()
-              }
-          }
-          EOF
-
-          if [ -f "$APP_DIR/build.gradle" ]; then
-            sed -i "s/versionName.*/versionName \"0.5.0\"/" "$APP_DIR/build.gradle" || true
-          fi
-
-      - name: Build APK
+      - name: Build Habitat Audrey
         run: |
-          cd habitat-project/HabitatAndroid
+          cd "$PROJECT_DIR"
           chmod +x gradlew
           ./gradlew assembleDebug
 
-      - name: Upload APK
+      - name: Find APK
+        run: |
+          APK=$(find "$PROJECT_DIR" -path "*/build/outputs/apk/debug/app-debug.apk" -print -quit)
+
+          if [ -z "$APK" ]; then
+            echo "ERROR: APK was not found."
+            find "$PROJECT_DIR" -type f -name "*.apk"
+            exit 1
+          fi
+
+          echo "APK found:"
+          echo "$APK"
+          echo "APK_PATH=$APK" >> "$GITHUB_ENV"
+
+      - name: Upload Habitat APK
         uses: actions/upload-artifact@v4
         with:
-          name: Habitat-Audrey-0.5.0
-          path: habitat-project/HabitatAndroid/app/build/outputs/apk/debug/app-debug.apk
+          name: Habitat-Audrey-Update
+          path: ${{ env.APK_PATH }}
