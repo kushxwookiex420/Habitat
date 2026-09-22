@@ -1,4 +1,4 @@
-name: Habitat One-Shot Build
+name: Habitat Audrey Full Build
 
 on:
   workflow_dispatch:
@@ -8,6 +8,9 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      # ------------------------------------------------------------
+      # 1. GET HABITAT
+      # ------------------------------------------------------------
       - name: Download repository
         uses: actions/checkout@v5
 
@@ -16,32 +19,58 @@ jobs:
           rm -rf habitat-project
           unzip -q Habitat-Android-Project.zip -d habitat-project
 
-      - name: Find Android project
+      # ------------------------------------------------------------
+      # 2. FIND ANDROID PROJECT
+      # ------------------------------------------------------------
+      - name: Locate Android project
         run: |
-          echo "Searching for Android project..."
-          find habitat-project -name settings.gradle -o -name settings.gradle.kts
-          find habitat-project -name AndroidManifest.xml
-          find habitat-project -name MainActivity.kt
+          SETTINGS=$(find habitat-project -name settings.gradle -o -name settings.gradle.kts | head -n 1)
 
-      - name: Find project directory
-        run: |
-          PROJECT=$(find habitat-project -name settings.gradle -o -name settings.gradle.kts | head -n 1)
-          PROJECT_DIR=$(dirname "$PROJECT")
+          if [ -z "$SETTINGS" ]; then
+            echo "Android project not found"
+            exit 1
+          fi
+
+          PROJECT_DIR=$(dirname "$SETTINGS")
+
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-          echo "Android project: $PROJECT_DIR"
 
-      - name: Find application module
+          echo "Android project:"
+          echo "$PROJECT_DIR"
+
+      - name: Locate application
         run: |
-          APP_DIR=$(find "$PROJECT_DIR" -name AndroidManifest.xml | head -n 1 | xargs dirname)
-          echo "APP_DIR=$APP_DIR" >> "$GITHUB_ENV"
-          echo "Application directory: $APP_DIR"
+          MANIFEST=$(find "$PROJECT_DIR" -name AndroidManifest.xml | head -n 1)
 
-      - name: Find MainActivity
+          if [ -z "$MANIFEST" ]; then
+            echo "AndroidManifest.xml not found"
+            exit 1
+          fi
+
+          APP_DIR=$(dirname "$MANIFEST")
+
+          echo "APP_DIR=$APP_DIR" >> "$GITHUB_ENV"
+
+          echo "Application:"
+          echo "$APP_DIR"
+
+      - name: Locate MainActivity
         run: |
           MAIN=$(find "$APP_DIR" -name MainActivity.kt | head -n 1)
-          echo "MAIN=$MAIN" >> "$GITHUB_ENV"
-          echo "MainActivity: $MAIN"
 
+          if [ -z "$MAIN" ]; then
+            echo "MainActivity.kt not found"
+            exit 1
+          fi
+
+          echo "MAIN=$MAIN" >> "$GITHUB_ENV"
+
+          echo "MainActivity:"
+          echo "$MAIN"
+
+      # ------------------------------------------------------------
+      # 3. JAVA / GRADLE
+      # ------------------------------------------------------------
       - name: Set up Java
         uses: actions/setup-java@v5
         with:
@@ -53,68 +82,141 @@ jobs:
         with:
           gradle-version: '8.9'
 
-      - name: Create Audrey Brain
+      # ------------------------------------------------------------
+      # 4. CREATE AUDREY BRAIN ADAPTER
+      # ------------------------------------------------------------
+      - name: Create Audrey brain
         run: |
           MAIN_DIR=$(dirname "$MAIN")
+
+          mkdir -p "$MAIN_DIR"
 
           cat > "$MAIN_DIR/AudreyBrain.kt" <<'EOF'
           package com.habitat.core
 
           import android.content.Context
+          import org.json.JSONArray
           import org.json.JSONObject
 
           class AudreyBrain(private val context: Context) {
 
               private val prefs =
-                  context.getSharedPreferences("audrey_memory", Context.MODE_PRIVATE)
+                  context.getSharedPreferences(
+                      "audrey_brain",
+                      Context.MODE_PRIVATE
+                  )
 
-              fun remember(message: String) {
-                  val old = prefs.getString("conversation", "") ?: ""
+              private val endpointKey = "brain_endpoint"
 
-                  val entry = JSONObject()
-                  entry.put("user", message)
-
-                  val updated =
-                      if (old.length > 12000) old.takeLast(10000) else old
-
+              fun setEndpoint(endpoint: String) {
                   prefs.edit()
-                      .putString("conversation", updated + "\n" + entry.toString())
+                      .putString(endpointKey, endpoint.trim())
                       .apply()
               }
 
-              fun respond(message: String): String {
-                  val text = message.trim().lowercase()
+              fun getEndpoint(): String {
+                  return prefs.getString(endpointKey, "") ?: ""
+              }
 
-                  remember(message)
+              fun remember(role: String, message: String) {
 
-                  return when {
-                      text.contains("hello") ||
-                      text.contains("hi") ||
-                      text.contains("hey") ->
-                          "Hello. I'm Audrey. Habitat is online."
+                  val old = prefs.getString(
+                      "memory",
+                      "[]"
+                  ) ?: "[]"
 
-                      text.contains("who are you") ->
-                          "I'm Audrey, the companion interface for Habitat."
-
-                      text.contains("habitat") ->
-                          "Habitat is my home. My memory and brain adapter are connected."
-
-                      text.contains("remember") ->
-                          "I can store conversation memory locally in this prototype."
-
-                      text.contains("status") ->
-                          "Habitat online. Audrey interface online. Local memory online. Brain adapter ready."
-
-                      else ->
-                          "I heard you. My AI backend isn't connected yet, but my brain adapter is ready for the next connection."
+                  val array = try {
+                      JSONArray(old)
+                  } catch (_: Exception) {
+                      JSONArray()
                   }
+
+                  val item = JSONObject()
+
+                  item.put("role", role)
+                  item.put("message", message)
+                  item.put(
+                      "time",
+                      System.currentTimeMillis()
+                  )
+
+                  array.put(item)
+
+                  while (array.length() > 100) {
+                      array.remove(0)
+                  }
+
+                  prefs.edit()
+                      .putString(
+                          "memory",
+                          array.toString()
+                      )
+                      .apply()
+              }
+
+              fun getMemory(): JSONArray {
+
+                  val raw = prefs.getString(
+                      "memory",
+                      "[]"
+                  ) ?: "[]"
+
+                  return try {
+                      JSONArray(raw)
+                  } catch (_: Exception) {
+                      JSONArray()
+                  }
+              }
+
+              fun demoResponse(message: String): String {
+
+                  val text =
+                      message.trim().lowercase()
+
+                  remember(
+                      "user",
+                      message
+                  )
+
+                  val response =
+                      when {
+
+                          text.contains("hello") ||
+                          text.contains("hi") ||
+                          text.contains("hey") ->
+                              "Hello. I'm Audrey. Habitat is online."
+
+                          text.contains("who are you") ->
+                              "I'm Audrey, the companion interface for Habitat."
+
+                          text.contains("status") ->
+                              "Habitat online. Local memory online. Brain adapter online. AI backend ready for connection."
+
+                          text.contains("remember") ->
+                              "I have local persistent memory enabled in this prototype."
+
+                          text.contains("habitat") ->
+                              "Habitat is my environment. I'm connected to its local brain layer."
+
+                          else ->
+                              "I heard you. The AI backend connection point is ready. Once connected, I'll be able to generate full AI responses."
+                      }
+
+                  remember(
+                      "assistant",
+                      response
+                  )
+
+                  return response
               }
           }
           EOF
 
-      - name: Replace MainActivity with Audrey
+      # ------------------------------------------------------------
+      # 5. CREATE FULLSCREEN AUDREY INTERFACE
+      # ------------------------------------------------------------
+      - name: Replace MainActivity
         run: |
-          MAIN_DIR=$(dirname "$MAIN")
 
           cat > "$MAIN" <<'EOF'
           package com.habitat.core
@@ -124,9 +226,11 @@ jobs:
           import android.graphics.Color
           import android.graphics.Typeface
           import android.view.Gravity
+          import android.view.View
           import android.view.ViewGroup
           import android.widget.Button
           import android.widget.EditText
+          import android.widget.FrameLayout
           import android.widget.LinearLayout
           import android.widget.ScrollView
           import android.widget.TextView
@@ -136,92 +240,128 @@ jobs:
               private lateinit var brain: AudreyBrain
               private lateinit var conversation: TextView
 
-              override fun onCreate(savedInstanceState: Bundle?) {
+              override fun onCreate(
+                  savedInstanceState: Bundle?
+              ) {
                   super.onCreate(savedInstanceState)
 
                   brain = AudreyBrain(this)
 
-                  val root = LinearLayout(this)
-                  root.orientation = LinearLayout.VERTICAL
-                  root.setBackgroundColor(Color.BLACK)
-                  root.setPadding(28, 28, 28, 28)
+                  enableImmersiveMode()
 
-                  val title = TextView(this)
-                  title.text = "AUDREY"
-                  title.textSize = 30f
-                  title.setTextColor(Color.WHITE)
-                  title.typeface = Typeface.DEFAULT_BOLD
-                  title.gravity = Gravity.CENTER
-                  title.setPadding(0, 20, 0, 8)
+                  buildAudreyScreen()
+              }
 
-                  val status = TextView(this)
-                  status.text = "HABITAT • ONLINE"
-                  status.textSize = 13f
-                  status.setTextColor(Color.rgb(80, 220, 150))
-                  status.gravity = Gravity.CENTER
-                  status.setPadding(0, 0, 0, 24)
+              private fun enableImmersiveMode() {
 
-                  val scroll = ScrollView(this)
-
-                  conversation = TextView(this)
-                  conversation.text =
-                      "AUDREY\n\nI'm online.\n\nLocal memory: READY\nBrain adapter: READY\nAI backend: NOT CONNECTED\n\nSay something."
-                  conversation.textSize = 17f
-                  conversation.setTextColor(Color.WHITE)
-                  conversation.setPadding(20, 20, 20, 20)
-
-                  scroll.addView(
-                      conversation,
-                      ViewGroup.LayoutParams(
-                          ViewGroup.LayoutParams.MATCH_PARENT,
-                          ViewGroup.LayoutParams.WRAP_CONTENT
+                  window.decorView.systemUiVisibility =
+                      (
+                          View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+                          or View.SYSTEM_UI_FLAG_FULLSCREEN
+                          or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                          or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                          or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+                          or View.SYSTEM_UI_FLAG_LAYOUT_STABLE
                       )
-                  )
+              }
 
-                  val input = EditText(this)
-                  input.hint = "Talk to Audrey..."
-                  input.setHintTextColor(Color.GRAY)
-                  input.setTextColor(Color.WHITE)
-                  input.setSingleLine(false)
+              override fun onWindowFocusChanged(
+                  hasFocus: Boolean
+              ) {
+                  super.onWindowFocusChanged(hasFocus)
 
-                  val send = Button(this)
-                  send.text = "SEND"
-
-                  send.setOnClickListener {
-                      val message = input.text.toString().trim()
-
-                      if (message.isNotEmpty()) {
-                          val reply = brain.respond(message)
-
-                          conversation.append(
-                              "\n\nYOU\n$message\n\nAUDREY\n$reply"
-                          )
-
-                          input.text.clear()
-                          scroll.post {
-                              scroll.fullScroll(ScrollView.FOCUS_DOWN)
-                          }
-                      }
+                  if (hasFocus) {
+                      enableImmersiveMode()
                   }
+              }
 
-                  root.addView(
-                      title,
+              private fun buildAudreyScreen() {
+
+                  /*
+                   * HABITAT FULLSCREEN ENVIRONMENT
+                   *
+                   * The background is intentionally created
+                   * as a dedicated layer so the final Audrey
+                   * artwork can occupy the entire environment.
+                   */
+
+                  val root =
+                      FrameLayout(this)
+
+                  root.setBackgroundColor(
+                      Color.rgb(5, 7, 15)
+                  )
+
+                  // ------------------------------------------------
+                  // FUTURISTIC ENVIRONMENT LAYER
+                  // ------------------------------------------------
+
+                  val environment =
+                      LinearLayout(this)
+
+                  environment.orientation =
+                      LinearLayout.VERTICAL
+
+                  environment.gravity =
+                      Gravity.CENTER
+
+                  environment.setBackgroundColor(
+                      Color.rgb(5, 7, 15)
+                  )
+
+                  val environmentTitle =
+                      TextView(this)
+
+                  environmentTitle.text =
+                      "HABITAT"
+
+                  environmentTitle.textSize =
+                      12f
+
+                  environmentTitle.setTextColor(
+                      Color.rgb(70, 220, 180)
+                  )
+
+                  environmentTitle.gravity =
+                      Gravity.CENTER
+
+                  val desk =
+                      TextView(this)
+
+                  desk.text =
+                      "\n\n\n\n\n\n\n\n\n" +
+                      "        AUDREY WORKSTATION\n\n" +
+                      "        [ AUDREY VISUAL LAYER ]"
+
+                  desk.textSize =
+                      20f
+
+                  desk.setTextColor(
+                      Color.WHITE
+                  )
+
+                  desk.gravity =
+                      Gravity.CENTER
+
+                  /*
+                   * This area is the Audrey-at-the-desk
+                   * artwork target.
+                   *
+                   * The actual generated artwork can be
+                   * dropped into this layer later without
+                   * changing the brain architecture.
+                   */
+
+                  environment.addView(
+                      environmentTitle,
                       LinearLayout.LayoutParams(
                           ViewGroup.LayoutParams.MATCH_PARENT,
                           ViewGroup.LayoutParams.WRAP_CONTENT
                       )
                   )
 
-                  root.addView(
-                      status,
-                      LinearLayout.LayoutParams(
-                          ViewGroup.LayoutParams.MATCH_PARENT,
-                          ViewGroup.LayoutParams.WRAP_CONTENT
-                      )
-                  )
-
-                  root.addView(
-                      scroll,
+                  environment.addView(
+                      desk,
                       LinearLayout.LayoutParams(
                           ViewGroup.LayoutParams.MATCH_PARENT,
                           0,
@@ -230,19 +370,253 @@ jobs:
                   )
 
                   root.addView(
+                      environment,
+                      FrameLayout.LayoutParams(
+                          ViewGroup.LayoutParams.MATCH_PARENT,
+                          ViewGroup.LayoutParams.MATCH_PARENT
+                      )
+                  )
+
+                  // ------------------------------------------------
+                  // TOP STATUS
+                  // ------------------------------------------------
+
+                  val top =
+                      LinearLayout(this)
+
+                  top.orientation =
+                      LinearLayout.VERTICAL
+
+                  top.gravity =
+                      Gravity.CENTER
+
+                  top.setPadding(
+                      24,
+                      30,
+                      24,
+                      10
+                  )
+
+                  val name =
+                      TextView(this)
+
+                  name.text =
+                      "AUDREY"
+
+                  name.textSize =
+                      30f
+
+                  name.typeface =
+                      Typeface.DEFAULT_BOLD
+
+                  name.setTextColor(
+                      Color.WHITE
+                  )
+
+                  name.gravity =
+                      Gravity.CENTER
+
+                  val online =
+                      TextView(this)
+
+                  online.text =
+                      "HABITAT • ONLINE"
+
+                  online.textSize =
+                      12f
+
+                  online.setTextColor(
+                      Color.rgb(70, 230, 160)
+                  )
+
+                  online.gravity =
+                      Gravity.CENTER
+
+                  top.addView(name)
+
+                  top.addView(online)
+
+                  val topParams =
+                      FrameLayout.LayoutParams(
+                          ViewGroup.LayoutParams.MATCH_PARENT,
+                          ViewGroup.LayoutParams.WRAP_CONTENT
+                      )
+
+                  topParams.gravity =
+                      Gravity.TOP
+
+                  root.addView(
+                      top,
+                      topParams
+                  )
+
+                  // ------------------------------------------------
+                  // CHAT PANEL
+                  // ------------------------------------------------
+
+                  val panel =
+                      LinearLayout(this)
+
+                  panel.orientation =
+                      LinearLayout.VERTICAL
+
+                  panel.setPadding(
+                      20,
+                      12,
+                      20,
+                      16
+                  )
+
+                  panel.setBackgroundColor(
+                      Color.argb(
+                          210,
+                          5,
+                          8,
+                          18
+                      )
+                  )
+
+                  conversation =
+                      TextView(this)
+
+                  conversation.text =
+                      "AUDREY\n\n" +
+                      "I'm online.\n\n" +
+                      "Local memory: READY\n" +
+                      "Brain adapter: READY\n" +
+                      "AI backend: READY FOR CONNECTION\n\n" +
+                      "Talk to me."
+
+                  conversation.textSize =
+                      16f
+
+                  conversation.setTextColor(
+                      Color.WHITE
+                  )
+
+                  conversation.setPadding(
+                      12,
+                      12,
+                      12,
+                      12
+                  )
+
+                  val scroll =
+                      ScrollView(this)
+
+                  scroll.addView(
+                      conversation
+                  )
+
+                  panel.addView(
+                      scroll,
+                      LinearLayout.LayoutParams(
+                          ViewGroup.LayoutParams.MATCH_PARENT,
+                          0,
+                          1f
+                      )
+                  )
+
+                  val inputRow =
+                      LinearLayout(this)
+
+                  inputRow.orientation =
+                      LinearLayout.HORIZONTAL
+
+                  val input =
+                      EditText(this)
+
+                  input.hint =
+                      "Talk to Audrey..."
+
+                  input.setHintTextColor(
+                      Color.GRAY
+                  )
+
+                  input.setTextColor(
+                      Color.WHITE
+                  )
+
+                  input.setSingleLine(
+                      false
+                  )
+
+                  val send =
+                      Button(this)
+
+                  send.text =
+                      "SEND"
+
+                  send.setOnClickListener {
+
+                      val message =
+                          input.text
+                              .toString()
+                              .trim()
+
+                      if (
+                          message.isNotEmpty()
+                      ) {
+
+                          val response =
+                              brain.demoResponse(
+                                  message
+                              )
+
+                          conversation.append(
+                              "\n\nYOU\n" +
+                              message +
+                              "\n\nAUDREY\n" +
+                              response
+                          )
+
+                          input.text.clear()
+
+                          scroll.post {
+                              scroll.fullScroll(
+                                  ScrollView.FOCUS_DOWN
+                              )
+                          }
+                      }
+                  }
+
+                  inputRow.addView(
                       input,
+                      LinearLayout.LayoutParams(
+                          0,
+                          ViewGroup.LayoutParams.WRAP_CONTENT,
+                          1f
+                      )
+                  )
+
+                  inputRow.addView(
+                      send,
+                      LinearLayout.LayoutParams(
+                          ViewGroup.LayoutParams.WRAP_CONTENT,
+                          ViewGroup.LayoutParams.WRAP_CONTENT
+                      )
+                  )
+
+                  panel.addView(
+                      inputRow,
                       LinearLayout.LayoutParams(
                           ViewGroup.LayoutParams.MATCH_PARENT,
                           ViewGroup.LayoutParams.WRAP_CONTENT
                       )
                   )
 
-                  root.addView(
-                      send,
-                      LinearLayout.LayoutParams(
+                  val panelParams =
+                      FrameLayout.LayoutParams(
                           ViewGroup.LayoutParams.MATCH_PARENT,
-                          ViewGroup.LayoutParams.WRAP_CONTENT
+                          430
                       )
+
+                  panelParams.gravity =
+                      Gravity.BOTTOM
+
+                  root.addView(
+                      panel,
+                      panelParams
                   )
 
                   setContentView(root)
@@ -250,53 +624,44 @@ jobs:
           }
           EOF
 
-      - name: Add internet permission
+      # ------------------------------------------------------------
+      # 6. INTERNET PERMISSION
+      # ------------------------------------------------------------
+      - name: Add Internet permission
         run: |
-          MANIFEST=$(find "$APP_DIR" -name AndroidManifest.xml | head -n 1)
+
+          MANIFEST=$(find "$APP_DIR" \
+            -name AndroidManifest.xml \
+            | head -n 1)
 
           python3 - "$MANIFEST" <<'PY'
           import sys
 
           path = sys.argv[1]
 
-          with open(path, "r", encoding="utf-8") as f:
+          with open(
+              path,
+              "r",
+              encoding="utf-8"
+          ) as f:
               data = f.read()
 
-          permission = '<uses-permission android:name="android.permission.INTERNET" />'
+          permission = (
+              '<uses-permission '
+              'android:name="android.permission.INTERNET" />'
+          )
 
-          if "android.permission.INTERNET" not in data:
+          if (
+              "android.permission.INTERNET"
+              not in data
+          ):
               data = data.replace(
                   "<application",
-                  permission + "\n    <application",
+                  permission +
+                  "\n    <application",
                   1
               )
 
-          with open(path, "w", encoding="utf-8") as f:
-              f.write(data)
-          PY
-
-      - name: Bump version
-        run: |
-          GRADLE=$(find "$APP_DIR" -maxdepth 2 \( -name build.gradle -o -name build.gradle.kts \) | head -n 1)
-
-          if [ -f "$GRADLE" ]; then
-            sed -i -E 's/versionCode[[:space:]]*[0-9]+/versionCode 3/' "$GRADLE" || true
-            sed -i -E 's/versionName[[:space:]]*["'\''][^"'\'']+["'\'']/versionName "0.3.0"/' "$GRADLE" || true
-          fi
-
-      - name: Build Habitat
-        working-directory: ${{ env.PROJECT_DIR }}
-        run: |
-          gradle assembleDebug
-
-      - name: Locate APK
-        run: |
-          APK=$(find "$PROJECT_DIR" -path "*/build/outputs/apk/debug/*.apk" | head -n 1)
-          echo "APK=$APK"
-          test -n "$APK"
-
-      - name: Upload Audrey Habitat APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: Habitat-Audrey-0.3.0
-          path: ${{ env.PROJECT_DIR }}/**/build/outputs/apk/debug/*.apk
+          with open(
+              path,
+              "
