@@ -8,27 +8,25 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Java
+      - name: Set up Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: "17"
+          java-version: '17'
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: "8.9"
+          gradle-version: '8.9'
 
       - name: Create Habitat Android project
-        shell: bash
         run: |
           rm -rf habitat-project
 
           mkdir -p habitat-project/HabitatAndroid/app/src/main/java/com/habitat
-          mkdir -p habitat-project/HabitatAndroid/app/src/main/res/drawable
           mkdir -p habitat-project/HabitatAndroid/app/src/main/res/values
 
           cat > habitat-project/HabitatAndroid/settings.gradle.kts <<'EOF'
@@ -48,26 +46,27 @@ jobs:
               }
           }
 
-          rootProject.name = "Habitat"
+          rootProject.name = "HabitatAndroid"
           include(":app")
           EOF
 
           cat > habitat-project/HabitatAndroid/build.gradle.kts <<'EOF'
           plugins {
               id("com.android.application") version "8.7.3" apply false
-              kotlin("android") version "2.0.21" apply false
+              id("org.jetbrains.kotlin.android") version "2.0.21" apply false
           }
           EOF
 
           cat > habitat-project/HabitatAndroid/gradle.properties <<'EOF'
           org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
           android.useAndroidX=true
+          kotlin.code.style=official
           EOF
 
           cat > habitat-project/HabitatAndroid/app/build.gradle.kts <<'EOF'
           plugins {
               id("com.android.application")
-              kotlin("android")
+              id("org.jetbrains.kotlin.android")
           }
 
           android {
@@ -99,6 +98,7 @@ jobs:
           EOF
 
           cat > habitat-project/HabitatAndroid/app/src/main/AndroidManifest.xml <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
               <uses-permission android:name="android.permission.INTERNET" />
@@ -107,8 +107,8 @@ jobs:
               <application
                   android:allowBackup="true"
                   android:label="Habitat"
-                  android:theme="@style/AppTheme"
-                  android:usesCleartextTraffic="false">
+                  android:supportsRtl="true"
+                  android:theme="@style/AppTheme">
 
                   <activity
                       android:name=".MainActivity"
@@ -129,183 +129,114 @@ jobs:
           EOF
 
           cat > habitat-project/HabitatAndroid/app/src/main/res/values/styles.xml <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
           <resources>
 
-              <style name="AppTheme"
-                  parent="android:style/Theme.Material.NoActionBar">
-
+              <style name="AppTheme" parent="Theme.AppCompat.DayNight.NoActionBar">
                   <item name="android:fontFamily">sans</item>
-                  <item name="android:windowNoTitle">true</item>
-                  <item name="android:colorAccent">#00E5FF</item>
-                  <item name="android:navigationBarColor">#02040A</item>
-                  <item name="android:statusBarColor">#02040A</item>
                   <item name="android:windowLightStatusBar">false</item>
-
+                  <item name="android:statusBarColor">#05070A</item>
+                  <item name="android:navigationBarColor">#05070A</item>
+                  <item name="android:windowBackground">#05070A</item>
               </style>
 
           </resources>
           EOF
 
-      - name: Create Habitat MainActivity
-        shell: bash
+      - name: Create MainActivity
         run: |
           cat > habitat-project/HabitatAndroid/app/src/main/java/com/habitat/MainActivity.kt <<'EOF'
           package com.habitat
 
-          import android.app.Activity
+          import android.graphics.Canvas
+          import android.graphics.Color
+          import android.graphics.Paint
+          import android.graphics.Typeface
           import android.os.Bundle
-          import android.os.Handler
-          import android.os.Looper
-          import android.graphics.*
-          import android.graphics.drawable.GradientDrawable
-          import android.view.*
+          import android.view.Gravity
+          import android.view.KeyEvent
+          import android.view.View
           import android.view.inputmethod.EditorInfo
-          import android.widget.*
+          import android.widget.Button
+          import android.widget.EditText
+          import android.widget.FrameLayout
+          import android.widget.LinearLayout
+          import android.widget.ScrollView
+          import android.widget.TextView
+          import androidx.appcompat.app.AppCompatActivity
+          import androidx.core.view.WindowCompat
+          import org.json.JSONObject
+          import java.io.BufferedReader
+          import java.io.InputStreamReader
           import java.net.HttpURLConnection
           import java.net.URL
-          import org.json.JSONObject
           import kotlin.concurrent.thread
 
-          class MainActivity : Activity() {
+          class MainActivity : AppCompatActivity() {
 
               private val BACKEND_URL =
                   "https://habitat-cr46.onrender.com/chat"
 
-              private lateinit var chatBox: TextView
+              private lateinit var chatBox: LinearLayout
               private lateinit var input: EditText
               private lateinit var sendButton: Button
               private lateinit var statusText: TextView
-              private lateinit var scroll: ScrollView
+              private lateinit var scrollView: ScrollView
 
-              private val handler =
-                  Handler(Looper.getMainLooper())
-
-              override fun onCreate(
-                  savedInstanceState: Bundle?
-              ) {
+              override fun onCreate(savedInstanceState: Bundle?) {
                   super.onCreate(savedInstanceState)
 
-                  window.setSoftInputMode(
-                      WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
-                  )
+                  WindowCompat.setDecorFitsSystemWindows(window, true)
 
                   buildInterface()
               }
 
-              private fun dp(value: Int): Int {
-                  return (
-                      value *
-                      resources.displayMetrics.density
-                  ).toInt()
-              }
-
-              private fun rounded(
-                  color: Int,
-                  radius: Float,
-                  strokeColor: Int? = null,
-                  strokeWidth: Int = 0
-              ): GradientDrawable {
-
-                  val drawable =
-                      GradientDrawable()
-
-                  drawable.setColor(color)
-
-                  drawable.cornerRadius =
-                      dp(radius.toInt()).toFloat()
-
-                  if (
-                      strokeColor != null &&
-                      strokeWidth > 0
-                  ) {
-                      drawable.setStroke(
-                          dp(strokeWidth),
-                          strokeColor
-                      )
-                  }
-
-                  return drawable
-              }
-
               private fun buildInterface() {
 
-                  val root =
-                      FrameLayout(this)
+                  val root = FrameLayout(this)
+                  root.setBackgroundColor(Color.rgb(4, 7, 11))
 
-                  root.setBackgroundColor(
-                      Color.rgb(2, 5, 12)
-                  )
-
-                  /*
-                   * FUTURISTIC COMMAND CENTER
-                   */
-
-                  val commandCenter =
-                      CommandCenterView(this)
-
+                  val background = CommandCenterView()
                   root.addView(
-                      commandCenter,
+                      background,
                       FrameLayout.LayoutParams(
                           FrameLayout.LayoutParams.MATCH_PARENT,
                           FrameLayout.LayoutParams.MATCH_PARENT
                       )
                   )
 
-                  /*
-                   * MAIN HUD
-                   */
+                  val main = LinearLayout(this)
+                  main.orientation = LinearLayout.VERTICAL
+                  main.setPadding(18, 18, 18, 12)
 
-                  val hud =
-                      LinearLayout(this)
-
-                  hud.orientation =
-                      LinearLayout.VERTICAL
-
-                  hud.setPadding(
-                      dp(18),
-                      dp(24),
-                      dp(18),
-                      dp(12)
+                  val mainParams = FrameLayout.LayoutParams(
+                      FrameLayout.LayoutParams.MATCH_PARENT,
+                      FrameLayout.LayoutParams.MATCH_PARENT
                   )
 
-                  root.addView(
-                      hud,
-                      FrameLayout.LayoutParams(
-                          FrameLayout.LayoutParams.MATCH_PARENT,
-                          FrameLayout.LayoutParams.MATCH_PARENT
-                      )
+                  root.addView(main, mainParams)
+
+                  val header = LinearLayout(this)
+                  header.orientation = LinearLayout.HORIZONTAL
+                  header.gravity = Gravity.CENTER_VERTICAL
+
+                  val headerParams = LinearLayout.LayoutParams(
+                      LinearLayout.LayoutParams.MATCH_PARENT,
+                      LinearLayout.LayoutParams.WRAP_CONTENT
                   )
 
-                  /*
-                   * TOP BAR
-                   */
+                  main.addView(header, headerParams)
 
-                  val top =
-                      LinearLayout(this)
-
-                  top.orientation =
-                      LinearLayout.HORIZONTAL
-
-                  top.gravity =
-                      Gravity.CENTER_VERTICAL
-
-                  val title =
-                      TextView(this)
-
-                  title.text =
-                      "HABITAT"
-
-                  title.textSize =
-                      25f
-
-                  title.setTextColor(
-                      Color.WHITE
+                  val title = TextView(this)
+                  title.text = "HABITAT"
+                  title.textSize = 25f
+                  title.setTextColor(Color.WHITE)
+                  title.typeface = Typeface.create(
+                      Typeface.MONOSPACE,
+                      Typeface.BOLD
                   )
 
-                  title.typeface =
-                      Typeface.DEFAULT_BOLD
-
-                  top.addView(
+                  header.addView(
                       title,
                       LinearLayout.LayoutParams(
                           0,
@@ -314,20 +245,13 @@ jobs:
                       )
                   )
 
-                  statusText =
-                      TextView(this)
+                  statusText = TextView(this)
+                  statusText.text = "● AUDREY ONLINE"
+                  statusText.textSize = 12f
+                  statusText.setTextColor(Color.rgb(80, 255, 180))
+                  statusText.typeface = Typeface.MONOSPACE
 
-                  statusText.text =
-                      "● SYSTEM ONLINE"
-
-                  statusText.textSize =
-                      11f
-
-                  statusText.setTextColor(
-                      Color.rgb(70, 255, 180)
-                  )
-
-                  top.addView(
+                  header.addView(
                       statusText,
                       LinearLayout.LayoutParams(
                           LinearLayout.LayoutParams.WRAP_CONTENT,
@@ -335,166 +259,62 @@ jobs:
                       )
                   )
 
-                  hud.addView(
-                      top,
-                      LinearLayout.LayoutParams(
-                          LinearLayout.LayoutParams.MATCH_PARENT,
-                          LinearLayout.LayoutParams.WRAP_CONTENT
-                      )
-                  )
-
-                  /*
-                   * SUBTITLE
-                   */
-
-                  val subtitle =
-                      TextView(this)
-
+                  val subtitle = TextView(this)
                   subtitle.text =
-                      "PERSONAL AI OPERATING ENVIRONMENT"
+                      "PERSONAL AI OPERATING ENVIRONMENT  •  BRAIN LINK"
+                  subtitle.textSize = 10f
+                  subtitle.setTextColor(Color.rgb(130, 150, 170))
+                  subtitle.typeface = Typeface.MONOSPACE
 
-                  subtitle.textSize =
-                      10f
-
-                  subtitle.setTextColor(
-                      Color.rgb(100, 160, 190)
+                  val subtitleParams = LinearLayout.LayoutParams(
+                      LinearLayout.LayoutParams.MATCH_PARENT,
+                      LinearLayout.LayoutParams.WRAP_CONTENT
                   )
 
-                  subtitle.setPadding(
-                      0,
-                      dp(2),
-                      0,
-                      dp(8)
+                  subtitleParams.topMargin = 5
+                  main.addView(subtitle, subtitleParams)
+
+                  val core = TextView(this)
+                  core.text = "\n                 ◉\n             AUDREY CORE\n          INTELLIGENCE ACTIVE\n"
+                  core.gravity = Gravity.CENTER
+                  core.textSize = 15f
+                  core.setTextColor(Color.rgb(100, 230, 255))
+                  core.typeface = Typeface.create(
+                      Typeface.MONOSPACE,
+                      Typeface.BOLD
                   )
 
-                  hud.addView(
-                      subtitle,
-                      LinearLayout.LayoutParams(
-                          LinearLayout.LayoutParams.MATCH_PARENT,
-                          LinearLayout.LayoutParams.WRAP_CONTENT
-                      )
+                  val coreParams = LinearLayout.LayoutParams(
+                      LinearLayout.LayoutParams.MATCH_PARENT,
+                      170
                   )
 
-                  /*
-                   * AUDREY STATUS
-                   */
+                  coreParams.topMargin = 8
+                  main.addView(core, coreParams)
 
-                  val audreyStatus =
-                      TextView(this)
+                  val chatTitle = TextView(this)
+                  chatTitle.text = "▣  CONVERSATION"
+                  chatTitle.textSize = 12f
+                  chatTitle.setTextColor(Color.rgb(100, 230, 255))
+                  chatTitle.typeface = Typeface.MONOSPACE
 
-                  audreyStatus.text =
-                      "AUDREY  //  INTELLIGENCE CORE  //  READY"
-
-                  audreyStatus.textSize =
-                      11f
-
-                  audreyStatus.setTextColor(
-                      Color.rgb(0, 229, 255)
+                  val chatTitleParams = LinearLayout.LayoutParams(
+                      LinearLayout.LayoutParams.MATCH_PARENT,
+                      LinearLayout.LayoutParams.WRAP_CONTENT
                   )
 
-                  audreyStatus.setPadding(
-                      dp(12),
-                      dp(9),
-                      dp(12),
-                      dp(9)
-                  )
+                  chatTitleParams.bottomMargin = 6
+                  main.addView(chatTitle, chatTitleParams)
 
-                  audreyStatus.background =
-                      rounded(
-                          Color.argb(
-                              150,
-                              5,
-                              20,
-                              32
-                          ),
-                          12f,
-                          Color.rgb(
-                              0,
-                              100,
-                              130
-                          ),
-                          1
-                      )
+                  scrollView = ScrollView(this)
+                  scrollView.isFillViewport = true
+                  scrollView.setBackgroundColor(Color.argb(130, 5, 10, 16))
 
-                  hud.addView(
-                      audreyStatus,
-                      LinearLayout.LayoutParams(
-                          LinearLayout.LayoutParams.MATCH_PARENT,
-                          LinearLayout.LayoutParams.WRAP_CONTENT
-                      )
-                  )
+                  chatBox = LinearLayout(this)
+                  chatBox.orientation = LinearLayout.VERTICAL
+                  chatBox.setPadding(12, 12, 12, 12)
 
-                  /*
-                   * CHAT SCROLL
-                   */
-
-                  scroll =
-                      ScrollView(this)
-
-                  scroll.isFillViewport =
-                      true
-
-                  scroll.setPadding(
-                      0,
-                      dp(10),
-                      0,
-                      dp(5)
-                  )
-
-                  chatBox =
-                      TextView(this)
-
-                  chatBox.text =
-                      """
-                      AUDREY:
-
-                      I'm online.
-
-                      Habitat systems are standing by.
-
-                      Type below and talk to me.
-                      """.trimIndent()
-
-                  chatBox.textSize =
-                      15f
-
-                  chatBox.setTextColor(
-                      Color.WHITE
-                  )
-
-                  chatBox.setPadding(
-                      dp(15),
-                      dp(15),
-                      dp(15),
-                      dp(15)
-                  )
-
-                  chatBox.gravity =
-                      Gravity.TOP
-
-                  chatBox.setLineSpacing(
-                      0f,
-                      1.15f
-                  )
-
-                  chatBox.background =
-                      rounded(
-                          Color.argb(
-                              170,
-                              3,
-                              8,
-                              17
-                          ),
-                          16f,
-                          Color.rgb(
-                              0,
-                              65,
-                              90
-                          ),
-                          1
-                      )
-
-                  scroll.addView(
+                  scrollView.addView(
                       chatBox,
                       ScrollView.LayoutParams(
                           ScrollView.LayoutParams.MATCH_PARENT,
@@ -502,434 +322,204 @@ jobs:
                       )
                   )
 
-                  val chatParams =
-                      LinearLayout.LayoutParams(
-                          LinearLayout.LayoutParams.MATCH_PARENT,
-                          0,
-                          1f
-                      )
-
-                  chatParams.setMargins(
+                  val scrollParams = LinearLayout.LayoutParams(
+                      LinearLayout.LayoutParams.MATCH_PARENT,
                       0,
-                      dp(8),
-                      0,
-                      dp(8)
+                      1f
                   )
 
-                  hud.addView(
-                      scroll,
-                      chatParams
+                  main.addView(scrollView, scrollParams)
+
+                  addMessage(
+                      "AUDREY",
+                      "Habitat loaded. Local memory ready. Brain adapter ready. AI backend ready for connection."
                   )
 
-                  /*
-                   * INPUT PANEL
-                   */
+                  val talkLabel = TextView(this)
+                  talkLabel.text = "▸  TALK TO AUDREY"
+                  talkLabel.textSize = 11f
+                  talkLabel.setTextColor(Color.rgb(100, 230, 255))
+                  talkLabel.typeface = Typeface.MONOSPACE
 
-                  val inputPanel =
-                      LinearLayout(this)
-
-                  inputPanel.orientation =
-                      LinearLayout.VERTICAL
-
-                  inputPanel.setPadding(
-                      dp(10),
-                      dp(10),
-                      dp(10),
-                      dp(10)
+                  val talkLabelParams = LinearLayout.LayoutParams(
+                      LinearLayout.LayoutParams.MATCH_PARENT,
+                      LinearLayout.LayoutParams.WRAP_CONTENT
                   )
 
-                  inputPanel.background =
-                      rounded(
-                          Color.argb(
-                              245,
-                              4,
-                              12,
-                              22
-                          ),
-                          18f,
-                          Color.rgb(
-                              0,
-                              120,
-                              150
-                          ),
-                          1
-                      )
+                  talkLabelParams.topMargin = 8
+                  talkLabelParams.bottomMargin = 4
 
-                  /*
-                   * PROMPT
-                   */
+                  main.addView(talkLabel, talkLabelParams)
 
-                  val prompt =
-                      TextView(this)
+                  val inputPanel = LinearLayout(this)
+                  inputPanel.orientation = LinearLayout.HORIZONTAL
+                  inputPanel.gravity = Gravity.CENTER_VERTICAL
 
-                  prompt.text =
-                      "▸ TALK TO AUDREY"
-
-                  prompt.textSize =
-                      10f
-
-                  prompt.typeface =
-                      Typeface.DEFAULT_BOLD
-
-                  prompt.setTextColor(
-                      Color.rgb(
-                          0,
-                          229,
-                          255
-                      )
+                  val inputPanelParams = LinearLayout.LayoutParams(
+                      LinearLayout.LayoutParams.MATCH_PARENT,
+                      LinearLayout.LayoutParams.WRAP_CONTENT
                   )
 
-                  prompt.setPadding(
-                      dp(4),
-                      0,
-                      0,
-                      dp(6)
-                  )
+                  main.addView(inputPanel, inputPanelParams)
 
-                  inputPanel.addView(
-                      prompt,
-                      LinearLayout.LayoutParams(
-                          LinearLayout.LayoutParams.MATCH_PARENT,
-                          LinearLayout.LayoutParams.WRAP_CONTENT
-                      )
-                  )
+                  input = EditText(this)
 
-                  /*
-                   * INPUT ROW
-                   */
-
-                  val row =
-                      LinearLayout(this)
-
-                  row.orientation =
-                      LinearLayout.HORIZONTAL
-
-                  row.gravity =
-                      Gravity.CENTER_VERTICAL
-
-                  /*
-                   * ACTUAL EDITABLE TEXT FIELD
-                   */
-
-                  input =
-                      EditText(this)
-
-                  input.hint =
-                      "Type a message..."
-
-                  input.setHintTextColor(
-                      Color.rgb(
-                          115,
-                          135,
-                          150
-                      )
-                  )
-
-                  input.setTextColor(
-                      Color.WHITE
-                  )
-
-                  input.textSize =
-                      16f
-
-                  input.setSingleLine(
-                      true
-                  )
-
-                  input.imeOptions =
-                      EditorInfo.IME_ACTION_SEND
-
+                  input.setSingleLine(true)
+                  input.imeOptions = EditorInfo.IME_ACTION_SEND
                   input.inputType =
                       android.text.InputType.TYPE_CLASS_TEXT or
                       android.text.InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
 
-                  input.isFocusable =
-                      true
+                  input.hint = "Type a message..."
+                  input.textSize = 16f
+                  input.setTextColor(Color.WHITE)
+                  input.setHintTextColor(Color.rgb(110, 125, 140))
+                  input.setPadding(14, 12, 14, 12)
+                  input.setBackgroundColor(Color.rgb(15, 22, 30))
 
-                  input.isFocusableInTouchMode =
-                      true
-
-                  input.setPadding(
-                      dp(14),
-                      dp(8),
-                      dp(14),
-                      dp(8)
-                  )
-
-                  input.background =
-                      rounded(
-                          Color.rgb(
-                              9,
-                              20,
-                              31
-                          ),
-                          12f,
-                          Color.rgb(
-                              0,
-                              105,
-                              135
-                          ),
-                          1
-                      )
-
-                  val editParams =
-                      LinearLayout.LayoutParams(
-                          0,
-                          dp(56),
-                          1f
-                      )
-
-                  row.addView(
-                      input,
-                      editParams
-                  )
-
-                  /*
-                   * SEND BUTTON
-                   */
-
-                  sendButton =
-                      Button(this)
-
-                  sendButton.text =
-                      "SEND"
-
-                  sendButton.textSize =
-                      12f
-
-                  sendButton.setTextColor(
-                      Color.WHITE
-                  )
-
-                  sendButton.typeface =
-                      Typeface.DEFAULT_BOLD
-
-                  sendButton.isAllCaps =
-                      false
-
-                  sendButton.background =
-                      rounded(
-                          Color.rgb(
-                              0,
-                              110,
-                              145
-                          ),
-                          12f,
-                          Color.rgb(
-                              0,
-                              229,
-                              255
-                          ),
-                          1
-                      )
-
-                  val buttonParams =
-                      LinearLayout.LayoutParams(
-                          dp(82),
-                          dp(56)
-                      )
-
-                  buttonParams.setMargins(
-                      dp(8),
+                  val inputParams = LinearLayout.LayoutParams(
                       0,
-                      0,
-                      0
+                      58,
+                      1f
                   )
 
-                  row.addView(
-                      sendButton,
-                      buttonParams
+                  inputPanel.addView(input, inputParams)
+
+                  sendButton = Button(this)
+                  sendButton.text = "SEND"
+                  sendButton.textSize = 12f
+                  sendButton.setTextColor(Color.WHITE)
+                  sendButton.isAllCaps = false
+
+                  val sendParams = LinearLayout.LayoutParams(
+                      95,
+                      58
                   )
 
-                  inputPanel.addView(
-                      row,
-                      LinearLayout.LayoutParams(
-                          LinearLayout.LayoutParams.MATCH_PARENT,
-                          dp(56)
-                      )
+                  sendParams.leftMargin = 8
+
+                  inputPanel.addView(sendButton, sendParams)
+
+                  val enterHint = TextView(this)
+                  enterHint.text = "ENTER = SEND"
+                  enterHint.textSize = 9f
+                  enterHint.setTextColor(Color.rgb(90, 110, 125))
+                  enterHint.typeface = Typeface.MONOSPACE
+
+                  val enterHintParams = LinearLayout.LayoutParams(
+                      LinearLayout.LayoutParams.MATCH_PARENT,
+                      LinearLayout.LayoutParams.WRAP_CONTENT
                   )
 
-                  /*
-                   * INPUT HELP
-                   */
+                  enterHintParams.topMargin = 3
 
-                  val hint =
-                      TextView(this)
-
-                  hint.text =
-                      "ENTER = SEND   •   HABITAT MEMORY ACTIVE"
-
-                  hint.textSize =
-                      9f
-
-                  hint.setTextColor(
-                      Color.rgb(
-                          90,
-                          115,
-                          130
-                      )
-                  )
-
-                  hint.setPadding(
-                      dp(4),
-                      dp(6),
-                      dp(4),
-                      0
-                  )
-
-                  inputPanel.addView(
-                      hint,
-                      LinearLayout.LayoutParams(
-                          LinearLayout.LayoutParams.MATCH_PARENT,
-                          LinearLayout.LayoutParams.WRAP_CONTENT
-                      )
-                  )
-
-                  /*
-                   * IMPORTANT:
-                   * inputPanel itself uses explicit
-                   * LinearLayout.LayoutParams.
-                   */
-
-                  hud.addView(
-                      inputPanel,
-                      LinearLayout.LayoutParams(
-                          LinearLayout.LayoutParams.MATCH_PARENT,
-                          LinearLayout.LayoutParams.WRAP_CONTENT
-                      )
-                  )
-
-                  /*
-                   * SEND CLICK
-                   */
+                  main.addView(enterHint, enterHintParams)
 
                   sendButton.setOnClickListener {
                       sendMessage()
                   }
 
-                  /*
-                   * SAMSUNG KEYBOARD SEND
-                   */
-
-                  input.setOnEditorActionListener {
-                          _,
-                          actionId,
-                          event ->
-
-                      val enter =
-                          event?.keyCode ==
-                              KeyEvent.KEYCODE_ENTER &&
-                          event.action ==
-                              KeyEvent.ACTION_DOWN
+                  input.setOnEditorActionListener { _, actionId, event ->
 
                       if (
-                          actionId ==
-                              EditorInfo.IME_ACTION_SEND ||
-                          enter
+                          actionId == EditorInfo.IME_ACTION_SEND ||
+                          (
+                              event != null &&
+                              event.keyCode == KeyEvent.KEYCODE_ENTER &&
+                              event.action == KeyEvent.ACTION_DOWN
+                          )
                       ) {
-
                           sendMessage()
                           true
-
                       } else {
-
                           false
                       }
                   }
 
-                  /*
-                   * PHYSICAL ENTER
-                   */
-
-                  input.setOnKeyListener {
-                          _,
-                          keyCode,
-                          event ->
+                  input.setOnKeyListener { _, keyCode, event ->
 
                       if (
-                          keyCode ==
-                              KeyEvent.KEYCODE_ENTER &&
-                          event.action ==
-                              KeyEvent.ACTION_DOWN
+                          keyCode == KeyEvent.KEYCODE_ENTER &&
+                          event.action == KeyEvent.ACTION_DOWN
                       ) {
-
                           sendMessage()
                           true
-
                       } else {
-
                           false
                       }
                   }
 
                   setContentView(root)
 
-                  /*
-                   * Make sure the EditText is usable.
-                   */
+                  input.requestFocus()
 
-                  input.isEnabled = true
-                  input.isClickable = true
-                  input.isFocusable = true
-                  input.isFocusableInTouchMode = true
+                  input.postDelayed({
+                      val imm =
+                          getSystemService(INPUT_METHOD_SERVICE)
+                              as android.view.inputmethod.InputMethodManager
+
+                      imm.showSoftInput(
+                          input,
+                          android.view.inputmethod.InputMethodManager.SHOW_IMPLICIT
+                      )
+                  }, 350)
               }
 
-              /*
-               * SEND MESSAGE
-               */
+              private fun addMessage(
+                  speaker: String,
+                  message: String
+              ) {
+
+                  val text = TextView(this)
+
+                  text.text = "$speaker  ›  $message"
+                  text.textSize = 14f
+                  text.setTextColor(Color.WHITE)
+                  text.typeface = Typeface.MONOSPACE
+                  text.setPadding(8, 8, 8, 8)
+
+                  val params = LinearLayout.LayoutParams(
+                      LinearLayout.LayoutParams.MATCH_PARENT,
+                      LinearLayout.LayoutParams.WRAP_CONTENT
+                  )
+
+                  params.bottomMargin = 4
+
+                  chatBox.addView(text, params)
+
+                  scrollView.post {
+                      scrollView.fullScroll(View.FOCUS_DOWN)
+                  }
+              }
 
               private fun sendMessage() {
 
-                  val message =
-                      input.text
-                          .toString()
-                          .trim()
+                  val message = input.text.toString().trim()
 
-                  if (
-                      message.isEmpty()
-                  ) {
+                  if (message.isEmpty()) {
                       return
                   }
 
-                  input.text.clear()
+                  input.setText("")
 
-                  sendButton.isEnabled =
-                      false
+                  addMessage("YOU", message)
 
-                  sendButton.alpha =
-                      0.55f
+                  statusText.text = "● AUDREY THINKING..."
+                  statusText.setTextColor(Color.rgb(255, 210, 80))
 
-                  chatBox.append(
-                      "\n\nYOU:\n$message\n\nAUDREY:\nThinking..."
-                  )
-
-                  scroll.post {
-                      scroll.fullScroll(
-                          View.FOCUS_DOWN
-                      )
-                  }
+                  sendButton.isEnabled = false
+                  input.isEnabled = false
 
                   thread {
 
                       try {
 
+                          val url = URL(BACKEND_URL)
+
                           val connection =
-                              URL(BACKEND_URL)
-                                  .openConnection()
-                                  as HttpURLConnection
+                              url.openConnection() as HttpURLConnection
 
-                          connection.requestMethod =
-                              "POST"
-
-                          connection.connectTimeout =
-                              15000
-
-                          connection.readTimeout =
-                              30000
-
-                          connection.doOutput =
-                              true
-
+                          connection.requestMethod = "POST"
                           connection.setRequestProperty(
                               "Content-Type",
                               "application/json"
@@ -940,549 +530,223 @@ jobs:
                               "application/json"
                           )
 
-                          val payload =
-                              JSONObject()
+                          connection.connectTimeout = 15000
+                          connection.readTimeout = 30000
+                          connection.doOutput = true
 
-                          payload.put(
-                              "message",
-                              message
-                          )
+                          val json = JSONObject()
 
-                          payload.put(
-                              "source",
-                              "Habitat Android"
-                          )
+                          json.put("message", message)
 
-                          payload.put(
-                              "session",
-                              "local"
-                          )
-
-                          connection.outputStream.use {
-                              it.write(
-                                  payload
-                                      .toString()
-                                      .toByteArray(
-                                          Charsets.UTF_8
-                                      )
+                          connection.outputStream.use { output ->
+                              output.write(
+                                  json.toString().toByteArray(
+                                      Charsets.UTF_8
+                                  )
                               )
                           }
 
-                          val code =
+                          val responseCode =
                               connection.responseCode
 
                           val stream =
-                              if (
-                                  code in 200..299
-                              ) {
+                              if (responseCode in 200..299) {
                                   connection.inputStream
                               } else {
                                   connection.errorStream
                               }
 
                           val responseText =
-                              stream
-                                  ?.bufferedReader()
-                                  ?.use {
-                                      it.readText()
+                              if (stream != null) {
+                                  BufferedReader(
+                                      InputStreamReader(stream)
+                                  ).use { reader ->
+                                      reader.readText()
                                   }
-                                  ?: ""
+                              } else {
+                                  ""
+                              }
 
                           connection.disconnect()
 
-                          handler.post {
+                          runOnUiThread {
 
-                              sendButton.isEnabled =
-                                  true
+                              sendButton.isEnabled = true
+                              input.isEnabled = true
 
-                              sendButton.alpha =
-                                  1f
+                              statusText.text = "● AUDREY ONLINE"
+                              statusText.setTextColor(
+                                  Color.rgb(80, 255, 180)
+                              )
 
-                              if (
-                                  code in 200..299
-                              ) {
+                              if (responseCode in 200..299) {
 
                                   try {
 
-                                      val json =
-                                          JSONObject(
-                                              responseText
-                                          )
-
                                       val response =
-                                          json.optString(
-                                              "response",
-                                              responseText
+                                          JSONObject(responseText)
+
+                                      val reply =
+                                          response.optString(
+                                              "reply",
+                                              response.optString(
+                                                  "message",
+                                                  responseText
+                                              )
                                           )
 
-                                      replaceThinking(
-                                          response
+                                      addMessage(
+                                          "AUDREY",
+                                          if (reply.isBlank()) {
+                                              "I received that, but the backend returned an empty response."
+                                          } else {
+                                              reply
+                                          }
                                       )
 
-                                      statusText.text =
-                                          "● AUDREY ONLINE"
+                                  } catch (e: Exception) {
 
-                                  } catch (
-                                      e: Exception
-                                  ) {
-
-                                      replaceThinking(
+                                      addMessage(
+                                          "AUDREY",
                                           responseText.ifBlank {
-                                              "Habitat received the message, but Audrey returned no text."
+                                              "Backend responded successfully, but the response format was unexpected."
                                           }
                                       )
                                   }
 
                               } else {
 
-                                  replaceThinking(
-                                      "Habitat backend returned HTTP $code.\n\n$responseText"
+                                  addMessage(
+                                      "SYSTEM",
+                                      "Backend error $responseCode: $responseText"
                                   )
-
-                                  statusText.text =
-                                      "● BACKEND ERROR"
                               }
                           }
 
-                      } catch (
-                          e: Exception
-                      ) {
+                      } catch (e: Exception) {
 
-                          handler.post {
+                          runOnUiThread {
 
-                              sendButton.isEnabled =
-                                  true
+                              sendButton.isEnabled = true
+                              input.isEnabled = true
 
-                              sendButton.alpha =
-                                  1f
-
-                              replaceThinking(
-                                  "Connection error:\n${e.message}\n\nHabitat itself is still running."
+                              statusText.text = "● BACKEND ERROR"
+                              statusText.setTextColor(
+                                  Color.rgb(255, 90, 90)
                               )
 
-                              statusText.text =
-                                  "● CONNECTION ERROR"
+                              addMessage(
+                                  "SYSTEM",
+                                  "Connection error: ${e.message ?: "Unknown error"}"
+                              )
                           }
                       }
                   }
               }
 
-              private fun replaceThinking(
-                  response: String
-              ) {
+              private inner class CommandCenterView : View(this@MainActivity) {
 
-                  val current =
-                      chatBox.text.toString()
+                  private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
 
-                  val marker =
-                      "AUDREY:\nThinking..."
+                  override fun onDraw(canvas: Canvas) {
 
-                  val index =
-                      current.lastIndexOf(
-                          marker
-                      )
+                      super.onDraw(canvas)
 
-                  if (
-                      index >= 0
-                  ) {
+                      val width = width.toFloat()
+                      val height = height.toFloat()
 
-                      chatBox.text =
-                          current.substring(
-                              0,
-                              index
-                          ) +
-                          "AUDREY:\n" +
-                          response
+                      paint.style = Paint.Style.STROKE
+                      paint.strokeWidth = 1f
+                      paint.color = Color.rgb(15, 45, 60)
 
-                  } else {
+                      val spacing = 45f
 
-                      chatBox.append(
-                          "\n\nAUDREY:\n$response"
-                      )
-                  }
+                      var x = 0f
 
-                  scroll.post {
-                      scroll.fullScroll(
-                          View.FOCUS_DOWN
-                      )
-                  }
-              }
-
-              /*
-               * JARVIS COMMAND CENTER
-               */
-
-              private class CommandCenterView(
-                  context: android.content.Context
-              ) : View(context) {
-
-                  private val paint =
-                      Paint(
-                          Paint.ANTI_ALIAS_FLAG
-                      )
-
-                  private val gridPaint =
-                      Paint(
-                          Paint.ANTI_ALIAS_FLAG
-                      )
-
-                  init {
-
-                      gridPaint.strokeWidth =
-                          1f
-
-                      paint.typeface =
-                          Typeface.create(
-                              Typeface.MONOSPACE,
-                              Typeface.NORMAL
+                      while (x < width) {
+                          canvas.drawLine(
+                              x,
+                              0f,
+                              x,
+                              height,
+                              paint
                           )
-                  }
+                          x += spacing
+                      }
 
-                  override fun onDraw(
-                      canvas: Canvas
-                  ) {
+                      var y = 0f
 
-                      super.onDraw(
-                          canvas
-                      )
-
-                      val w =
-                          width.toFloat()
-
-                      val h =
-                          height.toFloat()
-
-                      /*
-                       * BACKGROUND
-                       */
-
-                      canvas.drawColor(
-                          Color.rgb(
-                              1,
-                              4,
-                              10
-                          )
-                      )
-
-                      /*
-                       * AMBIENT GLOW
-                       */
-
-                      val glow =
-                          RadialGradient(
-                              w * 0.70f,
-                              h * 0.38f,
-                              w * 0.75f,
-                              intArrayOf(
-                                  Color.rgb(
-                                      5,
-                                      34,
-                                      50
-                                  ),
-                                  Color.rgb(
-                                      2,
-                                      13,
-                                      23
-                                  ),
-                                  Color.rgb(
-                                      1,
-                                      4,
-                                      10
-                                  )
-                              ),
-                              null,
-                              Shader.TileMode.CLAMP
-                          )
-
-                      paint.shader =
-                          glow
-
-                      canvas.drawRect(
-                          0f,
-                          0f,
-                          w,
-                          h,
-                          paint
-                      )
-
-                      paint.shader =
-                          null
-
-                      /*
-                       * FLOOR GRID
-                       */
-
-                      gridPaint.color =
-                          Color.argb(
-                              55,
-                              0,
-                              190,
-                              230
-                          )
-
-                      val horizon =
-                          h * 0.70f
-
-                      var y =
-                          horizon
-
-                      while (
-                          y < h
-                      ) {
-
+                      while (y < height) {
                           canvas.drawLine(
                               0f,
                               y,
-                              w,
+                              width,
                               y,
-                              gridPaint
+                              paint
                           )
-
-                          y += dp(34)
+                          y += spacing
                       }
 
-                      var x =
-                          -w
+                      paint.style = Paint.Style.STROKE
+                      paint.strokeWidth = 3f
+                      paint.color = Color.rgb(20, 120, 150)
 
-                      while (
-                          x < w * 2
-                      ) {
-
-                          canvas.drawLine(
-                              w / 2f,
-                              horizon,
-                              x,
-                              h,
-                              gridPaint
-                          )
-
-                          x += dp(65)
-                      }
-
-                      /*
-                       * AUDREY CORE RINGS
-                       */
-
-                      paint.style =
-                          Paint.Style.STROKE
-
-                      paint.strokeWidth =
-                          2f
-
-                      paint.color =
-                          Color.argb(
-                              90,
-                              0,
-                              220,
-                              255
-                          )
+                      val centerX = width / 2f
+                      val centerY = height * 0.32f
 
                       canvas.drawCircle(
-                          w * 0.70f,
-                          h * 0.38f,
-                          dp(145).toFloat(),
+                          centerX,
+                          centerY,
+                          65f,
                           paint
                       )
 
                       canvas.drawCircle(
-                          w * 0.70f,
-                          h * 0.38f,
-                          dp(115).toFloat(),
+                          centerX,
+                          centerY,
+                          42f,
                           paint
                       )
+
+                      paint.style = Paint.Style.FILL
+                      paint.color = Color.rgb(70, 220, 255)
 
                       canvas.drawCircle(
-                          w * 0.70f,
-                          h * 0.38f,
-                          dp(75).toFloat(),
+                          centerX,
+                          centerY,
+                          7f,
                           paint
                       )
 
-                      paint.style =
-                          Paint.Style.FILL
+                      paint.style = Paint.Style.STROKE
+                      paint.strokeWidth = 2f
 
-                      /*
-                       * AUDREY PLACEHOLDER
-                       */
-
-                      paint.color =
-                          Color.argb(
-                              125,
-                              20,
-                              90,
-                              115
-                          )
-
-                      canvas.drawOval(
-                          w * 0.58f,
-                          h * 0.25f,
-                          w * 0.82f,
-                          h * 0.64f,
+                      canvas.drawLine(
+                          centerX - 120,
+                          centerY,
+                          centerX + 120,
+                          centerY,
                           paint
                       )
 
-                      /*
-                       * HEAD / CORE
-                       */
-
-                      paint.color =
-                          Color.argb(
-                              190,
-                              0,
-                              229,
-                              255
-                          )
-
-                      canvas.drawCircle(
-                          w * 0.70f,
-                          h * 0.29f,
-                          dp(43).toFloat(),
+                      canvas.drawLine(
+                          centerX,
+                          centerY - 120,
+                          centerX,
+                          centerY + 120,
                           paint
                       )
 
-                      paint.color =
-                          Color.argb(
-                              225,
-                              2,
-                              8,
-                              15
-                          )
+                      paint.color = Color.rgb(10, 65, 85)
+                      paint.strokeWidth = 1f
 
-                      canvas.drawCircle(
-                          w * 0.70f,
-                          h * 0.29f,
-                          dp(39).toFloat(),
+                      canvas.drawRect(
+                          18f,
+                          height - 185f,
+                          width - 18f,
+                          height - 25f,
                           paint
                       )
-
-                      /*
-                       * FUTURISTIC DESK
-                       */
-
-                      paint.color =
-                          Color.argb(
-                              160,
-                              0,
-                              110,
-                              145
-                          )
-
-                      canvas.drawRoundRect(
-                          w * 0.43f,
-                          h * 0.57f,
-                          w * 0.96f,
-                          h * 0.67f,
-                          dp(15).toFloat(),
-                          dp(15).toFloat(),
-                          paint
-                      )
-
-                      paint.color =
-                          Color.argb(
-                              210,
-                              3,
-                              16,
-                              25
-                          )
-
-                      canvas.drawRoundRect(
-                          w * 0.45f,
-                          h * 0.575f,
-                          w * 0.94f,
-                          h * 0.65f,
-                          dp(12).toFloat(),
-                          dp(12).toFloat(),
-                          paint
-                      )
-
-                      /*
-                       * HOLOGRAPHIC SCREENS
-                       */
-
-                      paint.style =
-                          Paint.Style.STROKE
-
-                      paint.strokeWidth =
-                          2f
-
-                      paint.color =
-                          Color.argb(
-                              120,
-                              0,
-                              220,
-                              255
-                          )
-
-                      canvas.drawRoundRect(
-                          w * 0.38f,
-                          h * 0.40f,
-                          w * 0.55f,
-                          h * 0.55f,
-                          dp(10).toFloat(),
-                          dp(10).toFloat(),
-                          paint
-                      )
-
-                      canvas.drawRoundRect(
-                          w * 0.84f,
-                          h * 0.34f,
-                          w * 0.98f,
-                          h * 0.51f,
-                          dp(10).toFloat(),
-                          dp(10).toFloat(),
-                          paint
-                      )
-
-                      paint.style =
-                          Paint.Style.FILL
-
-                      /*
-                       * HUD TEXT
-                       */
-
-                      paint.color =
-                          Color.argb(
-                              120,
-                              0,
-                              229,
-                              255
-                          )
-
-                      paint.textSize =
-                          dp(10).toFloat()
-
-                      canvas.drawText(
-                          "AUDREY // CORE",
-                          w * 0.60f,
-                          h * 0.20f,
-                          paint
-                      )
-
-                      canvas.drawText(
-                          "MEMORY",
-                          w * 0.41f,
-                          h * 0.46f,
-                          paint
-                      )
-
-                      canvas.drawText(
-                          "SYSTEM",
-                          w * 0.86f,
-                          h * 0.40f,
-                          paint
-                      )
-                  }
-
-                  private fun dp(
-                      value: Int
-                  ): Int {
-
-                      return (
-                          value *
-                          resources
-                              .displayMetrics
-                              .density
-                      ).toInt()
                   }
               }
           }
@@ -1492,16 +756,8 @@ jobs:
         working-directory: habitat-project/HabitatAndroid
         run: gradle assembleDebug
 
-      - name: Prepare APK
-        shell: bash
-        run: |
-          mkdir -p habitat-apk
-
-          cp habitat-project/HabitatAndroid/app/build/outputs/apk/debug/app-debug.apk \
-             habitat-apk/Habitat-Audrey-v0.5.4.apk
-
-      - name: Upload APK
+      - name: Upload Habitat Audrey APK
         uses: actions/upload-artifact@v4
         with:
           name: Habitat-Audrey-v0.5.4
-          path: habitat-apk/Habitat-Audrey-v0.5.4.apk
+          path: habitat-project/HabitatAndroid/app/build/outputs/apk/debug/app-debug.apk
