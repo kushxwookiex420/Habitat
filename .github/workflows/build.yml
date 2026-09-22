@@ -30,8 +30,14 @@ jobs:
         run: |
           FILE="habitat-project/HabitatAndroid/app/src/main/java/com/habitat/core/MainActivity.kt"
           sed -i 's/\$now()/\${now()}/g' "$FILE"
-          echo "=== FIXED LINE ==="
-          sed -n '27p' "$FILE"
+
+      - name: Bump app version
+        run: |
+          FILE="habitat-project/HabitatAndroid/app/build.gradle"
+          if [ -f "$FILE" ]; then
+            sed -i 's/versionCode[[:space:]]*[0-9]*/versionCode 2/' "$FILE"
+            sed -i 's/versionName[[:space:]]*"[^"]*"/versionName "0.2.0"/' "$FILE"
+          fi
 
       - name: Build Habitat APK
         working-directory: habitat-project/HabitatAndroid
