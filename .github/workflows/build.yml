@@ -1,9 +1,90 @@
-      - name: Install Audrey environment
+name: Habitat Audrey Full Build
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+
+      - name: Download repository
+        uses: actions/checkout@v5
+
+      - name: Extract Habitat
         run: |
-          RES_DIR="$APP_DIR/res"
+          rm -rf habitat-project
+          unzip -q Habitat-Android-Project.zip -d habitat-project
+
+      - name: Locate Android project
+        run: |
+          SETTINGS=$(find habitat-project \
+            -name settings.gradle -o -name settings.gradle.kts \
+            -print -quit)
+
+          if [ -z "$SETTINGS" ]; then
+            echo "Android project not found"
+            exit 1
+          fi
+
+          PROJECT_DIR=$(dirname "$SETTINGS")
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+
+      - name: Locate application
+        run: |
+          MANIFEST=$(find "$PROJECT_DIR" \
+            -path "*/src/main/AndroidManifest.xml" \
+            -print -quit)
+
+          if [ -z "$MANIFEST" ]; then
+            echo "AndroidManifest.xml not found"
+            exit 1
+          fi
+
+          APP_DIR=$(dirname "$(dirname "$(dirname "$MANIFEST")")")
+
+          echo "APP_DIR=$APP_DIR" >> "$GITHUB_ENV"
+
+          echo "Application directory:"
+          echo "$APP_DIR"
+
+      - name: Locate MainActivity
+        run: |
+          MAIN=$(find "$APP_DIR/src/main" \
+            -name MainActivity.kt \
+            -print -quit)
+
+          if [ -z "$MAIN" ]; then
+            echo "MainActivity.kt not found"
+            exit 1
+          fi
+
+          echo "MAIN=$MAIN" >> "$GITHUB_ENV"
+
+          echo "MainActivity:"
+          echo "$MAIN"
+
+      - name: Set up Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Install Audrey workstation
+        run: |
+          RES_DIR="$APP_DIR/src/main/res"
 
           if [ ! -d "$RES_DIR" ]; then
-            echo "Android resources directory not found:"
+            echo "Resources directory not found:"
             echo "$RES_DIR"
             exit 1
           fi
@@ -12,12 +93,185 @@
 
           if [ ! -f "lucia.png" ]; then
             echo "ERROR: lucia.png is missing from repository root."
+            echo "Upload the Lucia image as lucia.png."
             exit 1
           fi
 
-          cp lucia.png "$RES_DIR/drawable-nodpi/lucia.png"
+          cp lucia.png \
+            "$RES_DIR/drawable-nodpi/lucia.png"
 
           echo "================================"
-          echo "AUDREY ENVIRONMENT INSTALLED"
-          echo "Lucia workstation image loaded."
+          echo "AUDREY WORKSTATION INSTALLED"
+          echo "LUCIA IMAGE LOADED"
           echo "================================"
+
+      - name: Create Audrey Brain
+        run: |
+          MAIN_DIR=$(dirname "$MAIN")
+
+          cat > "$MAIN_DIR/AudreyBrain.kt" <<'EOF'
+          package com.habitat.core
+
+          import android.content.Context
+          import org.json.JSONArray
+          import org.json.JSONObject
+
+          class AudreyBrain(private val context: Context) {
+
+              private val prefs =
+                  context.getSharedPreferences(
+                      "audrey_brain",
+                      Context.MODE_PRIVATE
+                  )
+
+              fun remember(role: String, message: String) {
+                  val raw =
+                      prefs.getString("memory", "[]") ?: "[]"
+
+                  val array =
+                      try {
+                          JSONArray(raw)
+                      } catch (e: Exception) {
+                          JSONArray()
+                      }
+
+                  val item = JSONObject()
+
+                  item.put("role", role)
+                  item.put("message", message)
+                  item.put("time", System.currentTimeMillis())
+
+                  array.put(item)
+
+                  while (array.length() > 150) {
+                      array.remove(0)
+                  }
+
+                  prefs.edit()
+                      .putString("memory", array.toString())
+                      .apply()
+              }
+
+              fun memoryCount(): Int {
+                  val raw =
+                      prefs.getString("memory", "[]") ?: "[]"
+
+                  return try {
+                      JSONArray(raw).length()
+                  } catch (e: Exception) {
+                      0
+                  }
+              }
+
+              fun respond(message: String): String {
+
+                  remember("user", message)
+
+                  val text =
+                      message.trim().lowercase()
+
+                  val response = when {
+
+                      text.contains("hello") ||
+                      text.contains("hi") ||
+                      text.contains("hey") ->
+                          "Hey. Audrey is online. Habitat is ready."
+
+                      text.contains("who are you") ->
+                          "I'm Audrey — the companion interface living inside Habitat."
+
+                      text.contains("status") ->
+                          "Habitat online. Memory online. Brain adapter online. AI backend connection ready."
+
+                      text.contains("remember") ->
+                          "Local persistent memory is active."
+
+                      text.contains("brain") ->
+                          "Brain adapter online."
+
+                      text.contains("habitat") ->
+                          "Habitat is my environment. This workstation is my interface."
+
+                      else ->
+                          "I'm listening. The local brain received that message."
+                  }
+
+                  remember("assistant", response)
+
+                  return response
+              }
+          }
+          EOF
+
+      - name: Create Audrey Interface
+        run: |
+          cat > "$MAIN" <<'EOF'
+          package com.habitat.core
+
+          import android.app.Activity
+          import android.os.Bundle
+          import android.graphics.Color
+          import android.graphics.Typeface
+          import android.view.Gravity
+          import android.view.KeyEvent
+          import android.view.View
+          import android.view.ViewGroup
+          import android.view.inputmethod.EditorInfo
+          import android.widget.Button
+          import android.widget.EditText
+          import android.widget.FrameLayout
+          import android.widget.ImageView
+          import android.widget.LinearLayout
+          import android.widget.ScrollView
+          import android.widget.TextView
+
+          class MainActivity : Activity() {
+
+              private lateinit var brain: AudreyBrain
+              private lateinit var conversation: TextView
+              private lateinit var scroll: ScrollView
+              private lateinit var input: EditText
+
+              override fun onCreate(savedInstanceState: Bundle?) {
+                  super.onCreate(savedInstanceState)
+
+                  brain = AudreyBrain(this)
+
+                  enableImmersiveMode()
+                  buildAudreyEnvironment()
+              }
+
+              private fun enableImmersiveMode() {
+                  window.decorView.systemUiVisibility =
+                      View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or
+                      View.SYSTEM_UI_FLAG_FULLSCREEN or
+                      View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or
+                      View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or
+                      View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION or
+                      View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+              }
+
+              override fun onWindowFocusChanged(hasFocus: Boolean) {
+                  super.onWindowFocusChanged(hasFocus)
+
+                  if (hasFocus) {
+                      enableImmersiveMode()
+                  }
+              }
+
+              private fun buildAudreyEnvironment() {
+
+                  val root = FrameLayout(this)
+
+                  val background = ImageView(this)
+
+                  background.setImageResource(R.drawable.lucia)
+
+                  background.scaleType =
+                      ImageView.ScaleType.CENTER_CROP
+
+                  root.addView(
+                      background,
+                      FrameLayout.LayoutParams(
+                          ViewGroup.LayoutParams.MATCH_PARENT,
+                         
