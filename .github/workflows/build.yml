@@ -20,53 +20,33 @@ jobs:
           rm -rf habitat-project
           unzip -q Habitat-Android-Project.zip -d habitat-project
 
-      - name: Locate Android project
-        run: |
-          SETTINGS=$(find habitat-project \
-            -name settings.gradle -o -name settings.gradle.kts \
-            -print -quit)
-
-          if [ -z "$SETTINGS" ]; then
-            echo "Android project not found"
+          if [ ! -d "habitat-project/HabitatAndroid" ]; then
+            echo "HabitatAndroid project folder not found"
             exit 1
           fi
 
-          PROJECT_DIR=$(dirname "$SETTINGS")
-          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+          echo "PROJECT_DIR=habitat-project/HabitatAndroid" >> "$GITHUB_ENV"
+          echo "APP_DIR=habitat-project/HabitatAndroid/app" >> "$GITHUB_ENV"
 
-      - name: Locate application
+      - name: Verify Android project
         run: |
-          MANIFEST=$(find "$PROJECT_DIR" \
-            -path "*/src/main/AndroidManifest.xml" \
-            -print -quit)
+          echo "Checking Habitat project..."
 
-          if [ -z "$MANIFEST" ]; then
+          ls -la "$PROJECT_DIR"
+          ls -la "$APP_DIR"
+
+          if [ ! -f "$PROJECT_DIR/settings.gradle" ] && \
+             [ ! -f "$PROJECT_DIR/settings.gradle.kts" ]; then
+            echo "Gradle settings file not found"
+            exit 1
+          fi
+
+          if [ ! -f "$APP_DIR/src/main/AndroidManifest.xml" ]; then
             echo "AndroidManifest.xml not found"
             exit 1
           fi
 
-          APP_DIR=$(dirname "$(dirname "$(dirname "$MANIFEST")")")
-
-          echo "APP_DIR=$APP_DIR" >> "$GITHUB_ENV"
-
-          echo "Application directory:"
-          echo "$APP_DIR"
-
-      - name: Locate MainActivity
-        run: |
-          MAIN=$(find "$APP_DIR/src/main" \
-            -name MainActivity.kt \
-            -print -quit)
-
-          if [ -z "$MAIN" ]; then
-            echo "MainActivity.kt not found"
-            exit 1
-          fi
-
-          echo "MAIN=$MAIN" >> "$GITHUB_ENV"
-
-          echo "MainActivity:"
-          echo "$MAIN"
+          echo "Android project verified."
 
       - name: Set up Java
         uses: actions/setup-java@v5
@@ -83,12 +63,6 @@ jobs:
         run: |
           RES_DIR="$APP_DIR/src/main/res"
 
-          if [ ! -d "$RES_DIR" ]; then
-            echo "Resources directory not found:"
-            echo "$RES_DIR"
-            exit 1
-          fi
-
           mkdir -p "$RES_DIR/drawable-nodpi"
 
           if [ ! -f "lucia.png" ]; then
@@ -97,8 +71,7 @@ jobs:
             exit 1
           fi
 
-          cp lucia.png \
-            "$RES_DIR/drawable-nodpi/lucia.png"
+          cp lucia.png "$RES_DIR/drawable-nodpi/lucia.png"
 
           echo "================================"
           echo "AUDREY WORKSTATION INSTALLED"
@@ -107,171 +80,138 @@ jobs:
 
       - name: Create Audrey Brain
         run: |
+          MAIN="habitat-project/HabitatAndroid/app/src/main/java/com/habitat/core/MainActivity.kt"
           MAIN_DIR=$(dirname "$MAIN")
 
+          mkdir -p "$MAIN_DIR"
+
           cat > "$MAIN_DIR/AudreyBrain.kt" <<'EOF'
-          package com.habitat.core
+package com.habitat.core
 
-          import android.content.Context
-          import org.json.JSONArray
-          import org.json.JSONObject
+import android.content.Context
+import org.json.JSONArray
+import org.json.JSONObject
 
-          class AudreyBrain(private val context: Context) {
+class AudreyBrain(private val context: Context) {
 
-              private val prefs =
-                  context.getSharedPreferences(
-                      "audrey_brain",
-                      Context.MODE_PRIVATE
-                  )
+    private val prefs =
+        context.getSharedPreferences(
+            "audrey_brain",
+            Context.MODE_PRIVATE
+        )
 
-              fun remember(role: String, message: String) {
-                  val raw =
-                      prefs.getString("memory", "[]") ?: "[]"
+    fun remember(role: String, message: String) {
 
-                  val array =
-                      try {
-                          JSONArray(raw)
-                      } catch (e: Exception) {
-                          JSONArray()
-                      }
+        val raw =
+            prefs.getString("memory", "[]") ?: "[]"
 
-                  val item = JSONObject()
+        val array =
+            try {
+                JSONArray(raw)
+            } catch (e: Exception) {
+                JSONArray()
+            }
 
-                  item.put("role", role)
-                  item.put("message", message)
-                  item.put("time", System.currentTimeMillis())
+        val item = JSONObject()
 
-                  array.put(item)
+        item.put("role", role)
+        item.put("message", message)
+        item.put("time", System.currentTimeMillis())
 
-                  while (array.length() > 150) {
-                      array.remove(0)
-                  }
+        array.put(item)
 
-                  prefs.edit()
-                      .putString("memory", array.toString())
-                      .apply()
-              }
+        while (array.length() > 150) {
+            array.remove(0)
+        }
 
-              fun memoryCount(): Int {
-                  val raw =
-                      prefs.getString("memory", "[]") ?: "[]"
+        prefs.edit()
+            .putString("memory", array.toString())
+            .apply()
+    }
 
-                  return try {
-                      JSONArray(raw).length()
-                  } catch (e: Exception) {
-                      0
-                  }
-              }
+    fun memoryCount(): Int {
+        val raw =
+            prefs.getString("memory", "[]") ?: "[]"
 
-              fun respond(message: String): String {
+        return try {
+            JSONArray(raw).length()
+        } catch (e: Exception) {
+            0
+        }
+    }
 
-                  remember("user", message)
+    fun respond(message: String): String {
 
-                  val text =
-                      message.trim().lowercase()
+        remember("user", message)
 
-                  val response = when {
+        val text =
+            message.trim().lowercase()
 
-                      text.contains("hello") ||
-                      text.contains("hi") ||
-                      text.contains("hey") ->
-                          "Hey. Audrey is online. Habitat is ready."
+        val response = when {
 
-                      text.contains("who are you") ->
-                          "I'm Audrey — the companion interface living inside Habitat."
+            text.contains("hello") ||
+            text.contains("hi") ||
+            text.contains("hey") ->
+                "Hey. Audrey is online. Habitat is ready."
 
-                      text.contains("status") ->
-                          "Habitat online. Memory online. Brain adapter online. AI backend connection ready."
+            text.contains("who are you") ->
+                "I'm Audrey — the companion interface living inside Habitat."
 
-                      text.contains("remember") ->
-                          "Local persistent memory is active."
+            text.contains("status") ->
+                "Habitat online. Memory online. Brain adapter online. AI backend connection ready."
 
-                      text.contains("brain") ->
-                          "Brain adapter online."
+            text.contains("remember") ->
+                "Local persistent memory is active."
 
-                      text.contains("habitat") ->
-                          "Habitat is my environment. This workstation is my interface."
+            text.contains("brain") ->
+                "Brain adapter online."
 
-                      else ->
-                          "I'm listening. The local brain received that message."
-                  }
+            text.contains("habitat") ->
+                "Habitat is my environment. This workstation is my interface."
 
-                  remember("assistant", response)
+            else ->
+                "I'm listening. The local brain received that message."
+        }
 
-                  return response
-              }
-          }
-          EOF
+        remember("assistant", response)
+
+        return response
+    }
+}
+EOF
 
       - name: Create Audrey Interface
         run: |
+          MAIN="habitat-project/HabitatAndroid/app/src/main/java/com/habitat/core/MainActivity.kt"
+
           cat > "$MAIN" <<'EOF'
-          package com.habitat.core
+package com.habitat.core
 
-          import android.app.Activity
-          import android.os.Bundle
-          import android.graphics.Color
-          import android.graphics.Typeface
-          import android.view.Gravity
-          import android.view.KeyEvent
-          import android.view.View
-          import android.view.ViewGroup
-          import android.view.inputmethod.EditorInfo
-          import android.widget.Button
-          import android.widget.EditText
-          import android.widget.FrameLayout
-          import android.widget.ImageView
-          import android.widget.LinearLayout
-          import android.widget.ScrollView
-          import android.widget.TextView
+import android.app.Activity
+import android.os.Bundle
+import android.graphics.Color
+import android.graphics.Typeface
+import android.view.Gravity
+import android.view.KeyEvent
+import android.view.View
+import android.view.ViewGroup
+import android.view.inputmethod.EditorInfo
+import android.widget.Button
+import android.widget.EditText
+import android.widget.FrameLayout
+import android.widget.ImageView
+import android.widget.LinearLayout
+import android.widget.ScrollView
+import android.widget.TextView
 
-          class MainActivity : Activity() {
+class MainActivity : Activity() {
 
-              private lateinit var brain: AudreyBrain
-              private lateinit var conversation: TextView
-              private lateinit var scroll: ScrollView
-              private lateinit var input: EditText
+    private lateinit var brain: AudreyBrain
+    private lateinit var conversation: TextView
+    private lateinit var scroll: ScrollView
+    private lateinit var input: EditText
 
-              override fun onCreate(savedInstanceState: Bundle?) {
-                  super.onCreate(savedInstanceState)
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
 
-                  brain = AudreyBrain(this)
-
-                  enableImmersiveMode()
-                  buildAudreyEnvironment()
-              }
-
-              private fun enableImmersiveMode() {
-                  window.decorView.systemUiVisibility =
-                      View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or
-                      View.SYSTEM_UI_FLAG_FULLSCREEN or
-                      View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or
-                      View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or
-                      View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION or
-                      View.SYSTEM_UI_FLAG_LAYOUT_STABLE
-              }
-
-              override fun onWindowFocusChanged(hasFocus: Boolean) {
-                  super.onWindowFocusChanged(hasFocus)
-
-                  if (hasFocus) {
-                      enableImmersiveMode()
-                  }
-              }
-
-              private fun buildAudreyEnvironment() {
-
-                  val root = FrameLayout(this)
-
-                  val background = ImageView(this)
-
-                  background.setImageResource(R.drawable.lucia)
-
-                  background.scaleType =
-                      ImageView.ScaleType.CENTER_CROP
-
-                  root.addView(
-                      background,
-                      FrameLayout.LayoutParams(
-                          ViewGroup.LayoutParams.MATCH_PARENT,
-                         
+       
