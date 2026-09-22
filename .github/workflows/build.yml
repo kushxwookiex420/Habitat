@@ -1,4 +1,4 @@
-name: Habitat Audrey AI Build
+name: Habitat Audrey Build
 
 on:
   workflow_dispatch:
@@ -8,813 +8,531 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout Habitat
-        uses: actions/checkout@v5
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-      - name: Set up Java 17
-        uses: actions/setup-java@v5
+      - name: Set up Java
+        uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: '17'
+          java-version: "17"
 
-      - name: Set up Gradle 8.9
+      - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: '8.9'
+          gradle-version: "8.9"
 
-      - name: Extract Habitat project
+      - name: Create Habitat Android project
         shell: bash
         run: |
-          set -e
-
           rm -rf habitat-project
-          mkdir -p habitat-project
+          mkdir -p habitat-project/HabitatAndroid/app/src/main/java/com/habitat
+          mkdir -p habitat-project/HabitatAndroid/app/src/main/res/drawable
+          mkdir -p habitat-project/HabitatAndroid/app/src/main/res/mipmap-hdpi
+          mkdir -p habitat-project/HabitatAndroid/app/src/main/res/mipmap-mdpi
+          mkdir -p habitat-project/HabitatAndroid/app/src/main/res/mipmap-xhdpi
+          mkdir -p habitat-project/HabitatAndroid/app/src/main/res/mipmap-xxhdpi
+          mkdir -p habitat-project/HabitatAndroid/app/src/main/res/mipmap-xxxhdpi
 
-          unzip -q Habitat-Android-Project.zip -d habitat-project
-
-          PROJECT_DIR="habitat-project/HabitatAndroid"
-          APP_DIR="$PROJECT_DIR/app"
-          MAIN_DIR="$APP_DIR/src/main"
-
-          test -f "$PROJECT_DIR/settings.gradle.kts"
-          test -f "$APP_DIR/build.gradle.kts"
-          test -f "$MAIN_DIR/AndroidManifest.xml"
-
-          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-          echo "APP_DIR=$APP_DIR" >> "$GITHUB_ENV"
-          echo "MAIN_DIR=$MAIN_DIR" >> "$GITHUB_ENV"
-
-      - name: Detect Android package
-        shell: bash
-        run: |
-          set -e
-
-          MAIN=$(find "$MAIN_DIR" -type f -name "MainActivity.kt" -print -quit)
-
-          if [ -z "$MAIN" ]; then
-            echo "ERROR: MainActivity.kt not found."
-            exit 1
-          fi
-
-          PACKAGE=$(grep -m1 '^package ' "$MAIN" | sed 's/^package //')
-          PACKAGE_DIR=$(dirname "$MAIN")
-
-          echo "MAIN=$MAIN" >> "$GITHUB_ENV"
-          echo "PACKAGE=$PACKAGE" >> "$GITHUB_ENV"
-          echo "PACKAGE_DIR=$PACKAGE_DIR" >> "$GITHUB_ENV"
-
-          echo "Android package: $PACKAGE"
-
-      - name: Add Internet permission
-        shell: bash
-        run: |
-          set -e
-
-          MANIFEST="$MAIN_DIR/AndroidManifest.xml"
-
-          if ! grep -q "android.permission.INTERNET" "$MANIFEST"; then
-            sed -i '/<manifest/a\
-            <uses-permission android:name="android.permission.INTERNET"/>' "$MANIFEST"
-          fi
-
-      - name: Create Audrey brain
-        shell: bash
-        run: |
-          set -e
-
-          cat > "$PACKAGE_DIR/AudreyBrain.kt" <<'EOF'
-          __PACKAGE__
-
-          import android.content.Context
-          import org.json.JSONArray
-          import org.json.JSONObject
-
-          class AudreyBrain(private val context: Context) {
-
-              private val prefs =
-                  context.getSharedPreferences(
-                      "habitat_memory",
-                      Context.MODE_PRIVATE
-                  )
-
-              fun status(): String {
-                  return "LOCAL MEMORY: READY\n" +
-                         "BRAIN ADAPTER: READY\n" +
-                         "AI BACKEND: CONNECTED"
+          cat > habitat-project/HabitatAndroid/settings.gradle.kts <<'EOF'
+          pluginManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
               }
+          }
 
-              fun remember(user: String, assistant: String) {
-
-                  val history = JSONArray(
-                      prefs.getString(
-                          "history",
-                          "[]"
-                      )
-                  )
-
-                  val item = JSONObject()
-
-                  item.put("user", user)
-                  item.put("assistant", assistant)
-                  item.put(
-                      "time",
-                      System.currentTimeMillis()
-                  )
-
-                  history.put(item)
-
-                  while (history.length() > 100) {
-                      history.remove(0)
-                  }
-
-                  prefs.edit()
-                      .putString(
-                          "history",
-                          history.toString()
-                      )
-                      .apply()
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories {
+                  google()
+                  mavenCentral()
               }
+          }
 
-              fun getHistory(): JSONArray {
-                  return JSONArray(
-                      prefs.getString(
-                          "history",
-                          "[]"
-                      )
-                  )
-              }
+          rootProject.name = "Habitat"
+          include(":app")
+          EOF
 
-              fun localResponse(message: String): String {
-
-                  val text = message.lowercase()
-
-                  return when {
-
-                      text.contains("hello") ||
-                      text.contains("hi") ||
-                      text.contains("hey") ->
-                          "I'm here. Habitat is online."
-
-                      text.contains("status") ->
-                          status()
-
-                      text.contains("remember") ->
-                          "I'll keep that in Habitat's local memory."
-
-                      text.contains("who are you") ->
-                          "I'm Audrey — the companion interface for Habitat."
-
-                      else ->
-                          "The AI backend didn't respond, so I'm using Habitat's local brain."
-                  }
-              }
+          cat > habitat-project/HabitatAndroid/build.gradle.kts <<'EOF'
+          plugins {
+              id("com.android.application") version "8.7.3" apply false
+              kotlin("android") version "2.0.21" apply false
           }
           EOF
 
-          sed -i "s#__PACKAGE__#package $PACKAGE#" \
-            "$PACKAGE_DIR/AudreyBrain.kt"
-
-      - name: Create Audrey interface
-        shell: bash
-        run: |
-          set -e
-
-          cat > "$MAIN" <<'EOF'
-          __PACKAGE__
-
-          import android.app.Activity
-          import android.os.Bundle
-          import android.graphics.Canvas
-          import android.graphics.Color
-          import android.graphics.Paint
-          import android.graphics.Typeface
-          import android.view.Gravity
-          import android.view.KeyEvent
-          import android.view.View
-          import android.view.WindowManager
-          import android.view.inputmethod.EditorInfo
-          import android.widget.Button
-          import android.widget.EditText
-          import android.widget.FrameLayout
-          import android.widget.LinearLayout
-          import android.widget.TextView
-          import org.json.JSONObject
-          import java.net.HttpURLConnection
-          import java.net.URL
-          import kotlin.concurrent.thread
-
-          class HabitatScene(context: android.content.Context) :
-              View(context) {
-
-              private val paint =
-                  Paint(Paint.ANTI_ALIAS_FLAG)
-
-              override fun onDraw(canvas: Canvas) {
-
-                  super.onDraw(canvas)
-
-                  val w = width.toFloat()
-                  val h = height.toFloat()
-
-                  canvas.drawColor(
-                      Color.rgb(4, 6, 16)
-                  )
-
-                  /*
-                   * Futuristic room
-                   */
-
-                  paint.color =
-                      Color.rgb(12, 24, 48)
-
-                  canvas.drawRect(
-                      0f,
-                      0f,
-                      w,
-                      h * .55f,
-                      paint
-                  )
-
-                  paint.color =
-                      Color.rgb(6, 12, 25)
-
-                  canvas.drawRect(
-                      0f,
-                      h * .55f,
-                      w,
-                      h,
-                      paint
-                  )
-
-                  /*
-                   * Skyline
-                   */
-
-                  paint.color =
-                      Color.rgb(25, 70, 110)
-
-                  var x = 10f
-
-                  while (x < w) {
-
-                      val buildingWidth = 42f
-
-                      val buildingHeight =
-                          70f +
-                          ((x * 7f) % 210f)
-
-                      canvas.drawRect(
-                          x,
-                          h * .50f -
-                              buildingHeight,
-                          x + buildingWidth,
-                          h * .50f,
-                          paint
-                      )
-
-                      x += 55f
-                  }
-
-                  /*
-                   * Horizon
-                   */
-
-                  paint.color =
-                      Color.rgb(50, 190, 240)
-
-                  canvas.drawRect(
-                      0f,
-                      h * .50f,
-                      w,
-                      h * .505f,
-                      paint
-                  )
-
-                  /*
-                   * Desk
-                   */
-
-                  paint.color =
-                      Color.rgb(22, 24, 34)
-
-                  canvas.drawRect(
-                      w * .07f,
-                      h * .69f,
-                      w * .93f,
-                      h * .735f,
-                      paint
-                  )
-
-                  paint.color =
-                      Color.rgb(12, 14, 22)
-
-                  canvas.drawRect(
-                      w * .12f,
-                      h * .735f,
-                      w * .18f,
-                      h,
-                      paint
-                  )
-
-                  canvas.drawRect(
-                      w * .82f,
-                      h * .735f,
-                      w * .88f,
-                      h,
-                      paint
-                  )
-
-                  /*
-                   * Holographic monitor
-                   */
-
-                  paint.color =
-                      Color.argb(
-                          70,
-                          30,
-                          190,
-                          255
-                      )
-
-                  canvas.drawRect(
-                      w * .22f,
-                      h * .27f,
-                      w * .78f,
-                      h * .57f,
-                      paint
-                  )
-
-                  paint.style =
-                      Paint.Style.STROKE
-
-                  paint.strokeWidth = 3f
-
-                  paint.color =
-                      Color.rgb(
-                          70,
-                          220,
-                          255
-                      )
-
-                  canvas.drawRect(
-                      w * .22f,
-                      h * .27f,
-                      w * .78f,
-                      h * .57f,
-                      paint
-                  )
-
-                  /*
-                   * Temporary Audrey display
-                   */
-
-                  paint.style =
-                      Paint.Style.FILL
-
-                  paint.color =
-                      Color.rgb(18, 20, 32)
-
-                  canvas.drawCircle(
-                      w * .50f,
-                      h * .51f,
-                      w * .075f,
-                      paint
-                  )
-
-                  canvas.drawRoundRect(
-                      w * .42f,
-                      h * .56f,
-                      w * .58f,
-                      h * .71f,
-                      35f,
-                      35f,
-                      paint
-                  )
-
-                  /*
-                   * HUD elements
-                   */
-
-                  paint.color =
-                      Color.rgb(
-                          70,
-                          220,
-                          255
-                      )
-
-                  for (i in 0..5) {
-
-                      val yy =
-                          h * .12f +
-                          i * 42f
-
-                      canvas.drawRect(
-                          w * .05f,
-                          yy,
-                          w * .05f + 130f,
-                          yy + 3f,
-                          paint
-                      )
-                  }
-
-                  for (i in 0..4) {
-
-                      val yy =
-                          h * .18f +
-                          i * 52f
-
-                      canvas.drawRect(
-                          w * .78f,
-                          yy,
-                          w * .94f,
-                          yy + 3f,
-                          paint
-                      )
-                  }
-
-                  /*
-                   * Labels
-                   */
-
-                  paint.color =
-                      Color.WHITE
-
-                  paint.textSize = 28f
-
-                  paint.typeface =
-                      Typeface.DEFAULT_BOLD
-
-                  canvas.drawText(
-                      "HABITAT",
-                      w * .05f,
-                      h * .09f,
-                      paint
-                  )
-
-                  paint.textSize = 13f
-
-                  paint.typeface =
-                      Typeface.DEFAULT
-
-                  canvas.drawText(
-                      "AUDREY // COMMAND CENTER",
-                      w * .05f,
-                      h * .115f,
-                      paint
-                  )
-
-                  paint.color =
-                      Color.rgb(
-                          70,
-                          220,
-                          255
-                      )
-
-                  canvas.drawText(
-                      "BRAIN ONLINE",
-                      w * .77f,
-                      h * .09f,
-                      paint
-                  )
-
-                  canvas.drawText(
-                      "MEMORY ONLINE",
-                      w * .77f,
-                      h * .115f,
-                      paint
-                  )
-
-                  canvas.drawText(
-                      "AI LINK ONLINE",
-                      w * .77f,
-                      h * .14f,
-                      paint
-                  )
-
-                  paint.style =
-                      Paint.Style.FILL
+          cat > habitat-project/HabitatAndroid/gradle.properties <<'EOF'
+          org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
+          android.useAndroidX=true
+          EOF
+
+          cat > habitat-project/HabitatAndroid/app/build.gradle.kts <<'EOF'
+          plugins {
+              id("com.android.application")
+              kotlin("android")
+          }
+
+          android {
+              namespace = "com.habitat"
+              compileSdk = 35
+
+              defaultConfig {
+                  applicationId = "com.habitat"
+                  minSdk = 26
+                  targetSdk = 35
+                  versionCode = 503
+                  versionName = "0.5.3"
               }
           }
 
+          dependencies {
+              implementation("androidx.core:core-ktx:1.15.0")
+              implementation("androidx.appcompat:appcompat:1.7.0")
+          }
+          EOF
+
+          cat > habitat-project/HabitatAndroid/app/src/main/AndroidManifest.xml <<'EOF'
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+              <uses-permission android:name="android.permission.INTERNET" />
+              <uses-permission android:name="android.permission.RECORD_AUDIO" />
+
+              <application
+                  android:allowBackup="true"
+                  android:label="Habitat"
+                  android:theme="@style/AppTheme"
+                  android:usesCleartextTraffic="false">
+
+                  <activity
+                      android:name=".MainActivity"
+                      android:screenOrientation="portrait"
+                      android:exported="true"
+                      android:windowSoftInputMode="adjustResize">
+
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+
+                  </activity>
+
+              </application>
+
+          </manifest>
+          EOF
+
+          mkdir -p habitat-project/HabitatAndroid/app/src/main/res/values
+
+          cat > habitat-project/HabitatAndroid/app/src/main/res/values/styles.xml <<'EOF'
+          <resources>
+
+              <style name="AppTheme" parent="android:style/Theme.Material.NoActionBar">
+                  <item name="android:fontFamily">sans</item>
+                  <item name="android:windowActionModeOverlay">true</item>
+                  <item name="android:windowNoTitle">true</item>
+                  <item name="android:colorAccent">#00E5FF</item>
+                  <item name="android:navigationBarColor">#02040A</item>
+                  <item name="android:statusBarColor">#02040A</item>
+                  <item name="android:windowLightStatusBar">false</item>
+              </style>
+
+          </resources>
+          EOF
+
+      - name: Create Habitat MainActivity
+        shell: bash
+        run: |
+          cat > habitat-project/HabitatAndroid/app/src/main/java/com/habitat/MainActivity.kt <<'EOF'
+          package com.habitat
+
+          import android.app.Activity
+          import android.os.Bundle
+          import android.os.Handler
+          import android.os.Looper
+          import android.graphics.*
+          import android.graphics.drawable.GradientDrawable
+          import android.view.*
+          import android.view.inputmethod.EditorInfo
+          import android.widget.*
+          import java.net.HttpURLConnection
+          import java.net.URL
+          import org.json.JSONObject
+          import kotlin.concurrent.thread
+
           class MainActivity : Activity() {
-
-              private lateinit var brain: AudreyBrain
-
-              private lateinit var chat: TextView
-
-              private lateinit var input: EditText
-
-              private lateinit var sendButton: Button
 
               private val BACKEND_URL =
                   "https://habitat-cr46.onrender.com/chat"
 
-              override fun onCreate(
-                  savedInstanceState: Bundle?
-              ) {
+              private lateinit var chatBox: TextView
+              private lateinit var input: EditText
+              private lateinit var sendButton: Button
+              private lateinit var statusText: TextView
+              private lateinit var scroll: ScrollView
 
-                  super.onCreate(
-                      savedInstanceState
+              private val handler = Handler(Looper.getMainLooper())
+
+              override fun onCreate(savedInstanceState: Bundle?) {
+                  super.onCreate(savedInstanceState)
+
+                  window.setSoftInputMode(
+                      WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
                   )
 
-                  brain =
-                      AudreyBrain(this)
+                  buildInterface()
+              }
 
-                  hideSystemUI()
+              private fun dp(value: Int): Int {
+                  return (value * resources.displayMetrics.density).toInt()
+              }
 
-                  val root =
-                      FrameLayout(this)
+              private fun rounded(
+                  color: Int,
+                  radius: Float,
+                  strokeColor: Int? = null,
+                  strokeWidth: Int = 0
+              ): GradientDrawable {
+                  val d = GradientDrawable()
+                  d.setColor(color)
+                  d.cornerRadius = dp(radius.toInt()).toFloat()
 
+                  if (strokeColor != null && strokeWidth > 0) {
+                      d.setStroke(dp(strokeWidth), strokeColor)
+                  }
+
+                  return d
+              }
+
+              private fun buildInterface() {
+
+                  val root = FrameLayout(this)
+                  root.setBackgroundColor(Color.rgb(2, 5, 12))
+
+                  val commandCenter = CommandCenterView(this)
                   root.addView(
-                      HabitatScene(this),
+                      commandCenter,
                       FrameLayout.LayoutParams(
                           FrameLayout.LayoutParams.MATCH_PARENT,
                           FrameLayout.LayoutParams.MATCH_PARENT
                       )
                   )
 
-                  val panel =
-                      LinearLayout(this)
+                  /*
+                   * MAIN HUD
+                   */
 
-                  panel.orientation =
-                      LinearLayout.VERTICAL
+                  val hud = LinearLayout(this)
+                  hud.orientation = LinearLayout.VERTICAL
+                  hud.setPadding(dp(18), dp(24), dp(18), dp(12))
 
-                  panel.setPadding(
-                      28,
-                      20,
-                      28,
-                      22
+                  val hudParams = FrameLayout.LayoutParams(
+                      FrameLayout.LayoutParams.MATCH_PARENT,
+                      FrameLayout.LayoutParams.MATCH_PARENT
                   )
 
-                  panel.setBackgroundColor(
-                      Color.argb(
-                          205,
-                          4,
-                          7,
-                          18
+                  root.addView(hud, hudParams)
+
+                  /*
+                   * TOP BAR
+                   */
+
+                  val top = LinearLayout(this)
+                  top.orientation = LinearLayout.HORIZONTAL
+                  top.gravity = Gravity.CENTER_VERTICAL
+
+                  val title = TextView(this)
+                  title.text = "HABITAT"
+                  title.textSize = 25f
+                  title.setTextColor(Color.WHITE)
+                  title.typeface = Typeface.DEFAULT_BOLD
+
+                  top.addView(
+                      title,
+                      LinearLayout.LayoutParams(
+                          0,
+                          LinearLayout.LayoutParams.WRAP_CONTENT,
+                          1f
                       )
                   )
 
-                  val title =
-                      TextView(this)
+                  statusText = TextView(this)
+                  statusText.text = "● SYSTEM ONLINE"
+                  statusText.textSize = 11f
+                  statusText.setTextColor(Color.rgb(70, 255, 180))
 
-                  title.text =
-                      "AUDREY"
+                  top.addView(statusText)
 
-                  title.textSize = 24f
+                  hud.addView(top)
 
-                  title.typeface =
-                      Typeface.DEFAULT_BOLD
+                  val subtitle = TextView(this)
+                  subtitle.text = "PERSONAL AI OPERATING ENVIRONMENT"
+                  subtitle.textSize = 10f
+                  subtitle.setTextColor(Color.rgb(100, 160, 190))
+                  subtitle.setPadding(0, dp(2), 0, dp(8))
 
-                  title.setTextColor(
-                      Color.WHITE
-                  )
+                  hud.addView(subtitle)
 
-                  val status =
-                      TextView(this)
+                  /*
+                   * AUDREY STATUS
+                   */
 
-                  status.text =
-                      "HABITAT • AI COMPANION"
+                  val audreyStatus = TextView(this)
+                  audreyStatus.text =
+                      "AUDREY  //  INTELLIGENCE CORE  //  READY"
+                  audreyStatus.textSize = 11f
+                  audreyStatus.setTextColor(Color.rgb(0, 229, 255))
+                  audreyStatus.setPadding(dp(12), dp(9), dp(12), dp(9))
+                  audreyStatus.background =
+                      rounded(
+                          Color.argb(150, 5, 20, 32),
+                          12f,
+                          Color.rgb(0, 100, 130),
+                          1
+                      )
 
-                  status.textSize = 11f
+                  hud.addView(audreyStatus)
 
-                  status.setTextColor(
-                      Color.rgb(
-                          90,
-                          220,
-                          255
+                  /*
+                   * CHAT AREA
+                   */
+
+                  scroll = ScrollView(this)
+                  scroll.isFillViewport = true
+                  scroll.setPadding(0, dp(10), 0, dp(5))
+
+                  chatBox = TextView(this)
+                  chatBox.text =
+                      "AUDREY:\n\nI'm online.\n\nHabitat systems are standing by.\n\nType below and talk to me."
+                  chatBox.textSize = 15f
+                  chatBox.setTextColor(Color.WHITE)
+                  chatBox.setPadding(dp(15), dp(15), dp(15), dp(15))
+                  chatBox.gravity = Gravity.TOP
+                  chatBox.setLineSpacing(0f, 1.15f)
+                  chatBox.background =
+                      rounded(
+                          Color.argb(170, 3, 8, 17),
+                          16f,
+                          Color.rgb(0, 65, 90),
+                          1
+                      )
+
+                  scroll.addView(
+                      chatBox,
+                      ScrollView.LayoutParams(
+                          ScrollView.LayoutParams.MATCH_PARENT,
+                          ScrollView.LayoutParams.WRAP_CONTENT
                       )
                   )
 
-                  chat =
-                      TextView(this)
-
-                  chat.text =
-                      "Habitat online.\n\n" +
-                      brain.status()
-
-                  chat.textSize = 15f
-
-                  chat.setTextColor(
-                      Color.WHITE
+                  val chatParams = LinearLayout.LayoutParams(
+                      LinearLayout.LayoutParams.MATCH_PARENT,
+                      0,
+                      1f
                   )
 
-                  chat.setPadding(
-                      12,
-                      18,
-                      12,
-                      18
-                  )
+                  chatParams.setMargins(0, dp(8), 0, dp(8))
+                  hud.addView(scroll, chatParams)
 
-                  input =
-                      EditText(this)
+                  /*
+                   * INPUT PANEL
+                   */
 
-                  input.hint =
-                      "Talk to Audrey..."
+                  val inputPanel = LinearLayout(this)
+                  inputPanel.orientation = LinearLayout.VERTICAL
+                  inputPanel.setPadding(dp(10), dp(10), dp(10), dp(10))
+                  inputPanel.background =
+                      rounded(
+                          Color.argb(235, 4, 12, 22),
+                          18f,
+                          Color.rgb(0, 120, 150),
+                          1
+                      )
 
+                  val prompt = TextView(this)
+                  prompt.text = "▸ TALK TO AUDREY"
+                  prompt.textSize = 10f
+                  prompt.typeface = Typeface.DEFAULT_BOLD
+                  prompt.setTextColor(Color.rgb(0, 229, 255))
+                  prompt.setPadding(dp(4), 0, 0, dp(6))
+
+                  inputPanel.addView(prompt)
+
+                  val row = LinearLayout(this)
+                  row.orientation = LinearLayout.HORIZONTAL
+                  row.gravity = Gravity.CENTER_VERTICAL
+
+                  input = EditText(this)
+
+                  input.hint = "Type a message..."
+                  input.setHintTextColor(Color.rgb(115, 135, 150))
+                  input.setTextColor(Color.WHITE)
                   input.textSize = 16f
 
                   input.setSingleLine(true)
+                  input.imeOptions = EditorInfo.IME_ACTION_SEND
+                  input.inputType =
+                      android.text.InputType.TYPE_CLASS_TEXT or
+                      android.text.InputType.TYPE_TEXT_FLAG_CAP_SENTENCES or
+                      android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE
 
-                  input.imeOptions =
-                      EditorInfo.IME_ACTION_SEND
-
-                  input.setTextColor(
-                      Color.WHITE
-                  )
-
-                  input.setHintTextColor(
-                      Color.LTGRAY
-                  )
+                  input.isFocusable = true
+                  input.isFocusableInTouchMode = true
 
                   input.setPadding(
-                      20,
+                      dp(14),
+                      dp(8),
+                      dp(14),
+                      dp(8)
+                  )
+
+                  input.background =
+                      rounded(
+                          Color.rgb(9, 20, 31),
+                          12f,
+                          Color.rgb(0, 105, 135),
+                          1
+                      )
+
+                  val inputParams = LinearLayout.LayoutParams(
                       0,
-                      20,
-                      0
+                      dp(56),
+                      1f
                   )
 
-                  sendButton =
-                      Button(this)
+                  row.addView(input, inputParams)
 
-                  sendButton.text =
-                      "SEND"
+                  sendButton = Button(this)
+                  sendButton.text = "SEND"
+                  sendButton.textSize = 12f
+                  sendButton.setTextColor(Color.WHITE)
+                  sendButton.typeface = Typeface.DEFAULT_BOLD
+                  sendButton.isAllCaps = false
+                  sendButton.background =
+                      rounded(
+                          Color.rgb(0, 110, 145),
+                          12f,
+                          Color.rgb(0, 229, 255),
+                          1
+                      )
 
-                  sendButton.textSize =
-                      13f
-
-                  sendButton.setTextColor(
-                      Color.WHITE
+                  val sendParams = LinearLayout.LayoutParams(
+                      dp(82),
+                      dp(56)
                   )
 
-                  sendButton.setBackgroundColor(
-                      Color.rgb(
-                          20,
-                          100,
-                          140
+                  sendParams.setMargins(dp(8), 0, 0, 0)
+
+                  row.addView(sendButton, sendParams)
+
+                  inputPanel.addView(row)
+
+                  val hint = TextView(this)
+                  hint.text =
+                      "ENTER = SEND   •   Your conversation stays in Habitat memory"
+                  hint.textSize = 9f
+                  hint.setTextColor(Color.rgb(90, 115, 130))
+                  hint.setPadding(dp(4), dp(6), dp(4), 0)
+
+                  inputPanel.addView(hint)
+
+                  hud.addView(
+                      inputPanel,
+                      LinearLayout.LayoutParams(
+                          LinearLayout.LayoutParams.MATCH_PARENT,
+                          LinearLayout.LayoutParams.WRAP_CONTENT
                       )
                   )
+
+                  /*
+                   * EVENTS
+                   */
 
                   sendButton.setOnClickListener {
                       sendMessage()
                   }
 
-                  /*
-                   * Samsung keyboard SEND action.
-                   */
+                  input.setOnEditorActionListener { _, actionId, event ->
 
-                  input.setOnEditorActionListener {
-                      _, actionId, _ ->
+                      val enter =
+                          event?.keyCode == KeyEvent.KEYCODE_ENTER &&
+                          event.action == KeyEvent.ACTION_DOWN
 
                       if (
-                          actionId ==
-                          EditorInfo.IME_ACTION_SEND
+                          actionId == EditorInfo.IME_ACTION_SEND ||
+                          enter
                       ) {
-
                           sendMessage()
-
                           true
-
                       } else {
-
                           false
                       }
                   }
 
-                  /*
-                   * Physical/keyboard ENTER key.
-                   */
-
-                  input.setOnKeyListener {
-                      _, keyCode, event ->
+                  input.setOnKeyListener { _, keyCode, event ->
 
                       if (
-                          keyCode ==
-                          KeyEvent.KEYCODE_ENTER &&
-                          event.action ==
-                          KeyEvent.ACTION_DOWN
+                          keyCode == KeyEvent.KEYCODE_ENTER &&
+                          event.action == KeyEvent.ACTION_DOWN
                       ) {
-
                           sendMessage()
-
                           true
-
                       } else {
-
                           false
                       }
                   }
 
-                  panel.addView(
-                      title
-                  )
+                  setContentView(root)
 
-                  panel.addView(
-                      status
-                  )
+                  /*
+                   * Make the typing box immediately obvious.
+                   */
+                  input.requestFocus()
 
-                  panel.addView(
-                      chat
-                  )
+                  handler.postDelayed({
+                      input.clearFocus()
+                  }, 300)
 
-                  val inputRow =
-                      LinearLayout(this)
-
-                  inputRow.orientation =
-                      LinearLayout.HORIZONTAL
-
-                  inputRow.gravity =
-                      Gravity.CENTER_VERTICAL
-
-                  val inputParams =
-                      LinearLayout.LayoutParams(
-                          0,
-                          70,
-                          1f
-                      )
-
-                  inputRow.addView(
-                      input,
-                      inputParams
-                  )
-
-                  val buttonParams =
-                      LinearLayout.LayoutParams(
-                          120,
-                          70
-                      )
-
-                  buttonParams.leftMargin =
-                      12
-
-                  inputRow.addView(
-                      sendButton,
-                      buttonParams
-                  )
-
-                  panel.addView(
-                      inputRow
-                  )
-
-                  val params =
-                      FrameLayout.LayoutParams(
-                          FrameLayout.LayoutParams.MATCH_PARENT,
-                          460
-                      )
-
-                  params.gravity =
-                      Gravity.BOTTOM
-
-                  root.addView(
-                      panel,
-                      params
-                  )
-
-                  setContentView(
-                      root
-                  )
+                  /*
+                   * Keep keyboard interaction available when user taps the box.
+                   */
+                  input.setOnClickListener {
+                      input.requestFocus()
+                  }
               }
 
               private fun sendMessage() {
 
-                  val message =
-                      input.text
-                          .toString()
-                          .trim()
+                  val message = input.text.toString().trim()
 
-                  if (
-                      message.isEmpty()
-                  ) {
+                  if (message.isEmpty()) {
                       return
                   }
 
                   input.text.clear()
+                  sendButton.isEnabled = false
+                  sendButton.alpha = 0.55f
 
-                  chat.text =
-                      "YOU:\n$message\n\n" +
-                      "AUDREY:\nThinking..."
+                  chatBox.append(
+                      "\n\nYOU:\n$message\n\nAUDREY:\nThinking..."
+                  )
+
+                  scroll.post {
+                      scroll.fullScroll(View.FOCUS_DOWN)
+                  }
 
                   thread {
 
-                      var connection:
-                          HttpURLConnection? = null
-
                       try {
 
-                          connection =
-                              URL(
-                                  BACKEND_URL
-                              ).openConnection()
+                          val connection =
+                              URL(BACKEND_URL).openConnection()
                                   as HttpURLConnection
 
-                          connection.requestMethod =
-                              "POST"
-
-                          connection.connectTimeout =
-                              15000
-
-                          connection.readTimeout =
-                              30000
+                          connection.requestMethod = "POST"
+                          connection.connectTimeout = 15000
+                          connection.readTimeout = 30000
+                          connection.doOutput = true
 
                           connection.setRequestProperty(
                               "Content-Type",
@@ -826,393 +544,423 @@ jobs:
                               "application/json"
                           )
 
-                          connection.doOutput =
-                              true
+                          val payload = JSONObject()
 
-                          val body =
-                              JSONObject()
-
-                          body.put(
+                          payload.put(
                               "message",
                               message
                           )
 
-                          body.put(
-                              "history",
-                              brain.getHistory()
+                          val history = JSONObject()
+
+                          history.put(
+                              "source",
+                              "Habitat Android"
                           )
 
-                          connection.outputStream
-                              .use {
-                                  it.write(
-                                      body.toString()
-                                          .toByteArray(
-                                              Charsets.UTF_8
-                                          )
-                                  )
-                              }
+                          history.put(
+                              "session",
+                              "local"
+                          )
 
-                          val responseCode =
-                              connection.responseCode
+                          payload.put(
+                              "history",
+                              history
+                          )
+
+                          connection.outputStream.use {
+                              it.write(
+                                  payload.toString()
+                                      .toByteArray(Charsets.UTF_8)
+                              )
+                          }
+
+                          val code = connection.responseCode
 
                           val stream =
-                              if (
-                                  responseCode in 200..299
-                              ) {
+                              if (code in 200..299)
                                   connection.inputStream
-                              } else {
+                              else
                                   connection.errorStream
-                              }
 
                           val responseText =
-                              stream
-                                  ?.bufferedReader()
-                                  ?.use {
-                                      it.readText()
+                              stream?.bufferedReader()?.use {
+                                  it.readText()
+                              } ?: ""
+
+                          connection.disconnect()
+
+                          handler.post {
+
+                              sendButton.isEnabled = true
+                              sendButton.alpha = 1f
+
+                              if (code in 200..299) {
+
+                                  try {
+
+                                      val json =
+                                          JSONObject(responseText)
+
+                                      val response =
+                                          json.optString(
+                                              "response",
+                                              responseText
+                                          )
+
+                                      replaceThinking(response)
+
+                                      statusText.text =
+                                          "● AUDREY ONLINE"
+
+                                  } catch (e: Exception) {
+
+                                      replaceThinking(
+                                          responseText.ifBlank {
+                                              "Habitat received the message, but Audrey returned no text."
+                                          }
+                                      )
                                   }
-                                  ?: ""
 
-                          if (
-                              responseCode !in 200..299
-                          ) {
+                              } else {
 
-                              throw Exception(
-                                  "Server HTTP $responseCode: $responseText"
-                              )
-                          }
-
-                          val json =
-                              JSONObject(
-                                  responseText
-                              )
-
-                          val answer =
-                              json.optString(
-                                  "response",
-                                  ""
-                              )
-
-                          if (
-                              answer.isBlank()
-                          ) {
-
-                              throw Exception(
-                                  "Server returned no response."
-                              )
-                          }
-
-                          brain.remember(
-                              message,
-                              answer
-                          )
-
-                          runOnUiThread {
-
-                              chat.text =
-                                  "YOU:\n$message\n\n" +
-                                  "AUDREY:\n$answer"
-                          }
-
-                      } catch (
-                          error: Exception
-                      ) {
-
-                          val fallback =
-                              brain.localResponse(
-                                  message
-                              )
-
-                          brain.remember(
-                              message,
-                              fallback
-                          )
-
-                          runOnUiThread {
-
-                              chat.text =
-                                  "YOU:\n$message\n\n" +
-                                  "AUDREY:\n$fallback\n\n" +
-                                  "CONNECTION ERROR:\n" +
-                                  (
-                                      error.message
-                                          ?: "Unknown error"
+                                  replaceThinking(
+                                      "I reached the Habitat backend, but it returned HTTP $code.\n\n$responseText"
                                   )
+
+                                  statusText.text =
+                                      "● BACKEND ERROR"
+                              }
                           }
 
-                      } finally {
+                      } catch (e: Exception) {
 
-                          connection?.disconnect()
+                          handler.post {
+
+                              sendButton.isEnabled = true
+                              sendButton.alpha = 1f
+
+                              replaceThinking(
+                                  "Connection error:\n${e.message}\n\nHabitat itself is still running."
+                              )
+
+                              statusText.text =
+                                  "● CONNECTION ERROR"
+                          }
                       }
                   }
               }
 
-              private fun hideSystemUI() {
+              private fun replaceThinking(response: String) {
 
-                  window.setFlags(
-                      WindowManager.LayoutParams.FLAG_FULLSCREEN,
-                      WindowManager.LayoutParams.FLAG_FULLSCREEN
-                  )
+                  val current = chatBox.text.toString()
 
-                  window.decorView.systemUiVisibility =
-                      View.SYSTEM_UI_FLAG_FULLSCREEN or
-                      View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or
-                      View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or
-                      View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or
-                      View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION or
-                      View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+                  val index =
+                      current.lastIndexOf(
+                          "AUDREY:\nThinking..."
+                      )
+
+                  if (index >= 0) {
+
+                      val updated =
+                          current.substring(0, index) +
+                          "AUDREY:\n" +
+                          response
+
+                      chatBox.text = updated
+
+                  } else {
+
+                      chatBox.append(
+                          "\n\nAUDREY:\n$response"
+                      )
+                  }
+
+                  scroll.post {
+                      scroll.fullScroll(View.FOCUS_DOWN)
+                  }
+              }
+
+              /*
+               * Futuristic Habitat command-center background.
+               */
+              private class CommandCenterView(
+                  context: android.content.Context
+              ) : View(context) {
+
+                  private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+                  private val gridPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+
+                  init {
+
+                      gridPaint.strokeWidth = 1f
+                      paint.typeface =
+                          Typeface.create(
+                              Typeface.MONOSPACE,
+                              Typeface.NORMAL
+                          )
+                  }
+
+                  override fun onDraw(canvas: Canvas) {
+                      super.onDraw(canvas)
+
+                      val w = width.toFloat()
+                      val h = height.toFloat()
+
+                      /*
+                       * Deep-space background
+                       */
+                      canvas.drawColor(
+                          Color.rgb(1, 4, 10)
+                      )
+
+                      /*
+                       * Subtle command-center glow.
+                       */
+                      val glow =
+                          RadialGradient(
+                              w * 0.72f,
+                              h * 0.40f,
+                              w * 0.75f,
+                              intArrayOf(
+                                  Color.rgb(5, 34, 50),
+                                  Color.rgb(2, 13, 23),
+                                  Color.rgb(1, 4, 10)
+                              ),
+                              null,
+                              Shader.TileMode.CLAMP
+                          )
+
+                      paint.shader = glow
+
+                      canvas.drawRect(
+                          0f,
+                          0f,
+                          w,
+                          h,
+                          paint
+                      )
+
+                      paint.shader = null
+
+                      /*
+                       * Floor perspective.
+                       */
+                      gridPaint.color =
+                          Color.argb(55, 0, 190, 230)
+
+                      val horizon =
+                          h * 0.70f
+
+                      var y = horizon
+
+                      while (y < h) {
+
+                          canvas.drawLine(
+                              0f,
+                              y,
+                              w,
+                              y,
+                              gridPaint
+                          )
+
+                          y += dp(34).toFloat()
+                      }
+
+                      var x = -w
+
+                      while (x < w * 2) {
+
+                          canvas.drawLine(
+                              w / 2f,
+                              horizon,
+                              x,
+                              h,
+                              gridPaint
+                          )
+
+                          x += dp(65).toFloat()
+                      }
+
+                      /*
+                       * Main holographic core behind Audrey.
+                       */
+                      paint.style = Paint.Style.STROKE
+                      paint.strokeWidth = 2f
+                      paint.color =
+                          Color.argb(90, 0, 220, 255)
+
+                      canvas.drawCircle(
+                          w * 0.70f,
+                          h * 0.38f,
+                          dp(145).toFloat(),
+                          paint
+                      )
+
+                      canvas.drawCircle(
+                          w * 0.70f,
+                          h * 0.38f,
+                          dp(115).toFloat(),
+                          paint
+                      )
+
+                      canvas.drawCircle(
+                          w * 0.70f,
+                          h * 0.38f,
+                          dp(75).toFloat(),
+                          paint
+                      )
+
+                      paint.style = Paint.Style.FILL
+
+                      /*
+                       * Generic Audrey placeholder silhouette.
+                       *
+                       * If audrey.png is later added to the drawable
+                       * directory, this area can be replaced by the
+                       * actual Audrey artwork.
+                       */
+                      paint.color =
+                          Color.argb(125, 20, 90, 115)
+
+                      canvas.drawOval(
+                          w * 0.58f,
+                          h * 0.25f,
+                          w * 0.82f,
+                          h * 0.64f,
+                          paint
+                      )
+
+                      paint.color =
+                          Color.argb(190, 0, 229, 255)
+
+                      canvas.drawCircle(
+                          w * 0.70f,
+                          h * 0.29f,
+                          dp(43).toFloat(),
+                          paint
+                      )
+
+                      paint.color =
+                          Color.argb(225, 2, 8, 15)
+
+                      canvas.drawCircle(
+                          w * 0.70f,
+                          h * 0.29f,
+                          dp(39).toFloat(),
+                          paint
+                      )
+
+                      /*
+                       * Holographic desk.
+                       */
+                      paint.color =
+                          Color.argb(160, 0, 110, 145)
+
+                      canvas.drawRoundRect(
+                          w * 0.43f,
+                          h * 0.57f,
+                          w * 0.96f,
+                          h * 0.67f,
+                          dp(15).toFloat(),
+                          dp(15).toFloat(),
+                          paint
+                      )
+
+                      paint.color =
+                          Color.argb(210, 3, 16, 25)
+
+                      canvas.drawRoundRect(
+                          w * 0.45f,
+                          h * 0.575f,
+                          w * 0.94f,
+                          h * 0.65f,
+                          dp(12).toFloat(),
+                          dp(12).toFloat(),
+                          paint
+                      )
+
+                      /*
+                       * Holographic screens.
+                       */
+                      paint.style = Paint.Style.STROKE
+                      paint.strokeWidth = 2f
+                      paint.color =
+                          Color.argb(120, 0, 220, 255)
+
+                      canvas.drawRoundRect(
+                          w * 0.38f,
+                          h * 0.40f,
+                          w * 0.55f,
+                          h * 0.55f,
+                          dp(10).toFloat(),
+                          dp(10).toFloat(),
+                          paint
+                      )
+
+                      canvas.drawRoundRect(
+                          w * 0.84f,
+                          h * 0.34f,
+                          w * 0.98f,
+                          h * 0.51f,
+                          dp(10).toFloat(),
+                          dp(10).toFloat(),
+                          paint
+                      )
+
+                      paint.style = Paint.Style.FILL
+
+                      /*
+                       * HUD labels.
+                       */
+                      paint.color =
+                          Color.argb(120, 0, 229, 255)
+
+                      paint.textSize =
+                          dp(10).toFloat()
+
+                      canvas.drawText(
+                          "AUDREY // CORE",
+                          w * 0.60f,
+                          h * 0.20f,
+                          paint
+                      )
+
+                      canvas.drawText(
+                          "MEMORY",
+                          w * 0.41f,
+                          h * 0.46f,
+                          paint
+                      )
+
+                      canvas.drawText(
+                          "SYSTEM",
+                          w * 0.86f,
+                          h * 0.40f,
+                          paint
+                      )
+                  }
+
+                  private fun dp(v: Int): Int {
+                      return (v * resources.displayMetrics.density).toInt()
+                  }
               }
           }
           EOF
 
-          sed -i "s#__PACKAGE__#package $PACKAGE#" "$MAIN"
+      - name: Build APK
+        working-directory: habitat-project/HabitatAndroid
+        run: gradle assembleDebug
 
-      - name: Create backend source
+      - name: Prepare artifact
         shell: bash
         run: |
-          set -e
+          mkdir -p habitat-apk
+          cp habitat-project/HabitatAndroid/app/build/outputs/apk/debug/app-debug.apk \
+             habitat-apk/Habitat-Audrey-v0.5.3.apk
 
-          mkdir -p habitat-backend
-
-          cat > habitat-backend/package.json <<'EOF'
-          {
-            "name": "habitat-audrey-backend",
-            "version": "0.5.2",
-            "private": true,
-            "type": "module",
-            "scripts": {
-              "start": "node server.mjs"
-            },
-            "dependencies": {
-              "express": "^5.1.0",
-              "openai": "^5.20.0"
-            }
-          }
-          EOF
-
-          cat > habitat-backend/server.mjs <<'EOF'
-          import express from "express";
-          import OpenAI from "openai";
-
-          const app = express();
-
-          app.use(
-            express.json({
-              limit: "1mb"
-            })
-          );
-
-          const port =
-            process.env.PORT || 8080;
-
-          const model =
-            process.env.OPENAI_MODEL ||
-            "gpt-5.6-luna";
-
-          const apiKey =
-            process.env.OPENAI_API_KEY;
-
-          const client =
-            new OpenAI({
-              apiKey
-            });
-
-          app.get(
-            "/",
-            (req, res) => {
-
-              res.json({
-                habitat: "online",
-                service: "Audrey AI backend",
-                brain: "ready",
-                backend: "ready"
-              });
-
-            }
-          );
-
-          app.get(
-            "/health",
-            (req, res) => {
-
-              res.json({
-                habitat: "online",
-                brain: "ready",
-                backend: "ready",
-                apiKeyConfigured:
-                  Boolean(apiKey),
-                model
-              });
-
-            }
-          );
-
-          app.post(
-            "/chat",
-            async (req, res) => {
-
-              console.log(
-                "CHAT REQUEST RECEIVED"
-              );
-
-              try {
-
-                if (!apiKey) {
-
-                  console.error(
-                    "OPENAI_API_KEY missing"
-                  );
-
-                  return res.status(500).json({
-                    error:
-                      "OPENAI_API_KEY is not configured."
-                  });
-
-                }
-
-                const message =
-                  String(
-                    req.body?.message || ""
-                  ).trim();
-
-                if (!message) {
-
-                  return res.status(400).json({
-                    error:
-                      "message required"
-                  });
-
-                }
-
-                console.log(
-                  "User message:",
-                  message
-                );
-
-                const history =
-                  Array.isArray(
-                    req.body?.history
-                  )
-                    ? req.body.history
-                    : [];
-
-                const recentHistory =
-                  history.slice(-20);
-
-                const memory =
-                  recentHistory
-                    .map(
-                      item =>
-                        `USER: ${item.user}\nAUDREY: ${item.assistant}`
-                    )
-                    .join("\n\n");
-
-                const input =
-                  memory
-                    ? `Habitat memory:\n${memory}\n\nUSER:\n${message}`
-                    : message;
-
-                const response =
-                  await client.responses.create({
-
-                    model,
-
-                    instructions:
-                      "You are Audrey, the AI companion and intelligence layer for Habitat. Be helpful, direct, natural, and conversational. Habitat is the user's personal AI environment.",
-
-                    input
-                  });
-
-                const answer =
-                  response.output_text;
-
-                console.log(
-                  "AI RESPONSE RECEIVED"
-                );
-
-                res.json({
-                  response: answer
-                });
-
-              } catch (error) {
-
-                console.error(
-                  "AI ERROR:",
-                  error
-                );
-
-                res.status(500).json({
-                  error:
-                    error?.message ||
-                    "AI backend error"
-                });
-
-              }
-            }
-          );
-
-          app.listen(
-            port,
-            "0.0.0.0",
-            () => {
-
-              console.log(
-                `Habitat backend listening on ${port}`
-              );
-
-            }
-          );
-          EOF
-
-      - name: Build Habitat Audrey
-        shell: bash
-        run: |
-          set -e
-
-          cd "$PROJECT_DIR"
-
-          echo "====================================="
-          echo " HABITAT / AUDREY"
-          echo "====================================="
-          echo "Local memory: READY"
-          echo "Brain adapter: READY"
-          echo "AI backend URL: CONFIGURED"
-          echo "Send button: READY"
-          echo "Keyboard Enter: READY"
-          echo "Command center: READY"
-          echo "====================================="
-
-          gradle assembleDebug --stacktrace
-
-      - name: Find APK
-        shell: bash
-        run: |
-          set -e
-
-          APK=$(find "$PROJECT_DIR" \
-            -type f \
-            -name "app-debug.apk" \
-            -print -quit)
-
-          if [ -z "$APK" ]; then
-
-            echo "ERROR: APK was not created."
-
-            find "$PROJECT_DIR" \
-              -type f \
-              -name "*.apk" \
-              -print
-
-            exit 1
-          fi
-
-          echo "APK CREATED:"
-          echo "$APK"
-
-          echo "APK_PATH=$APK" >> "$GITHUB_ENV"
-
-      - name: Upload Habitat APK
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: Habitat-Audrey-v0.5.2
-          path: ${{ env.APK_PATH }}
-          if-no-files-found: error
+          name: Habitat-Audrey-v0.5.3
+          path: habitat-apk/Habitat-Audrey-v0.5.3.apk
