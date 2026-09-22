@@ -28,7 +28,12 @@ jobs:
 
       - name: Fix MainActivity
         run: |
-          sed -i 's/\\.now/\\.now()/g' habitat-project/HabitatAndroid/app/src/main/java/com/habitat/core/MainActivity.kt
+          FILE="habitat-project/HabitatAndroid/app/src/main/java/com/habitat/core/MainActivity.kt"
+          echo "=== BEFORE FIX ==="
+          sed -n '27p' "$FILE"
+          sed -i '27s/\bnow\b/now()/g' "$FILE"
+          echo "=== AFTER FIX ==="
+          sed -n '27p' "$FILE"
 
       - name: Build Habitat APK
         working-directory: habitat-project/HabitatAndroid
