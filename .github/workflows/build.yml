@@ -55,18 +55,21 @@ jobs:
           test -f "$PROJECT_DIR/settings.gradle.kts" || test -f "$PROJECT_DIR/settings.gradle"
           test -f "$PROJECT_DIR/build.gradle.kts" || test -f "$PROJECT_DIR/build.gradle"
           test -f "$PROJECT_DIR/gradle.properties"
-          test -f "$PROJECT_DIR/AndroidManifest.xml" || find "$PROJECT_DIR" -name "AndroidManifest.xml" | grep -q .
 
           echo "Habitat v0.2.2 Android project verified."
 
-      - name: Set up JDK
-        uses: actions/setup-java@v4
+      - name: Set up JDK 17
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "17"
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
+
+      - name: Accept Android SDK licenses
+        run: |
+          yes | sdkmanager --licenses > /dev/null || true
 
       - name: Build Habitat v0.2.2
         working-directory: ${{ env.PROJECT_DIR }}
