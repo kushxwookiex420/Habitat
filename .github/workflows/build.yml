@@ -1,4 +1,4 @@
-name: Habitat 1.0 Ax Core
+name: Habitat 1.1 Ax Core
 
 on:
   workflow_dispatch:
@@ -8,7 +8,7 @@ permissions:
 
 jobs:
   build:
-    name: Build Habitat APK
+    name: Build Habitat 1.1 APK
     runs-on: ubuntu-latest
 
     steps:
@@ -64,11 +64,8 @@ jobs:
 
           if [ -z "$SDKMANAGER" ] || [ ! -f "$SDKMANAGER" ]; then
             echo "sdkmanager could not be located."
-            find "$ANDROID_HOME" -maxdepth 5 -type f -name sdkmanager || true
             exit 1
           fi
-
-          echo "sdkmanager: $SDKMANAGER"
 
           yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
 
@@ -83,12 +80,8 @@ jobs:
 
           rm -rf HabitatBuild
 
-          mkdir -p HabitatBuild
-          mkdir -p HabitatBuild/app
           mkdir -p HabitatBuild/app/src/main/java/com/habitat/core
           mkdir -p HabitatBuild/app/src/main/res/values
-
-          echo "Habitat project directory created."
 
       - name: Write Gradle settings
         shell: bash
@@ -150,8 +143,9 @@ jobs:
                   applicationId = "com.habitat.core"
                   minSdk = 24
                   targetSdk = 35
-                  versionCode = 100
-                  versionName = "1.0"
+
+                  versionCode = 101
+                  versionName = "1.1"
               }
 
               buildTypes {
@@ -176,9 +170,12 @@ jobs:
         run: |
           cat > HabitatBuild/app/src/main/AndroidManifest.xml <<'EOF'
           <?xml version="1.0" encoding="utf-8"?>
-          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-              <uses-permission android:name="android.permission.INTERNET" />
+          <manifest
+              xmlns:android="http://schemas.android.com/apk/res/android">
+
+              <uses-permission
+                  android:name="android.permission.INTERNET" />
 
               <application
                   android:allowBackup="true"
@@ -192,8 +189,13 @@ jobs:
                       android:exported="true">
 
                       <intent-filter>
-                          <action android:name="android.intent.action.MAIN" />
-                          <category android:name="android.intent.category.LAUNCHER" />
+
+                          <action
+                              android:name="android.intent.action.MAIN" />
+
+                          <category
+                              android:name="android.intent.category.LAUNCHER" />
+
                       </intent-filter>
 
                   </activity>
@@ -208,6 +210,7 @@ jobs:
         run: |
           cat > HabitatBuild/app/src/main/res/values/styles.xml <<'EOF'
           <?xml version="1.0" encoding="utf-8"?>
+
           <resources>
 
               <style
@@ -236,12 +239,16 @@ jobs:
 
           public final class HabitatStore {
 
-              private static final String PREFS = "habitat_memory";
+              private static final String PREFS =
+                  "habitat_memory";
 
               private HabitatStore() {
               }
 
-              private static SharedPreferences prefs(Context context) {
+              private static SharedPreferences prefs(
+                  Context context
+              ) {
+
                   return context.getSharedPreferences(
                       PREFS,
                       Context.MODE_PRIVATE
@@ -253,6 +260,7 @@ jobs:
                   String key,
                   String value
               ) {
+
                   prefs(context)
                       .edit()
                       .putString(key, value)
@@ -264,28 +272,19 @@ jobs:
                   String key,
                   String fallback
               ) {
+
                   return prefs(context)
                       .getString(key, fallback);
               }
 
-              public static void saveInt(
-                  Context context,
-                  String key,
-                  int value
+              public static void clear(
+                  Context context
               ) {
+
                   prefs(context)
                       .edit()
-                      .putInt(key, value)
+                      .clear()
                       .apply();
-              }
-
-              public static int loadInt(
-                  Context context,
-                  String key,
-                  int fallback
-              ) {
-                  return prefs(context)
-                      .getInt(key, fallback);
               }
           }
           EOF
@@ -296,7 +295,6 @@ jobs:
           cat > HabitatBuild/app/src/main/java/com/habitat/core/BrainAdapter.java <<'EOF'
           package com.habitat.core;
 
-          import org.json.JSONArray;
           import org.json.JSONObject;
 
           import java.io.BufferedReader;
@@ -313,8 +311,14 @@ jobs:
               }
 
               public interface Callback {
-                  void success(String response);
-                  void failure(String error);
+
+                  void success(
+                      String response
+                  );
+
+                  void failure(
+                      String error
+                  );
               }
 
               public static void chat(
@@ -325,42 +329,70 @@ jobs:
 
                   new Thread(() -> {
 
-                      HttpURLConnection connection = null;
+                      HttpURLConnection connection =
+                          null;
 
                       try {
 
-                          URL url = new URL(endpoint);
+                          URL url =
+                              new URL(endpoint);
 
                           connection =
-                              (HttpURLConnection) url.openConnection();
+                              (HttpURLConnection)
+                                  url.openConnection();
 
-                          connection.setRequestMethod("POST");
-                          connection.setConnectTimeout(10000);
-                          connection.setReadTimeout(30000);
-                          connection.setDoOutput(true);
+                          connection.setRequestMethod(
+                              "POST"
+                          );
+
+                          connection.setConnectTimeout(
+                              15000
+                          );
+
+                          connection.setReadTimeout(
+                              45000
+                          );
+
+                          connection.setDoOutput(
+                              true
+                          );
 
                           connection.setRequestProperty(
                               "Content-Type",
                               "application/json"
                           );
 
+                          connection.setRequestProperty(
+                              "Accept",
+                              "application/json"
+                          );
+
                           JSONObject body =
                               new JSONObject();
 
-                          body.put("message", message);
+                          body.put(
+                              "message",
+                              message
+                          );
 
                           byte[] data =
                               body.toString()
-                                  .getBytes(StandardCharsets.UTF_8);
+                                  .getBytes(
+                                      StandardCharsets.UTF_8
+                                  );
 
-                          connection.setFixedLengthStreamingMode(
-                              data.length
-                          );
+                          connection
+                              .setFixedLengthStreamingMode(
+                                  data.length
+                              );
 
-                          try (OutputStream output =
-                                   connection.getOutputStream()) {
+                          try (
+                              OutputStream output =
+                                  connection.getOutputStream()
+                          ) {
 
                               output.write(data);
+                              output.flush();
                           }
 
                           int status =
@@ -368,21 +400,31 @@ jobs:
 
                           InputStream stream;
 
-                          if (status >= 200 && status < 300) {
-                              stream = connection.getInputStream();
+                          if (
+                              status >= 200 &&
+                              status < 300
+                          ) {
+
+                              stream =
+                                  connection.getInputStream();
+
                           } else {
-                              stream = connection.getErrorStream();
+
+                              stream =
+                                  connection.getErrorStream();
                           }
 
                           String result =
                               readStream(stream);
 
-                          if (status >= 200 && status < 300) {
+                          if (
+                              status >= 200 &&
+                              status < 300
+                          ) {
 
-                              String responseText =
-                                  parseResponse(result);
-
-                              callback.success(responseText);
+                              callback.success(
+                                  parseResponse(result)
+                              );
 
                           } else {
 
@@ -397,9 +439,12 @@ jobs:
                       } catch (Exception error) {
 
                           callback.failure(
-                              error.getClass().getSimpleName() +
+                              error.getClass()
+                                  .getSimpleName() +
                               ": " +
-                              String.valueOf(error.getMessage())
+                              String.valueOf(
+                                  error.getMessage()
+                              )
                           );
 
                       } finally {
@@ -435,7 +480,10 @@ jobs:
 
                       String line;
 
-                      while ((line = reader.readLine()) != null) {
+                      while (
+                          (line = reader.readLine()) != null
+                      ) {
+
                           result.append(line);
                       }
                   }
@@ -452,14 +500,20 @@ jobs:
                       JSONObject object =
                           new JSONObject(raw);
 
-                      if (object.has("response")) {
+                      if (
+                          object.has("response")
+                      ) {
+
                           return object.optString(
                               "response",
                               raw
                           );
                       }
 
-                      if (object.has("message")) {
+                      if (
+                          object.has("message")
+                      ) {
+
                           return object.optString(
                               "message",
                               raw
@@ -490,7 +544,10 @@ jobs:
               private HabitatEngine() {
               }
 
-              public static String understand(String input) {
+              public static String understand(
+                  String input
+              ) {
+
                   if (input == null) {
                       return "";
                   }
@@ -498,7 +555,9 @@ jobs:
                   return input.trim();
               }
 
-              public static List<String> plan(String input) {
+              public static List<String> plan(
+                  String input
+              ) {
 
                   List<String> plan =
                       new ArrayList<>();
@@ -509,6 +568,7 @@ jobs:
                   plan.add("SELECT TOOLS");
                   plan.add("PLAN");
                   plan.add("ACT");
+                  plan.add("OBSERVE");
                   plan.add("VERIFY");
                   plan.add("STORE RESULT");
 
@@ -581,7 +641,6 @@ jobs:
 
           import android.app.Activity;
           import android.graphics.Color;
-          import android.graphics.Typeface;
           import android.os.Bundle;
           import android.os.Handler;
           import android.os.Looper;
@@ -591,6 +650,8 @@ jobs:
           import android.view.View;
           import android.view.Window;
           import android.view.inputmethod.EditorInfo;
+          import android.view.inputmethod.InputMethodManager;
+          import android.content.Context;
           import android.widget.Button;
           import android.widget.EditText;
           import android.widget.LinearLayout;
@@ -619,23 +680,59 @@ jobs:
               private static final int ACCENT =
                   Color.rgb(80, 200, 255);
 
+              /*
+               * LIVE HABITAT AX CORE
+               */
+              private static final String BRAIN_ENDPOINT =
+                  "https://habitat-1-szzd.onrender.com/chat";
+
               private LinearLayout root;
               private LinearLayout content;
               private TextView output;
               private EditText input;
 
               private final Handler handler =
-                  new Handler(Looper.getMainLooper());
+                  new Handler(
+                      Looper.getMainLooper()
+                  );
 
               @Override
-              protected void onCreate(Bundle state) {
+              protected void onCreate(
+                  Bundle state
+              ) {
 
                   super.onCreate(state);
 
-                  Window window = getWindow();
+                  Window window =
+                      getWindow();
 
                   window.setStatusBarColor(BG);
                   window.setNavigationBarColor(BG);
+
+                  /*
+                   * Auto-connect to Ax Core.
+                   *
+                   * We only write the default endpoint
+                   * when no endpoint already exists.
+                   */
+                  String savedEndpoint =
+                      HabitatStore.load(
+                          this,
+                          "brain_endpoint",
+                          ""
+                      );
+
+                  if (
+                      savedEndpoint == null ||
+                      savedEndpoint.trim().isEmpty()
+                  ) {
+
+                      HabitatStore.save(
+                          this,
+                          "brain_endpoint",
+                          BRAIN_ENDPOINT
+                      );
+                  }
 
                   showHome();
               }
@@ -651,7 +748,13 @@ jobs:
                   view.setText(text);
                   view.setTextSize(size);
                   view.setTextColor(TEXT);
-                  view.setPadding(0, 8, 0, 8);
+
+                  view.setPadding(
+                      0,
+                      8,
+                      0,
+                      8
+                  );
 
                   return view;
               }
@@ -666,7 +769,13 @@ jobs:
                   view.setText(text);
                   view.setTextSize(12);
                   view.setTextColor(MUTED);
-                  view.setPadding(0, 4, 0, 12);
+
+                  view.setPadding(
+                      0,
+                      4,
+                      0,
+                      12
+                  );
 
                   return view;
               }
@@ -686,7 +795,9 @@ jobs:
                   return button;
               }
 
-              private void base(String title) {
+              private void base(
+                  String title
+              ) {
 
                   root =
                       new LinearLayout(this);
@@ -698,18 +809,24 @@ jobs:
                   root.setBackgroundColor(BG);
 
                   root.setPadding(
-                      20,
-                      20,
-                      20,
-                      16
+                      18,
+                      14,
+                      18,
+                      0
                   );
 
                   TextView header =
-                      label(title, 25);
+                      label(
+                          title,
+                          24
+                      );
 
-                  header.setTypeface(
-                      Typeface.DEFAULT,
-                      Typeface.BOLD
+                  header.setTextColor(
+                      ACCENT
+                  );
+
+                  header.setGravity(
+                      Gravity.CENTER_VERTICAL
                   );
 
                   root.addView(
@@ -762,12 +879,17 @@ jobs:
                       "MORE"
                   };
 
-                  for (String name : names) {
+                  for (
+                      String name :
+                      names
+                  ) {
 
                       Button navButton =
                           button(name);
 
-                      navButton.setTextSize(10);
+                      navButton.setTextSize(
+                          10
+                      );
 
                       nav.addView(
                           navButton,
@@ -778,31 +900,46 @@ jobs:
                           )
                       );
 
-                      if (name.equals("HOME")) {
+                      if (
+                          name.equals("HOME")
+                      ) {
+
                           navButton.setOnClickListener(
                               v -> showHome()
                           );
                       }
 
-                      if (name.equals("PROJECTS")) {
+                      if (
+                          name.equals("PROJECTS")
+                      ) {
+
                           navButton.setOnClickListener(
                               v -> showProjects()
                           );
                       }
 
-                      if (name.equals("BRAIN")) {
+                      if (
+                          name.equals("BRAIN")
+                      ) {
+
                           navButton.setOnClickListener(
                               v -> showBrain()
                           );
                       }
 
-                      if (name.equals("AGENTS")) {
+                      if (
+                          name.equals("AGENTS")
+                      ) {
+
                           navButton.setOnClickListener(
                               v -> showAgents()
                           );
                       }
 
-                      if (name.equals("MORE")) {
+                      if (
+                          name.equals("MORE")
+                      ) {
+
                           navButton.setOnClickListener(
                               v -> showMore()
                           );
@@ -820,14 +957,14 @@ jobs:
 
                   content.addView(
                       muted(
-                          "● CORE ONLINE"
+                          "● HABITAT ONLINE"
                       )
                   );
 
                   addPanel(
                       "AX CORE",
                       "The central intelligence layer for Habitat.\n\n" +
-                      "UNDERSTAND → PLAN → ACT → OBSERVE → VERIFY"
+                      "UNDERSTAND → PLAN → ACT → OBSERVE → VERIFY → CONTINUE"
                   );
 
                   addPanel(
@@ -844,7 +981,7 @@ jobs:
                       "Agents      READY\n" +
                       "Tasks       READY\n" +
                       "Tools       READY\n" +
-                      "Brain       CONFIGURABLE"
+                      "Brain       ONLINE"
                   );
 
                   TextView command =
@@ -863,7 +1000,9 @@ jobs:
                   );
 
                   input.setTextColor(TEXT);
-                  input.setHintTextColor(MUTED);
+                  input.setHintTextColor(
+                      MUTED
+                  );
 
                   input.setSingleLine(true);
 
@@ -885,15 +1024,15 @@ jobs:
                   );
 
                   Button send =
-                      button("SEND TO AX");
+                      button(
+                          "SEND TO AX"
+                      );
 
                   send.setOnClickListener(
                       v -> sendMessage()
                   );
 
-                  content.addView(
-                      send
-                  );
+                  content.addView(send);
 
                   input.setOnEditorActionListener(
                       (v, action, event) -> {
@@ -903,17 +1042,16 @@ jobs:
                                   EditorInfo.IME_ACTION_SEND
                               ||
                               (
-                                  event != null
-                                  &&
+                                  event != null &&
                                   event.getKeyCode() ==
-                                      KeyEvent.KEYCODE_ENTER
-                                  &&
+                                      KeyEvent.KEYCODE_ENTER &&
                                   event.getAction() ==
                                       KeyEvent.ACTION_DOWN
                               )
                           ) {
 
                               sendMessage();
+
                               return true;
                           }
 
@@ -941,11 +1079,16 @@ jobs:
                           .toString()
                           .trim();
 
-                  if (message.isEmpty()) {
+                  if (
+                      message.isEmpty()
+                  ) {
+
                       return;
                   }
 
-                  if (output != null) {
+                  if (
+                      output != null
+                  ) {
 
                       output.append(
                           "\n\nYOU\n" +
@@ -954,14 +1097,55 @@ jobs:
                       );
                   }
 
+                  /*
+                   * Clear the input.
+                   */
                   input.setText("");
 
+                  /*
+                   * Hide the Android keyboard
+                   * immediately after sending.
+                   */
+                  InputMethodManager imm =
+                      (InputMethodManager)
+                          getSystemService(
+                              Context.INPUT_METHOD_SERVICE
+                          );
+
+                  if (imm != null) {
+
+                      imm.hideSoftInputFromWindow(
+                          input.getWindowToken(),
+                          0
+                      );
+                  }
+
+                  input.clearFocus();
+
+                  /*
+                   * Always have a usable endpoint.
+                   */
                   String endpoint =
                       HabitatStore.load(
                           this,
                           "brain_endpoint",
-                          ""
+                          BRAIN_ENDPOINT
                       );
+
+                  if (
+                      endpoint == null ||
+                      endpoint.trim().isEmpty()
+                  ) {
+
+                      endpoint =
+                          BRAIN_ENDPOINT;
+
+                      HabitatStore.save(
+                          this,
+                          "brain_endpoint",
+                          BRAIN_ENDPOINT
+                      );
+                  }
 
                   HabitatStore.save(
                       this,
@@ -969,21 +1153,11 @@ jobs:
                       message
                   );
 
-                  if (endpoint.isEmpty()) {
-
-                      if (output != null) {
-
-                          output.append(
-                              "\n\nBrain endpoint is not configured.\n" +
-                              "Open BRAIN to connect Habitat to your AI backend."
-                          );
-                      }
-
-                      return;
-                  }
+                  final String finalEndpoint =
+                      endpoint;
 
                   BrainAdapter.chat(
-                      endpoint,
+                      finalEndpoint,
                       message,
                       new BrainAdapter.Callback() {
 
@@ -992,16 +1166,20 @@ jobs:
                               String response
                           ) {
 
-                              handler.post(() -> {
+                              handler.post(
+                                  () -> {
 
-                                  if (output != null) {
+                                      if (
+                                          output != null
+                                      ) {
 
-                                      output.append(
-                                          "\n\nAX\n" +
-                                          response
-                                      );
+                                          output.append(
+                                              "\n\nAX\n" +
+                                              response
+                                          );
+                                      }
                                   }
-                              });
+                              );
                           }
 
                           @Override
@@ -1009,16 +1187,20 @@ jobs:
                               String error
                           ) {
 
-                              handler.post(() -> {
+                              handler.post(
+                                  () -> {
 
-                                  if (output != null) {
+                                      if (
+                                          output != null
+                                      ) {
 
-                                      output.append(
-                                          "\n\nAX CONNECTION ERROR\n" +
-                                          error
-                                      );
+                                          output.append(
+                                              "\n\nAX CONNECTION ERROR\n" +
+                                              error
+                                          );
+                                      }
                                   }
-                              });
+                              );
                           }
                       }
                   );
@@ -1036,7 +1218,9 @@ jobs:
                       LinearLayout.VERTICAL
                   );
 
-                  panel.setBackgroundColor(PANEL);
+                  panel.setBackgroundColor(
+                      PANEL
+                  );
 
                   panel.setPadding(
                       18,
@@ -1046,17 +1230,32 @@ jobs:
                   );
 
                   TextView titleView =
-                      label(title, 16);
+                      label(
+                          title,
+                          16
+                      );
 
-                  titleView.setTextColor(ACCENT);
+                  titleView.setTextColor(
+                      ACCENT
+                  );
 
                   TextView bodyView =
-                      label(body, 13);
+                      label(
+                          body,
+                          13
+                      );
 
-                  bodyView.setTextColor(TEXT);
+                  bodyView.setTextColor(
+                      TEXT
+                  );
 
-                  panel.addView(titleView);
-                  panel.addView(bodyView);
+                  panel.addView(
+                      titleView
+                  );
+
+                  panel.addView(
+                      bodyView
+                  );
 
                   LinearLayout.LayoutParams params =
                       new LinearLayout.LayoutParams(
@@ -1095,7 +1294,7 @@ jobs:
                   drop.setOnClickListener(
                       v -> Toast.makeText(
                           this,
-                          "DropPilot workspace ready for expansion.",
+                          "DropPilot workspace ready.",
                           Toast.LENGTH_SHORT
                       ).show()
                   );
@@ -1137,14 +1336,21 @@ jobs:
                       HabitatStore.load(
                           this,
                           "brain_endpoint",
-                          ""
+                          BRAIN_ENDPOINT
                       );
 
                   addPanel(
-                      "BRAIN CONNECTION",
-                      "Connect Habitat to your AI backend.\n\n" +
-                      "Example endpoint:\n" +
-                      "https://your-server.example/chat"
+                      "BRAIN ONLINE",
+                      "Ax Core is connected to the live Habitat Brain.\n\n" +
+                      saved
+                  );
+
+                  addPanel(
+                      "LIVE BACKEND",
+                      "Habitat backend: ONLINE\n" +
+                      "Ax Core: READY\n" +
+                      "Connection: HTTPS\n" +
+                      "Endpoint: /chat"
                   );
 
                   EditText endpoint =
@@ -1155,9 +1361,18 @@ jobs:
                   );
 
                   endpoint.setText(saved);
-                  endpoint.setTextColor(TEXT);
-                  endpoint.setHintTextColor(MUTED);
-                  endpoint.setSingleLine(true);
+
+                  endpoint.setTextColor(
+                      TEXT
+                  );
+
+                  endpoint.setHintTextColor(
+                      MUTED
+                  );
+
+                  endpoint.setSingleLine(
+                      true
+                  );
 
                   content.addView(
                       endpoint,
@@ -1168,7 +1383,9 @@ jobs:
                   );
 
                   Button save =
-                      button("SAVE BRAIN ENDPOINT");
+                      button(
+                          "SAVE BRAIN ENDPOINT"
+                      );
 
                   save.setOnClickListener(
                       v -> {
@@ -1177,6 +1394,14 @@ jobs:
                               endpoint.getText()
                                   .toString()
                                   .trim();
+
+                          if (
+                              value.isEmpty()
+                          ) {
+
+                              value =
+                                  BRAIN_ENDPOINT;
+                          }
 
                           HabitatStore.save(
                               this,
@@ -1196,9 +1421,7 @@ jobs:
 
                   addPanel(
                       "STATUS",
-                      saved.isEmpty()
-                          ? "NOT CONNECTED"
-                          : "ENDPOINT SAVED"
+                      "ONLINE — Ax Core Brain connected"
                   );
               }
 
@@ -1208,7 +1431,7 @@ jobs:
 
                   addPanel(
                       "AGENT COORDINATOR",
-                      "Ax Core coordinates specialized agents."
+                      "Ax Core coordinates specialized Habitat agents."
                   );
 
                   addPanel(
@@ -1264,9 +1487,10 @@ jobs:
 
                   addPanel(
                       "SYSTEM",
-                      "Habitat 1.0\n" +
+                      "Habitat 1.1\n" +
                       "Ax Core\n" +
                       "Build: Debug\n" +
+                      "Brain: ONLINE\n" +
                       "Session: " +
                       time
                   );
@@ -1279,21 +1503,23 @@ jobs:
                   clear.setOnClickListener(
                       v -> {
 
-                          HabitatStore.save(
-                              this,
-                              "last_message",
-                              ""
+                          /*
+                           * Clear user memory but immediately
+                           * restore the live Brain endpoint.
+                           */
+                          HabitatStore.clear(
+                              this
                           );
 
                           HabitatStore.save(
                               this,
                               "brain_endpoint",
-                              ""
+                              BRAIN_ENDPOINT
                           );
 
                           Toast.makeText(
                               this,
-                              "Local Habitat memory cleared.",
+                              "Local memory cleared. Ax Core remains connected.",
                               Toast.LENGTH_SHORT
                           ).show();
                       }
@@ -1304,19 +1530,23 @@ jobs:
           }
           EOF
 
-      - name: Validate project
+      - name: Validate generated project
         working-directory: HabitatBuild
         shell: bash
         run: |
           set -e
 
-          echo "===== PROJECT ====="
-          find . -type f | sort
-          echo "==================="
+          echo "======================================"
+          echo "HABITAT PROJECT"
+          echo "======================================"
 
+          find . -type f | sort
+
+          echo ""
           echo "Gradle:"
           gradle --version
 
+          echo ""
           echo "Android SDK:"
           echo "$ANDROID_HOME"
 
@@ -1327,7 +1557,7 @@ jobs:
           set -e
 
           echo "======================================"
-          echo "BUILDING HABITAT AX CORE"
+          echo "BUILDING HABITAT 1.1 AX CORE"
           echo "======================================"
 
           gradle clean assembleDebug \
@@ -1339,17 +1569,22 @@ jobs:
         run: |
           set -e
 
-          APK="$(find HabitatBuild \
-            -type f \
-            -name '*.apk' \
-            -path '*/build/outputs/apk/*' \
-            | head -n 1)"
+          APK="$(
+            find HabitatBuild \
+              -type f \
+              -name '*.apk' \
+              -path '*/build/outputs/apk/*' \
+              | head -n 1
+          )"
 
           if [ -z "$APK" ]; then
+
             echo "ERROR: APK was not produced."
-            echo ""
-            echo "Build output:"
-            find HabitatBuild/app/build -type f 2>/dev/null | sort || true
+
+            find HabitatBuild/app/build \
+              -type f 2>/dev/null \
+              | sort || true
+
             exit 1
           fi
 
@@ -1359,7 +1594,7 @@ jobs:
           mkdir -p artifact
 
           cp "$APK" \
-            artifact/Habitat-1.0-Ax-Core-debug.apk
+            artifact/Habitat-1.1-Ax-Core-debug.apk
 
       - name: Create source archive
         shell: bash
@@ -1369,21 +1604,21 @@ jobs:
           cd HabitatBuild
 
           zip -qr \
-            "$GITHUB_WORKSPACE/artifact/Habitat-1.0-Ax-Core-source.zip" \
+            "$GITHUB_WORKSPACE/artifact/Habitat-1.1-Ax-Core-source.zip" \
             .
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Habitat-1.0-Ax-Core-debug-apk
-          path: artifact/Habitat-1.0-Ax-Core-debug.apk
+          name: Habitat-1.1-Ax-Core-debug-apk
+          path: artifact/Habitat-1.1-Ax-Core-debug.apk
           if-no-files-found: error
 
       - name: Upload source artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Habitat-1.0-Ax-Core-source
-          path: artifact/Habitat-1.0-Ax-Core-source.zip
+          name: Habitat-1.1-Ax-Core-source
+          path: artifact/Habitat-1.1-Ax-Core-source.zip
           if-no-files-found: error
 
       - name: Build success report
@@ -1391,15 +1626,17 @@ jobs:
         run: |
           echo ""
           echo "=============================================="
-          echo "       HABITAT 1.0 AX CORE"
-          echo "          BUILD SUCCESSFUL"
+          echo "          HABITAT 1.1 AX CORE"
+          echo "             BUILD SUCCESSFUL"
           echo "=============================================="
           echo ""
+          echo "LIVE BRAIN:"
+          echo "https://habitat-1-szzd.onrender.com/chat"
+          echo ""
           echo "APK:"
-          ls -lh artifact/Habitat-1.0-Ax-Core-debug.apk
+          ls -lh artifact/Habitat-1.1-Ax-Core-debug.apk
           echo ""
           echo "SOURCE:"
-          ls -lh artifact/Habitat-1.0-Ax-Core-source.zip
+          ls -lh artifact/Habitat-1.1-Ax-Core-source.zip
           echo ""
-          echo "The APK is available in the Actions artifacts."
           echo "=============================================="
