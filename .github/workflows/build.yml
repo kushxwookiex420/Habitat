@@ -1,586 +1,692 @@
-name: Habitat 1.0 - Ax Core Build
+name: Habitat 1.0 Ax Core Build
 
 on:
   workflow_dispatch:
-  push:
-    paths:
-      - "**/*.zip"
-      - ".github/workflows/build.yml"
 
 permissions:
   contents: read
 
 jobs:
   build:
-    name: Build Habitat Android
     runs-on: ubuntu-latest
 
     steps:
-
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Show repository files
-        shell: bash
+      - name: Show files
         run: |
-          echo "===== REPOSITORY ====="
+          echo "Repository contents:"
           find . -maxdepth 3 -type f | sort
-          echo "======================"
 
-      - name: Find Habitat ZIP
-        shell: bash
+      - name: Find project zip
         run: |
           set -e
 
           ZIP_FILE=""
 
-          if [ -f "./Habitat-Android-v0.2.2-Ax-Edition-2.zip" ]; then
-            ZIP_FILE="./Habitat-Android-v0.2.2-Ax-Edition-2.zip"
-          elif [ -f "./Habitat-Android-v0.2.2-Ax-Edition.zip" ]; then
-            ZIP_FILE="./Habitat-Android-v0.2.2-Ax-Edition.zip"
-          elif [ -f "./Habitat-Android-Project.zip" ]; then
-            ZIP_FILE="./Habitat-Android-Project.zip"
-          else
-            ZIP_FILE="$(find . -type f -name '*.zip' -not -path './extracted/*' | head -n 1)"
+          for FILE in \
+            "./Habitat-Android-v0.2.2-Ax-Edition-2.zip" \
+            "./Habitat-Android-v0.2.2-Ax-Edition.zip" \
+            "./Habitat-Android-v0.2.1-Ax-Edition.zip" \
+            "./Habitat-Android-Project.zip"
+          do
+            if [ -f "$FILE" ]; then
+              ZIP_FILE="$FILE"
+              break
+            fi
+          done
+
+          if [ -z "$ZIP_FILE" ]; then
+            ZIP_FILE="$(find . -type f -name '*.zip' | head -n 1)"
           fi
 
           if [ -z "$ZIP_FILE" ]; then
-            echo "ERROR: No Habitat ZIP file found."
+            echo "ERROR: No Habitat ZIP was found."
             exit 1
           fi
 
-          echo "Using ZIP:"
-          echo "$ZIP_FILE"
-
+          echo "Found: $ZIP_FILE"
           echo "ZIP_FILE=$ZIP_FILE" >> "$GITHUB_ENV"
 
-      - name: Extract Habitat project
-        shell: bash
+      - name: Extract project
         run: |
           set -e
 
           rm -rf extracted
-          mkdir -p extracted
+          mkdir extracted
 
           unzip -q "$ZIP_FILE" -d extracted
 
-          echo "===== EXTRACTED PROJECT ====="
-          find extracted -maxdepth 5 -type f | sort
-          echo "============================="
+          echo "Extracted files:"
+          find extracted -maxdepth 6 -type f | sort
 
-      - name: Locate Android project
-        shell: bash
+      - name: Find Gradle project
         run: |
           set -e
 
-          SETTINGS_FILE="$(find extracted -type f \( -name 'settings.gradle.kts' -o -name 'settings.gradle' \) | head -n 1)"
+          SETTINGS="$(find extracted -type f \( -name 'settings.gradle.kts' -o -name 'settings.gradle' \) | head -n 1)"
 
-          if [ -z "$SETTINGS_FILE" ]; then
-            echo "ERROR: Could not find settings.gradle.kts or settings.gradle"
+          if [ -z "$SETTINGS" ]; then
+            echo "ERROR: Gradle settings file not found."
             exit 1
           fi
 
-          PROJECT_DIR="$(dirname "$SETTINGS_FILE")"
+          PROJECT_DIR="$(dirname "$SETTINGS")"
 
-          echo "Android project:"
-          echo "$PROJECT_DIR"
-
+          echo "Project directory: $PROJECT_DIR"
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
-      - name: Locate MainActivity
-        shell: bash
+      - name: Find Android files
         run: |
           set -e
 
-          MAIN_ACTIVITY="$(find "$PROJECT_DIR" -type f -name 'MainActivity.kt' | head -n 1)"
-
-          if [ -z "$MAIN_ACTIVITY" ]; then
-            echo "ERROR: MainActivity.kt was not found."
-            exit 1
-          fi
-
-          echo "MainActivity:"
-          echo "$MAIN_ACTIVITY"
-
-          echo "MAIN_ACTIVITY=$MAIN_ACTIVITY" >> "$GITHUB_ENV"
-
-      - name: Locate Android manifest
-        shell: bash
-        run: |
-          set -e
-
+          MAIN="$(find "$PROJECT_DIR" -type f -name 'MainActivity.kt' | head -n 1)"
           MANIFEST="$(find "$PROJECT_DIR" -type f -name 'AndroidManifest.xml' | head -n 1)"
 
-          if [ -z "$MANIFEST" ]; then
-            echo "ERROR: AndroidManifest.xml was not found."
+          if [ -z "$MAIN" ]; then
+            echo "ERROR: MainActivity.kt not found."
             exit 1
           fi
 
-          echo "Manifest:"
-          echo "$MANIFEST"
+          if [ -z "$MANIFEST" ]; then
+            echo "ERROR: AndroidManifest.xml not found."
+            exit 1
+          fi
 
+          echo "MainActivity: $MAIN"
+          echo "Manifest: $MANIFEST"
+
+          echo "MAIN_ACTIVITY=$MAIN" >> "$GITHUB_ENV"
           echo "MANIFEST=$MANIFEST" >> "$GITHUB_ENV"
 
-      - name: Set up Java 17
+      - name: Java 17
         uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "17"
 
-      - name: Configure Android SDK
-        shell: bash
+      - name: Android SDK
         run: |
           set -e
 
           if [ -d "/usr/local/lib/android/sdk" ]; then
-            ANDROID_SDK="/usr/local/lib/android/sdk"
-          elif [ -d "$ANDROID_HOME" ]; then
-            ANDROID_SDK="$ANDROID_HOME"
+            SDK="/usr/local/lib/android/sdk"
           else
+            SDK="$ANDROID_HOME"
+          fi
+
+          if [ -z "$SDK" ] || [ ! -d "$SDK" ]; then
             echo "ERROR: Android SDK not found."
             exit 1
           fi
 
-          echo "Android SDK:"
-          echo "$ANDROID_SDK"
+          echo "Android SDK: $SDK"
 
-          echo "ANDROID_HOME=$ANDROID_SDK" >> "$GITHUB_ENV"
-          echo "ANDROID_SDK_ROOT=$ANDROID_SDK" >> "$GITHUB_ENV"
-          echo "$ANDROID_SDK/platform-tools" >> "$GITHUB_PATH"
-          echo "$ANDROID_SDK/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
+          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
+          echo "$SDK/platform-tools" >> "$GITHUB_PATH"
+          echo "$SDK/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
 
-      - name: Install Android SDK components
-        shell: bash
+      - name: Install Android components
         run: |
           set -e
 
           SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
 
           if [ ! -f "$SDKMANAGER" ]; then
-            SDKMANAGER="$(find "$ANDROID_HOME/cmdline-tools" -type f -name sdkmanager | head -n 1)"
+            SDKMANAGER="$(find "$ANDROID_HOME" -type f -name sdkmanager | head -n 1)"
           fi
 
-          if [ -z "$SDKMANAGER" ] || [ ! -f "$SDKMANAGER" ]; then
+          if [ -z "$SDKMANAGER" ]; then
             echo "ERROR: sdkmanager not found."
-            find "$ANDROID_HOME" -maxdepth 4 -type f -name sdkmanager || true
             exit 1
           fi
 
-          echo "Using sdkmanager:"
-          echo "$SDKMANAGER"
+          echo "Using sdkmanager: $SDKMANAGER"
 
-          yes | "$SDKMANAGER" --licenses >/dev/null || true
+          yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
 
-          "$SDKMANAGER" \
-            "platform-tools" \
-            "platforms;android-35" \
-            "build-tools;35.0.0"
+          "$SDKMANAGER" "platform-tools"
+          "$SDKMANAGER" "platforms;android-35"
+          "$SDKMANAGER" "build-tools;35.0.0"
 
-      - name: Inspect Gradle project
-        shell: bash
+      - name: Install Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.10"
+
+      - name: Write Ax MainActivity
+        run: |
+          python3 - "$MAIN_ACTIVITY" <<'PY'
+          import sys
+
+          path = sys.argv[1]
+
+          code = r'''package com.habitat.core
+
+          import android.app.Activity
+          import android.os.Bundle
+          import android.graphics.Color
+          import android.view.KeyEvent
+          import android.view.Gravity
+          import android.view.inputmethod.EditorInfo
+          import android.widget.Button
+          import android.widget.EditText
+          import android.widget.LinearLayout
+          import android.widget.ScrollView
+          import android.widget.TextView
+
+          class MainActivity : Activity() {
+
+              private lateinit var conversation: TextView
+              private lateinit var input: EditText
+
+              override fun onCreate(savedInstanceState: Bundle?) {
+                  super.onCreate(savedInstanceState)
+
+                  window.statusBarColor = Color.BLACK
+                  window.navigationBarColor = Color.BLACK
+
+                  buildHabitat()
+              }
+
+              private fun buildHabitat() {
+
+                  val root = LinearLayout(this)
+
+                  root.orientation = LinearLayout.VERTICAL
+                  root.setBackgroundColor(Color.rgb(7, 11, 17))
+                  root.setPadding(24, 24, 24, 20)
+
+                  val title = TextView(this)
+
+                  title.text = "HABITAT"
+                  title.textSize = 30f
+                  title.setTextColor(Color.WHITE)
+                  title.gravity = Gravity.CENTER_VERTICAL
+
+                  val subtitle = TextView(this)
+
+                  subtitle.text = "AX CORE  •  AI OPERATING ENVIRONMENT"
+                  subtitle.textSize = 12f
+                  subtitle.setTextColor(Color.LTGRAY)
+
+                  val status = TextView(this)
+
+                  status.text = "●  CORE ONLINE"
+                  status.textSize = 14f
+                  status.setTextColor(Color.GREEN)
+                  status.setPadding(0, 18, 0, 18)
+
+                  conversation = TextView(this)
+
+                  conversation.text =
+                      "HABITAT INITIALIZED\n\n" +
+                      "AX CORE\n" +
+                      "Memory       READY\n" +
+                      "Projects     READY\n" +
+                      "Agents       READY\n" +
+                      "Tasks        READY\n" +
+                      "Tools        READY\n" +
+                      "Execution    READY\n\n" +
+                      "ACTIVE PROJECTS\n" +
+                      "• DropPilot AI\n" +
+                      "• Vice City Files\n" +
+                      "• Habitat\n\n" +
+                      "SYSTEM LOOP\n" +
+                      "UNDERSTAND → PLAN → ACT → OBSERVE → VERIFY\n\n" +
+                      "Ax is ready."
+
+                  conversation.textSize = 16f
+                  conversation.setTextColor(Color.WHITE)
+                  conversation.setPadding(0, 10, 0, 20)
+
+                  val scroll = ScrollView(this)
+
+                  scroll.addView(conversation)
+
+                  input = EditText(this)
+
+                  input.hint = "Talk to Ax..."
+                  input.textSize = 16f
+                  input.setTextColor(Color.WHITE)
+                  input.setHintTextColor(Color.GRAY)
+                  input.singleLine = true
+                  input.imeOptions = EditorInfo.IME_ACTION_SEND
+
+                  val send = Button(this)
+
+                  send.text = "SEND TO AX"
+
+                  send.setOnClickListener {
+                      sendMessage()
+                  }
+
+                  input.setOnEditorActionListener { _, action, event ->
+
+                      if (
+                          action == EditorInfo.IME_ACTION_SEND ||
+                          (
+                              event != null &&
+                              event.keyCode == KeyEvent.KEYCODE_ENTER &&
+                              event.action == KeyEvent.ACTION_DOWN
+                          )
+                      ) {
+                          sendMessage()
+                          true
+                      } else {
+                          false
+                      }
+                  }
+
+                  root.addView(
+                      title,
+                      LinearLayout.LayoutParams(
+                          LinearLayout.LayoutParams.MATCH_PARENT,
+                          60
+                      )
+                  )
+
+                  root.addView(
+                      subtitle,
+                      LinearLayout.LayoutParams(
+                          LinearLayout.LayoutParams.MATCH_PARENT,
+                          35
+                      )
+                  )
+
+                  root.addView(
+                      status,
+                      LinearLayout.LayoutParams(
+                          LinearLayout.LayoutParams.MATCH_PARENT,
+                          60
+                      )
+                  )
+
+                  root.addView(
+                      scroll,
+                      LinearLayout.LayoutParams(
+                          LinearLayout.LayoutParams.MATCH_PARENT,
+                          0,
+                          1f
+                      )
+                  )
+
+                  root.addView(
+                      input,
+                      LinearLayout.LayoutParams(
+                          LinearLayout.LayoutParams.MATCH_PARENT,
+                          60
+                      )
+                  )
+
+                  root.addView(
+                      send,
+                      LinearLayout.LayoutParams(
+                          LinearLayout.LayoutParams.MATCH_PARENT,
+                          55
+                      )
+                  )
+
+                  setContentView(root)
+              }
+
+              private fun sendMessage() {
+
+                  val message = input.text.toString().trim()
+
+                  if (message.isEmpty()) {
+                      return
+                  }
+
+                  conversation.append(
+                      "\n\nYOU\n$message\n\nAX\n" +
+                      "Request received by Habitat Core."
+                  )
+
+                  input.text.clear()
+              }
+          }
+          '''
+
+          code = code.replace("\n          ", "\n").strip() + "\n"
+
+          with open(path, "w", encoding="utf-8") as f:
+              f.write(code)
+
+          print("MainActivity written successfully.")
+          PY
+
+      - name: Write HabitatStore
+        run: |
+          python3 - "$PROJECT_DIR" <<'PY'
+          import sys
+          import os
+
+          project = sys.argv[1]
+
+          matches = []
+
+          for root, dirs, files in os.walk(project):
+              if "MainActivity.kt" in files:
+                  matches.append(root)
+
+          if not matches:
+              raise SystemExit("MainActivity directory not found")
+
+          directory = matches[0]
+
+          code = r'''package com.habitat.core
+
+          import android.content.Context
+
+          object HabitatStore {
+
+              private const val PREFS = "habitat_core"
+
+              fun save(
+                  context: Context,
+                  key: String,
+                  value: String
+              ) {
+                  context
+                      .getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                      .edit()
+                      .putString(key, value)
+                      .apply()
+              }
+
+              fun load(
+                  context: Context,
+                  key: String,
+                  default: String = ""
+              ): String {
+                  return context
+                      .getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                      .getString(key, default)
+                      ?: default
+              }
+          }
+          '''
+
+          code = code.replace("\n          ", "\n").strip() + "\n"
+
+          with open(
+              os.path.join(directory, "HabitatStore.kt"),
+              "w",
+              encoding="utf-8"
+          ) as f:
+              f.write(code)
+
+          print("HabitatStore written.")
+          PY
+
+      - name: Write BrainAdapter
+        run: |
+          python3 - "$PROJECT_DIR" <<'PY'
+          import sys
+          import os
+
+          project = sys.argv[1]
+
+          directory = None
+
+          for root, dirs, files in os.walk(project):
+              if "MainActivity.kt" in files:
+                  directory = root
+                  break
+
+          if directory is None:
+              raise SystemExit("Source directory not found")
+
+          code = r'''package com.habitat.core
+
+          import org.json.JSONObject
+          import java.net.HttpURLConnection
+          import java.net.URL
+
+          object BrainAdapter {
+
+              fun isConfigured(endpoint: String): Boolean {
+                  return endpoint.trim().startsWith("http")
+              }
+
+              fun request(
+                  endpoint: String,
+                  message: String
+              ): String {
+
+                  val connection =
+                      URL(endpoint).openConnection() as HttpURLConnection
+
+                  connection.requestMethod = "POST"
+                  connection.connectTimeout = 10000
+                  connection.readTimeout = 30000
+                  connection.doOutput = true
+
+                  connection.setRequestProperty(
+                      "Content-Type",
+                      "application/json"
+                  )
+
+                  val body =
+                      JSONObject()
+                          .put("message", message)
+                          .toString()
+
+                  connection.outputStream.use {
+                      it.write(body.toByteArray())
+                  }
+
+                  val stream =
+                      if (connection.responseCode in 200..299) {
+                          connection.inputStream
+                      } else {
+                          connection.errorStream
+                      }
+
+                  return stream.bufferedReader().use {
+                      it.readText()
+                  }
+              }
+          }
+          '''
+
+          code = code.replace("\n          ", "\n").strip() + "\n"
+
+          with open(
+              os.path.join(directory, "BrainAdapter.kt"),
+              "w",
+              encoding="utf-8"
+          ) as f:
+              f.write(code)
+
+          print("BrainAdapter written.")
+          PY
+
+      - name: Write Habitat engines
+        run: |
+          python3 - "$PROJECT_DIR" <<'PY'
+          import sys
+          import os
+
+          project = sys.argv[1]
+
+          directory = None
+
+          for root, dirs, files in os.walk(project):
+              if "MainActivity.kt" in files:
+                  directory = root
+                  break
+
+          if directory is None:
+              raise SystemExit("Source directory not found")
+
+          files = {
+              "HabitatEngine.kt": r'''
+          package com.habitat.core
+
+          object HabitatEngine {
+
+              fun understand(input: String): String {
+                  return input.trim()
+              }
+
+              fun plan(input: String): List<String> {
+                  return listOf(
+                      "Understand request",
+                      "Check memory",
+                      "Check projects",
+                      "Select tools",
+                      "Create execution plan",
+                      "Execute",
+                      "Verify"
+                  )
+              }
+          }
+          ''',
+
+              "AgentRegistry.kt": r'''
+          package com.habitat.core
+
+          object AgentRegistry {
+
+              private val agents = listOf(
+                  "Ax Core",
+                  "Research Agent",
+                  "Project Agent",
+                  "Automation Agent",
+                  "Content Agent",
+                  "Commerce Agent"
+              )
+
+              fun all(): List<String> {
+                  return agents
+              }
+          }
+          ''',
+
+              "ToolRegistry.kt": r'''
+          package com.habitat.core
+
+          object ToolRegistry {
+
+              private val tools = listOf(
+                  "Memory",
+                  "Projects",
+                  "Tasks",
+                  "Brain",
+                  "Network",
+                  "Android"
+              )
+
+              fun all(): List<String> {
+                  return tools
+              }
+          }
+          '''
+          }
+
+          for filename, content in files.items():
+
+              content = content.replace("\n          ", "\n").strip() + "\n"
+
+              with open(
+                  os.path.join(directory, filename),
+                  "w",
+                  encoding="utf-8"
+              ) as f:
+                  f.write(content)
+
+              print("Written:", filename)
+          PY
+
+      - name: Remove old portrait references
+        run: |
+          set +e
+
+          grep -RIl \
+            -e "ax_portrait" \
+            -e "desk_scene" \
+            "$PROJECT_DIR" \
+            --include='*.kt' \
+            --include='*.xml' \
+            2>/dev/null |
+          while read FILE
+          do
+            sed -i \
+              -e '/ax_portrait/d' \
+              -e '/desk_scene/d' \
+              "$FILE"
+          done
+
+          true
+
+      - name: Add Internet permission
+        run: |
+          set -e
+
+          if ! grep -q "android.permission.INTERNET" "$MANIFEST"; then
+            python3 - "$MANIFEST" <<'PY'
+          import sys
+
+          path = sys.argv[1]
+
+          with open(path, "r", encoding="utf-8") as f:
+              text = f.read()
+
+          text = text.replace(
+              "<manifest",
+              "<manifest\n    <uses-permission android:name=\"android.permission.INTERNET\" />",
+              1
+          )
+
+          with open(path, "w", encoding="utf-8") as f:
+              f.write(text)
+          PY
+          fi
+
+          echo "Internet permission checked."
+
+      - name: Build APK
         working-directory: ${{ env.PROJECT_DIR }}
         run: |
-          echo "===== GRADLE PROJECT ====="
-          find . -maxdepth 4 -type f | sort
-          echo "=========================="
-
-          echo "===== GRADLE VERSION ====="
-          if [ -f "./gradlew" ]; then
-            chmod +x ./gradlew
-            ./gradlew --version
-          else
-            echo "No gradlew wrapper found."
-          fi
-
-      - name: Install Gradle wrapper if needed
-        shell: bash
-        working-directory: ${{ env.PROJECT_DIR }}
-        run: |
           set -e
 
-          if [ -f "./gradlew" ]; then
-            chmod +x ./gradlew
-            exit 0
-          fi
+          echo "Gradle version:"
+          gradle --version
 
-          echo "Gradle wrapper missing."
+          echo "Building Habitat..."
 
-          if command -v gradle >/dev/null 2>&1; then
-            gradle wrapper
-            chmod +x ./gradlew
-          else
-            echo "ERROR: No Gradle wrapper and no system Gradle available."
-            exit 1
-          fi
-
-      - name: Replace Habitat MainActivity
-        shell: bash
-        run: |
-          set -e
-
-          cat > "$MAIN_ACTIVITY" <<'KOTLIN'
-package com.habitat.core
-
-import android.graphics.Color
-import android.os.Bundle
-import android.view.KeyEvent
-import android.view.inputmethod.EditorInfo
-import android.widget.Button
-import android.widget.EditText
-import android.widget.LinearLayout
-import android.widget.ScrollView
-import android.widget.TextView
-import androidx.appcompat.app.AppCompatActivity
-
-class MainActivity : AppCompatActivity() {
-
-    private lateinit var conversation: TextView
-    private lateinit var input: EditText
-
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-
-        window.statusBarColor = Color.BLACK
-        window.navigationBarColor = Color.BLACK
-
-        buildInterface()
-    }
-
-    private fun buildInterface() {
-
-        val root = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setBackgroundColor(Color.rgb(8, 12, 18))
-            setPadding(24, 24, 24, 16)
-        }
-
-        val title = TextView(this).apply {
-            text = "HABITAT"
-            textSize = 28f
-            setTextColor(Color.WHITE)
-            setPadding(0, 8, 0, 4)
-        }
-
-        val subtitle = TextView(this).apply {
-            text = "AX CORE • AI OPERATING ENVIRONMENT"
-            textSize = 12f
-            setTextColor(Color.LTGRAY)
-            setPadding(0, 0, 0, 20)
-        }
-
-        val status = TextView(this).apply {
-            text = "● HABITAT CORE ONLINE"
-            textSize = 13f
-            setTextColor(Color.GREEN)
-            setPadding(0, 0, 0, 16)
-        }
-
-        val scroll = ScrollView(this)
-
-        conversation = TextView(this).apply {
-            text = """
-WELCOME TO HABITAT
-
-Ax Core is initialized.
-
-CORE
-• Memory
-• Projects
-• Agents
-• Tasks
-• Tools
-• Execution
-• Android control
-
-ACTIVE PROJECTS
-• DropPilot AI
-• Vice City Files
-• Habitat
-
-SYSTEM LOOP
-UNDERSTAND → PLAN → ACT → OBSERVE → VERIFY
-
-Type a command below.
-            """.trimIndent()
-
-            textSize = 15f
-            setTextColor(Color.WHITE)
-            setPadding(0, 8, 0, 24)
-        }
-
-        scroll.addView(conversation)
-
-        input = EditText(this).apply {
-            hint = "Talk to Ax..."
-            textSize = 15f
-            setTextColor(Color.WHITE)
-            setHintTextColor(Color.GRAY)
-            singleLine = true
-            imeOptions = EditorInfo.IME_ACTION_SEND
-        }
-
-        val send = Button(this).apply {
-            text = "SEND TO AX"
-            setOnClickListener {
-                sendMessage()
-            }
-        }
-
-        input.setOnEditorActionListener { _, actionId, event ->
-            if (
-                actionId == EditorInfo.IME_ACTION_SEND ||
-                (event?.keyCode == KeyEvent.KEYCODE_ENTER &&
-                 event.action == KeyEvent.ACTION_DOWN)
-            ) {
-                sendMessage()
-                true
-            } else {
-                false
-            }
-        }
-
-        root.addView(title)
-        root.addView(subtitle)
-        root.addView(status)
-
-        root.addView(
-            scroll,
-            LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                0,
-                1f
-            )
-        )
-
-        root.addView(
-            input,
-            LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            )
-        )
-
-        root.addView(
-            send,
-            LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            )
-        )
-
-        setContentView(root)
-    }
-
-    private fun sendMessage() {
-        val message = input.text.toString().trim()
-
-        if (message.isEmpty()) {
-            return
-        }
-
-        conversation.append(
-            "\n\nYOU\n$message\n\nAX\nProcessing through Habitat Core..."
-        )
-
-        input.text.clear()
-    }
-}
-KOTLIN
-
-          echo "MainActivity replaced."
-
-      - name: Add Habitat core files
-        shell: bash
-        run: |
-          set -e
-
-          PACKAGE_DIR="$(dirname "$MAIN_ACTIVITY")"
-
-          cat > "$PACKAGE_DIR/HabitatStore.kt" <<'KOTLIN'
-package com.habitat.core
-
-import android.content.Context
-
-object HabitatStore {
-
-    private const val PREFS = "habitat_core"
-
-    fun save(context: Context, key: String, value: String) {
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            .edit()
-            .putString(key, value)
-            .apply()
-    }
-
-    fun load(context: Context, key: String, default: String = ""): String {
-        return context
-            .getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            .getString(key, default)
-            ?: default
-    }
-}
-KOTLIN
-
-          cat > "$PACKAGE_DIR/BrainAdapter.kt" <<'KOTLIN'
-package com.habitat.core
-
-import org.json.JSONObject
-import java.net.HttpURLConnection
-import java.net.URL
-
-object BrainAdapter {
-
-    fun isConfigured(endpoint: String): Boolean {
-        return endpoint.trim().startsWith("http")
-    }
-
-    fun request(
-        endpoint: String,
-        message: String
-    ): String {
-
-        val connection =
-            URL(endpoint).openConnection() as HttpURLConnection
-
-        connection.requestMethod = "POST"
-        connection.connectTimeout = 10000
-        connection.readTimeout = 30000
-        connection.doOutput = true
-        connection.setRequestProperty(
-            "Content-Type",
-            "application/json"
-        )
-
-        val body = JSONObject()
-            .put("message", message)
-            .toString()
-
-        connection.outputStream.use {
-            it.write(body.toByteArray())
-        }
-
-        val stream =
-            if (connection.responseCode in 200..299) {
-                connection.inputStream
-            } else {
-                connection.errorStream
-            }
-
-        return stream.bufferedReader().use {
-            it.readText()
-        }
-    }
-}
-KOTLIN
-
-          cat > "$PACKAGE_DIR/HabitatEngine.kt" <<'KOTLIN'
-package com.habitat.core
-
-object HabitatEngine {
-
-    fun understand(input: String): String {
-        return input.trim()
-    }
-
-    fun plan(input: String): List<String> {
-        return listOf(
-            "Understand request",
-            "Check available tools",
-            "Create execution plan",
-            "Execute permitted actions",
-            "Verify result"
-        )
-    }
-}
-KOTLIN
-
-          cat > "$PACKAGE_DIR/AgentRegistry.kt" <<'KOTLIN'
-package com.habitat.core
-
-object AgentRegistry {
-
-    private val agents = mutableListOf(
-        "Ax Core",
-        "Research Agent",
-        "Project Agent",
-        "Automation Agent",
-        "Content Agent",
-        "Commerce Agent"
-    )
-
-    fun all(): List<String> {
-        return agents.toList()
-    }
-}
-KOTLIN
-
-          cat > "$PACKAGE_DIR/ToolRegistry.kt" <<'KOTLIN'
-package com.habitat.core
-
-object ToolRegistry {
-
-    private val tools = mutableListOf(
-        "Memory",
-        "Projects",
-        "Tasks",
-        "Brain",
-        "Network",
-        "Android"
-    )
-
-    fun all(): List<String> {
-        return tools.toList()
-    }
-}
-KOTLIN
-
-      - name: Update Android manifest
-        shell: bash
-        run: |
-          set -e
-
-          if ! grep -q 'android.permission.INTERNET' "$MANIFEST"; then
-            sed -i 's#<manifest#<manifest\n    <uses-permission android:name="android.permission.INTERNET" />#' "$MANIFEST"
-          fi
-
-          echo "Manifest updated."
-
-      - name: Build Habitat APK
-        shell: bash
-        working-directory: ${{ env.PROJECT_DIR }}
-        run: |
-          set -e
-
-          chmod +x ./gradlew
-
-          ./gradlew clean assembleDebug \
+          gradle clean assembleDebug \
             --no-daemon \
             --stacktrace
 
-      - name: Find APK
-        shell: bash
-        working-directory: ${{ env.PROJECT_DIR }}
+      - name: Locate APK
         run: |
           set -e
 
-          APK="$(find . -type f -path '*/build/outputs/apk/*.apk' | head -n 1)"
+          APK="$(find "$PROJECT_DIR" \
+            -type f \
+            -path '*/build/outputs/apk/*.apk' \
+            | head -n 1)"
 
           if [ -z "$APK" ]; then
-            echo "ERROR: APK was not created."
-            find . -type f | sort | tail -n 100
+            echo "ERROR: Build completed but APK was not found."
+            find "$PROJECT_DIR" -type f | sort
             exit 1
           fi
 
-          echo "APK found:"
+          echo "APK:"
           echo "$APK"
 
-          mkdir -p "$GITHUB_WORKSPACE/artifact"
+          mkdir -p artifact
 
           cp "$APK" \
-            "$GITHUB_WORKSPACE/artifact/Habitat-1.0-Ax-Core-debug.apk"
+            "artifact/Habitat-1.0-Ax-Core-debug.apk"
 
-      - name: Package Habitat source
-        shell: bash
+      - name: Create source archive
         run: |
           set -e
 
@@ -604,13 +710,13 @@ KOTLIN
           path: artifact/Habitat-1.0-Ax-Core-source.zip
           if-no-files-found: error
 
-      - name: Build complete
-        shell: bash
+      - name: Final report
         run: |
           echo ""
-          echo "========================================"
-          echo " HABITAT 1.0 AX CORE BUILD COMPLETE"
-          echo "========================================"
+          echo "=========================================="
+          echo "       HABITAT 1.0 AX CORE"
+          echo "          BUILD SUCCESS"
+          echo "=========================================="
           echo ""
           echo "APK:"
           ls -lh artifact/Habitat-1.0-Ax-Core-debug.apk
@@ -618,4 +724,4 @@ KOTLIN
           echo "SOURCE:"
           ls -lh artifact/Habitat-1.0-Ax-Core-source.zip
           echo ""
-          echo "Ready for download from Actions artifacts."
+          echo "=========================================="
