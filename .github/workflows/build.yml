@@ -1,4 +1,4 @@
-name: Habitat 1.0 Ax Core Build
+name: Habitat 1.0 Ax Core
 
 on:
   workflow_dispatch:
@@ -8,127 +8,51 @@ permissions:
 
 jobs:
   build:
+    name: Build Habitat APK
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
+
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Show files
-        run: |
-          echo "Repository contents:"
-          find . -maxdepth 3 -type f | sort
-
-      - name: Find project zip
-        run: |
-          set -e
-
-          ZIP_FILE=""
-
-          for FILE in \
-            "./Habitat-Android-v0.2.2-Ax-Edition-2.zip" \
-            "./Habitat-Android-v0.2.2-Ax-Edition.zip" \
-            "./Habitat-Android-v0.2.1-Ax-Edition.zip" \
-            "./Habitat-Android-Project.zip"
-          do
-            if [ -f "$FILE" ]; then
-              ZIP_FILE="$FILE"
-              break
-            fi
-          done
-
-          if [ -z "$ZIP_FILE" ]; then
-            ZIP_FILE="$(find . -type f -name '*.zip' | head -n 1)"
-          fi
-
-          if [ -z "$ZIP_FILE" ]; then
-            echo "ERROR: No Habitat ZIP was found."
-            exit 1
-          fi
-
-          echo "Found: $ZIP_FILE"
-          echo "ZIP_FILE=$ZIP_FILE" >> "$GITHUB_ENV"
-
-      - name: Extract project
-        run: |
-          set -e
-
-          rm -rf extracted
-          mkdir extracted
-
-          unzip -q "$ZIP_FILE" -d extracted
-
-          echo "Extracted files:"
-          find extracted -maxdepth 6 -type f | sort
-
-      - name: Find Gradle project
-        run: |
-          set -e
-
-          SETTINGS="$(find extracted -type f \( -name 'settings.gradle.kts' -o -name 'settings.gradle' \) | head -n 1)"
-
-          if [ -z "$SETTINGS" ]; then
-            echo "ERROR: Gradle settings file not found."
-            exit 1
-          fi
-
-          PROJECT_DIR="$(dirname "$SETTINGS")"
-
-          echo "Project directory: $PROJECT_DIR"
-          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-
-      - name: Find Android files
-        run: |
-          set -e
-
-          MAIN="$(find "$PROJECT_DIR" -type f -name 'MainActivity.kt' | head -n 1)"
-          MANIFEST="$(find "$PROJECT_DIR" -type f -name 'AndroidManifest.xml' | head -n 1)"
-
-          if [ -z "$MAIN" ]; then
-            echo "ERROR: MainActivity.kt not found."
-            exit 1
-          fi
-
-          if [ -z "$MANIFEST" ]; then
-            echo "ERROR: AndroidManifest.xml not found."
-            exit 1
-          fi
-
-          echo "MainActivity: $MAIN"
-          echo "Manifest: $MANIFEST"
-
-          echo "MAIN_ACTIVITY=$MAIN" >> "$GITHUB_ENV"
-          echo "MANIFEST=$MANIFEST" >> "$GITHUB_ENV"
-
-      - name: Java 17
+      - name: Set up Java
         uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "17"
 
-      - name: Android SDK
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.7"
+
+      - name: Locate Android SDK
+        shell: bash
         run: |
           set -e
 
           if [ -d "/usr/local/lib/android/sdk" ]; then
             SDK="/usr/local/lib/android/sdk"
-          else
+          elif [ -n "${ANDROID_HOME:-}" ] && [ -d "$ANDROID_HOME" ]; then
             SDK="$ANDROID_HOME"
-          fi
-
-          if [ -z "$SDK" ] || [ ! -d "$SDK" ]; then
-            echo "ERROR: Android SDK not found."
+          elif [ -n "${ANDROID_SDK_ROOT:-}" ] && [ -d "$ANDROID_SDK_ROOT" ]; then
+            SDK="$ANDROID_SDK_ROOT"
+          else
+            echo "Android SDK was not found."
             exit 1
           fi
 
-          echo "Android SDK: $SDK"
+          echo "ANDROID SDK: $SDK"
 
           echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
           echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
+
           echo "$SDK/platform-tools" >> "$GITHUB_PATH"
           echo "$SDK/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
 
-      - name: Install Android components
+      - name: Install Android SDK packages
+        shell: bash
         run: |
           set -e
 
@@ -138,12 +62,13 @@ jobs:
             SDKMANAGER="$(find "$ANDROID_HOME" -type f -name sdkmanager | head -n 1)"
           fi
 
-          if [ -z "$SDKMANAGER" ]; then
-            echo "ERROR: sdkmanager not found."
+          if [ -z "$SDKMANAGER" ] || [ ! -f "$SDKMANAGER" ]; then
+            echo "sdkmanager could not be located."
+            find "$ANDROID_HOME" -maxdepth 5 -type f -name sdkmanager || true
             exit 1
           fi
 
-          echo "Using sdkmanager: $SDKMANAGER"
+          echo "sdkmanager: $SDKMANAGER"
 
           yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
 
@@ -151,572 +76,1324 @@ jobs:
           "$SDKMANAGER" "platforms;android-35"
           "$SDKMANAGER" "build-tools;35.0.0"
 
-      - name: Install Gradle
-        uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: "8.10"
-
-      - name: Write Ax MainActivity
+      - name: Create clean Habitat project
+        shell: bash
         run: |
-          python3 - "$MAIN_ACTIVITY" <<'PY'
-          import sys
+          set -e
 
-          path = sys.argv[1]
+          rm -rf HabitatBuild
 
-          code = r'''package com.habitat.core
+          mkdir -p HabitatBuild
+          mkdir -p HabitatBuild/app
+          mkdir -p HabitatBuild/app/src/main/java/com/habitat/core
+          mkdir -p HabitatBuild/app/src/main/res/values
 
-          import android.app.Activity
-          import android.os.Bundle
-          import android.graphics.Color
-          import android.view.KeyEvent
-          import android.view.Gravity
-          import android.view.inputmethod.EditorInfo
-          import android.widget.Button
-          import android.widget.EditText
-          import android.widget.LinearLayout
-          import android.widget.ScrollView
-          import android.widget.TextView
+          echo "Habitat project directory created."
 
-          class MainActivity : Activity() {
+      - name: Write Gradle settings
+        shell: bash
+        run: |
+          cat > HabitatBuild/settings.gradle.kts <<'EOF'
+          pluginManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
 
-              private lateinit var conversation: TextView
-              private lateinit var input: EditText
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
 
-              override fun onCreate(savedInstanceState: Bundle?) {
-                  super.onCreate(savedInstanceState)
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
 
-                  window.statusBarColor = Color.BLACK
-                  window.navigationBarColor = Color.BLACK
+          rootProject.name = "Habitat"
 
-                  buildHabitat()
+          include(":app")
+          EOF
+
+      - name: Write root Gradle build
+        shell: bash
+        run: |
+          cat > HabitatBuild/build.gradle.kts <<'EOF'
+          plugins {
+              id("com.android.application") version "8.6.1" apply false
+          }
+          EOF
+
+      - name: Write Gradle properties
+        shell: bash
+        run: |
+          cat > HabitatBuild/gradle.properties <<'EOF'
+          org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
+          android.useAndroidX=true
+          android.nonTransitiveRClass=true
+          EOF
+
+      - name: Write Android app build
+        shell: bash
+        run: |
+          cat > HabitatBuild/app/build.gradle.kts <<'EOF'
+          plugins {
+              id("com.android.application")
+          }
+
+          android {
+              namespace = "com.habitat.core"
+              compileSdk = 35
+
+              defaultConfig {
+                  applicationId = "com.habitat.core"
+                  minSdk = 24
+                  targetSdk = 35
+                  versionCode = 100
+                  versionName = "1.0"
               }
 
-              private fun buildHabitat() {
-
-                  val root = LinearLayout(this)
-
-                  root.orientation = LinearLayout.VERTICAL
-                  root.setBackgroundColor(Color.rgb(7, 11, 17))
-                  root.setPadding(24, 24, 24, 20)
-
-                  val title = TextView(this)
-
-                  title.text = "HABITAT"
-                  title.textSize = 30f
-                  title.setTextColor(Color.WHITE)
-                  title.gravity = Gravity.CENTER_VERTICAL
-
-                  val subtitle = TextView(this)
-
-                  subtitle.text = "AX CORE  •  AI OPERATING ENVIRONMENT"
-                  subtitle.textSize = 12f
-                  subtitle.setTextColor(Color.LTGRAY)
-
-                  val status = TextView(this)
-
-                  status.text = "●  CORE ONLINE"
-                  status.textSize = 14f
-                  status.setTextColor(Color.GREEN)
-                  status.setPadding(0, 18, 0, 18)
-
-                  conversation = TextView(this)
-
-                  conversation.text =
-                      "HABITAT INITIALIZED\n\n" +
-                      "AX CORE\n" +
-                      "Memory       READY\n" +
-                      "Projects     READY\n" +
-                      "Agents       READY\n" +
-                      "Tasks        READY\n" +
-                      "Tools        READY\n" +
-                      "Execution    READY\n\n" +
-                      "ACTIVE PROJECTS\n" +
-                      "• DropPilot AI\n" +
-                      "• Vice City Files\n" +
-                      "• Habitat\n\n" +
-                      "SYSTEM LOOP\n" +
-                      "UNDERSTAND → PLAN → ACT → OBSERVE → VERIFY\n\n" +
-                      "Ax is ready."
-
-                  conversation.textSize = 16f
-                  conversation.setTextColor(Color.WHITE)
-                  conversation.setPadding(0, 10, 0, 20)
-
-                  val scroll = ScrollView(this)
-
-                  scroll.addView(conversation)
-
-                  input = EditText(this)
-
-                  input.hint = "Talk to Ax..."
-                  input.textSize = 16f
-                  input.setTextColor(Color.WHITE)
-                  input.setHintTextColor(Color.GRAY)
-                  input.singleLine = true
-                  input.imeOptions = EditorInfo.IME_ACTION_SEND
-
-                  val send = Button(this)
-
-                  send.text = "SEND TO AX"
-
-                  send.setOnClickListener {
-                      sendMessage()
+              buildTypes {
+                  release {
+                      isMinifyEnabled = false
                   }
 
-                  input.setOnEditorActionListener { _, action, event ->
+                  debug {
+                      isMinifyEnabled = false
+                  }
+              }
 
-                      if (
-                          action == EditorInfo.IME_ACTION_SEND ||
-                          (
-                              event != null &&
-                              event.keyCode == KeyEvent.KEYCODE_ENTER &&
-                              event.action == KeyEvent.ACTION_DOWN
+              compileOptions {
+                  sourceCompatibility = JavaVersion.VERSION_17
+                  targetCompatibility = JavaVersion.VERSION_17
+              }
+          }
+          EOF
+
+      - name: Write Android manifest
+        shell: bash
+        run: |
+          cat > HabitatBuild/app/src/main/AndroidManifest.xml <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+              <uses-permission android:name="android.permission.INTERNET" />
+
+              <application
+                  android:allowBackup="true"
+                  android:label="Habitat"
+                  android:supportsRtl="true"
+                  android:theme="@style/HabitatTheme">
+
+                  <activity
+                      android:name=".MainActivity"
+                      android:screenOrientation="portrait"
+                      android:exported="true">
+
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+
+                  </activity>
+
+              </application>
+
+          </manifest>
+          EOF
+
+      - name: Write Android theme
+        shell: bash
+        run: |
+          cat > HabitatBuild/app/src/main/res/values/styles.xml <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <resources>
+
+              <style
+                  name="HabitatTheme"
+                  parent="android:style/Theme.Material.NoActionBar">
+
+                  <item name="android:fontFamily">sans</item>
+                  <item name="android:windowLightStatusBar">false</item>
+                  <item name="android:statusBarColor">#05080D</item>
+                  <item name="android:navigationBarColor">#05080D</item>
+                  <item name="android:windowActionModeOverlay">true</item>
+
+              </style>
+
+          </resources>
+          EOF
+
+      - name: Write HabitatStore
+        shell: bash
+        run: |
+          cat > HabitatBuild/app/src/main/java/com/habitat/core/HabitatStore.java <<'EOF'
+          package com.habitat.core;
+
+          import android.content.Context;
+          import android.content.SharedPreferences;
+
+          public final class HabitatStore {
+
+              private static final String PREFS = "habitat_memory";
+
+              private HabitatStore() {
+              }
+
+              private static SharedPreferences prefs(Context context) {
+                  return context.getSharedPreferences(
+                      PREFS,
+                      Context.MODE_PRIVATE
+                  );
+              }
+
+              public static void save(
+                  Context context,
+                  String key,
+                  String value
+              ) {
+                  prefs(context)
+                      .edit()
+                      .putString(key, value)
+                      .apply();
+              }
+
+              public static String load(
+                  Context context,
+                  String key,
+                  String fallback
+              ) {
+                  return prefs(context)
+                      .getString(key, fallback);
+              }
+
+              public static void saveInt(
+                  Context context,
+                  String key,
+                  int value
+              ) {
+                  prefs(context)
+                      .edit()
+                      .putInt(key, value)
+                      .apply();
+              }
+
+              public static int loadInt(
+                  Context context,
+                  String key,
+                  int fallback
+              ) {
+                  return prefs(context)
+                      .getInt(key, fallback);
+              }
+          }
+          EOF
+
+      - name: Write BrainAdapter
+        shell: bash
+        run: |
+          cat > HabitatBuild/app/src/main/java/com/habitat/core/BrainAdapter.java <<'EOF'
+          package com.habitat.core;
+
+          import org.json.JSONArray;
+          import org.json.JSONObject;
+
+          import java.io.BufferedReader;
+          import java.io.InputStream;
+          import java.io.InputStreamReader;
+          import java.io.OutputStream;
+          import java.net.HttpURLConnection;
+          import java.net.URL;
+          import java.nio.charset.StandardCharsets;
+
+          public final class BrainAdapter {
+
+              private BrainAdapter() {
+              }
+
+              public interface Callback {
+                  void success(String response);
+                  void failure(String error);
+              }
+
+              public static void chat(
+                  String endpoint,
+                  String message,
+                  Callback callback
+              ) {
+
+                  new Thread(() -> {
+
+                      HttpURLConnection connection = null;
+
+                      try {
+
+                          URL url = new URL(endpoint);
+
+                          connection =
+                              (HttpURLConnection) url.openConnection();
+
+                          connection.setRequestMethod("POST");
+                          connection.setConnectTimeout(10000);
+                          connection.setReadTimeout(30000);
+                          connection.setDoOutput(true);
+
+                          connection.setRequestProperty(
+                              "Content-Type",
+                              "application/json"
+                          );
+
+                          JSONObject body =
+                              new JSONObject();
+
+                          body.put("message", message);
+
+                          byte[] data =
+                              body.toString()
+                                  .getBytes(StandardCharsets.UTF_8);
+
+                          connection.setFixedLengthStreamingMode(
+                              data.length
+                          );
+
+                          try (OutputStream output =
+                                   connection.getOutputStream()) {
+
+                              output.write(data);
+                          }
+
+                          int status =
+                              connection.getResponseCode();
+
+                          InputStream stream;
+
+                          if (status >= 200 && status < 300) {
+                              stream = connection.getInputStream();
+                          } else {
+                              stream = connection.getErrorStream();
+                          }
+
+                          String result =
+                              readStream(stream);
+
+                          if (status >= 200 && status < 300) {
+
+                              String responseText =
+                                  parseResponse(result);
+
+                              callback.success(responseText);
+
+                          } else {
+
+                              callback.failure(
+                                  "Brain server returned HTTP " +
+                                  status +
+                                  ": " +
+                                  result
+                              );
+                          }
+
+                      } catch (Exception error) {
+
+                          callback.failure(
+                              error.getClass().getSimpleName() +
+                              ": " +
+                              String.valueOf(error.getMessage())
+                          );
+
+                      } finally {
+
+                          if (connection != null) {
+                              connection.disconnect();
+                          }
+                      }
+
+                  }).start();
+              }
+
+              private static String readStream(
+                  InputStream stream
+              ) throws Exception {
+
+                  if (stream == null) {
+                      return "";
+                  }
+
+                  StringBuilder result =
+                      new StringBuilder();
+
+                  try (
+                      BufferedReader reader =
+                          new BufferedReader(
+                              new InputStreamReader(
+                                  stream,
+                                  StandardCharsets.UTF_8
+                              )
                           )
-                      ) {
-                          sendMessage()
-                          true
-                      } else {
-                          false
+                  ) {
+
+                      String line;
+
+                      while ((line = reader.readLine()) != null) {
+                          result.append(line);
                       }
                   }
 
-                  root.addView(
-                      title,
-                      LinearLayout.LayoutParams(
-                          LinearLayout.LayoutParams.MATCH_PARENT,
-                          60
-                      )
-                  )
+                  return result.toString();
+              }
+
+              private static String parseResponse(
+                  String raw
+              ) {
+
+                  try {
+
+                      JSONObject object =
+                          new JSONObject(raw);
+
+                      if (object.has("response")) {
+                          return object.optString(
+                              "response",
+                              raw
+                          );
+                      }
+
+                      if (object.has("message")) {
+                          return object.optString(
+                              "message",
+                              raw
+                          );
+                      }
+
+                      return raw;
+
+                  } catch (Exception ignored) {
+
+                      return raw;
+                  }
+              }
+          }
+          EOF
+
+      - name: Write Habitat Engine
+        shell: bash
+        run: |
+          cat > HabitatBuild/app/src/main/java/com/habitat/core/HabitatEngine.java <<'EOF'
+          package com.habitat.core;
+
+          import java.util.ArrayList;
+          import java.util.List;
+
+          public final class HabitatEngine {
+
+              private HabitatEngine() {
+              }
+
+              public static String understand(String input) {
+                  if (input == null) {
+                      return "";
+                  }
+
+                  return input.trim();
+              }
+
+              public static List<String> plan(String input) {
+
+                  List<String> plan =
+                      new ArrayList<>();
+
+                  plan.add("UNDERSTAND");
+                  plan.add("CHECK MEMORY");
+                  plan.add("CHECK PROJECT");
+                  plan.add("SELECT TOOLS");
+                  plan.add("PLAN");
+                  plan.add("ACT");
+                  plan.add("VERIFY");
+                  plan.add("STORE RESULT");
+
+                  return plan;
+              }
+          }
+          EOF
+
+      - name: Write Agent Registry
+        shell: bash
+        run: |
+          cat > HabitatBuild/app/src/main/java/com/habitat/core/AgentRegistry.java <<'EOF'
+          package com.habitat.core;
+
+          import java.util.Arrays;
+          import java.util.List;
+
+          public final class AgentRegistry {
+
+              private AgentRegistry() {
+              }
+
+              public static List<String> all() {
+
+                  return Arrays.asList(
+                      "Ax Core",
+                      "Research Agent",
+                      "Project Agent",
+                      "Automation Agent",
+                      "Content Agent",
+                      "Commerce Agent"
+                  );
+              }
+          }
+          EOF
+
+      - name: Write Tool Registry
+        shell: bash
+        run: |
+          cat > HabitatBuild/app/src/main/java/com/habitat/core/ToolRegistry.java <<'EOF'
+          package com.habitat.core;
+
+          import java.util.Arrays;
+          import java.util.List;
+
+          public final class ToolRegistry {
+
+              private ToolRegistry() {
+              }
+
+              public static List<String> all() {
+
+                  return Arrays.asList(
+                      "Memory",
+                      "Projects",
+                      "Tasks",
+                      "Brain",
+                      "Network",
+                      "Android"
+                  );
+              }
+          }
+          EOF
+
+      - name: Write MainActivity
+        shell: bash
+        run: |
+          cat > HabitatBuild/app/src/main/java/com/habitat/core/MainActivity.java <<'EOF'
+          package com.habitat.core;
+
+          import android.app.Activity;
+          import android.graphics.Color;
+          import android.graphics.Typeface;
+          import android.os.Bundle;
+          import android.os.Handler;
+          import android.os.Looper;
+          import android.text.InputType;
+          import android.view.Gravity;
+          import android.view.KeyEvent;
+          import android.view.View;
+          import android.view.Window;
+          import android.view.inputmethod.EditorInfo;
+          import android.widget.Button;
+          import android.widget.EditText;
+          import android.widget.LinearLayout;
+          import android.widget.ScrollView;
+          import android.widget.TextView;
+          import android.widget.Toast;
+
+          import java.text.SimpleDateFormat;
+          import java.util.Date;
+          import java.util.Locale;
+
+          public class MainActivity extends Activity {
+
+              private static final int BG =
+                  Color.rgb(5, 8, 13);
+
+              private static final int PANEL =
+                  Color.rgb(11, 17, 25);
+
+              private static final int TEXT =
+                  Color.rgb(235, 240, 248);
+
+              private static final int MUTED =
+                  Color.rgb(145, 157, 173);
+
+              private static final int ACCENT =
+                  Color.rgb(80, 200, 255);
+
+              private LinearLayout root;
+              private LinearLayout content;
+              private TextView output;
+              private EditText input;
+
+              private final Handler handler =
+                  new Handler(Looper.getMainLooper());
+
+              @Override
+              protected void onCreate(Bundle state) {
+
+                  super.onCreate(state);
+
+                  Window window = getWindow();
+
+                  window.setStatusBarColor(BG);
+                  window.setNavigationBarColor(BG);
+
+                  showHome();
+              }
+
+              private TextView label(
+                  String text,
+                  float size
+              ) {
+
+                  TextView view =
+                      new TextView(this);
+
+                  view.setText(text);
+                  view.setTextSize(size);
+                  view.setTextColor(TEXT);
+                  view.setPadding(0, 8, 0, 8);
+
+                  return view;
+              }
+
+              private TextView muted(
+                  String text
+              ) {
+
+                  TextView view =
+                      new TextView(this);
+
+                  view.setText(text);
+                  view.setTextSize(12);
+                  view.setTextColor(MUTED);
+                  view.setPadding(0, 4, 0, 12);
+
+                  return view;
+              }
+
+              private Button button(
+                  String text
+              ) {
+
+                  Button button =
+                      new Button(this);
+
+                  button.setText(text);
+                  button.setTextSize(12);
+                  button.setTextColor(TEXT);
+                  button.setAllCaps(false);
+
+                  return button;
+              }
+
+              private void base(String title) {
+
+                  root =
+                      new LinearLayout(this);
+
+                  root.setOrientation(
+                      LinearLayout.VERTICAL
+                  );
+
+                  root.setBackgroundColor(BG);
+
+                  root.setPadding(
+                      20,
+                      20,
+                      20,
+                      16
+                  );
+
+                  TextView header =
+                      label(title, 25);
+
+                  header.setTypeface(
+                      Typeface.DEFAULT,
+                      Typeface.BOLD
+                  );
 
                   root.addView(
-                      subtitle,
-                      LinearLayout.LayoutParams(
-                          LinearLayout.LayoutParams.MATCH_PARENT,
-                          35
+                      header,
+                      new LinearLayout.LayoutParams(
+                          -1,
+                          58
                       )
-                  )
+                  );
 
                   root.addView(
-                      status,
-                      LinearLayout.LayoutParams(
-                          LinearLayout.LayoutParams.MATCH_PARENT,
-                          60
+                      muted(
+                          "AX CORE  •  HABITAT AI OPERATING ENVIRONMENT"
                       )
-                  )
+                  );
+
+                  content =
+                      new LinearLayout(this);
+
+                  content.setOrientation(
+                      LinearLayout.VERTICAL
+                  );
+
+                  ScrollView scroll =
+                      new ScrollView(this);
+
+                  scroll.addView(content);
 
                   root.addView(
                       scroll,
-                      LinearLayout.LayoutParams(
-                          LinearLayout.LayoutParams.MATCH_PARENT,
+                      new LinearLayout.LayoutParams(
+                          -1,
                           0,
-                          1f
+                          1
                       )
-                  )
+                  );
 
-                  root.addView(
-                      input,
-                      LinearLayout.LayoutParams(
-                          LinearLayout.LayoutParams.MATCH_PARENT,
-                          60
-                      )
-                  )
+                  LinearLayout nav =
+                      new LinearLayout(this);
 
-                  root.addView(
-                      send,
-                      LinearLayout.LayoutParams(
-                          LinearLayout.LayoutParams.MATCH_PARENT,
-                          55
-                      )
-                  )
+                  nav.setOrientation(
+                      LinearLayout.HORIZONTAL
+                  );
 
-                  setContentView(root)
-              }
+                  String[] names = {
+                      "HOME",
+                      "PROJECTS",
+                      "BRAIN",
+                      "AGENTS",
+                      "MORE"
+                  };
 
-              private fun sendMessage() {
+                  for (String name : names) {
 
-                  val message = input.text.toString().trim()
+                      Button navButton =
+                          button(name);
 
-                  if (message.isEmpty()) {
-                      return
-                  }
+                      navButton.setTextSize(10);
 
-                  conversation.append(
-                      "\n\nYOU\n$message\n\nAX\n" +
-                      "Request received by Habitat Core."
-                  )
+                      nav.addView(
+                          navButton,
+                          new LinearLayout.LayoutParams(
+                              0,
+                              55,
+                              1
+                          )
+                      );
 
-                  input.text.clear()
-              }
-          }
-          '''
-
-          code = code.replace("\n          ", "\n").strip() + "\n"
-
-          with open(path, "w", encoding="utf-8") as f:
-              f.write(code)
-
-          print("MainActivity written successfully.")
-          PY
-
-      - name: Write HabitatStore
-        run: |
-          python3 - "$PROJECT_DIR" <<'PY'
-          import sys
-          import os
-
-          project = sys.argv[1]
-
-          matches = []
-
-          for root, dirs, files in os.walk(project):
-              if "MainActivity.kt" in files:
-                  matches.append(root)
-
-          if not matches:
-              raise SystemExit("MainActivity directory not found")
-
-          directory = matches[0]
-
-          code = r'''package com.habitat.core
-
-          import android.content.Context
-
-          object HabitatStore {
-
-              private const val PREFS = "habitat_core"
-
-              fun save(
-                  context: Context,
-                  key: String,
-                  value: String
-              ) {
-                  context
-                      .getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-                      .edit()
-                      .putString(key, value)
-                      .apply()
-              }
-
-              fun load(
-                  context: Context,
-                  key: String,
-                  default: String = ""
-              ): String {
-                  return context
-                      .getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-                      .getString(key, default)
-                      ?: default
-              }
-          }
-          '''
-
-          code = code.replace("\n          ", "\n").strip() + "\n"
-
-          with open(
-              os.path.join(directory, "HabitatStore.kt"),
-              "w",
-              encoding="utf-8"
-          ) as f:
-              f.write(code)
-
-          print("HabitatStore written.")
-          PY
-
-      - name: Write BrainAdapter
-        run: |
-          python3 - "$PROJECT_DIR" <<'PY'
-          import sys
-          import os
-
-          project = sys.argv[1]
-
-          directory = None
-
-          for root, dirs, files in os.walk(project):
-              if "MainActivity.kt" in files:
-                  directory = root
-                  break
-
-          if directory is None:
-              raise SystemExit("Source directory not found")
-
-          code = r'''package com.habitat.core
-
-          import org.json.JSONObject
-          import java.net.HttpURLConnection
-          import java.net.URL
-
-          object BrainAdapter {
-
-              fun isConfigured(endpoint: String): Boolean {
-                  return endpoint.trim().startsWith("http")
-              }
-
-              fun request(
-                  endpoint: String,
-                  message: String
-              ): String {
-
-                  val connection =
-                      URL(endpoint).openConnection() as HttpURLConnection
-
-                  connection.requestMethod = "POST"
-                  connection.connectTimeout = 10000
-                  connection.readTimeout = 30000
-                  connection.doOutput = true
-
-                  connection.setRequestProperty(
-                      "Content-Type",
-                      "application/json"
-                  )
-
-                  val body =
-                      JSONObject()
-                          .put("message", message)
-                          .toString()
-
-                  connection.outputStream.use {
-                      it.write(body.toByteArray())
-                  }
-
-                  val stream =
-                      if (connection.responseCode in 200..299) {
-                          connection.inputStream
-                      } else {
-                          connection.errorStream
+                      if (name.equals("HOME")) {
+                          navButton.setOnClickListener(
+                              v -> showHome()
+                          );
                       }
 
-                  return stream.bufferedReader().use {
-                      it.readText()
+                      if (name.equals("PROJECTS")) {
+                          navButton.setOnClickListener(
+                              v -> showProjects()
+                          );
+                      }
+
+                      if (name.equals("BRAIN")) {
+                          navButton.setOnClickListener(
+                              v -> showBrain()
+                          );
+                      }
+
+                      if (name.equals("AGENTS")) {
+                          navButton.setOnClickListener(
+                              v -> showAgents()
+                          );
+                      }
+
+                      if (name.equals("MORE")) {
+                          navButton.setOnClickListener(
+                              v -> showMore()
+                          );
+                      }
                   }
-              }
-          }
-          '''
 
-          code = code.replace("\n          ", "\n").strip() + "\n"
+                  root.addView(nav);
 
-          with open(
-              os.path.join(directory, "BrainAdapter.kt"),
-              "w",
-              encoding="utf-8"
-          ) as f:
-              f.write(code)
-
-          print("BrainAdapter written.")
-          PY
-
-      - name: Write Habitat engines
-        run: |
-          python3 - "$PROJECT_DIR" <<'PY'
-          import sys
-          import os
-
-          project = sys.argv[1]
-
-          directory = None
-
-          for root, dirs, files in os.walk(project):
-              if "MainActivity.kt" in files:
-                  directory = root
-                  break
-
-          if directory is None:
-              raise SystemExit("Source directory not found")
-
-          files = {
-              "HabitatEngine.kt": r'''
-          package com.habitat.core
-
-          object HabitatEngine {
-
-              fun understand(input: String): String {
-                  return input.trim()
+                  setContentView(root);
               }
 
-              fun plan(input: String): List<String> {
-                  return listOf(
-                      "Understand request",
-                      "Check memory",
-                      "Check projects",
-                      "Select tools",
-                      "Create execution plan",
-                      "Execute",
-                      "Verify"
-                  )
+              private void showHome() {
+
+                  base("HABITAT");
+
+                  content.addView(
+                      muted(
+                          "● CORE ONLINE"
+                      )
+                  );
+
+                  addPanel(
+                      "AX CORE",
+                      "The central intelligence layer for Habitat.\n\n" +
+                      "UNDERSTAND → PLAN → ACT → OBSERVE → VERIFY"
+                  );
+
+                  addPanel(
+                      "ACTIVE PROJECTS",
+                      "DropPilot AI\n" +
+                      "Vice City Files\n" +
+                      "Habitat"
+                  );
+
+                  addPanel(
+                      "SYSTEMS",
+                      "Memory      READY\n" +
+                      "Projects    READY\n" +
+                      "Agents      READY\n" +
+                      "Tasks       READY\n" +
+                      "Tools       READY\n" +
+                      "Brain       CONFIGURABLE"
+                  );
+
+                  TextView command =
+                      label(
+                          "COMMAND CONSOLE",
+                          17
+                      );
+
+                  content.addView(command);
+
+                  input =
+                      new EditText(this);
+
+                  input.setHint(
+                      "Talk to Ax..."
+                  );
+
+                  input.setTextColor(TEXT);
+                  input.setHintTextColor(MUTED);
+
+                  input.setSingleLine(true);
+
+                  input.setInputType(
+                      InputType.TYPE_CLASS_TEXT |
+                      InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
+                  );
+
+                  input.setImeOptions(
+                      EditorInfo.IME_ACTION_SEND
+                  );
+
+                  content.addView(
+                      input,
+                      new LinearLayout.LayoutParams(
+                          -1,
+                          60
+                      )
+                  );
+
+                  Button send =
+                      button("SEND TO AX");
+
+                  send.setOnClickListener(
+                      v -> sendMessage()
+                  );
+
+                  content.addView(
+                      send
+                  );
+
+                  input.setOnEditorActionListener(
+                      (v, action, event) -> {
+
+                          if (
+                              action ==
+                                  EditorInfo.IME_ACTION_SEND
+                              ||
+                              (
+                                  event != null
+                                  &&
+                                  event.getKeyCode() ==
+                                      KeyEvent.KEYCODE_ENTER
+                                  &&
+                                  event.getAction() ==
+                                      KeyEvent.ACTION_DOWN
+                              )
+                          ) {
+
+                              sendMessage();
+                              return true;
+                          }
+
+                          return false;
+                      }
+                  );
+
+                  output =
+                      label(
+                          "",
+                          14
+                      );
+
+                  content.addView(output);
+              }
+
+              private void sendMessage() {
+
+                  if (input == null) {
+                      return;
+                  }
+
+                  String message =
+                      input.getText()
+                          .toString()
+                          .trim();
+
+                  if (message.isEmpty()) {
+                      return;
+                  }
+
+                  if (output != null) {
+
+                      output.append(
+                          "\n\nYOU\n" +
+                          message +
+                          "\n\nAX\nThinking..."
+                      );
+                  }
+
+                  input.setText("");
+
+                  String endpoint =
+                      HabitatStore.load(
+                          this,
+                          "brain_endpoint",
+                          ""
+                      );
+
+                  HabitatStore.save(
+                      this,
+                      "last_message",
+                      message
+                  );
+
+                  if (endpoint.isEmpty()) {
+
+                      if (output != null) {
+
+                          output.append(
+                              "\n\nBrain endpoint is not configured.\n" +
+                              "Open BRAIN to connect Habitat to your AI backend."
+                          );
+                      }
+
+                      return;
+                  }
+
+                  BrainAdapter.chat(
+                      endpoint,
+                      message,
+                      new BrainAdapter.Callback() {
+
+                          @Override
+                          public void success(
+                              String response
+                          ) {
+
+                              handler.post(() -> {
+
+                                  if (output != null) {
+
+                                      output.append(
+                                          "\n\nAX\n" +
+                                          response
+                                      );
+                                  }
+                              });
+                          }
+
+                          @Override
+                          public void failure(
+                              String error
+                          ) {
+
+                              handler.post(() -> {
+
+                                  if (output != null) {
+
+                                      output.append(
+                                          "\n\nAX CONNECTION ERROR\n" +
+                                          error
+                                      );
+                                  }
+                              });
+                          }
+                      }
+                  );
+              }
+
+              private void addPanel(
+                  String title,
+                  String body
+              ) {
+
+                  LinearLayout panel =
+                      new LinearLayout(this);
+
+                  panel.setOrientation(
+                      LinearLayout.VERTICAL
+                  );
+
+                  panel.setBackgroundColor(PANEL);
+
+                  panel.setPadding(
+                      18,
+                      14,
+                      18,
+                      14
+                  );
+
+                  TextView titleView =
+                      label(title, 16);
+
+                  titleView.setTextColor(ACCENT);
+
+                  TextView bodyView =
+                      label(body, 13);
+
+                  bodyView.setTextColor(TEXT);
+
+                  panel.addView(titleView);
+                  panel.addView(bodyView);
+
+                  LinearLayout.LayoutParams params =
+                      new LinearLayout.LayoutParams(
+                          -1,
+                          -2
+                      );
+
+                  params.setMargins(
+                      0,
+                      0,
+                      0,
+                      12
+                  );
+
+                  content.addView(
+                      panel,
+                      params
+                  );
+              }
+
+              private void showProjects() {
+
+                  base("PROJECTS");
+
+                  addPanel(
+                      "DROPPILOT AI",
+                      "Commerce automation workspace\n\n" +
+                      "Research → Score → Verify → List → Monitor"
+                  );
+
+                  Button drop =
+                      button(
+                          "OPEN DROPPILOT"
+                      );
+
+                  drop.setOnClickListener(
+                      v -> Toast.makeText(
+                          this,
+                          "DropPilot workspace ready for expansion.",
+                          Toast.LENGTH_SHORT
+                      ).show()
+                  );
+
+                  content.addView(drop);
+
+                  addPanel(
+                      "VICE CITY FILES",
+                      "Content automation workspace\n\n" +
+                      "Research → Script → Create → Publish → Analyze"
+                  );
+
+                  Button vice =
+                      button(
+                          "OPEN VICE CITY FILES"
+                      );
+
+                  vice.setOnClickListener(
+                      v -> Toast.makeText(
+                          this,
+                          "Vice City Files workspace ready.",
+                          Toast.LENGTH_SHORT
+                      ).show()
+                  );
+
+                  content.addView(vice);
+
+                  addPanel(
+                      "HABITAT",
+                      "The platform that runs the other projects."
+                  );
+              }
+
+              private void showBrain() {
+
+                  base("BRAIN");
+
+                  String saved =
+                      HabitatStore.load(
+                          this,
+                          "brain_endpoint",
+                          ""
+                      );
+
+                  addPanel(
+                      "BRAIN CONNECTION",
+                      "Connect Habitat to your AI backend.\n\n" +
+                      "Example endpoint:\n" +
+                      "https://your-server.example/chat"
+                  );
+
+                  EditText endpoint =
+                      new EditText(this);
+
+                  endpoint.setHint(
+                      "Brain /chat endpoint"
+                  );
+
+                  endpoint.setText(saved);
+                  endpoint.setTextColor(TEXT);
+                  endpoint.setHintTextColor(MUTED);
+                  endpoint.setSingleLine(true);
+
+                  content.addView(
+                      endpoint,
+                      new LinearLayout.LayoutParams(
+                          -1,
+                          60
+                      )
+                  );
+
+                  Button save =
+                      button("SAVE BRAIN ENDPOINT");
+
+                  save.setOnClickListener(
+                      v -> {
+
+                          String value =
+                              endpoint.getText()
+                                  .toString()
+                                  .trim();
+
+                          HabitatStore.save(
+                              this,
+                              "brain_endpoint",
+                              value
+                          );
+
+                          Toast.makeText(
+                              this,
+                              "Brain endpoint saved.",
+                              Toast.LENGTH_SHORT
+                          ).show();
+                      }
+                  );
+
+                  content.addView(save);
+
+                  addPanel(
+                      "STATUS",
+                      saved.isEmpty()
+                          ? "NOT CONNECTED"
+                          : "ENDPOINT SAVED"
+                  );
+              }
+
+              private void showAgents() {
+
+                  base("AGENTS");
+
+                  addPanel(
+                      "AGENT COORDINATOR",
+                      "Ax Core coordinates specialized agents."
+                  );
+
+                  addPanel(
+                      "AVAILABLE AGENTS",
+                      "Ax Core\n" +
+                      "Research Agent\n" +
+                      "Project Agent\n" +
+                      "Automation Agent\n" +
+                      "Content Agent\n" +
+                      "Commerce Agent"
+                  );
+
+                  addPanel(
+                      "EXECUTION LOOP",
+                      "1. Understand\n" +
+                      "2. Plan\n" +
+                      "3. Select tools\n" +
+                      "4. Execute\n" +
+                      "5. Observe\n" +
+                      "6. Verify\n" +
+                      "7. Store result"
+                  );
+              }
+
+              private void showMore() {
+
+                  base("MORE");
+
+                  addPanel(
+                      "MEMORY",
+                      "Local Habitat memory is active."
+                  );
+
+                  String last =
+                      HabitatStore.load(
+                          this,
+                          "last_message",
+                          "No command recorded yet."
+                      );
+
+                  addPanel(
+                      "LAST COMMAND",
+                      last
+                  );
+
+                  String time =
+                      new SimpleDateFormat(
+                          "yyyy-MM-dd HH:mm:ss",
+                          Locale.US
+                      ).format(
+                          new Date()
+                      );
+
+                  addPanel(
+                      "SYSTEM",
+                      "Habitat 1.0\n" +
+                      "Ax Core\n" +
+                      "Build: Debug\n" +
+                      "Session: " +
+                      time
+                  );
+
+                  Button clear =
+                      button(
+                          "CLEAR LOCAL MEMORY"
+                      );
+
+                  clear.setOnClickListener(
+                      v -> {
+
+                          HabitatStore.save(
+                              this,
+                              "last_message",
+                              ""
+                          );
+
+                          HabitatStore.save(
+                              this,
+                              "brain_endpoint",
+                              ""
+                          );
+
+                          Toast.makeText(
+                              this,
+                              "Local Habitat memory cleared.",
+                              Toast.LENGTH_SHORT
+                          ).show();
+                      }
+                  );
+
+                  content.addView(clear);
               }
           }
-          ''',
+          EOF
 
-              "AgentRegistry.kt": r'''
-          package com.habitat.core
-
-          object AgentRegistry {
-
-              private val agents = listOf(
-                  "Ax Core",
-                  "Research Agent",
-                  "Project Agent",
-                  "Automation Agent",
-                  "Content Agent",
-                  "Commerce Agent"
-              )
-
-              fun all(): List<String> {
-                  return agents
-              }
-          }
-          ''',
-
-              "ToolRegistry.kt": r'''
-          package com.habitat.core
-
-          object ToolRegistry {
-
-              private val tools = listOf(
-                  "Memory",
-                  "Projects",
-                  "Tasks",
-                  "Brain",
-                  "Network",
-                  "Android"
-              )
-
-              fun all(): List<String> {
-                  return tools
-              }
-          }
-          '''
-          }
-
-          for filename, content in files.items():
-
-              content = content.replace("\n          ", "\n").strip() + "\n"
-
-              with open(
-                  os.path.join(directory, filename),
-                  "w",
-                  encoding="utf-8"
-              ) as f:
-                  f.write(content)
-
-              print("Written:", filename)
-          PY
-
-      - name: Remove old portrait references
-        run: |
-          set +e
-
-          grep -RIl \
-            -e "ax_portrait" \
-            -e "desk_scene" \
-            "$PROJECT_DIR" \
-            --include='*.kt' \
-            --include='*.xml' \
-            2>/dev/null |
-          while read FILE
-          do
-            sed -i \
-              -e '/ax_portrait/d' \
-              -e '/desk_scene/d' \
-              "$FILE"
-          done
-
-          true
-
-      - name: Add Internet permission
+      - name: Validate project
+        working-directory: HabitatBuild
+        shell: bash
         run: |
           set -e
 
-          if ! grep -q "android.permission.INTERNET" "$MANIFEST"; then
-            python3 - "$MANIFEST" <<'PY'
-          import sys
+          echo "===== PROJECT ====="
+          find . -type f | sort
+          echo "==================="
 
-          path = sys.argv[1]
-
-          with open(path, "r", encoding="utf-8") as f:
-              text = f.read()
-
-          text = text.replace(
-              "<manifest",
-              "<manifest\n    <uses-permission android:name=\"android.permission.INTERNET\" />",
-              1
-          )
-
-          with open(path, "w", encoding="utf-8") as f:
-              f.write(text)
-          PY
-          fi
-
-          echo "Internet permission checked."
-
-      - name: Build APK
-        working-directory: ${{ env.PROJECT_DIR }}
-        run: |
-          set -e
-
-          echo "Gradle version:"
+          echo "Gradle:"
           gradle --version
 
-          echo "Building Habitat..."
+          echo "Android SDK:"
+          echo "$ANDROID_HOME"
+
+      - name: Build debug APK
+        working-directory: HabitatBuild
+        shell: bash
+        run: |
+          set -e
+
+          echo "======================================"
+          echo "BUILDING HABITAT AX CORE"
+          echo "======================================"
 
           gradle clean assembleDebug \
             --no-daemon \
             --stacktrace
 
-      - name: Locate APK
+      - name: Verify APK
+        shell: bash
         run: |
           set -e
 
-          APK="$(find "$PROJECT_DIR" \
+          APK="$(find HabitatBuild \
             -type f \
-            -path '*/build/outputs/apk/*.apk' \
+            -name '*.apk' \
+            -path '*/build/outputs/apk/*' \
             | head -n 1)"
 
           if [ -z "$APK" ]; then
-            echo "ERROR: Build completed but APK was not found."
-            find "$PROJECT_DIR" -type f | sort
+            echo "ERROR: APK was not produced."
+            echo ""
+            echo "Build output:"
+            find HabitatBuild/app/build -type f 2>/dev/null | sort || true
             exit 1
           fi
 
-          echo "APK:"
+          echo "APK FOUND:"
           echo "$APK"
 
           mkdir -p artifact
 
           cp "$APK" \
-            "artifact/Habitat-1.0-Ax-Core-debug.apk"
+            artifact/Habitat-1.0-Ax-Core-debug.apk
 
       - name: Create source archive
+        shell: bash
         run: |
           set -e
 
-          cd "$PROJECT_DIR"
+          cd HabitatBuild
 
           zip -qr \
             "$GITHUB_WORKSPACE/artifact/Habitat-1.0-Ax-Core-source.zip" \
             .
 
-      - name: Upload APK
+      - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: Habitat-1.0-Ax-Core-debug-apk
           path: artifact/Habitat-1.0-Ax-Core-debug.apk
           if-no-files-found: error
 
-      - name: Upload source
+      - name: Upload source artifact
         uses: actions/upload-artifact@v4
         with:
           name: Habitat-1.0-Ax-Core-source
           path: artifact/Habitat-1.0-Ax-Core-source.zip
           if-no-files-found: error
 
-      - name: Final report
+      - name: Build success report
+        shell: bash
         run: |
           echo ""
-          echo "=========================================="
+          echo "=============================================="
           echo "       HABITAT 1.0 AX CORE"
-          echo "          BUILD SUCCESS"
-          echo "=========================================="
+          echo "          BUILD SUCCESSFUL"
+          echo "=============================================="
           echo ""
           echo "APK:"
           ls -lh artifact/Habitat-1.0-Ax-Core-debug.apk
@@ -724,4 +1401,5 @@ jobs:
           echo "SOURCE:"
           ls -lh artifact/Habitat-1.0-Ax-Core-source.zip
           echo ""
-          echo "=========================================="
+          echo "The APK is available in the Actions artifacts."
+          echo "=============================================="
