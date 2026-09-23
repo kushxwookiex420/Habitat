@@ -17,7 +17,7 @@ jobs:
         uses: actions/checkout@v5
 
       - name: Set up Java
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "17"
@@ -25,10 +25,17 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      - name: Verify v0.2.1 ZIP exists
+      - name: Verify Habitat v0.2.1 ZIP
         run: |
+          echo "Checking for Habitat v0.2.1..."
           test -f Habitat-Android-v0.2.1-Ax-Edition.zip
-          echo "v0.2.1 ZIP found."
+          ls -lh Habitat-Android-v0.2.1-Ax-Edition.zip
+
+      - name: Inspect ZIP contents
+        run: |
+          echo "===== ZIP CONTENTS ====="
+          unzip -l Habitat-Android-v0.2.1-Ax-Edition.zip
+          echo "===== END ZIP CONTENTS ====="
 
       - name: Extract Habitat v0.2.1
         run: |
@@ -36,41 +43,71 @@ jobs:
           mkdir -p extracted
           unzip -q Habitat-Android-v0.2.1-Ax-Edition.zip -d extracted
 
+          echo "===== EXTRACTED FILES ====="
+          find extracted -maxdepth 5 -type f | head -200
+          echo "===== END EXTRACTED FILES ====="
+
       - name: Locate Android project
         run: |
-          echo "Searching for Gradle project..."
-          find extracted -name gradlew -type f -print
+          echo "Searching for Android project files..."
+
+          echo "Gradle wrappers:"
+          find extracted -type f -name "gradlew" -print || true
+
+          echo "Gradle build files:"
+          find extracted -type f \( -name "settings.gradle" -o -name "settings.gradle.kts" -o -name "build.gradle" -o -name "build.gradle.kts" \) -print || true
+
+          echo "Android manifests:"
+          find extracted -type f -name "AndroidManifest.xml" -print || true
+
+      - name: Find Gradle wrapper
+        id: project
+        run: |
+          GRADLEW=$(find extracted -type f -name "gradlew" -print -quit)
+
+          if [ -z "$GRADLEW" ]; then
+            echo ""
+            echo "ERROR: No gradlew file was found in the v0.2.1 ZIP."
+            echo ""
+            echo "The ZIP structure shown above must be checked."
+            exit 1
+          fi
+
+          PROJECT_DIR=$(dirname "$GRADLEW")
+
+          echo "Gradle wrapper found:"
+          echo "$GRADLEW"
+
+          echo "Project directory:"
+          echo "$PROJECT_DIR"
+
+          echo "gradle_project=$PROJECT_DIR" >> "$GITHUB_OUTPUT"
 
       - name: Prepare Gradle wrapper
         run: |
-          chmod +x "$(find extracted -name gradlew -type f | head -n 1)"
+          chmod +x "${{ steps.project.outputs.gradle_project }}/gradlew"
 
       - name: Build Habitat debug APK
         run: |
-          GRADLEW="$(find extracted -name gradlew -type f | head -n 1)"
-          PROJECT_DIR="$(dirname "$GRADLEW")"
-
-          echo "Project directory: $PROJECT_DIR"
-
-          cd "$PROJECT_DIR"
-
+          cd "${{ steps.project.outputs.gradle_project }}"
           ./gradlew assembleDebug --stacktrace
 
       - name: Find generated APK
         run: |
-          echo "Searching for APK..."
+          echo "===== GENERATED APK FILES ====="
           find extracted -type f -name "*.apk" -print
+          echo "===== END APK FILES ====="
 
-      - name: Verify APK was created
+      - name: Verify APK
         run: |
-          APK="$(find extracted -type f -path "*/build/outputs/apk/debug/*.apk" | head -n 1)"
+          APK=$(find extracted -type f -path "*/build/outputs/apk/debug/*.apk" -print -quit)
 
           if [ -z "$APK" ]; then
-            echo "ERROR: No debug APK was produced."
+            echo "ERROR: Build completed but no debug APK was found."
             exit 1
           fi
 
-          echo "APK successfully created:"
+          echo "Habitat v0.2.1 APK:"
           echo "$APK"
 
       - name: Upload Habitat v0.2.1 APK
