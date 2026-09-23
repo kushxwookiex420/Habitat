@@ -1,135 +1,455 @@
-name: Habitat 1.0 Android Build
+name: Habitat 1.0 - Ax Android Build
 
 on:
   workflow_dispatch:
+
   push:
     paths:
-      - '**.zip'
-      - '.github/workflows/build.yml'
+      - "**.zip"
+      - ".github/workflows/build.yml"
 
 permissions:
   contents: read
 
 jobs:
   build:
-    name: Build Habitat 1.0
+    name: Build Habitat APK
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
+
+      # --------------------------------------------------
+      # 1. GET THE REPOSITORY
+      # --------------------------------------------------
+
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Find Habitat source ZIP
+
+      # --------------------------------------------------
+      # 2. SHOW WHAT WE HAVE
+      # --------------------------------------------------
+
+      - name: Inspect repository
+        shell: bash
+        run: |
+          set -eux
+
+          echo "Repository contents:"
+          find . -maxdepth 3 -type f | sort
+
+
+      # --------------------------------------------------
+      # 3. FIND HABITAT ZIP
+      # --------------------------------------------------
+
+      - name: Find Habitat Android ZIP
         shell: bash
         run: |
           set -e
 
-          ZIP_FILE=$(find . -maxdepth 2 -type f -iname '*0.2.2*.zip' | head -n 1)
+          ZIP_FILE=""
+
+          for candidate in \
+            "./Habitat-Android-v0.2.2-Ax-Edition-2.zip" \
+            "./Habitat-Android-v0.2.2-Ax-Edition.zip" \
+            "./Habitat-Android-Project.zip"
+          do
+            if [ -f "$candidate" ]; then
+              ZIP_FILE="$candidate"
+              break
+            fi
+          done
 
           if [ -z "$ZIP_FILE" ]; then
-            echo "ERROR: Habitat Android ZIP not found."
-            find . -maxdepth 3 -type f | sort
+            ZIP_FILE=$(find . \
+              -maxdepth 3 \
+              -type f \
+              -iname "*.zip" \
+              | grep -Ei "habitat.*android|android.*habitat" \
+              | head -n 1 || true)
+          fi
+
+          if [ -z "$ZIP_FILE" ]; then
+            echo "ERROR: No Habitat Android ZIP found."
             exit 1
           fi
 
-          echo "Found: $ZIP_FILE"
+          echo "Using Habitat source:"
+          echo "$ZIP_FILE"
+
           echo "ZIP_FILE=$ZIP_FILE" >> "$GITHUB_ENV"
 
-      - name: Extract source
+
+      # --------------------------------------------------
+      # 4. EXTRACT HABITAT
+      # --------------------------------------------------
+
+      - name: Extract Habitat source
         shell: bash
         run: |
           set -e
 
           rm -rf extracted
-          mkdir extracted
+          mkdir -p extracted
 
           unzip -q "$ZIP_FILE" -d extracted
 
-          echo "Source extracted."
-          find extracted -maxdepth 5 -type f | sort
+          echo "Extraction complete."
+          find extracted -maxdepth 6 -type f | sort
+
+
+      # --------------------------------------------------
+      # 5. LOCATE ANDROID PROJECT
+      # --------------------------------------------------
 
       - name: Locate Android project
         shell: bash
         run: |
           set -e
 
-          SETTINGS=$(find extracted -type f \
-            \( -name 'settings.gradle.kts' -o -name 'settings.gradle' \) \
-            | head -n 1)
+          SETTINGS_FILE=$(
+            find extracted \
+              -type f \
+              \( \
+                -name "settings.gradle.kts" \
+                -o \
+                -name "settings.gradle" \
+              \) \
+              | head -n 1
+          )
 
-          if [ -z "$SETTINGS" ]; then
-            echo "ERROR: settings.gradle(.kts) not found."
+          if [ -z "$SETTINGS_FILE" ]; then
+            echo "ERROR: Android settings file not found."
+            find extracted -type f | sort
             exit 1
           fi
 
-          PROJECT_DIR=$(dirname "$SETTINGS")
+          PROJECT_DIR=$(dirname "$SETTINGS_FILE")
 
-          echo "Project: $PROJECT_DIR"
+          echo "Android project found:"
+          echo "$PROJECT_DIR"
+
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
-      - name: Verify project
+
+      # --------------------------------------------------
+      # 6. VERIFY ANDROID PROJECT
+      # --------------------------------------------------
+
+      - name: Verify Android project
         shell: bash
         run: |
           set -e
 
-          test -f "$PROJECT_DIR/settings.gradle.kts" || \
-          test -f "$PROJECT_DIR/settings.gradle"
+          echo "Project directory:"
+          echo "$PROJECT_DIR"
 
-          test -f "$PROJECT_DIR/build.gradle.kts" || \
-          test -f "$PROJECT_DIR/build.gradle"
+          echo
+          echo "Project files:"
+          find "$PROJECT_DIR" -maxdepth 3 -type f | sort
+
+          if [ ! -f "$PROJECT_DIR/settings.gradle.kts" ] && \
+             [ ! -f "$PROJECT_DIR/settings.gradle" ]; then
+            echo "ERROR: settings.gradle(.kts) missing."
+            exit 1
+          fi
+
+          if [ ! -f "$PROJECT_DIR/build.gradle.kts" ] && \
+             [ ! -f "$PROJECT_DIR/build.gradle" ]; then
+            echo "ERROR: build.gradle(.kts) missing."
+            exit 1
+          fi
+
+          if [ ! -f "$PROJECT_DIR/AndroidManifest.xml" ]; then
+            MANIFEST=$(find "$PROJECT_DIR" \
+              -type f \
+              -name "AndroidManifest.xml" \
+              | head -n 1 || true)
+
+            if [ -z "$MANIFEST" ]; then
+              echo "ERROR: AndroidManifest.xml missing."
+              exit 1
+            fi
+          fi
 
           echo "Android project verified."
 
-      - name: Java 17
+
+      # --------------------------------------------------
+      # 7. JAVA 17
+      # --------------------------------------------------
+
+      - name: Install Java 17
         uses: actions/setup-java@v5
         with:
           distribution: temurin
-          java-version: '17'
+          java-version: "17"
 
-      - name: Android SDK
-        uses: android-actions/setup-android@v3
 
-      - name: Install Android SDK
+      # --------------------------------------------------
+      # 8. CHECK JAVA
+      # --------------------------------------------------
+
+      - name: Verify Java
         shell: bash
         run: |
-          sdkmanager "platform-tools"
-          sdkmanager "platforms;android-35"
-          sdkmanager "build-tools;35.0.0"
+          set -e
 
-      - name: Build APK
+          java -version
+          javac -version
+
+
+      # --------------------------------------------------
+      # 9. USE PREINSTALLED ANDROID SDK
+      # --------------------------------------------------
+
+      - name: Configure Android SDK
+        shell: bash
+        run: |
+          set -e
+
+          export ANDROID_HOME="/usr/local/lib/android/sdk"
+          export ANDROID_SDK_ROOT="/usr/local/lib/android/sdk"
+
+          echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT" >> "$GITHUB_ENV"
+
+          echo "$ANDROID_HOME/platform-tools" >> "$GITHUB_PATH"
+          echo "$ANDROID_HOME/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
+
+          if [ -x "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" ]; then
+            echo "sdkmanager found."
+          else
+            echo "ERROR: sdkmanager not found."
+            find "$ANDROID_HOME" -maxdepth 4 -type f -name sdkmanager || true
+            exit 1
+          fi
+
+
+      # --------------------------------------------------
+      # 10. ACCEPT LICENSES
+      # --------------------------------------------------
+
+      - name: Accept Android licenses
+        shell: bash
+        run: |
+          set -e
+
+          export ANDROID_HOME="/usr/local/lib/android/sdk"
+          export ANDROID_SDK_ROOT="/usr/local/lib/android/sdk"
+
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses \
+            > /dev/null || true
+
+          echo "Android licenses processed."
+
+
+      # --------------------------------------------------
+      # 11. INSTALL REQUIRED SDK
+      # --------------------------------------------------
+
+      - name: Install Android SDK packages
+        shell: bash
+        run: |
+          set -e
+
+          export ANDROID_HOME="/usr/local/lib/android/sdk"
+          export ANDROID_SDK_ROOT="/usr/local/lib/android/sdk"
+
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+
+          "$SDKMANAGER" \
+            "platform-tools" \
+            "platforms;android-35" \
+            "build-tools;35.0.0"
+
+          echo "Required Android SDK packages installed."
+
+
+      # --------------------------------------------------
+      # 12. VERIFY SDK
+      # --------------------------------------------------
+
+      - name: Verify Android SDK
+        shell: bash
+        run: |
+          set -e
+
+          export ANDROID_HOME="/usr/local/lib/android/sdk"
+
+          "$ANDROID_HOME/platform-tools/adb" version
+
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --list \
+            | grep -E "platforms;android-35|build-tools;35.0.0" \
+            | head -n 20 || true
+
+          echo "Android SDK verified."
+
+
+      # --------------------------------------------------
+      # 13. INSTALL GRADLE
+      # --------------------------------------------------
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+
+      # --------------------------------------------------
+      # 14. DETECT GRADLE
+      # --------------------------------------------------
+
+      - name: Prepare Gradle
         working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
         run: |
           set -e
 
           if [ -f "./gradlew" ]; then
+            echo "Gradle wrapper found."
             chmod +x ./gradlew
-            ./gradlew assembleDebug --no-daemon --stacktrace
+            ./gradlew --version
           else
-            gradle assembleDebug --no-daemon --stacktrace
+            echo "No Gradle wrapper found."
+            echo "Using installed Gradle."
+            gradle --version
           fi
 
-      - name: Find APK
+
+      # --------------------------------------------------
+      # 15. BUILD HABITAT
+      # --------------------------------------------------
+
+      - name: Build Habitat Debug APK
+        working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
         run: |
           set -e
 
+          export ANDROID_HOME="/usr/local/lib/android/sdk"
+          export ANDROID_SDK_ROOT="/usr/local/lib/android/sdk"
+
+          if [ -f "./gradlew" ]; then
+
+            chmod +x ./gradlew
+
+            ./gradlew \
+              assembleDebug \
+              --no-daemon \
+              --stacktrace
+
+          else
+
+            gradle \
+              assembleDebug \
+              --no-daemon \
+              --stacktrace
+
+          fi
+
+
+      # --------------------------------------------------
+      # 16. FIND APK
+      # --------------------------------------------------
+
+      - name: Locate generated APK
+        shell: bash
+        run: |
+          set -e
+
+          echo "Searching for APK..."
+
+          find "$PROJECT_DIR" \
+            -type f \
+            -name "*.apk" \
+            -print
+
           APK=$(find "$PROJECT_DIR" \
             -type f \
-            -name '*.apk' \
-            | head -n 1)
+            -name "*.apk" \
+            | grep -Ei "debug" \
+            | head -n 1 || true)
+
+          if [ -z "$APK" ]; then
+            APK=$(find "$PROJECT_DIR" \
+              -type f \
+              -name "*.apk" \
+              | head -n 1 || true)
+          fi
 
           if [ -z "$APK" ]; then
             echo "ERROR: APK was not generated."
             exit 1
           fi
 
-          echo "APK: $APK"
+          echo "APK FOUND:"
+          echo "$APK"
 
-      - name: Upload APK
+          mkdir -p artifact
+
+          cp "$APK" \
+            "artifact/Habitat-1.0-Ax-debug.apk"
+
+          echo "APK copied to artifact."
+
+
+      # --------------------------------------------------
+      # 17. PACKAGE SOURCE
+      # --------------------------------------------------
+
+      - name: Package Habitat source
+        shell: bash
+        run: |
+          set -e
+
+          mkdir -p artifact/source
+
+          cp -R "$PROJECT_DIR"/. \
+            artifact/source/
+
+          echo "Habitat source packaged."
+
+
+      # --------------------------------------------------
+      # 18. UPLOAD APK
+      # --------------------------------------------------
+
+      - name: Upload Habitat APK
         uses: actions/upload-artifact@v4
         with:
           name: Habitat-1.0-Ax-debug-apk
-          path: |
-            ${{ env.PROJECT_DIR }}/**/build/outputs/apk/**/*.apk
+          path: artifact/Habitat-1.0-Ax-debug.apk
           if-no-files-found: error
+
+
+      # --------------------------------------------------
+      # 19. UPLOAD SOURCE
+      # --------------------------------------------------
+
+      - name: Upload Habitat source
+        uses: actions/upload-artifact@v4
+        with:
+          name: Habitat-1.0-Ax-Android-Source
+          path: artifact/source
+          if-no-files-found: error
+
+
+      # --------------------------------------------------
+      # 20. FINAL BUILD REPORT
+      # --------------------------------------------------
+
+      - name: Build complete
+        shell: bash
+        run: |
+          echo
+          echo "=========================================="
+          echo "        HABITAT 1.0 BUILD COMPLETE"
+          echo "=========================================="
+          echo
+          echo "APK:"
+          ls -lh artifact/Habitat-1.0-Ax-debug.apk
+          echo
+          echo "Source:"
+          du -sh artifact/source
+          echo
+          echo "Ax Core build pipeline finished."
