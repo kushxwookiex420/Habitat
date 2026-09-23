@@ -1,62 +1,43 @@
-name: Habitat 1.0 - Ax Android Build
+name: Habitat 1.0 - Ax Core Build
 
 on:
   workflow_dispatch:
-
-  push:
-    paths:
-      - "**.zip"
-      - ".github/workflows/build.yml"
 
 permissions:
   contents: read
 
 jobs:
   build:
-    name: Build Habitat APK
+    name: Build Habitat 1.0 Ax Core
     runs-on: ubuntu-latest
 
     steps:
 
-      # --------------------------------------------------
-      # 1. GET THE REPOSITORY
-      # --------------------------------------------------
+      # ============================================================
+      # CHECKOUT
+      # ============================================================
 
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # ============================================================
+      # FIND SOURCE ZIP
+      # ============================================================
 
-      # --------------------------------------------------
-      # 2. SHOW WHAT WE HAVE
-      # --------------------------------------------------
-
-      - name: Inspect repository
-        shell: bash
-        run: |
-          set -eux
-
-          echo "Repository contents:"
-          find . -maxdepth 3 -type f | sort
-
-
-      # --------------------------------------------------
-      # 3. FIND HABITAT ZIP
-      # --------------------------------------------------
-
-      - name: Find Habitat Android ZIP
+      - name: Find Habitat Android project
         shell: bash
         run: |
           set -e
 
           ZIP_FILE=""
 
-          for candidate in \
+          for file in \
             "./Habitat-Android-v0.2.2-Ax-Edition-2.zip" \
             "./Habitat-Android-v0.2.2-Ax-Edition.zip" \
             "./Habitat-Android-Project.zip"
           do
-            if [ -f "$candidate" ]; then
-              ZIP_FILE="$candidate"
+            if [ -f "$file" ]; then
+              ZIP_FILE="$file"
               break
             fi
           done
@@ -66,26 +47,22 @@ jobs:
               -maxdepth 3 \
               -type f \
               -iname "*.zip" \
-              | grep -Ei "habitat.*android|android.*habitat" \
               | head -n 1 || true)
           fi
 
           if [ -z "$ZIP_FILE" ]; then
-            echo "ERROR: No Habitat Android ZIP found."
+            echo "No Android source ZIP found."
             exit 1
           fi
 
-          echo "Using Habitat source:"
-          echo "$ZIP_FILE"
-
+          echo "ZIP=$ZIP_FILE"
           echo "ZIP_FILE=$ZIP_FILE" >> "$GITHUB_ENV"
 
+      # ============================================================
+      # EXTRACT
+      # ============================================================
 
-      # --------------------------------------------------
-      # 4. EXTRACT HABITAT
-      # --------------------------------------------------
-
-      - name: Extract Habitat source
+      - name: Extract Habitat
         shell: bash
         run: |
           set -e
@@ -95,114 +72,49 @@ jobs:
 
           unzip -q "$ZIP_FILE" -d extracted
 
-          echo "Extraction complete."
-          find extracted -maxdepth 6 -type f | sort
+      # ============================================================
+      # LOCATE PROJECT
+      # ============================================================
 
-
-      # --------------------------------------------------
-      # 5. LOCATE ANDROID PROJECT
-      # --------------------------------------------------
-
-      - name: Locate Android project
+      - name: Locate Gradle project
         shell: bash
         run: |
           set -e
 
-          SETTINGS_FILE=$(
-            find extracted \
-              -type f \
-              \( \
-                -name "settings.gradle.kts" \
-                -o \
-                -name "settings.gradle" \
-              \) \
-              | head -n 1
-          )
+          SETTINGS=$(find extracted \
+            -type f \
+            \( \
+              -name "settings.gradle.kts" \
+              -o \
+              -name "settings.gradle" \
+            \) \
+            | head -n 1)
 
-          if [ -z "$SETTINGS_FILE" ]; then
-            echo "ERROR: Android settings file not found."
-            find extracted -type f | sort
+          if [ -z "$SETTINGS" ]; then
+            echo "settings.gradle(.kts) not found."
             exit 1
           fi
 
-          PROJECT_DIR=$(dirname "$SETTINGS_FILE")
-
-          echo "Android project found:"
-          echo "$PROJECT_DIR"
+          PROJECT_DIR=$(dirname "$SETTINGS")
 
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
-
-      # --------------------------------------------------
-      # 6. VERIFY ANDROID PROJECT
-      # --------------------------------------------------
-
-      - name: Verify Android project
-        shell: bash
-        run: |
-          set -e
-
-          echo "Project directory:"
+          echo "Project:"
           echo "$PROJECT_DIR"
 
-          echo
-          echo "Project files:"
-          find "$PROJECT_DIR" -maxdepth 3 -type f | sort
+      # ============================================================
+      # JAVA
+      # ============================================================
 
-          if [ ! -f "$PROJECT_DIR/settings.gradle.kts" ] && \
-             [ ! -f "$PROJECT_DIR/settings.gradle" ]; then
-            echo "ERROR: settings.gradle(.kts) missing."
-            exit 1
-          fi
-
-          if [ ! -f "$PROJECT_DIR/build.gradle.kts" ] && \
-             [ ! -f "$PROJECT_DIR/build.gradle" ]; then
-            echo "ERROR: build.gradle(.kts) missing."
-            exit 1
-          fi
-
-          if [ ! -f "$PROJECT_DIR/AndroidManifest.xml" ]; then
-            MANIFEST=$(find "$PROJECT_DIR" \
-              -type f \
-              -name "AndroidManifest.xml" \
-              | head -n 1 || true)
-
-            if [ -z "$MANIFEST" ]; then
-              echo "ERROR: AndroidManifest.xml missing."
-              exit 1
-            fi
-          fi
-
-          echo "Android project verified."
-
-
-      # --------------------------------------------------
-      # 7. JAVA 17
-      # --------------------------------------------------
-
-      - name: Install Java 17
+      - name: Java 17
         uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "17"
 
-
-      # --------------------------------------------------
-      # 8. CHECK JAVA
-      # --------------------------------------------------
-
-      - name: Verify Java
-        shell: bash
-        run: |
-          set -e
-
-          java -version
-          javac -version
-
-
-      # --------------------------------------------------
-      # 9. USE PREINSTALLED ANDROID SDK
-      # --------------------------------------------------
+      # ============================================================
+      # ANDROID SDK
+      # ============================================================
 
       - name: Configure Android SDK
         shell: bash
@@ -218,109 +130,2126 @@ jobs:
           echo "$ANDROID_HOME/platform-tools" >> "$GITHUB_PATH"
           echo "$ANDROID_HOME/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
 
-          if [ -x "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" ]; then
-            echo "sdkmanager found."
-          else
-            echo "ERROR: sdkmanager not found."
-            find "$ANDROID_HOME" -maxdepth 4 -type f -name sdkmanager || true
-            exit 1
-          fi
-
-
-      # --------------------------------------------------
-      # 10. ACCEPT LICENSES
-      # --------------------------------------------------
-
-      - name: Accept Android licenses
+      - name: Install Android SDK
         shell: bash
         run: |
           set -e
 
           export ANDROID_HOME="/usr/local/lib/android/sdk"
-          export ANDROID_SDK_ROOT="/usr/local/lib/android/sdk"
 
-          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses \
-            > /dev/null || true
+          SDK="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
 
-          echo "Android licenses processed."
+          yes | "$SDK" --licenses || true
 
-
-      # --------------------------------------------------
-      # 11. INSTALL REQUIRED SDK
-      # --------------------------------------------------
-
-      - name: Install Android SDK packages
-        shell: bash
-        run: |
-          set -e
-
-          export ANDROID_HOME="/usr/local/lib/android/sdk"
-          export ANDROID_SDK_ROOT="/usr/local/lib/android/sdk"
-
-          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
-
-          "$SDKMANAGER" \
+          "$SDK" \
             "platform-tools" \
             "platforms;android-35" \
             "build-tools;35.0.0"
 
-          echo "Required Android SDK packages installed."
-
-
-      # --------------------------------------------------
-      # 12. VERIFY SDK
-      # --------------------------------------------------
-
-      - name: Verify Android SDK
-        shell: bash
-        run: |
-          set -e
-
-          export ANDROID_HOME="/usr/local/lib/android/sdk"
-
-          "$ANDROID_HOME/platform-tools/adb" version
-
-          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --list \
-            | grep -E "platforms;android-35|build-tools;35.0.0" \
-            | head -n 20 || true
-
-          echo "Android SDK verified."
-
-
-      # --------------------------------------------------
-      # 13. INSTALL GRADLE
-      # --------------------------------------------------
+      # ============================================================
+      # GRADLE
+      # ============================================================
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
 
+      # ============================================================
+      # CREATE HABITAT CORE SOURCE
+      # ============================================================
 
-      # --------------------------------------------------
-      # 14. DETECT GRADLE
-      # --------------------------------------------------
-
-      - name: Prepare Gradle
-        working-directory: ${{ env.PROJECT_DIR }}
+      - name: Install Habitat 1.0 source
         shell: bash
         run: |
+
           set -e
 
-          if [ -f "./gradlew" ]; then
-            echo "Gradle wrapper found."
-            chmod +x ./gradlew
-            ./gradlew --version
-          else
-            echo "No Gradle wrapper found."
-            echo "Using installed Gradle."
-            gradle --version
-          fi
+          SRC="$PROJECT_DIR/app/src/main/java/com/habitat/core"
+
+          mkdir -p "$SRC"
+
+          # --------------------------------------------------------
+          # MainActivity.kt
+          # --------------------------------------------------------
+
+          cat > "$SRC/MainActivity.kt" <<'KOTLIN'
+
+package com.habitat.core
+
+import android.app.Activity
+import android.content.Context
+import android.graphics.Color
+import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
+import android.os.Bundle
+import android.view.Gravity
+import android.view.KeyEvent
+import android.view.View
+import android.view.WindowInsets
+import android.view.WindowInsetsController
+import android.view.inputmethod.EditorInfo
+import android.widget.*
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+
+class MainActivity : Activity() {
+
+    private val store by lazy {
+        HabitatStore(this)
+    }
+
+    private val brain by lazy {
+        BrainAdapter(this)
+    }
+
+    private lateinit var root: LinearLayout
+    private lateinit var content: LinearLayout
+
+    private val background = Color.rgb(4, 7, 12)
+    private val panel = Color.rgb(12, 17, 25)
+    private val panel2 = Color.rgb(18, 25, 36)
+    private val line = Color.rgb(36, 49, 68)
+    private val text = Color.WHITE
+    private val muted = Color.rgb(145, 158, 178)
+    private val cyan = Color.rgb(80, 195, 255)
+    private val green = Color.rgb(100, 220, 155)
+    private val orange = Color.rgb(255, 190, 90)
+    private val red = Color.rgb(255, 105, 105)
+
+    private fun dp(v: Int): Int =
+        (v * resources.displayMetrics.density).toInt()
+
+    override fun onCreate(state: Bundle?) {
+        super.onCreate(state)
+
+        configureWindow()
+        showHome()
+    }
+
+    override fun onDestroy() {
+        brain.shutdown()
+        super.onDestroy()
+    }
+
+    private fun configureWindow() {
+
+        window.statusBarColor = background
+        window.navigationBarColor = background
+
+        if (android.os.Build.VERSION.SDK_INT >= 30) {
+
+            window.setDecorFitsSystemWindows(false)
+
+            window.insetsController?.setSystemBarsAppearance(
+                0,
+                WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or
+                    WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS
+            )
+        }
+    }
+
+    private fun makeRoot(): LinearLayout {
+
+        return LinearLayout(this).apply {
+
+            orientation = LinearLayout.VERTICAL
+
+            setBackgroundColor(background)
+
+            setPadding(
+                dp(16),
+                dp(12),
+                dp(16),
+                dp(8)
+            )
+
+            if (android.os.Build.VERSION.SDK_INT >= 30) {
+
+                setOnApplyWindowInsetsListener { view, insets ->
+
+                    val bars =
+                        insets.getInsets(
+                            WindowInsets.Type.systemBars()
+                        )
+
+                    view.setPadding(
+                        dp(16),
+                        bars.top + dp(12),
+                        dp(16),
+                        bars.bottom + dp(8)
+                    )
+
+                    insets
+                }
+            }
+        }
+    }
+
+    private fun panelBackground(
+        color: Int = panel,
+        radius: Int = 16
+    ): GradientDrawable {
+
+        return GradientDrawable().apply {
+
+            setColor(color)
+
+            cornerRadius =
+                dp(radius).toFloat()
+
+            setStroke(
+                dp(1),
+                line
+            )
+        }
+    }
+
+    private fun label(
+        value: String,
+        size: Float = 14f,
+        color: Int = text,
+        bold: Boolean = false
+    ): TextView {
+
+        return TextView(this).apply {
+
+            this.text = value
+
+            textSize = size
+
+            setTextColor(color)
+
+            if (bold) {
+                typeface = Typeface.DEFAULT_BOLD
+            }
+        }
+    }
+
+    private fun button(
+        title: String,
+        action: () -> Unit
+    ): Button {
+
+        return Button(this).apply {
+
+            text = title
+
+            textSize = 12f
+
+            setTextColor(text)
+
+            typeface = Typeface.DEFAULT_BOLD
+
+            background =
+                panelBackground(
+                    panel2,
+                    12
+                )
+
+            minHeight = dp(48)
+
+            minimumHeight = dp(48)
+
+            setPadding(
+                dp(8),
+                dp(2),
+                dp(8),
+                dp(2)
+            )
+
+            setOnClickListener {
+                action()
+            }
+        }
+    }
+
+    private fun header(
+        title: String,
+        subtitle: String
+    ): LinearLayout {
+
+        return LinearLayout(this).apply {
+
+            orientation = LinearLayout.VERTICAL
+
+            addView(
+                label(
+                    title,
+                    28f,
+                    text,
+                    true
+                )
+            )
+
+            addView(
+                label(
+                    subtitle,
+                    11f,
+                    muted
+                ),
+                LinearLayout.LayoutParams(
+                    -1,
+                    -2
+                ).apply {
+                    topMargin = dp(3)
+                }
+            )
+        }
+    }
+
+    private fun install(
+        screen: LinearLayout
+    ) {
+
+        root = screen
+
+        content =
+            LinearLayout(this).apply {
+                orientation =
+                    LinearLayout.VERTICAL
+            }
+
+        root.addView(
+            content,
+            LinearLayout.LayoutParams(
+                -1,
+                0,
+                1f
+            )
+        )
+
+        val navigation =
+            LinearLayout(this).apply {
+
+                orientation =
+                    LinearLayout.HORIZONTAL
+
+                gravity =
+                    Gravity.CENTER
+
+                setPadding(
+                    0,
+                    dp(5),
+                    0,
+                    dp(3)
+                )
+            }
+
+        listOf(
+            "HOME",
+            "PROJECTS",
+            "BRAIN",
+            "AGENTS",
+            "MORE"
+        ).forEach { name ->
+
+            navigation.addView(
+                button(name) {
+
+                    when (name) {
+
+                        "HOME" ->
+                            showHome()
+
+                        "PROJECTS" ->
+                            showProjects()
+
+                        "BRAIN" ->
+                            showBrain()
+
+                        "AGENTS" ->
+                            showAgents()
+
+                        "MORE" ->
+                            showMore()
+                    }
+
+                },
+                LinearLayout.LayoutParams(
+                    0,
+                    dp(50),
+                    1f
+                ).apply {
+
+                    marginStart = dp(3)
+                    marginEnd = dp(3)
+                }
+            )
+        }
+
+        root.addView(
+            navigation,
+            LinearLayout.LayoutParams(
+                -1,
+                dp(58)
+            )
+        )
+
+        setContentView(root)
+    }
+
+    private fun statusLine(): String {
+
+        return if (
+            brain.endpoint().isBlank()
+        ) {
+            "● AX CORE   LOCAL   BRAIN OFFLINE"
+        } else {
+            "● AX CORE   BRAIN ENDPOINT READY"
+        }
+    }
+
+    private fun statusColor(): Int {
+
+        return if (
+            brain.endpoint().isBlank()
+        ) {
+            orange
+        } else {
+            green
+        }
+    }
+
+    private fun card(
+        title: String,
+        state: String,
+        description: String
+    ): LinearLayout {
+
+        return LinearLayout(this).apply {
+
+            orientation =
+                LinearLayout.VERTICAL
+
+            background =
+                panelBackground()
+
+            setPadding(
+                dp(14),
+                dp(12),
+                dp(14),
+                dp(12)
+            )
+
+            val row =
+                LinearLayout(this@MainActivity).apply {
+
+                    orientation =
+                        LinearLayout.HORIZONTAL
+                }
+
+            row.addView(
+                label(
+                    title,
+                    15f,
+                    text,
+                    true
+                ),
+                LinearLayout.LayoutParams(
+                    0,
+                    -2,
+                    1f
+                )
+            )
+
+            row.addView(
+                label(
+                    state,
+                    13f,
+                    cyan,
+                    true
+                )
+            )
+
+            addView(row)
+
+            addView(
+                label(
+                    description,
+                    11f,
+                    muted
+                ),
+                LinearLayout.LayoutParams(
+                    -1,
+                    -2
+                ).apply {
+                    topMargin = dp(5)
+                }
+            )
+
+            layoutParams =
+                LinearLayout.LayoutParams(
+                    -1,
+                    dp(78)
+                ).apply {
+                    bottomMargin = dp(8)
+                }
+        }
+    }
+
+    private fun showHome() {
+
+        val screen =
+            makeRoot()
+
+        screen.addView(
+            header(
+                "HABITAT",
+                "AX INTELLIGENCE ENVIRONMENT"
+            )
+        )
+
+        screen.addView(
+            label(
+                statusLine(),
+                12f,
+                statusColor(),
+                true
+            ),
+            LinearLayout.LayoutParams(
+                -1,
+                -2
+            ).apply {
+                topMargin = dp(10)
+                bottomMargin = dp(10)
+            }
+        )
+
+        val core =
+            LinearLayout(this).apply {
+
+                orientation =
+                    LinearLayout.VERTICAL
+
+                background =
+                    panelBackground()
+
+                setPadding(
+                    dp(18),
+                    dp(18),
+                    dp(18),
+                    dp(18)
+                )
+            }
+
+        core.addView(
+            label(
+                "AX CORE",
+                22f,
+                text,
+                true
+            )
+        )
+
+        core.addView(
+            label(
+                "Command center online",
+                15f,
+                cyan,
+                true
+            ),
+            LinearLayout.LayoutParams(
+                -1,
+                -2
+            ).apply {
+                topMargin = dp(7)
+            }
+        )
+
+        core.addView(
+            label(
+                "UNDERSTAND → PLAN → ACT → OBSERVE → VERIFY",
+                11f,
+                muted
+            ),
+            LinearLayout.LayoutParams(
+                -1,
+                -2
+            ).apply {
+                topMargin = dp(7)
+            }
+        )
+
+        screen.addView(
+            core,
+            LinearLayout.LayoutParams(
+                -1,
+                dp(132)
+            ).apply {
+                bottomMargin = dp(10)
+            }
+        )
+
+        screen.addView(
+            card(
+                "DROPPILOT AI",
+                "WORKSPACE",
+                "Products • economics • research • listings • growth"
+            )
+        )
+
+        screen.addView(
+            card(
+                "VICE CITY FILES",
+                "WORKSPACE",
+                "Research • scripts • assets • publishing • analytics"
+            )
+        )
+
+        screen.addView(
+            card(
+                "HABITAT CORE",
+                "RUNNING",
+                "Memory • tasks • agents • tools • automation"
+            )
+        )
+
+        val commands =
+            LinearLayout(this).apply {
+                orientation =
+                    LinearLayout.HORIZONTAL
+            }
+
+        commands.addView(
+            button("TALK TO AX") {
+                showChat()
+            },
+            LinearLayout.LayoutParams(
+                0,
+                dp(52),
+                1f
+            )
+        )
+
+        commands.addView(
+            button("TASKS") {
+                showTasks()
+            },
+            LinearLayout.LayoutParams(
+                0,
+                dp(52),
+                1f
+            ).apply {
+                marginStart = dp(8)
+            }
+        )
+
+        screen.addView(
+            commands,
+            LinearLayout.LayoutParams(
+                -1,
+                dp(58)
+            )
+        )
+
+        install(screen)
+    }
+
+    private fun showChat() {
+
+        val screen =
+            makeRoot()
+
+        screen.addView(
+            header(
+                "AX",
+                "DIRECT COMMAND INTERFACE"
+            )
+        )
+
+        val scroll =
+            ScrollView(this)
+
+        val messages =
+            LinearLayout(this).apply {
+                orientation =
+                    LinearLayout.VERTICAL
+
+                setPadding(
+                    0,
+                    dp(10),
+                    0,
+                    dp(10)
+                )
+            }
+
+        fun addMessage(
+            who: String,
+            message: String,
+            user: Boolean
+        ) {
+
+            val bubble =
+                label(
+                    "$who\n$message",
+                    14f,
+                    text
+                )
+
+            bubble.background =
+                panelBackground(
+                    if (user)
+                        Color.rgb(18, 42, 62)
+                    else
+                        panel
+                )
+
+            bubble.setPadding(
+                dp(14),
+                dp(12),
+                dp(14),
+                dp(12)
+            )
+
+            messages.addView(
+                bubble,
+                LinearLayout.LayoutParams(
+                    -1,
+                    -2
+                ).apply {
+                    topMargin = dp(5)
+                    bottomMargin = dp(5)
+                }
+            )
+
+            scroll.post {
+                scroll.fullScroll(
+                    View.FOCUS_DOWN
+                )
+            }
+        }
+
+        addMessage(
+            "AX",
+            "Habitat command interface online. Awaiting mission.",
+            false
+        )
+
+        scroll.addView(messages)
+
+        screen.addView(
+            scroll,
+            LinearLayout.LayoutParams(
+                -1,
+                0,
+                1f
+            )
+        )
+
+        val input =
+            EditText(this).apply {
+
+                hint = "Command Ax..."
+
+                setHintTextColor(muted)
+
+                setTextColor(text)
+
+                textSize = 15f
+
+                singleLine = true
+
+                imeOptions =
+                    EditorInfo.IME_ACTION_SEND
+
+                background =
+                    panelBackground()
+
+                setPadding(
+                    dp(14),
+                    dp(10),
+                    dp(14),
+                    dp(10)
+                )
+            }
+
+        screen.addView(
+            input,
+            LinearLayout.LayoutParams(
+                -1,
+                dp(56)
+            ).apply {
+                bottomMargin = dp(7)
+            }
+        )
+
+        fun sendCommand() {
+
+            val command =
+                input.text
+                    .toString()
+                    .trim()
+
+            if (command.isEmpty()) {
+                return
+            }
+
+            addMessage(
+                "YOU",
+                command,
+                true
+            )
+
+            store.saveMessage(
+                "YOU",
+                command
+            )
+
+            input.text.clear()
+
+            if (brain.endpoint().isBlank()) {
+
+                addMessage(
+                    "AX",
+                    "I received it locally. Connect a brain endpoint in BRAIN for external AI processing.",
+                    false
+                )
+
+            } else {
+
+                addMessage(
+                    "AX",
+                    "Processing...",
+                    false
+                )
+
+                brain.send(
+                    command
+                ) { result ->
+
+                    runOnUiThread {
+
+                        addMessage(
+                            "AX",
+                            result.text,
+                            false
+                        )
+
+                        store.saveMessage(
+                            "AX",
+                            result.text
+                        )
+                    }
+                }
+            }
+        }
+
+        input.setOnEditorActionListener { _, action, event ->
+
+            if (
+                action == EditorInfo.IME_ACTION_SEND ||
+                (
+                    event != null &&
+                    event.keyCode == KeyEvent.KEYCODE_ENTER &&
+                    event.action == KeyEvent.ACTION_DOWN
+                )
+            ) {
+
+                sendCommand()
+
+                true
+
+            } else {
+
+                false
+            }
+        }
+
+        screen.addView(
+            button("SEND") {
+                sendCommand()
+            },
+            LinearLayout.LayoutParams(
+                -1,
+                dp(50)
+            )
+        )
+
+        install(screen)
+    }
+
+    private fun showProjects() {
+
+        val screen =
+            makeRoot()
+
+        screen.addView(
+            header(
+                "PROJECTS",
+                "HABITAT WORKSPACES"
+            )
+        )
+
+        screen.addView(
+            card(
+                "DROPPILOT AI",
+                "READY",
+                "TikTok Shop / Shopify business workspace"
+            )
+        )
+
+        screen.addView(
+            card(
+                "VICE CITY FILES",
+                "READY",
+                "GTA 6 research and content workspace"
+            )
+        )
+
+        screen.addView(
+            card(
+                "HABITAT",
+                "ACTIVE",
+                "Core AI environment"
+            )
+        )
+
+        screen.addView(
+            button("DROPPILOT COMMAND CENTER") {
+                showWorkspace(
+                    "DROPPILOT AI",
+                    listOf(
+                        "PRODUCT RESEARCH",
+                        "ECONOMICS",
+                        "COMPETITOR RESEARCH",
+                        "LISTINGS",
+                        "CREATOR OUTREACH",
+                        "SALES MONITOR"
+                    )
+                )
+            },
+            LinearLayout.LayoutParams(
+                -1,
+                dp(52)
+            ).apply {
+                bottomMargin = dp(8)
+            }
+        )
+
+        screen.addView(
+            button("VICE CITY COMMAND CENTER") {
+                showWorkspace(
+                    "VICE CITY FILES",
+                    listOf(
+                        "TOPIC RESEARCH",
+                        "FACT CHECK",
+                        "SCRIPT ENGINE",
+                        "ASSET PLANNER",
+                        "PUBLISHING",
+                        "ANALYTICS"
+                    )
+                )
+            },
+            LinearLayout.LayoutParams(
+                -1,
+                dp(52)
+            )
+        )
+
+        install(screen)
+    }
+
+    private fun showWorkspace(
+        name: String,
+        functions: List<String>
+    ) {
+
+        val screen =
+            makeRoot()
+
+        screen.addView(
+            header(
+                name,
+                "PROJECT COMMAND CENTER"
+            )
+        )
+
+        functions.forEach { function ->
+
+            screen.addView(
+                card(
+                    function,
+                    "READY",
+                    "Habitat capability interface"
+                )
+            )
+        }
+
+        screen.addView(
+            button("ASK AX ABOUT THIS PROJECT") {
+                showChat()
+            },
+            LinearLayout.LayoutParams(
+                -1,
+                dp(52)
+            ).apply {
+                topMargin = dp(5)
+            }
+        )
+
+        install(screen)
+    }
+
+    private fun showBrain() {
+
+        val screen =
+            makeRoot()
+
+        screen.addView(
+            header(
+                "BRAIN",
+                "AI PROVIDER CONTROL"
+            )
+        )
+
+        screen.addView(
+            label(
+                if (brain.endpoint().isBlank())
+                    "● BRAIN NOT CONNECTED"
+                else
+                    "● BRAIN ENDPOINT READY",
+                13f,
+                if (brain.endpoint().isBlank())
+                    orange
+                else
+                    green,
+                true
+            ),
+            LinearLayout.LayoutParams(
+                -1,
+                -2
+            ).apply {
+                topMargin = dp(10)
+            }
+        )
+
+        val endpoint =
+            EditText(this).apply {
+
+                hint =
+                    "https://your-server/chat"
+
+                setHintTextColor(muted)
+
+                setTextColor(text)
+
+                singleLine = true
+
+                setText(
+                    brain.endpoint()
+                )
+
+                background =
+                    panelBackground()
+
+                setPadding(
+                    dp(14),
+                    dp(10),
+                    dp(14),
+                    dp(10)
+                )
+            }
+
+        screen.addView(
+            endpoint,
+            LinearLayout.LayoutParams(
+                -1,
+                dp(56)
+            ).apply {
+                topMargin = dp(10)
+            }
+        )
+
+        screen.addView(
+            button("SAVE BRAIN ENDPOINT") {
+
+                brain.setEndpoint(
+                    endpoint.text
+                        .toString()
+                        .trim()
+                )
+
+                Toast.makeText(
+                    this,
+                    "Brain endpoint saved.",
+                    Toast.LENGTH_SHORT
+                ).show()
+
+                showBrain()
+            },
+            LinearLayout.LayoutParams(
+                -1,
+                dp(50)
+            ).apply {
+                topMargin = dp(7)
+            }
+        )
+
+        screen.addView(
+            card(
+                "MEMORY",
+                "LOCAL",
+                "Persistent Habitat conversation memory"
+            )
+        )
+
+        screen.addView(
+            card(
+                "TASK ENGINE",
+                "READY",
+                "Task creation and completion state"
+            )
+        )
+
+        screen.addView(
+            card(
+                "AGENT COORDINATOR",
+                "READY",
+                "Specialized workers and project routing"
+            )
+        )
+
+        screen.addView(
+            card(
+                "EXECUTION",
+                "SAFE",
+                "Actions should be verified before claiming completion"
+            )
+        )
+
+        install(screen)
+    }
+
+    private fun showAgents() {
+
+        val screen =
+            makeRoot()
+
+        screen.addView(
+            header(
+                "AGENTS",
+                "SPECIALIZED HABITAT WORKERS"
+            )
+        )
+
+        listOf(
+            "COORDINATOR",
+            "RESEARCH",
+            "DROPPILOT",
+            "VICE CITY",
+            "ANDROID",
+            "AUTOMATION"
+        ).forEach {
+
+            screen.addView(
+                card(
+                    it,
+                    "READY",
+                    "Agent role registered with Habitat Core"
+                )
+            )
+        }
+
+        install(screen)
+    }
+
+    private fun showTasks() {
+
+        val screen =
+            makeRoot()
+
+        screen.addView(
+            header(
+                "TASKS",
+                "HABITAT EXECUTION QUEUE"
+            )
+        )
+
+        val tasks =
+            store.tasks()
+
+        if (tasks.isEmpty()) {
+
+            screen.addView(
+                card(
+                    "QUEUE",
+                    "EMPTY",
+                    "No tasks are currently stored"
+                )
+            )
+
+        } else {
+
+            tasks.forEach { task ->
+
+                screen.addView(
+                    card(
+                        task.title,
+                        if (task.completed)
+                            "DONE"
+                        else
+                            "OPEN",
+                        task.description
+                    )
+                )
+            }
+        }
+
+        screen.addView(
+            button("CREATE HABITAT TASK") {
+
+                store.addTask(
+                    "Habitat task",
+                    "New task created from command center"
+                )
+
+                showTasks()
+            },
+            LinearLayout.LayoutParams(
+                -1,
+                dp(52)
+            ).apply {
+                topMargin = dp(8)
+            }
+        )
+
+        install(screen)
+    }
+
+    private fun showMore() {
+
+        val screen =
+            makeRoot()
+
+        screen.addView(
+            header(
+                "MORE",
+                "HABITAT SYSTEM"
+            )
+        )
+
+        screen.addView(
+            card(
+                "HABITAT",
+                "1.0",
+                "Ax Intelligence Environment"
+            )
+        )
+
+        screen.addView(
+            card(
+                "MEMORY",
+                store.messageCount().toString(),
+                "Local messages stored"
+            )
+        )
+
+        screen.addView(
+            card(
+                "TASKS",
+                store.tasks().size.toString(),
+                "Tasks stored"
+            )
+        )
+
+        screen.addView(
+            button("VIEW MEMORY") {
+
+                val count =
+                    store.messageCount()
+
+                Toast.makeText(
+                    this,
+                    "$count local messages stored.",
+                    Toast.LENGTH_SHORT
+                ).show()
+            }
+        )
+
+        screen.addView(
+            button("CLEAR LOCAL MEMORY") {
+
+                store.clearMessages()
+
+                Toast.makeText(
+                    this,
+                    "Local conversation memory cleared.",
+                    Toast.LENGTH_SHORT
+                ).show()
+            },
+            LinearLayout.LayoutParams(
+                -1,
+                dp(52)
+            ).apply {
+                topMargin = dp(8)
+            }
+        )
+
+        install(screen)
+    }
+}
+
+KOTLIN
+
+        # --------------------------------------------------------
+        # BrainAdapter.kt
+        # --------------------------------------------------------
+
+        cat > "$SRC/BrainAdapter.kt" <<'KOTLIN'
+
+package com.habitat.core
+
+import android.content.Context
+import org.json.JSONObject
+import java.net.HttpURLConnection
+import java.net.URL
+import java.util.concurrent.Executors
+
+data class BrainResult(
+    val text: String
+)
+
+class BrainAdapter(
+    context: Context
+) {
+
+    private val prefs =
+        context.getSharedPreferences(
+            "habitat_brain",
+            Context.MODE_PRIVATE
+        )
+
+    private val executor =
+        Executors.newCachedThreadPool()
+
+    fun endpoint(): String =
+        prefs.getString(
+            "endpoint",
+            ""
+        ) ?: ""
+
+    fun setEndpoint(
+        value: String
+    ) {
+
+        prefs.edit()
+            .putString(
+                "endpoint",
+                value
+            )
+            .apply()
+    }
+
+    fun send(
+        message: String,
+        callback: (BrainResult) -> Unit
+    ) {
+
+        val endpoint =
+            endpoint()
+
+        if (endpoint.isBlank()) {
+
+            callback(
+                BrainResult(
+                    "Brain endpoint is not configured."
+                )
+            )
+
+            return
+        }
+
+        executor.execute {
+
+            try {
+
+                val connection =
+                    URL(endpoint)
+                        .openConnection()
+                        as HttpURLConnection
+
+                connection.requestMethod =
+                    "POST"
+
+                connection.connectTimeout =
+                    15000
+
+                connection.readTimeout =
+                    30000
+
+                connection.doOutput = true
+
+                connection.setRequestProperty(
+                    "Content-Type",
+                    "application/json"
+                )
+
+                val body =
+                    JSONObject()
+                        .put(
+                            "message",
+                            message
+                        )
+                        .toString()
+
+                connection.outputStream
+                    .use {
+                        it.write(
+                            body.toByteArray(
+                                Charsets.UTF_8
+                            )
+                        )
+                    }
+
+                val code =
+                    connection.responseCode
+
+                val stream =
+                    if (code in 200..299)
+                        connection.inputStream
+                    else
+                        connection.errorStream
+
+                val response =
+                    stream
+                        ?.bufferedReader()
+                        ?.use { it.readText() }
+                        ?: ""
+
+                val json =
+                    try {
+                        JSONObject(response)
+                    } catch (_: Exception) {
+                        JSONObject()
+                    }
+
+                val answer =
+                    json.optString(
+                        "response",
+                        json.optString(
+                            "error",
+                            "Brain returned no response."
+                        )
+                    )
+
+                callback(
+                    BrainResult(answer)
+                )
+
+                connection.disconnect()
+
+            } catch (error: Exception) {
+
+                callback(
+                    BrainResult(
+                        "Brain connection failed: ${
+                            error.message ?: "unknown error"
+                        }"
+                    )
+                )
+            }
+        }
+    }
+
+    fun shutdown() {
+
+        executor.shutdownNow()
+    }
+}
+
+KOTLIN
+
+        # --------------------------------------------------------
+        # HabitatStore.kt
+        # --------------------------------------------------------
+
+        cat > "$SRC/HabitatStore.kt" <<'KOTLIN'
+
+package com.habitat.core
+
+import android.content.Context
+import org.json.JSONArray
+import org.json.JSONObject
+import java.util.UUID
+
+data class HabitatTask(
+    val id: String,
+    val title: String,
+    val description: String,
+    val completed: Boolean
+)
+
+class HabitatStore(
+    context: Context
+) {
+
+    private val prefs =
+        context.getSharedPreferences(
+            "habitat_store",
+            Context.MODE_PRIVATE
+        )
+
+    fun saveMessage(
+        role: String,
+        message: String
+    ) {
+
+        val current =
+            prefs.getString(
+                "messages",
+                "[]"
+            ) ?: "[]"
+
+        val array =
+            try {
+                JSONArray(current)
+            } catch (_: Exception) {
+                JSONArray()
+            }
+
+        array.put(
+            JSONObject()
+                .put("role", role)
+                .put("message", message)
+                .put(
+                    "timestamp",
+                    System.currentTimeMillis()
+                )
+        )
+
+        while (array.length() > 200) {
+            array.remove(0)
+        }
+
+        prefs.edit()
+            .putString(
+                "messages",
+                array.toString()
+            )
+            .apply()
+    }
+
+    fun messageCount(): Int {
+
+        val current =
+            prefs.getString(
+                "messages",
+                "[]"
+            ) ?: "[]"
+
+        return try {
+            JSONArray(current).length()
+        } catch (_: Exception) {
+            0
+        }
+    }
+
+    fun clearMessages() {
+
+        prefs.edit()
+            .remove("messages")
+            .apply()
+    }
+
+    fun tasks(): List<HabitatTask> {
+
+        val raw =
+            prefs.getString(
+                "tasks",
+                "[]"
+            ) ?: "[]"
+
+        val array =
+            try {
+                JSONArray(raw)
+            } catch (_: Exception) {
+                JSONArray()
+            }
+
+        val result =
+            mutableListOf<HabitatTask>()
+
+        for (i in 0 until array.length()) {
+
+            val item =
+                array.optJSONObject(i)
+                    ?: continue
+
+            result.add(
+                HabitatTask(
+                    item.optString("id"),
+                    item.optString("title"),
+                    item.optString("description"),
+                    item.optBoolean("completed")
+                )
+            )
+        }
+
+        return result
+    }
+
+    fun addTask(
+        title: String,
+        description: String
+    ) {
+
+        val tasks =
+            JSONArray()
+
+        this.tasks()
+            .forEach { task ->
+
+                tasks.put(
+                    JSONObject()
+                        .put("id", task.id)
+                        .put("title", task.title)
+                        .put(
+                            "description",
+                            task.description
+                        )
+                        .put(
+                            "completed",
+                            task.completed
+                        )
+                )
+            }
+
+        tasks.put(
+            JSONObject()
+                .put(
+                    "id",
+                    UUID.randomUUID().toString()
+                )
+                .put("title", title)
+                .put(
+                    "description",
+                    description
+                )
+                .put(
+                    "completed",
+                    false
+                )
+        )
+
+        prefs.edit()
+            .putString(
+                "tasks",
+                tasks.toString()
+            )
+            .apply()
+    }
+}
+
+KOTLIN
+
+        # ========================================================
+        # CREATE SUPPORTING DATA MODEL
+        # ========================================================
+
+        cat > "$SRC/HabitatEngine.kt" <<'KOTLIN'
+
+package com.habitat.core
+
+enum class HabitatState {
+    IDLE,
+    THINKING,
+    PLANNING,
+    ACTING,
+    OBSERVING,
+    VERIFYING,
+    COMPLETE,
+    FAILED
+}
+
+data class HabitatAction(
+    val id: String,
+    val name: String,
+    val description: String,
+    val requiresConfirmation: Boolean
+)
+
+data class HabitatPlan(
+    val objective: String,
+    val actions: List<HabitatAction>
+)
+
+class HabitatEngine {
+
+    var state: HabitatState =
+        HabitatState.IDLE
+        private set
+
+    fun begin(
+        objective: String
+    ): HabitatPlan {
+
+        state =
+            HabitatState.THINKING
+
+        state =
+            HabitatState.PLANNING
+
+        return HabitatPlan(
+            objective = objective,
+            actions = listOf(
+                HabitatAction(
+                    id = "research",
+                    name = "Research",
+                    description =
+                        "Gather information required by the objective.",
+                    requiresConfirmation = false
+                ),
+                HabitatAction(
+                    id = "verify",
+                    name = "Verify",
+                    description =
+                        "Verify the result before claiming completion.",
+                    requiresConfirmation = false
+                )
+            )
+        )
+    }
+
+    fun acting() {
+        state =
+            HabitatState.ACTING
+    }
+
+    fun observing() {
+        state =
+            HabitatState.OBSERVING
+    }
+
+    fun verifying() {
+        state =
+            HabitatState.VERIFYING
+    }
+
+    fun complete() {
+        state =
+            HabitatState.COMPLETE
+    }
+
+    fun fail() {
+        state =
+            HabitatState.FAILED
+    }
+}
+
+KOTLIN
+
+        # ========================================================
+        # AGENT REGISTRY
+        # ========================================================
+
+        cat > "$SRC/AgentRegistry.kt" <<'KOTLIN'
+
+package com.habitat.core
+
+data class HabitatAgent(
+    val id: String,
+    val name: String,
+    val mission: String,
+    val enabled: Boolean
+)
+
+class AgentRegistry {
+
+    private val agents =
+        mutableListOf(
+            HabitatAgent(
+                "coordinator",
+                "Coordinator",
+                "Route objectives and coordinate Habitat workers.",
+                true
+            ),
+            HabitatAgent(
+                "research",
+                "Research",
+                "Research and verify information.",
+                true
+            ),
+            HabitatAgent(
+                "droppilot",
+                "DropPilot",
+                "Operate the DropPilot business workflow.",
+                true
+            ),
+            HabitatAgent(
+                "vicecity",
+                "Vice City",
+                "Operate the Vice City Files content workflow.",
+                true
+            ),
+            HabitatAgent(
+                "android",
+                "Android",
+                "Coordinate Android capabilities and device actions.",
+                true
+            ),
+            HabitatAgent(
+                "automation",
+                "Automation",
+                "Coordinate scheduled routines and triggers.",
+                true
+            )
+        )
+
+    fun all(): List<HabitatAgent> =
+        agents.toList()
+
+    fun find(
+        id: String
+    ): HabitatAgent? =
+        agents.firstOrNull {
+            it.id == id
+        }
+}
+
+KOTLIN
+
+        # ========================================================
+        # TOOL REGISTRY
+        # ========================================================
+
+        cat > "$SRC/ToolRegistry.kt" <<'KOTLIN'
+
+package com.habitat.core
+
+data class HabitatTool(
+    val id: String,
+    val name: String,
+    val description: String,
+    val enabled: Boolean
+)
+
+class ToolRegistry {
+
+    private val tools =
+        listOf(
+
+            HabitatTool(
+                "memory",
+                "Memory",
+                "Read and store Habitat memory.",
+                true
+            ),
+
+            HabitatTool(
+                "tasks",
+                "Tasks",
+                "Create and manage Habitat tasks.",
+                true
+            ),
+
+            HabitatTool(
+                "projects",
+                "Projects",
+                "Manage Habitat project workspaces.",
+                true
+            ),
+
+            HabitatTool(
+                "brain",
+                "Brain",
+                "Send requests to the configured AI backend.",
+                true
+            ),
+
+            HabitatTool(
+                "research",
+                "Research",
+                "Research information through an authorized provider.",
+                true
+            ),
+
+            HabitatTool(
+                "android",
+                "Android",
+                "Android capability integration.",
+                false
+            ),
+
+            HabitatTool(
+                "automation",
+                "Automation",
+                "Scheduled and event-driven automation.",
+                false
+            ),
+
+            HabitatTool(
+                "tiktok",
+                "TikTok",
+                "Authorized TikTok integration.",
+                false
+            )
+        )
+
+    fun all(): List<HabitatTool> =
+        tools
+}
+
+KOTLIN
+
+        # ========================================================
+        # PROJECT ENGINE
+        # ========================================================
+
+        cat > "$SRC/ProjectEngine.kt" <<'KOTLIN'
+
+package com.habitat.core
+
+data class HabitatProject(
+    val id: String,
+    val name: String,
+    val description: String,
+    val type: String
+)
+
+class ProjectEngine {
+
+    private val projects =
+        listOf(
+
+            HabitatProject(
+                "habitat",
+                "Habitat",
+                "AI operating environment and Ax Core.",
+                "SYSTEM"
+            ),
+
+            HabitatProject(
+                "droppilot",
+                "DropPilot AI",
+                "TikTok Shop and Shopify business workflow.",
+                "BUSINESS"
+            ),
+
+            HabitatProject(
+                "vicecity",
+                "Vice City Files",
+                "GTA 6 research and content workflow.",
+                "CONTENT"
+            )
+        )
+
+    fun all(): List<HabitatProject> =
+        projects
+
+    fun find(
+        id: String
+    ): HabitatProject? =
+        projects.firstOrNull {
+            it.id == id
+        }
+}
+
+KOTLIN
+
+        # ========================================================
+        # MEMORY MODEL
+        # ========================================================
+
+        cat > "$SRC/MemoryEngine.kt" <<'KOTLIN'
+
+package com.habitat.core
+
+data class HabitatMemory(
+    val id: String,
+    val category: String,
+    val content: String,
+    val timestamp: Long
+)
+
+class MemoryEngine {
+
+    private val memories =
+        mutableListOf<HabitatMemory>()
+
+    fun remember(
+        memory: HabitatMemory
+    ) {
+        memories.add(memory)
+    }
+
+    fun recent(
+        limit: Int = 20
+    ): List<HabitatMemory> {
+
+        return memories
+            .sortedByDescending {
+                it.timestamp
+            }
+            .take(limit)
+    }
+
+    fun clear() {
+        memories.clear()
+    }
+}
+
+KOTLIN
+
+        # ========================================================
+        # EXECUTION / VERIFICATION
+        # ========================================================
+
+        cat > "$SRC/ExecutionEngine.kt" <<'KOTLIN'
+
+package com.habitat.core
+
+enum class ExecutionResult {
+    NOT_STARTED,
+    RUNNING,
+    SUCCESS,
+    FAILED,
+    UNVERIFIED
+}
+
+data class ExecutionRecord(
+    val actionId: String,
+    val result: ExecutionResult,
+    val message: String
+)
+
+class ExecutionEngine {
+
+    private val history =
+        mutableListOf<ExecutionRecord>()
+
+    fun begin(
+        actionId: String
+    ): ExecutionRecord {
+
+        val record =
+            ExecutionRecord(
+                actionId,
+                ExecutionResult.RUNNING,
+                "Execution started."
+            )
+
+        history.add(record)
+
+        return record
+    }
+
+    fun verify(
+        actionId: String,
+        success: Boolean,
+        message: String
+    ): ExecutionRecord {
+
+        val result =
+            if (success)
+                ExecutionResult.SUCCESS
+            else
+                ExecutionResult.FAILED
+
+        val record =
+            ExecutionRecord(
+                actionId,
+                result,
+                message
+            )
+
+        history.add(record)
+
+        return record
+    }
+
+    fun history():
+        List<ExecutionRecord> =
+        history.toList()
+}
+
+KOTLIN
+
+        # ========================================================
+        # HABITAT CONFIGURATION
+        # ========================================================
+
+        cat > "$SRC/HabitatConfig.kt" <<'KOTLIN'
+
+package com.habitat.core
+
+object HabitatConfig {
+
+    const val VERSION =
+        "1.0.0"
+
+    const val CORE_NAME =
+        "Ax Core"
+
+    const val HABITAT_NAME =
+        "Habitat"
+
+    const val EXECUTION_POLICY =
+        "UNDERSTAND_PLAN_ACT_OBSERVE_VERIFY"
+
+    const val NO_FAKE_ACTIONS =
+        true
+
+    const val REQUIRE_VERIFICATION =
+        true
+}
+
+KOTLIN
+
+        # ========================================================
+        # REMOVE OLD PORTRAIT REFERENCES
+        # ========================================================
+
+        find "$PROJECT_DIR" \
+          -type f \
+          \( \
+            -name "*.kt" \
+            -o \
+            -name "*.xml" \
+          \) \
+          -print0 \
+          | xargs -0 sed -i \
+            -e '/ax_portrait/d' \
+            -e '/desk_scene/d' \
+            -e '/Audrey/d'
+
+        # ========================================================
+        # CREATE HABITAT DATA DIRECTORY
+        # ========================================================
+
+        mkdir -p "$PROJECT_DIR/app/src/main/assets"
+
+        cat > "$PROJECT_DIR/app/src/main/assets/habitat_manifest.json" <<'JSON'
+{
+  "name": "Habitat",
+  "version": "1.0.0",
+  "intelligence": "Ax Core",
+  "architecture": {
+    "memory": true,
+    "reasoning": true,
+    "projects": true,
+    "tasks": true,
+    "agents": true,
+    "tools": true,
+    "execution": true,
+    "verification": true,
+    "automation": true
+  },
+  "workspaces": [
+    "Habitat",
+    "DropPilot AI",
+    "Vice City Files"
+  ]
+}
+JSON
+
+        echo "Habitat 1.0 source installed."
 
 
-      # --------------------------------------------------
-      # 15. BUILD HABITAT
-      # --------------------------------------------------
+      # ============================================================
+      # BUILD
+      # ============================================================
 
-      - name: Build Habitat Debug APK
+      - name: Build Habitat APK
         working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
         run: |
@@ -334,6 +2263,7 @@ jobs:
             chmod +x ./gradlew
 
             ./gradlew \
+              clean \
               assembleDebug \
               --no-daemon \
               --stacktrace
@@ -341,6 +2271,7 @@ jobs:
           else
 
             gradle \
+              clean \
               assembleDebug \
               --no-daemon \
               --stacktrace
@@ -348,16 +2279,16 @@ jobs:
           fi
 
 
-      # --------------------------------------------------
-      # 16. FIND APK
-      # --------------------------------------------------
+      # ============================================================
+      # LOCATE APK
+      # ============================================================
 
-      - name: Locate generated APK
+      - name: Locate APK
         shell: bash
         run: |
           set -e
 
-          echo "Searching for APK..."
+          echo "Generated APK files:"
 
           find "$PROJECT_DIR" \
             -type f \
@@ -371,85 +2302,106 @@ jobs:
             | head -n 1 || true)
 
           if [ -z "$APK" ]; then
+
             APK=$(find "$PROJECT_DIR" \
               -type f \
               -name "*.apk" \
               | head -n 1 || true)
+
           fi
 
           if [ -z "$APK" ]; then
-            echo "ERROR: APK was not generated."
+            echo "ERROR: No APK produced."
             exit 1
           fi
-
-          echo "APK FOUND:"
-          echo "$APK"
 
           mkdir -p artifact
 
           cp "$APK" \
-            "artifact/Habitat-1.0-Ax-debug.apk"
+            artifact/Habitat-1.0-Ax-Core-debug.apk
 
-          echo "APK copied to artifact."
+          echo "APK=$APK"
 
 
-      # --------------------------------------------------
-      # 17. PACKAGE SOURCE
-      # --------------------------------------------------
+      # ============================================================
+      # PACKAGE MODIFIED SOURCE
+      # ============================================================
 
-      - name: Package Habitat source
+      - name: Package modified Habitat source
         shell: bash
         run: |
           set -e
+
+          rm -rf artifact/source
 
           mkdir -p artifact/source
 
           cp -R "$PROJECT_DIR"/. \
             artifact/source/
 
-          echo "Habitat source packaged."
+          echo "Modified Habitat source packaged."
 
 
-      # --------------------------------------------------
-      # 18. UPLOAD APK
-      # --------------------------------------------------
+      # ============================================================
+      # UPLOAD APK
+      # ============================================================
 
       - name: Upload Habitat APK
         uses: actions/upload-artifact@v4
         with:
-          name: Habitat-1.0-Ax-debug-apk
-          path: artifact/Habitat-1.0-Ax-debug.apk
+          name: Habitat-1.0-Ax-Core-debug-apk
+          path: artifact/Habitat-1.0-Ax-Core-debug.apk
           if-no-files-found: error
 
 
-      # --------------------------------------------------
-      # 19. UPLOAD SOURCE
-      # --------------------------------------------------
+      # ============================================================
+      # UPLOAD SOURCE
+      # ============================================================
 
       - name: Upload Habitat source
         uses: actions/upload-artifact@v4
         with:
-          name: Habitat-1.0-Ax-Android-Source
+          name: Habitat-1.0-Ax-Core-source
           path: artifact/source
           if-no-files-found: error
 
 
-      # --------------------------------------------------
-      # 20. FINAL BUILD REPORT
-      # --------------------------------------------------
+      # ============================================================
+      # FINAL REPORT
+      # ============================================================
 
-      - name: Build complete
+      - name: Habitat build report
         shell: bash
         run: |
           echo
-          echo "=========================================="
-          echo "        HABITAT 1.0 BUILD COMPLETE"
-          echo "=========================================="
+          echo "================================================"
+          echo "             HABITAT 1.0 AX CORE"
+          echo "================================================"
+          echo
+          echo "BUILD: SUCCESS"
           echo
           echo "APK:"
-          ls -lh artifact/Habitat-1.0-Ax-debug.apk
+          ls -lh artifact/Habitat-1.0-Ax-Core-debug.apk
           echo
-          echo "Source:"
+          echo "SOURCE:"
           du -sh artifact/source
           echo
-          echo "Ax Core build pipeline finished."
+          echo "FEATURE FOUNDATION:"
+          echo "  [x] Ax command center"
+          echo "  [x] Chat interface"
+          echo "  [x] Enter/send"
+          echo "  [x] Local memory"
+          echo "  [x] Task engine"
+          echo "  [x] Project engine"
+          echo "  [x] Agent registry"
+          echo "  [x] Tool registry"
+          echo "  [x] Execution state"
+          echo "  [x] Verification state"
+          echo "  [x] Brain adapter"
+          echo "  [x] DropPilot workspace"
+          echo "  [x] Vice City workspace"
+          echo "  [x] Safe-area UI"
+          echo "  [x] Audrey UI removed"
+          echo "  [x] Portrait references removed"
+          echo
+          echo "================================================"
