@@ -24,18 +24,14 @@ jobs:
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.10"
 
-      - name: Verify Habitat v0.2.1 ZIP
+      - name: Verify v0.2.1 ZIP
         run: |
-          echo "Checking for Habitat v0.2.1..."
+          echo "Checking Habitat v0.2.1 ZIP..."
           test -f Habitat-Android-v0.2.1-Ax-Edition.zip
           ls -lh Habitat-Android-v0.2.1-Ax-Edition.zip
-
-      - name: Inspect ZIP contents
-        run: |
-          echo "===== ZIP CONTENTS ====="
-          unzip -l Habitat-Android-v0.2.1-Ax-Edition.zip
-          echo "===== END ZIP CONTENTS ====="
 
       - name: Extract Habitat v0.2.1
         run: |
@@ -43,70 +39,42 @@ jobs:
           mkdir -p extracted
           unzip -q Habitat-Android-v0.2.1-Ax-Edition.zip -d extracted
 
-          echo "===== EXTRACTED FILES ====="
-          find extracted -maxdepth 5 -type f | head -200
-          echo "===== END EXTRACTED FILES ====="
+          echo "Habitat project:"
+          find extracted/HabitatAndroid -maxdepth 3 -type f | sort
 
-      - name: Locate Android project
+      - name: Verify Android project
         run: |
-          echo "Searching for Android project files..."
+          test -f extracted/HabitatAndroid/settings.gradle.kts
+          test -f extracted/HabitatAndroid/build.gradle.kts
+          test -f extracted/HabitatAndroid/app/build.gradle.kts
+          test -f extracted/HabitatAndroid/app/src/main/AndroidManifest.xml
 
-          echo "Gradle wrappers:"
-          find extracted -type f -name "gradlew" -print || true
-
-          echo "Gradle build files:"
-          find extracted -type f \( -name "settings.gradle" -o -name "settings.gradle.kts" -o -name "build.gradle" -o -name "build.gradle.kts" \) -print || true
-
-          echo "Android manifests:"
-          find extracted -type f -name "AndroidManifest.xml" -print || true
-
-      - name: Find Gradle wrapper
-        id: project
-        run: |
-          GRADLEW=$(find extracted -type f -name "gradlew" -print -quit)
-
-          if [ -z "$GRADLEW" ]; then
-            echo ""
-            echo "ERROR: No gradlew file was found in the v0.2.1 ZIP."
-            echo ""
-            echo "The ZIP structure shown above must be checked."
-            exit 1
-          fi
-
-          PROJECT_DIR=$(dirname "$GRADLEW")
-
-          echo "Gradle wrapper found:"
-          echo "$GRADLEW"
-
-          echo "Project directory:"
-          echo "$PROJECT_DIR"
-
-          echo "gradle_project=$PROJECT_DIR" >> "$GITHUB_OUTPUT"
-
-      - name: Prepare Gradle wrapper
-        run: |
-          chmod +x "${{ steps.project.outputs.gradle_project }}/gradlew"
+          echo "Android project verified."
 
       - name: Build Habitat debug APK
         run: |
-          cd "${{ steps.project.outputs.gradle_project }}"
-          ./gradlew assembleDebug --stacktrace
+          cd extracted/HabitatAndroid
+
+          echo "Starting Habitat v0.2.1 debug build..."
+
+          gradle assembleDebug --stacktrace
 
       - name: Find generated APK
         run: |
-          echo "===== GENERATED APK FILES ====="
-          find extracted -type f -name "*.apk" -print
-          echo "===== END APK FILES ====="
+          echo "Searching for generated APK..."
+
+          find extracted/HabitatAndroid -type f -name "*.apk" -print
 
       - name: Verify APK
         run: |
-          APK=$(find extracted -type f -path "*/build/outputs/apk/debug/*.apk" -print -quit)
+          APK=$(find extracted/HabitatAndroid -type f -path "*/build/outputs/apk/debug/*.apk" -print -quit)
 
           if [ -z "$APK" ]; then
-            echo "ERROR: Build completed but no debug APK was found."
+            echo "ERROR: No debug APK was produced."
             exit 1
           fi
 
+          echo "SUCCESS!"
           echo "Habitat v0.2.1 APK:"
           echo "$APK"
 
@@ -114,5 +82,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: Habitat-v0.2.1-Ax-debug-apk
-          path: extracted/**/build/outputs/apk/debug/*.apk
+          path: extracted/HabitatAndroid/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
