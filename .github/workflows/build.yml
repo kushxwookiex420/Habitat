@@ -1,30 +1,27 @@
 name: Habitat 1.0 - Ax Core Build
 
-on:
+"on":
   workflow_dispatch:
+
+  push:
+    paths:
+      - "**.zip"
+      - ".github/workflows/build.yml"
 
 permissions:
   contents: read
 
 jobs:
   build:
-    name: Build Habitat 1.0 Ax Core
+    name: Build Habitat 1.0
     runs-on: ubuntu-latest
 
     steps:
 
-      # ============================================================
-      # CHECKOUT
-      # ============================================================
-
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
 
-      # ============================================================
-      # FIND SOURCE ZIP
-      # ============================================================
-
-      - name: Find Habitat Android project
+      - name: Find Habitat ZIP
         shell: bash
         run: |
           set -e
@@ -43,24 +40,16 @@ jobs:
           done
 
           if [ -z "$ZIP_FILE" ]; then
-            ZIP_FILE=$(find . \
-              -maxdepth 3 \
-              -type f \
-              -iname "*.zip" \
-              | head -n 1 || true)
+            ZIP_FILE=$(find . -maxdepth 3 -type f -iname "*.zip" | head -n 1 || true)
           fi
 
           if [ -z "$ZIP_FILE" ]; then
-            echo "No Android source ZIP found."
+            echo "ERROR: Habitat ZIP not found."
             exit 1
           fi
 
-          echo "ZIP=$ZIP_FILE"
+          echo "Using: $ZIP_FILE"
           echo "ZIP_FILE=$ZIP_FILE" >> "$GITHUB_ENV"
-
-      # ============================================================
-      # EXTRACT
-      # ============================================================
 
       - name: Extract Habitat
         shell: bash
@@ -72,49 +61,58 @@ jobs:
 
           unzip -q "$ZIP_FILE" -d extracted
 
-      # ============================================================
-      # LOCATE PROJECT
-      # ============================================================
+          echo "Extraction successful."
 
-      - name: Locate Gradle project
+      - name: Find Android project
         shell: bash
         run: |
           set -e
 
           SETTINGS=$(find extracted \
             -type f \
-            \( \
-              -name "settings.gradle.kts" \
-              -o \
-              -name "settings.gradle" \
-            \) \
+            \( -name "settings.gradle.kts" -o -name "settings.gradle" \) \
             | head -n 1)
 
           if [ -z "$SETTINGS" ]; then
-            echo "settings.gradle(.kts) not found."
+            echo "ERROR: Gradle settings file not found."
             exit 1
           fi
 
           PROJECT_DIR=$(dirname "$SETTINGS")
 
-          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-
-          echo "Project:"
+          echo "Android project:"
           echo "$PROJECT_DIR"
 
-      # ============================================================
-      # JAVA
-      # ============================================================
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+
+      - name: Find MainActivity
+        shell: bash
+        run: |
+          set -e
+
+          MAIN=$(find "$PROJECT_DIR" \
+            -type f \
+            -name "MainActivity.kt" \
+            | head -n 1)
+
+          if [ -z "$MAIN" ]; then
+            echo "ERROR: MainActivity.kt not found."
+            find "$PROJECT_DIR" -type f | sort
+            exit 1
+          fi
+
+          SOURCE_DIR=$(dirname "$MAIN")
+
+          echo "MainActivity:"
+          echo "$MAIN"
+
+          echo "SOURCE_DIR=$SOURCE_DIR" >> "$GITHUB_ENV"
 
       - name: Java 17
         uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "17"
-
-      # ============================================================
-      # ANDROID SDK
-      # ============================================================
 
       - name: Configure Android SDK
         shell: bash
@@ -137,42 +135,33 @@ jobs:
 
           export ANDROID_HOME="/usr/local/lib/android/sdk"
 
-          SDK="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
 
-          yes | "$SDK" --licenses || true
+          if [ ! -x "$SDKMANAGER" ]; then
+            echo "ERROR: sdkmanager not found."
+            exit 1
+          fi
 
-          "$SDK" \
+          yes | "$SDKMANAGER" --licenses >/dev/null || true
+
+          "$SDKMANAGER" \
             "platform-tools" \
             "platforms;android-35" \
             "build-tools;35.0.0"
 
-      # ============================================================
-      # GRADLE
-      # ============================================================
-
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      # ============================================================
-      # CREATE HABITAT CORE SOURCE
-      # ============================================================
+      # ==========================================================
+      # INSTALL HABITAT SOURCE
+      # ==========================================================
 
-      - name: Install Habitat 1.0 source
+      - name: Write Habitat MainActivity
         shell: bash
         run: |
-
           set -e
 
-          SRC="$PROJECT_DIR/app/src/main/java/com/habitat/core"
-
-          mkdir -p "$SRC"
-
-          # --------------------------------------------------------
-          # MainActivity.kt
-          # --------------------------------------------------------
-
-          cat > "$SRC/MainActivity.kt" <<'KOTLIN'
-
+          cat > "$SOURCE_DIR/MainActivity.kt" <<'KOTLIN'
 package com.habitat.core
 
 import android.app.Activity
@@ -187,41 +176,33 @@ import android.view.View
 import android.view.WindowInsets
 import android.view.WindowInsetsController
 import android.view.inputmethod.EditorInfo
-import android.widget.*
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
+import android.widget.EditText
+import android.widget.LinearLayout
+import android.widget.ScrollView
+import android.widget.TextView
+import android.widget.Button
+import android.widget.Toast
 
 class MainActivity : Activity() {
 
-    private val store by lazy {
-        HabitatStore(this)
-    }
+    private val store by lazy { HabitatStore(this) }
+    private val brain by lazy { BrainAdapter(this) }
 
-    private val brain by lazy {
-        BrainAdapter(this)
-    }
-
-    private lateinit var root: LinearLayout
-    private lateinit var content: LinearLayout
-
-    private val background = Color.rgb(4, 7, 12)
+    private val bg = Color.rgb(4, 7, 12)
     private val panel = Color.rgb(12, 17, 25)
     private val panel2 = Color.rgb(18, 25, 36)
-    private val line = Color.rgb(36, 49, 68)
-    private val text = Color.WHITE
+    private val border = Color.rgb(36, 49, 68)
+    private val white = Color.WHITE
     private val muted = Color.rgb(145, 158, 178)
     private val cyan = Color.rgb(80, 195, 255)
     private val green = Color.rgb(100, 220, 155)
     private val orange = Color.rgb(255, 190, 90)
-    private val red = Color.rgb(255, 105, 105)
 
-    private fun dp(v: Int): Int =
-        (v * resources.displayMetrics.density).toInt()
+    private fun dp(value: Int): Int =
+        (value * resources.displayMetrics.density).toInt()
 
-    override fun onCreate(state: Bundle?) {
-        super.onCreate(state)
-
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
         configureWindow()
         showHome()
     }
@@ -232,12 +213,10 @@ class MainActivity : Activity() {
     }
 
     private fun configureWindow() {
-
-        window.statusBarColor = background
-        window.navigationBarColor = background
+        window.statusBarColor = bg
+        window.navigationBarColor = bg
 
         if (android.os.Build.VERSION.SDK_INT >= 30) {
-
             window.setDecorFitsSystemWindows(false)
 
             window.insetsController?.setSystemBarsAppearance(
@@ -248,29 +227,16 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun makeRoot(): LinearLayout {
-
+    private fun root(): LinearLayout {
         return LinearLayout(this).apply {
-
             orientation = LinearLayout.VERTICAL
-
-            setBackgroundColor(background)
-
-            setPadding(
-                dp(16),
-                dp(12),
-                dp(16),
-                dp(8)
-            )
+            setBackgroundColor(bg)
+            setPadding(dp(16), dp(12), dp(16), dp(8))
 
             if (android.os.Build.VERSION.SDK_INT >= 30) {
-
                 setOnApplyWindowInsetsListener { view, insets ->
-
                     val bars =
-                        insets.getInsets(
-                            WindowInsets.Type.systemBars()
-                        )
+                        insets.getInsets(WindowInsets.Type.systemBars())
 
                     view.setPadding(
                         dp(16),
@@ -285,38 +251,26 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun panelBackground(
+    private fun background(
         color: Int = panel,
         radius: Int = 16
     ): GradientDrawable {
-
         return GradientDrawable().apply {
-
             setColor(color)
-
-            cornerRadius =
-                dp(radius).toFloat()
-
-            setStroke(
-                dp(1),
-                line
-            )
+            cornerRadius = dp(radius).toFloat()
+            setStroke(dp(1), border)
         }
     }
 
-    private fun label(
+    private fun text(
         value: String,
         size: Float = 14f,
-        color: Int = text,
+        color: Int = white,
         bold: Boolean = false
     ): TextView {
-
         return TextView(this).apply {
-
-            this.text = value
-
+            text = value
             textSize = size
-
             setTextColor(color)
 
             if (bold) {
@@ -329,25 +283,14 @@ class MainActivity : Activity() {
         title: String,
         action: () -> Unit
     ): Button {
-
         return Button(this).apply {
-
             text = title
-
             textSize = 12f
-
-            setTextColor(text)
-
+            setTextColor(white)
             typeface = Typeface.DEFAULT_BOLD
-
-            background =
-                panelBackground(
-                    panel2,
-                    12
-                )
+            background = background(panel2, 12)
 
             minHeight = dp(48)
-
             minimumHeight = dp(48)
 
             setPadding(
@@ -367,22 +310,20 @@ class MainActivity : Activity() {
         title: String,
         subtitle: String
     ): LinearLayout {
-
         return LinearLayout(this).apply {
-
             orientation = LinearLayout.VERTICAL
 
             addView(
-                label(
+                text(
                     title,
                     28f,
-                    text,
+                    white,
                     true
                 )
             )
 
             addView(
-                label(
+                text(
                     subtitle,
                     11f,
                     muted
@@ -400,16 +341,23 @@ class MainActivity : Activity() {
     private fun install(
         screen: LinearLayout
     ) {
-
-        root = screen
-
-        content =
+        val content =
             LinearLayout(this).apply {
-                orientation =
-                    LinearLayout.VERTICAL
+                orientation = LinearLayout.VERTICAL
             }
 
-        root.addView(
+        val existing =
+            screen.childCount
+
+        for (i in 0 until existing) {
+            val child = screen.getChildAt(i)
+            screen.removeView(child)
+            content.addView(child)
+        }
+
+        screen.removeAllViews()
+
+        screen.addView(
             content,
             LinearLayout.LayoutParams(
                 -1,
@@ -418,9 +366,8 @@ class MainActivity : Activity() {
             )
         )
 
-        val navigation =
+        val nav =
             LinearLayout(this).apply {
-
                 orientation =
                     LinearLayout.HORIZONTAL
 
@@ -435,18 +382,21 @@ class MainActivity : Activity() {
                 )
             }
 
-        listOf(
-            "HOME",
-            "PROJECTS",
-            "BRAIN",
-            "AGENTS",
-            "MORE"
-        ).forEach { name ->
+        val items =
+            listOf(
+                "HOME",
+                "PROJECTS",
+                "BRAIN",
+                "AGENTS",
+                "MORE"
+            )
 
-            navigation.addView(
-                button(name) {
+        items.forEach { item ->
 
-                    when (name) {
+            nav.addView(
+                button(item) {
+
+                    when (item) {
 
                         "HOME" ->
                             showHome()
@@ -463,51 +413,27 @@ class MainActivity : Activity() {
                         "MORE" ->
                             showMore()
                     }
-
                 },
                 LinearLayout.LayoutParams(
                     0,
                     dp(50),
                     1f
                 ).apply {
-
                     marginStart = dp(3)
                     marginEnd = dp(3)
                 }
             )
         }
 
-        root.addView(
-            navigation,
+        screen.addView(
+            nav,
             LinearLayout.LayoutParams(
                 -1,
                 dp(58)
             )
         )
 
-        setContentView(root)
-    }
-
-    private fun statusLine(): String {
-
-        return if (
-            brain.endpoint().isBlank()
-        ) {
-            "● AX CORE   LOCAL   BRAIN OFFLINE"
-        } else {
-            "● AX CORE   BRAIN ENDPOINT READY"
-        }
-    }
-
-    private fun statusColor(): Int {
-
-        return if (
-            brain.endpoint().isBlank()
-        ) {
-            orange
-        } else {
-            green
-        }
+        setContentView(screen)
     }
 
     private fun card(
@@ -515,14 +441,9 @@ class MainActivity : Activity() {
         state: String,
         description: String
     ): LinearLayout {
-
         return LinearLayout(this).apply {
-
-            orientation =
-                LinearLayout.VERTICAL
-
-            background =
-                panelBackground()
+            orientation = LinearLayout.VERTICAL
+            background = background()
 
             setPadding(
                 dp(14),
@@ -533,16 +454,15 @@ class MainActivity : Activity() {
 
             val row =
                 LinearLayout(this@MainActivity).apply {
-
                     orientation =
                         LinearLayout.HORIZONTAL
                 }
 
             row.addView(
-                label(
+                text(
                     title,
                     15f,
-                    text,
+                    white,
                     true
                 ),
                 LinearLayout.LayoutParams(
@@ -553,7 +473,7 @@ class MainActivity : Activity() {
             )
 
             row.addView(
-                label(
+                text(
                     state,
                     13f,
                     cyan,
@@ -564,7 +484,7 @@ class MainActivity : Activity() {
             addView(row)
 
             addView(
-                label(
+                text(
                     description,
                     11f,
                     muted
@@ -587,10 +507,17 @@ class MainActivity : Activity() {
         }
     }
 
+    private fun brainStatus(): String {
+        return if (brain.endpoint().isBlank()) {
+            "● AX CORE   LOCAL   BRAIN NOT CONNECTED"
+        } else {
+            "● AX CORE   BRAIN ENDPOINT READY"
+        }
+    }
+
     private fun showHome() {
 
-        val screen =
-            makeRoot()
+        val screen = root()
 
         screen.addView(
             header(
@@ -600,10 +527,13 @@ class MainActivity : Activity() {
         )
 
         screen.addView(
-            label(
-                statusLine(),
+            text(
+                brainStatus(),
                 12f,
-                statusColor(),
+                if (brain.endpoint().isBlank())
+                    orange
+                else
+                    green,
                 true
             ),
             LinearLayout.LayoutParams(
@@ -617,12 +547,11 @@ class MainActivity : Activity() {
 
         val core =
             LinearLayout(this).apply {
-
                 orientation =
                     LinearLayout.VERTICAL
 
                 background =
-                    panelBackground()
+                    background()
 
                 setPadding(
                     dp(18),
@@ -633,16 +562,16 @@ class MainActivity : Activity() {
             }
 
         core.addView(
-            label(
+            text(
                 "AX CORE",
                 22f,
-                text,
+                white,
                 true
             )
         )
 
         core.addView(
-            label(
+            text(
                 "Command center online",
                 15f,
                 cyan,
@@ -657,7 +586,7 @@ class MainActivity : Activity() {
         )
 
         core.addView(
-            label(
+            text(
                 "UNDERSTAND → PLAN → ACT → OBSERVE → VERIFY",
                 11f,
                 muted
@@ -747,8 +676,7 @@ class MainActivity : Activity() {
 
     private fun showChat() {
 
-        val screen =
-            makeRoot()
+        val screen = root()
 
         screen.addView(
             header(
@@ -775,19 +703,18 @@ class MainActivity : Activity() {
 
         fun addMessage(
             who: String,
-            message: String,
+            body: String,
             user: Boolean
         ) {
-
             val bubble =
-                label(
-                    "$who\n$message",
+                text(
+                    "$who\n$body",
                     14f,
-                    text
+                    white
                 )
 
             bubble.background =
-                panelBackground(
+                background(
                     if (user)
                         Color.rgb(18, 42, 62)
                     else
@@ -842,8 +769,7 @@ class MainActivity : Activity() {
                 hint = "Command Ax..."
 
                 setHintTextColor(muted)
-
-                setTextColor(text)
+                setTextColor(white)
 
                 textSize = 15f
 
@@ -853,7 +779,7 @@ class MainActivity : Activity() {
                     EditorInfo.IME_ACTION_SEND
 
                 background =
-                    panelBackground()
+                    background()
 
                 setPadding(
                     dp(14),
@@ -873,7 +799,7 @@ class MainActivity : Activity() {
             }
         )
 
-        fun sendCommand() {
+        fun send() {
 
             val command =
                 input.text
@@ -901,7 +827,7 @@ class MainActivity : Activity() {
 
                 addMessage(
                     "AX",
-                    "I received it locally. Connect a brain endpoint in BRAIN for external AI processing.",
+                    "Command received locally. Connect a brain endpoint in BRAIN to enable external AI processing.",
                     false
                 )
 
@@ -940,13 +866,14 @@ class MainActivity : Activity() {
                 action == EditorInfo.IME_ACTION_SEND ||
                 (
                     event != null &&
-                    event.keyCode == KeyEvent.KEYCODE_ENTER &&
-                    event.action == KeyEvent.ACTION_DOWN
+                    event.keyCode ==
+                        KeyEvent.KEYCODE_ENTER &&
+                    event.action ==
+                        KeyEvent.ACTION_DOWN
                 )
             ) {
 
-                sendCommand()
-
+                send()
                 true
 
             } else {
@@ -957,7 +884,7 @@ class MainActivity : Activity() {
 
         screen.addView(
             button("SEND") {
-                sendCommand()
+                send()
             },
             LinearLayout.LayoutParams(
                 -1,
@@ -970,8 +897,7 @@ class MainActivity : Activity() {
 
     private fun showProjects() {
 
-        val screen =
-            makeRoot()
+        val screen = root()
 
         screen.addView(
             header(
@@ -1000,7 +926,7 @@ class MainActivity : Activity() {
             card(
                 "HABITAT",
                 "ACTIVE",
-                "Core AI environment"
+                "Ax intelligence environment"
             )
         )
 
@@ -1038,7 +964,7 @@ class MainActivity : Activity() {
                         "PUBLISHING",
                         "ANALYTICS"
                     )
-                )
+                }
             },
             LinearLayout.LayoutParams(
                 -1,
@@ -1054,8 +980,7 @@ class MainActivity : Activity() {
         functions: List<String>
     ) {
 
-        val screen =
-            makeRoot()
+        val screen = root()
 
         screen.addView(
             header(
@@ -1064,11 +989,11 @@ class MainActivity : Activity() {
             )
         )
 
-        functions.forEach { function ->
+        functions.forEach { item ->
 
             screen.addView(
                 card(
-                    function,
+                    item,
                     "READY",
                     "Habitat capability interface"
                 )
@@ -1076,7 +1001,7 @@ class MainActivity : Activity() {
         }
 
         screen.addView(
-            button("ASK AX ABOUT THIS PROJECT") {
+            button("ASK AX") {
                 showChat()
             },
             LinearLayout.LayoutParams(
@@ -1092,8 +1017,7 @@ class MainActivity : Activity() {
 
     private fun showBrain() {
 
-        val screen =
-            makeRoot()
+        val screen = root()
 
         screen.addView(
             header(
@@ -1103,7 +1027,7 @@ class MainActivity : Activity() {
         )
 
         screen.addView(
-            label(
+            text(
                 if (brain.endpoint().isBlank())
                     "● BRAIN NOT CONNECTED"
                 else
@@ -1130,8 +1054,7 @@ class MainActivity : Activity() {
                     "https://your-server/chat"
 
                 setHintTextColor(muted)
-
-                setTextColor(text)
+                setTextColor(white)
 
                 singleLine = true
 
@@ -1140,7 +1063,7 @@ class MainActivity : Activity() {
                 )
 
                 background =
-                    panelBackground()
+                    background()
 
                 setPadding(
                     dp(14),
@@ -1189,7 +1112,7 @@ class MainActivity : Activity() {
             card(
                 "MEMORY",
                 "LOCAL",
-                "Persistent Habitat conversation memory"
+                "Persistent local conversation memory"
             )
         )
 
@@ -1197,23 +1120,23 @@ class MainActivity : Activity() {
             card(
                 "TASK ENGINE",
                 "READY",
-                "Task creation and completion state"
+                "Task creation and state"
             )
         )
 
         screen.addView(
             card(
-                "AGENT COORDINATOR",
+                "AGENTS",
                 "READY",
-                "Specialized workers and project routing"
+                "Habitat specialized workers"
             )
         )
 
         screen.addView(
             card(
                 "EXECUTION",
-                "SAFE",
-                "Actions should be verified before claiming completion"
+                "VERIFIED",
+                "Actions must be verified before completion"
             )
         )
 
@@ -1222,8 +1145,7 @@ class MainActivity : Activity() {
 
     private fun showAgents() {
 
-        val screen =
-            makeRoot()
+        val screen = root()
 
         screen.addView(
             header(
@@ -1245,7 +1167,7 @@ class MainActivity : Activity() {
                 card(
                     it,
                     "READY",
-                    "Agent role registered with Habitat Core"
+                    "Registered Habitat agent"
                 )
             )
         }
@@ -1255,8 +1177,7 @@ class MainActivity : Activity() {
 
     private fun showTasks() {
 
-        val screen =
-            makeRoot()
+        val screen = root()
 
         screen.addView(
             header(
@@ -1265,8 +1186,7 @@ class MainActivity : Activity() {
             )
         )
 
-        val tasks =
-            store.tasks()
+        val tasks = store.tasks()
 
         if (tasks.isEmpty()) {
 
@@ -1274,7 +1194,7 @@ class MainActivity : Activity() {
                 card(
                     "QUEUE",
                     "EMPTY",
-                    "No tasks are currently stored"
+                    "No tasks currently stored"
                 )
             )
 
@@ -1296,11 +1216,11 @@ class MainActivity : Activity() {
         }
 
         screen.addView(
-            button("CREATE HABITAT TASK") {
+            button("CREATE TEST TASK") {
 
                 store.addTask(
                     "Habitat task",
-                    "New task created from command center"
+                    "Created from the Habitat command center."
                 )
 
                 showTasks()
@@ -1318,8 +1238,7 @@ class MainActivity : Activity() {
 
     private fun showMore() {
 
-        val screen =
-            makeRoot()
+        val screen = root()
 
         screen.addView(
             header(
@@ -1340,7 +1259,7 @@ class MainActivity : Activity() {
             card(
                 "MEMORY",
                 store.messageCount().toString(),
-                "Local messages stored"
+                "Local messages"
             )
         )
 
@@ -1348,22 +1267,8 @@ class MainActivity : Activity() {
             card(
                 "TASKS",
                 store.tasks().size.toString(),
-                "Tasks stored"
+                "Stored tasks"
             )
-        )
-
-        screen.addView(
-            button("VIEW MEMORY") {
-
-                val count =
-                    store.messageCount()
-
-                Toast.makeText(
-                    this,
-                    "$count local messages stored.",
-                    Toast.LENGTH_SHORT
-                ).show()
-            }
         )
 
         screen.addView(
@@ -1373,30 +1278,25 @@ class MainActivity : Activity() {
 
                 Toast.makeText(
                     this,
-                    "Local conversation memory cleared.",
+                    "Local memory cleared.",
                     Toast.LENGTH_SHORT
                 ).show()
-            },
-            LinearLayout.LayoutParams(
-                -1,
-                dp(52)
-            ).apply {
-                topMargin = dp(8)
+
+                showMore()
             }
         )
 
         install(screen)
     }
 }
-
 KOTLIN
 
-        # --------------------------------------------------------
-        # BrainAdapter.kt
-        # --------------------------------------------------------
+      - name: Write BrainAdapter
+        shell: bash
+        run: |
+          set -e
 
-        cat > "$SRC/BrainAdapter.kt" <<'KOTLIN'
-
+          cat > "$SOURCE_DIR/BrainAdapter.kt" <<'KOTLIN'
 package com.habitat.core
 
 import android.content.Context
@@ -1431,7 +1331,6 @@ class BrainAdapter(
     fun setEndpoint(
         value: String
     ) {
-
         prefs.edit()
             .putString(
                 "endpoint",
@@ -1468,15 +1367,9 @@ class BrainAdapter(
                         .openConnection()
                         as HttpURLConnection
 
-                connection.requestMethod =
-                    "POST"
-
-                connection.connectTimeout =
-                    15000
-
-                connection.readTimeout =
-                    30000
-
+                connection.requestMethod = "POST"
+                connection.connectTimeout = 15000
+                connection.readTimeout = 30000
                 connection.doOutput = true
 
                 connection.setRequestProperty(
@@ -1492,14 +1385,13 @@ class BrainAdapter(
                         )
                         .toString()
 
-                connection.outputStream
-                    .use {
-                        it.write(
-                            body.toByteArray(
-                                Charsets.UTF_8
-                            )
+                connection.outputStream.use {
+                    it.write(
+                        body.toByteArray(
+                            Charsets.UTF_8
                         )
-                    }
+                    )
+                }
 
                 val code =
                     connection.responseCode
@@ -1513,7 +1405,9 @@ class BrainAdapter(
                 val response =
                     stream
                         ?.bufferedReader()
-                        ?.use { it.readText() }
+                        ?.use {
+                            it.readText()
+                        }
                         ?: ""
 
                 val json =
@@ -1543,7 +1437,8 @@ class BrainAdapter(
                 callback(
                     BrainResult(
                         "Brain connection failed: ${
-                            error.message ?: "unknown error"
+                            error.message
+                                ?: "unknown error"
                         }"
                     )
                 )
@@ -1552,19 +1447,17 @@ class BrainAdapter(
     }
 
     fun shutdown() {
-
         executor.shutdownNow()
     }
 }
-
 KOTLIN
 
-        # --------------------------------------------------------
-        # HabitatStore.kt
-        # --------------------------------------------------------
+      - name: Write HabitatStore
+        shell: bash
+        run: |
+          set -e
 
-        cat > "$SRC/HabitatStore.kt" <<'KOTLIN'
-
+          cat > "$SOURCE_DIR/HabitatStore.kt" <<'KOTLIN'
 package com.habitat.core
 
 import android.content.Context
@@ -1594,7 +1487,7 @@ class HabitatStore(
         message: String
     ) {
 
-        val current =
+        val raw =
             prefs.getString(
                 "messages",
                 "[]"
@@ -1602,7 +1495,7 @@ class HabitatStore(
 
         val array =
             try {
-                JSONArray(current)
+                JSONArray(raw)
             } catch (_: Exception) {
                 JSONArray()
             }
@@ -1631,14 +1524,14 @@ class HabitatStore(
 
     fun messageCount(): Int {
 
-        val current =
+        val raw =
             prefs.getString(
                 "messages",
                 "[]"
             ) ?: "[]"
 
         return try {
-            JSONArray(current).length()
+            JSONArray(raw).length()
         } catch (_: Exception) {
             0
         }
@@ -1693,28 +1586,26 @@ class HabitatStore(
         description: String
     ) {
 
-        val tasks =
-            JSONArray()
+        val array = JSONArray()
 
-        this.tasks()
-            .forEach { task ->
+        tasks().forEach { task ->
 
-                tasks.put(
-                    JSONObject()
-                        .put("id", task.id)
-                        .put("title", task.title)
-                        .put(
-                            "description",
-                            task.description
-                        )
-                        .put(
-                            "completed",
-                            task.completed
-                        )
-                )
-            }
+            array.put(
+                JSONObject()
+                    .put("id", task.id)
+                    .put("title", task.title)
+                    .put(
+                        "description",
+                        task.description
+                    )
+                    .put(
+                        "completed",
+                        task.completed
+                    )
+            )
+        }
 
-        tasks.put(
+        array.put(
             JSONObject()
                 .put(
                     "id",
@@ -1734,20 +1625,19 @@ class HabitatStore(
         prefs.edit()
             .putString(
                 "tasks",
-                tasks.toString()
+                array.toString()
             )
             .apply()
     }
 }
-
 KOTLIN
 
-        # ========================================================
-        # CREATE SUPPORTING DATA MODEL
-        # ========================================================
+      - name: Write Habitat Engines
+        shell: bash
+        run: |
+          set -e
 
-        cat > "$SRC/HabitatEngine.kt" <<'KOTLIN'
-
+          cat > "$SOURCE_DIR/HabitatEngine.kt" <<'KOTLIN'
 package com.habitat.core
 
 enum class HabitatState {
@@ -1783,67 +1673,51 @@ class HabitatEngine {
         objective: String
     ): HabitatPlan {
 
-        state =
-            HabitatState.THINKING
-
-        state =
-            HabitatState.PLANNING
+        state = HabitatState.THINKING
+        state = HabitatState.PLANNING
 
         return HabitatPlan(
-            objective = objective,
-            actions = listOf(
+            objective,
+            listOf(
                 HabitatAction(
-                    id = "research",
-                    name = "Research",
-                    description =
-                        "Gather information required by the objective.",
-                    requiresConfirmation = false
+                    "research",
+                    "Research",
+                    "Gather required information.",
+                    false
                 ),
                 HabitatAction(
-                    id = "verify",
-                    name = "Verify",
-                    description =
-                        "Verify the result before claiming completion.",
-                    requiresConfirmation = false
+                    "verify",
+                    "Verify",
+                    "Verify results before completion.",
+                    false
                 )
             )
         )
     }
 
     fun acting() {
-        state =
-            HabitatState.ACTING
+        state = HabitatState.ACTING
     }
 
     fun observing() {
-        state =
-            HabitatState.OBSERVING
+        state = HabitatState.OBSERVING
     }
 
     fun verifying() {
-        state =
-            HabitatState.VERIFYING
+        state = HabitatState.VERIFYING
     }
 
     fun complete() {
-        state =
-            HabitatState.COMPLETE
+        state = HabitatState.COMPLETE
     }
 
     fun fail() {
-        state =
-            HabitatState.FAILED
+        state = HabitatState.FAILED
     }
 }
-
 KOTLIN
 
-        # ========================================================
-        # AGENT REGISTRY
-        # ========================================================
-
-        cat > "$SRC/AgentRegistry.kt" <<'KOTLIN'
-
+          cat > "$SOURCE_DIR/AgentRegistry.kt" <<'KOTLIN'
 package com.habitat.core
 
 data class HabitatAgent(
@@ -1856,11 +1730,11 @@ data class HabitatAgent(
 class AgentRegistry {
 
     private val agents =
-        mutableListOf(
+        listOf(
             HabitatAgent(
                 "coordinator",
                 "Coordinator",
-                "Route objectives and coordinate Habitat workers.",
+                "Route and coordinate objectives.",
                 true
             ),
             HabitatAgent(
@@ -1872,31 +1746,31 @@ class AgentRegistry {
             HabitatAgent(
                 "droppilot",
                 "DropPilot",
-                "Operate the DropPilot business workflow.",
+                "Coordinate DropPilot workflows.",
                 true
             ),
             HabitatAgent(
                 "vicecity",
                 "Vice City",
-                "Operate the Vice City Files content workflow.",
+                "Coordinate Vice City Files workflows.",
                 true
             ),
             HabitatAgent(
                 "android",
                 "Android",
-                "Coordinate Android capabilities and device actions.",
+                "Coordinate Android capabilities.",
                 true
             ),
             HabitatAgent(
                 "automation",
                 "Automation",
-                "Coordinate scheduled routines and triggers.",
+                "Coordinate scheduled routines.",
                 true
             )
         )
 
     fun all(): List<HabitatAgent> =
-        agents.toList()
+        agents
 
     fun find(
         id: String
@@ -1905,15 +1779,9 @@ class AgentRegistry {
             it.id == id
         }
 }
-
 KOTLIN
 
-        # ========================================================
-        # TOOL REGISTRY
-        # ========================================================
-
-        cat > "$SRC/ToolRegistry.kt" <<'KOTLIN'
-
+          cat > "$SOURCE_DIR/ToolRegistry.kt" <<'KOTLIN'
 package com.habitat.core
 
 data class HabitatTool(
@@ -1927,56 +1795,48 @@ class ToolRegistry {
 
     private val tools =
         listOf(
-
             HabitatTool(
                 "memory",
                 "Memory",
-                "Read and store Habitat memory.",
+                "Store and retrieve Habitat memory.",
                 true
             ),
-
             HabitatTool(
                 "tasks",
                 "Tasks",
-                "Create and manage Habitat tasks.",
+                "Create and manage tasks.",
                 true
             ),
-
             HabitatTool(
                 "projects",
                 "Projects",
-                "Manage Habitat project workspaces.",
+                "Manage project workspaces.",
                 true
             ),
-
             HabitatTool(
                 "brain",
                 "Brain",
-                "Send requests to the configured AI backend.",
+                "Connect Habitat to an AI backend.",
                 true
             ),
-
             HabitatTool(
                 "research",
                 "Research",
-                "Research information through an authorized provider.",
+                "Authorized research provider.",
                 true
             ),
-
             HabitatTool(
                 "android",
                 "Android",
-                "Android capability integration.",
+                "Android capability layer.",
                 false
             ),
-
             HabitatTool(
                 "automation",
                 "Automation",
-                "Scheduled and event-driven automation.",
+                "Scheduled automation.",
                 false
             ),
-
             HabitatTool(
                 "tiktok",
                 "TikTok",
@@ -1988,15 +1848,9 @@ class ToolRegistry {
     fun all(): List<HabitatTool> =
         tools
 }
-
 KOTLIN
 
-        # ========================================================
-        # PROJECT ENGINE
-        # ========================================================
-
-        cat > "$SRC/ProjectEngine.kt" <<'KOTLIN'
-
+          cat > "$SOURCE_DIR/ProjectEngine.kt" <<'KOTLIN'
 package com.habitat.core
 
 data class HabitatProject(
@@ -2010,25 +1864,22 @@ class ProjectEngine {
 
     private val projects =
         listOf(
-
             HabitatProject(
                 "habitat",
                 "Habitat",
-                "AI operating environment and Ax Core.",
+                "Ax Intelligence Environment.",
                 "SYSTEM"
             ),
-
             HabitatProject(
                 "droppilot",
                 "DropPilot AI",
-                "TikTok Shop and Shopify business workflow.",
+                "TikTok Shop and Shopify workspace.",
                 "BUSINESS"
             ),
-
             HabitatProject(
                 "vicecity",
                 "Vice City Files",
-                "GTA 6 research and content workflow.",
+                "GTA 6 content workspace.",
                 "CONTENT"
             )
         )
@@ -2043,59 +1894,9 @@ class ProjectEngine {
             it.id == id
         }
 }
-
 KOTLIN
 
-        # ========================================================
-        # MEMORY MODEL
-        # ========================================================
-
-        cat > "$SRC/MemoryEngine.kt" <<'KOTLIN'
-
-package com.habitat.core
-
-data class HabitatMemory(
-    val id: String,
-    val category: String,
-    val content: String,
-    val timestamp: Long
-)
-
-class MemoryEngine {
-
-    private val memories =
-        mutableListOf<HabitatMemory>()
-
-    fun remember(
-        memory: HabitatMemory
-    ) {
-        memories.add(memory)
-    }
-
-    fun recent(
-        limit: Int = 20
-    ): List<HabitatMemory> {
-
-        return memories
-            .sortedByDescending {
-                it.timestamp
-            }
-            .take(limit)
-    }
-
-    fun clear() {
-        memories.clear()
-    }
-}
-
-KOTLIN
-
-        # ========================================================
-        # EXECUTION / VERIFICATION
-        # ========================================================
-
-        cat > "$SRC/ExecutionEngine.kt" <<'KOTLIN'
-
+          cat > "$SOURCE_DIR/ExecutionEngine.kt" <<'KOTLIN'
 package com.habitat.core
 
 enum class ExecutionResult {
@@ -2114,7 +1915,7 @@ data class ExecutionRecord(
 
 class ExecutionEngine {
 
-    private val history =
+    private val records =
         mutableListOf<ExecutionRecord>()
 
     fun begin(
@@ -2128,7 +1929,7 @@ class ExecutionEngine {
                 "Execution started."
             )
 
-        history.add(record)
+        records.add(record)
 
         return record
     }
@@ -2152,104 +1953,124 @@ class ExecutionEngine {
                 message
             )
 
-        history.add(record)
+        records.add(record)
 
         return record
     }
 
-    fun history():
-        List<ExecutionRecord> =
-        history.toList()
+    fun history(): List<ExecutionRecord> =
+        records.toList()
 }
-
 KOTLIN
 
-        # ========================================================
-        # HABITAT CONFIGURATION
-        # ========================================================
+          cat > "$SOURCE_DIR/MemoryEngine.kt" <<'KOTLIN'
+package com.habitat.core
 
-        cat > "$SRC/HabitatConfig.kt" <<'KOTLIN'
+data class HabitatMemory(
+    val id: String,
+    val category: String,
+    val content: String,
+    val timestamp: Long
+)
 
+class MemoryEngine {
+
+    private val memories =
+        mutableListOf<HabitatMemory>()
+
+    fun remember(
+        memory: HabitatMemory
+    ) {
+        memories.add(memory)
+    }
+
+    fun recent(
+        limit: Int
+    ): List<HabitatMemory> =
+        memories
+            .sortedByDescending {
+                it.timestamp
+            }
+            .take(limit)
+
+    fun clear() {
+        memories.clear()
+    }
+}
+KOTLIN
+
+          cat > "$SOURCE_DIR/HabitatConfig.kt" <<'KOTLIN'
 package com.habitat.core
 
 object HabitatConfig {
 
-    const val VERSION =
-        "1.0.0"
+    const val VERSION = "1.0.0"
 
-    const val CORE_NAME =
-        "Ax Core"
+    const val CORE_NAME = "Ax Core"
 
-    const val HABITAT_NAME =
-        "Habitat"
+    const val HABITAT_NAME = "Habitat"
 
-    const val EXECUTION_POLICY =
+    const val EXECUTION_LOOP =
         "UNDERSTAND_PLAN_ACT_OBSERVE_VERIFY"
 
-    const val NO_FAKE_ACTIONS =
+    const val VERIFY_BEFORE_COMPLETION =
         true
 
-    const val REQUIRE_VERIFICATION =
+    const val NO_FAKE_EXTERNAL_ACTIONS =
         true
 }
-
 KOTLIN
 
-        # ========================================================
-        # REMOVE OLD PORTRAIT REFERENCES
-        # ========================================================
+      # ==========================================================
+      # REMOVE OLD UI REFERENCES
+      # ==========================================================
 
-        find "$PROJECT_DIR" \
-          -type f \
-          \( \
-            -name "*.kt" \
-            -o \
-            -name "*.xml" \
-          \) \
-          -print0 \
-          | xargs -0 sed -i \
-            -e '/ax_portrait/d' \
-            -e '/desk_scene/d' \
-            -e '/Audrey/d'
+      - name: Remove old portrait references
+        shell: bash
+        run: |
+          set -e
 
-        # ========================================================
-        # CREATE HABITAT DATA DIRECTORY
-        # ========================================================
+          find "$PROJECT_DIR" \
+            -type f \
+            \( -name "*.kt" -o -name "*.xml" \) \
+            -print0 \
+            | xargs -0 -r sed -i \
+              -e '/ax_portrait/d' \
+              -e '/desk_scene/d' \
+              -e '/Audrey/d'
 
-        mkdir -p "$PROJECT_DIR/app/src/main/assets"
+      # ==========================================================
+      # INTERNET PERMISSION
+      # ==========================================================
 
-        cat > "$PROJECT_DIR/app/src/main/assets/habitat_manifest.json" <<'JSON'
-{
-  "name": "Habitat",
-  "version": "1.0.0",
-  "intelligence": "Ax Core",
-  "architecture": {
-    "memory": true,
-    "reasoning": true,
-    "projects": true,
-    "tasks": true,
-    "agents": true,
-    "tools": true,
-    "execution": true,
-    "verification": true,
-    "automation": true
-  },
-  "workspaces": [
-    "Habitat",
-    "DropPilot AI",
-    "Vice City Files"
-  ]
-}
-JSON
+      - name: Ensure internet permission
+        shell: bash
+        run: |
+          set -e
 
-        echo "Habitat 1.0 source installed."
+          MANIFEST=$(find "$PROJECT_DIR" \
+            -type f \
+            -name "AndroidManifest.xml" \
+            | head -n 1)
 
+          if [ -z "$MANIFEST" ]; then
+            echo "ERROR: AndroidManifest.xml not found."
+            exit 1
+          fi
 
-      # ============================================================
+          if ! grep -q 'android.permission.INTERNET' "$MANIFEST"; then
+
+            sed -i \
+              's#<manifest#<manifest\n    <uses-permission android:name="android.permission.INTERNET" />#' \
+              "$MANIFEST"
+
+          fi
+
+      # ==========================================================
       # BUILD
-      # ============================================================
+      # ==========================================================
 
-      - name: Build Habitat APK
+      - name: Build Debug APK
         working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
         run: |
@@ -2278,22 +2099,14 @@ JSON
 
           fi
 
+      # ==========================================================
+      # FIND APK
+      # ==========================================================
 
-      # ============================================================
-      # LOCATE APK
-      # ============================================================
-
-      - name: Locate APK
+      - name: Find generated APK
         shell: bash
         run: |
           set -e
-
-          echo "Generated APK files:"
-
-          find "$PROJECT_DIR" \
-            -type f \
-            -name "*.apk" \
-            -print
 
           APK=$(find "$PROJECT_DIR" \
             -type f \
@@ -2302,16 +2115,14 @@ JSON
             | head -n 1 || true)
 
           if [ -z "$APK" ]; then
-
             APK=$(find "$PROJECT_DIR" \
               -type f \
               -name "*.apk" \
               | head -n 1 || true)
-
           fi
 
           if [ -z "$APK" ]; then
-            echo "ERROR: No APK produced."
+            echo "ERROR: APK not generated."
             exit 1
           fi
 
@@ -2320,88 +2131,78 @@ JSON
           cp "$APK" \
             artifact/Habitat-1.0-Ax-Core-debug.apk
 
-          echo "APK=$APK"
+          echo "APK created:"
+          ls -lh artifact/Habitat-1.0-Ax-Core-debug.apk
 
+      # ==========================================================
+      # PACKAGE SOURCE
+      # ==========================================================
 
-      # ============================================================
-      # PACKAGE MODIFIED SOURCE
-      # ============================================================
-
-      - name: Package modified Habitat source
+      - name: Package modified source
         shell: bash
         run: |
           set -e
-
-          rm -rf artifact/source
 
           mkdir -p artifact/source
 
           cp -R "$PROJECT_DIR"/. \
             artifact/source/
 
-          echo "Modified Habitat source packaged."
-
-
-      # ============================================================
+      # ==========================================================
       # UPLOAD APK
-      # ============================================================
+      # ==========================================================
 
-      - name: Upload Habitat APK
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: Habitat-1.0-Ax-Core-debug-apk
           path: artifact/Habitat-1.0-Ax-Core-debug.apk
           if-no-files-found: error
 
-
-      # ============================================================
+      # ==========================================================
       # UPLOAD SOURCE
-      # ============================================================
+      # ==========================================================
 
-      - name: Upload Habitat source
+      - name: Upload source
         uses: actions/upload-artifact@v4
         with:
           name: Habitat-1.0-Ax-Core-source
           path: artifact/source
           if-no-files-found: error
 
+      # ==========================================================
+      # REPORT
+      # ==========================================================
 
-      # ============================================================
-      # FINAL REPORT
-      # ============================================================
-
-      - name: Habitat build report
+      - name: Build report
         shell: bash
         run: |
-          echo
-          echo "================================================"
-          echo "             HABITAT 1.0 AX CORE"
-          echo "================================================"
-          echo
-          echo "BUILD: SUCCESS"
-          echo
+          echo ""
+          echo "=============================================="
+          echo " HABITAT 1.0 - AX CORE BUILD SUCCESS"
+          echo "=============================================="
+          echo ""
           echo "APK:"
           ls -lh artifact/Habitat-1.0-Ax-Core-debug.apk
-          echo
-          echo "SOURCE:"
+          echo ""
+          echo "Source:"
           du -sh artifact/source
-          echo
-          echo "FEATURE FOUNDATION:"
-          echo "  [x] Ax command center"
-          echo "  [x] Chat interface"
-          echo "  [x] Enter/send"
-          echo "  [x] Local memory"
-          echo "  [x] Task engine"
-          echo "  [x] Project engine"
-          echo "  [x] Agent registry"
-          echo "  [x] Tool registry"
-          echo "  [x] Execution state"
-          echo "  [x] Verification state"
-          echo "  [x] Brain adapter"
-          echo "  [x] DropPilot workspace"
-          echo "  [x] Vice City workspace"
-          echo "  [x] Safe-area UI"
-          echo "  [x] Audrey UI removed"
-          echo "  [x] Portrait references removed"
-          echo
-          echo "================================================"
+          echo ""
+          echo "Core:"
+          echo "  AX command center"
+          echo "  Direct chat"
+          echo "  Enter/send"
+          echo "  Local memory"
+          echo "  Tasks"
+          echo "  Projects"
+          echo "  Agents"
+          echo "  Tools"
+          echo "  Execution state"
+          echo "  Verification state"
+          echo "  Brain adapter"
+          echo "  DropPilot workspace"
+          echo "  Vice City workspace"
+          echo "  Safe-area UI"
+          echo "  Old portrait UI removed"
+          echo ""
+          echo "=============================================="
