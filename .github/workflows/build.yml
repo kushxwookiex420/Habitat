@@ -75,7 +75,7 @@ jobs:
         run: |
           set -e
 
-          ZIP="$GITHUB_WORKSPACE/Habitat-Android-v0.3.2-Ax-Edition.zip"
+          ZIP="$GITHUB_WORKSPACE/Habitat-Android-v0.3.0-Ax-Edition.zip"
 
           test -f "$ZIP"
 
