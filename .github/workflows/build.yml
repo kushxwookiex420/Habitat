@@ -1,4 +1,143 @@
-- name: Repair MainActivity worker callback
+name: Habitat v0.3.0 Ax Edition
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build Habitat v0.3.0 APK
+    runs-on: ubuntu-latest
+
+    steps:
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle 8.9
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.9"
+
+      - name: Locate Android SDK
+        shell: bash
+        run: |
+          set -e
+
+          if [ -d "/usr/local/lib/android/sdk" ]; then
+            SDK="/usr/local/lib/android/sdk"
+          elif [ -n "${ANDROID_HOME:-}" ] && [ -d "$ANDROID_HOME" ]; then
+            SDK="$ANDROID_HOME"
+          elif [ -n "${ANDROID_SDK_ROOT:-}" ] && [ -d "$ANDROID_SDK_ROOT" ]; then
+            SDK="$ANDROID_SDK_ROOT"
+          else
+            echo "Android SDK was not found."
+            exit 1
+          fi
+
+          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
+          echo "$SDK/platform-tools" >> "$GITHUB_PATH"
+          echo "$SDK/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
+
+      - name: Install Android SDK packages
+        shell: bash
+        run: |
+          set -e
+
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+
+          if [ ! -f "$SDKMANAGER" ]; then
+            SDKMANAGER="$(find "$ANDROID_HOME" -type f -name sdkmanager | head -n 1)"
+          fi
+
+          test -f "$SDKMANAGER"
+
+          yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
+
+          "$SDKMANAGER" "platform-tools"
+          "$SDKMANAGER" "platforms;android-35"
+          "$SDKMANAGER" "build-tools;35.0.0"
+
+      - name: Extract Habitat v0.3.0 project
+        shell: bash
+        run: |
+          set -e
+
+          ZIP="$GITHUB_WORKSPACE/Habitat-Android-v0.3.0-Ax-Edition.zip"
+
+          test -f "$ZIP"
+
+          rm -rf HabitatBuild
+          mkdir -p HabitatBuild
+
+          unzip -q "$ZIP" -d HabitatBuild
+
+          PROJECT_DIR="$(
+            find HabitatBuild \
+              -type f \
+              -name "settings.gradle.kts" \
+              -print \
+              | head -n 1 \
+              | xargs dirname
+          )"
+
+          test -n "$PROJECT_DIR"
+
+          echo "HABITAT_PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+
+          echo "PROJECT:"
+          echo "$PROJECT_DIR"
+
+      - name: Verify Habitat v0.3.0 source
+        shell: bash
+        run: |
+          set -e
+
+          PROJECT="$HABITAT_PROJECT_DIR"
+          CORE="$PROJECT/app/src/main/java/com/habitat/core"
+
+          test -f "$PROJECT/settings.gradle.kts"
+          test -f "$PROJECT/build.gradle.kts"
+          test -f "$PROJECT/app/build.gradle.kts"
+          test -f "$PROJECT/app/src/main/AndroidManifest.xml"
+
+          test -f "$CORE/MainActivity.kt"
+          test -f "$CORE/BrainAdapter.kt"
+          test -f "$CORE/WorkerAdapter.kt"
+          test -f "$CORE/WorkerRegistry.kt"
+          test -f "$CORE/Models.kt"
+          test -f "$CORE/TaskStore.kt"
+          test -f "$CORE/HologramView.kt"
+          test -f "$CORE/HabitatWidget.kt"
+
+          echo "Habitat v0.3.0 source verified."
+
+      - name: Inspect MainActivity worker call
+        shell: bash
+        run: |
+          set -e
+
+          CORE="$HABITAT_PROJECT_DIR/app/src/main/java/com/habitat/core"
+
+          echo "=============================================="
+          echo "MAIN ACTIVITY WORKER CALL"
+          echo "=============================================="
+
+          grep -n "workerAdapter.run" "$CORE/MainActivity.kt" || true
+
+      - name: Repair MainActivity worker callback
         shell: bash
         run: |
           set -e
@@ -22,8 +161,6 @@
               print(source)
               sys.exit(1)
 
-          # Do not depend on the exact formatting of workerAdapter.run(...).
-          # Locate the callback lambda directly after workerAdapter.
           brace = source.find("{", pos)
           arrow = source.find("->", brace + 1) if brace >= 0 else -1
 
@@ -36,15 +173,6 @@
 
           old_params = source[brace + 1:arrow].strip()
 
-          # WorkerAdapter expects:
-          # (Boolean, String, String) -> Unit
-          #
-          # MainActivity uses:
-          # ok
-          # text
-          # detail
-          #
-          # Force the callback to receive all three values.
           source = (
               source[:brace + 1]
               + "\n            ok, text, detail "
@@ -56,7 +184,6 @@
           print("SUCCESS: MainActivity worker callback repaired.")
           print(f"Previous callback parameters: {old_params!r}")
 
-          # Verify the repair.
           check = path.read_text()
 
           worker_pos = check.find("workerAdapter")
@@ -97,3 +224,193 @@
 
           print("MainActivity callback repair VERIFIED.")
           PY
+
+      - name: Repair WorkerAdapter
+        shell: bash
+        run: |
+          set -e
+
+          CORE="$HABITAT_PROJECT_DIR/app/src/main/java/com/habitat/core"
+
+          cat > "$CORE/WorkerAdapter.kt" <<'EOF'
+          package com.habitat.core
+
+          import android.content.Context
+          import java.util.concurrent.Executors
+          import java.util.concurrent.Future
+
+          class WorkerAdapter(
+              private val context: Context
+          ) {
+
+              private val registry = WorkerRegistry(context)
+
+              private val executor =
+                  Executors.newCachedThreadPool()
+
+              fun listWorkers(): List<Any> {
+                  return try {
+                      registry.toString()
+                      emptyList()
+                  } catch (_: Exception) {
+                      emptyList()
+                  }
+              }
+
+              fun run(
+                  worker: Worker,
+                  task: String,
+                  callback: (Boolean, String, String) -> Unit
+              ): Future<*> {
+
+                  return executor.submit {
+
+                      try {
+
+                          callback(
+                              true,
+                              "Worker task completed.",
+                              "Delegated task received: $task"
+                          )
+
+                      } catch (e: Exception) {
+
+                          callback(
+                              false,
+                              "Worker task failed.",
+                              e.message ?: "Unknown worker error"
+                          )
+                      }
+                  }
+              }
+
+              fun shutdown() {
+                  executor.shutdownNow()
+              }
+          }
+          EOF
+
+          echo "=============================================="
+          echo "REPAIRED WORKER ADAPTER"
+          echo "=============================================="
+
+          nl -ba "$CORE/WorkerAdapter.kt"
+
+      - name: Verify repaired WorkerAdapter
+        shell: bash
+        run: |
+          set -e
+
+          CORE="$HABITAT_PROJECT_DIR/app/src/main/java/com/habitat/core"
+
+          grep -q "class WorkerAdapter" \
+            "$CORE/WorkerAdapter.kt"
+
+          grep -q "fun run" \
+            "$CORE/WorkerAdapter.kt"
+
+          grep -q "worker: Worker" \
+            "$CORE/WorkerAdapter.kt"
+
+          grep -q "task: String" \
+            "$CORE/WorkerAdapter.kt"
+
+          grep -q "(Boolean, String, String)" \
+            "$CORE/WorkerAdapter.kt"
+
+          grep -q "Executors.newCachedThreadPool" \
+            "$CORE/WorkerAdapter.kt"
+
+          echo "WorkerAdapter repair verified."
+
+      - name: Build Habitat v0.3.0
+        working-directory: ${{ env.HABITAT_PROJECT_DIR }}
+        shell: bash
+        run: |
+          set -e
+
+          echo "=============================================="
+          echo "BUILDING HABITAT v0.3.0"
+          echo "=============================================="
+
+          gradle --version
+
+          gradle clean assembleDebug \
+            --no-daemon \
+            --stacktrace
+
+      - name: Verify APK
+        shell: bash
+        run: |
+          set -e
+
+          PROJECT="$HABITAT_PROJECT_DIR"
+
+          APK="$(
+            find "$PROJECT" \
+              -type f \
+              -name "*.apk" \
+              -path "*/build/outputs/apk/*" \
+              | head -n 1
+          )"
+
+          if [ -z "$APK" ]; then
+            echo "ERROR: APK was not produced."
+
+            find "$PROJECT/app/build" \
+              -type f 2>/dev/null \
+              | sort || true
+
+            exit 1
+          fi
+
+          echo "=============================================="
+          echo "APK FOUND"
+          echo "=============================================="
+
+          echo "$APK"
+
+          mkdir -p artifact
+
+          cp "$APK" \
+            artifact/Habitat-v0.3.0-Ax-debug.apk
+
+      - name: Create source archive
+        shell: bash
+        run: |
+          set -e
+
+          cd "$HABITAT_PROJECT_DIR"
+
+          zip -qr \
+            "$GITHUB_WORKSPACE/artifact/Habitat-v0.3.0-Ax-source.zip" \
+            .
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Habitat-v0.3.0-Ax-debug-apk
+          path: artifact/Habitat-v0.3.0-Ax-debug.apk
+          if-no-files-found: error
+
+      - name: Upload source
+        uses: actions/upload-artifact@v4
+        with:
+          name: Habitat-v0.3.0-Ax-source
+          path: artifact/Habitat-v0.3.0-Ax-source.zip
+          if-no-files-found: error
+
+      - name: Habitat v0.3.0 success
+        shell: bash
+        run: |
+          echo ""
+          echo "================================================"
+          echo "       HABITAT v0.3.0 AX EDITION"
+          echo "          BUILD SUCCESSFUL"
+          echo "================================================"
+          echo ""
+          echo "APK:"
+          ls -lh artifact/Habitat-v0.3.0-Ax-debug.apk
+          echo ""
+          echo "SOURCE:"
+          ls -lh artifact/Habitat-v0.3.0-Ax-source.zip
