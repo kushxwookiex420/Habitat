@@ -633,6 +633,116 @@ jobs:
               }
           }
           KT
+      - name: FORCE PURE GALAXY UI — remove companion
+        shell: bash
+        run: |
+          set -e
+          CORE="$HABITAT_PROJECT_DIR/app/src/main/java/com/habitat/core"
+          RES="$HABITAT_PROJECT_DIR/app/src/main/res/drawable"
+          rm -f "$CORE/HologramView.kt" "$RES/ax_portrait.png" "$RES/desk_scene.png"
+          cat > "$CORE/MainActivity.kt" <<'KT'
+package com.habitat.core
+
+import android.app.Activity
+import android.os.Bundle
+import android.graphics.Color
+import android.view.Window
+import android.view.WindowManager
+
+class MainActivity: Activity() {
+  override fun onCreate(b: Bundle?) {
+    super.onCreate(b)
+    requestWindowFeature(Window.FEATURE_NO_TITLE)
+    window.setFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN, WindowManager.LayoutParams.FLAG_FULLSCREEN)
+    window.statusBarColor = Color.BLACK
+    window.navigationBarColor = Color.BLACK
+    setContentView(GalaxyHabitatView(this))
+  }
+}
+KT
+          cat > "$CORE/GalaxyHabitatView.kt" <<'KT'
+package com.habitat.core
+
+import android.content.Context
+import android.graphics.*
+import android.view.View
+import kotlin.math.*
+import kotlin.random.Random
+
+class GalaxyHabitatView(c: Context): View(c) {
+  private val p = Paint(Paint.ANTI_ALIAS_FLAG)
+  private val tx = Paint(Paint.ANTI_ALIAS_FLAG)
+  private val stars = ArrayList<FloatArray>()
+  private var t = 0f
+
+  init {
+    setLayerType(View.LAYER_TYPE_SOFTWARE, null)
+    repeat(520) { stars.add(floatArrayOf(Random.nextFloat(), Random.nextFloat(), Random.nextFloat())) }
+  }
+
+  override fun onDraw(c: Canvas) {
+    val w=width.toFloat(); val h=height.toFloat(); val cx=w/2f; val cy=h*.47f
+    p.shader=RadialGradient(cx,cy,max(w,h)*.9f,
+      intArrayOf(Color.rgb(35,8,75),Color.rgb(5,12,34),Color.BLACK),floatArrayOf(0f,.42f,1f),Shader.TileMode.CLAMP)
+    c.drawRect(0f,0f,w,h,p); p.shader=null
+    drawMilkyWay(c,w,h,cx,cy)
+    drawBrain(c,cx,cy,min(w,h)*.245f)
+    tx.textAlign=Paint.Align.CENTER; tx.typeface=Typeface.DEFAULT_BOLD; tx.color=Color.WHITE; tx.textSize=28f
+    c.drawText("HABITAT",cx,55f,tx)
+    tx.typeface=Typeface.DEFAULT; tx.textSize=11f; tx.color=Color.rgb(120,215,255)
+    c.drawText("AX  •  NEURAL CORE",cx,76f,tx)
+    tx.textSize=10f; tx.color=Color.argb(180,175,210,240)
+    c.drawText("A LIVING DIGITAL MIND",cx,h*.91f,tx)
+    t+=.02f; postInvalidateDelayed(30)
+  }
+
+  private fun drawMilkyWay(c:Canvas,w:Float,h:Float,cx:Float,cy:Float) {
+    for(i in stars.indices) {
+      val s=stars[i]; val a=(s[0]*7f+t*.18f); val r=(s[1]-.5f)*max(w,h)*1.25f
+      val x=cx+cos(a)*r; val y=cy+sin(a)*r*.36f
+      p.color=Color.argb((45+s[2]*150).toInt(),170,205,255)
+      c.drawCircle(x,y,.5f+s[2]*1.8f,p)
+    }
+    p.shader=RadialGradient(cx,cy,max(w,h)*.58f,
+      intArrayOf(Color.argb(55,150,70,255),Color.argb(18,40,120,220),Color.TRANSPARENT),floatArrayOf(0f,.42f,1f),Shader.TileMode.CLAMP)
+    c.drawOval(cx-max(w,h)*.62f,cy-h*.16f,cx+max(w,h)*.62f,cy+h*.16f,p); p.shader=null
+  }
+
+  private fun drawBrain(c:Canvas,cx:Float,cy:Float,r:Float) {
+    val spin=t*.75f
+    c.save(); c.rotate(sin(spin)*7f,cx,cy)
+    p.style=Paint.Style.STROKE; p.strokeWidth=2.4f; p.color=Color.rgb(105,225,255)
+    p.setShadowLayer(28f,0f,0f,Color.rgb(45,180,255))
+    val left=Path(); val right=Path()
+    left.moveTo(cx-6,cy-r*.78f); left.cubicTo(cx-r*.55f,cy-r,cx-r,cy-r*.42f,cx-r*.78f,cy)
+    left.cubicTo(cx-r,cy+r*.48f,cx-r*.48f,cy+r*.82f,cx-6,cy+r*.68f)
+    right.moveTo(cx+6,cy-r*.78f); right.cubicTo(cx+r*.55f,cy-r,cx+r,cy-r*.42f,cx+r*.78f,cy)
+    right.cubicTo(cx+r,cy+r*.48f,cx+r*.48f,cy+r*.82f,cx+6,cy+r*.68f)
+    c.drawPath(left,p); c.drawPath(right,p); p.clearShadowLayer()
+    p.strokeWidth=1.1f; p.color=Color.argb(160,140,240,255)
+    for(i in 0..14) {
+      val yy=cy-r*.65f+i*r*.095f; val path=Path(); path.moveTo(cx-r*.62f,yy)
+      path.cubicTo(cx-r*.25f,yy+sin(spin+i)*r*.12f,cx+r*.25f,yy-sin(spin+i)*r*.12f,cx+r*.62f,yy)
+      c.drawPath(path,p)
+    }
+    c.drawLine(cx,cy-r*.68f,cx,cy+r*.64f,p)
+    p.style=Paint.Style.FILL
+    for(i in 0..34) {
+      val a=i*1.83f+spin; val rr=r*(.18f+(i%7)*.09f)
+      p.color=Color.argb(210,100+(i%70),205+(i%45),255)
+      c.drawCircle(cx+cos(a)*rr,cy+sin(a)*rr*.82f,2f+(i%3),p)
+    }
+    p.style=Paint.Style.STROKE; p.strokeWidth=1f; p.color=Color.argb(110,100,220,255)
+    c.drawOval(cx-r*1.18f,cy-r*.9f,cx+r*1.18f,cy+r*.9f,p)
+    c.restore(); p.style=Paint.Style.FILL
+  }
+}
+KT
+          grep -q 'GalaxyHabitatView(this)' "$CORE/MainActivity.kt"
+          test ! -f "$CORE/HologramView.kt"
+          test ! -f "$RES/ax_portrait.png"
+          test ! -f "$RES/desk_scene.png"
+
       - name: Pre-build Kotlin sanity check
         shell: bash
         run: |
