@@ -97,7 +97,9 @@ jobs:
 
           echo "HABITAT_PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
-          echo "PROJECT:"
+          echo "=============================================="
+          echo "HABITAT PROJECT"
+          echo "=============================================="
           echo "$PROJECT_DIR"
 
       - name: Verify Habitat v0.3.0 source
@@ -135,7 +137,7 @@ jobs:
           echo "MAIN ACTIVITY WORKER CALL"
           echo "=============================================="
 
-          grep -n -C 8 "adapter.run" "$CORE/MainActivity.kt" || true
+          grep -n -C 12 "adapter.run" "$CORE/MainActivity.kt" || true
 
       - name: Repair MainActivity worker callback
         shell: bash
@@ -153,76 +155,97 @@ jobs:
           path = Path(sys.argv[1])
           source = path.read_text()
 
-          # v0.3.0 uses "adapter" for WorkerAdapter.
-          # Keep workerAdapter as a compatibility fallback.
-          marker = "adapter.run"
-          pos = source.find(marker)
+          # IMPORTANT:
+          #
+          # Do NOT search for the first "{" after adapter.run.
+          #
+          # MainActivity contains Kotlin string interpolation such as:
+          #
+          #   ${t.id}
+          #   ${t.title}
+          #
+          # Those braces occur before the worker callback and caused the
+          # previous repair script to modify the wrong location.
+          #
+          # Instead, locate the exact callback parameter pattern.
 
-          if pos < 0:
-              marker = "workerAdapter.run"
-              pos = source.find(marker)
+          callback_patterns = [
+              "){res->",
+              "){ res ->",
+              ") {res->",
+              ") { res ->",
+          ]
 
-          if pos < 0:
-              print("ERROR: MainActivity does not contain a WorkerAdapter run call.")
-              print(source)
+          replacement = "){ok, text, detail ->"
+
+          matched = None
+
+          for pattern in callback_patterns:
+              if pattern in source:
+                  source = source.replace(
+                      pattern,
+                      replacement,
+                      1
+                  )
+                  matched = pattern
+                  break
+
+          if matched is None:
+              print("ERROR: Exact WorkerAdapter callback was not found.")
+
+              worker_pos = source.find("adapter.run")
+
+              if worker_pos < 0:
+                  worker_pos = source.find("workerAdapter.run")
+
+              if worker_pos < 0:
+                  print("ERROR: WorkerAdapter run call was not found either.")
+              else:
+                  print("")
+                  print("Relevant MainActivity source:")
+                  print(
+                      source[
+                          max(0, worker_pos - 500):
+                          min(len(source), worker_pos + 3000)
+                      ]
+                  )
+
               sys.exit(1)
 
-          brace = source.find("{", pos)
-          arrow = source.find("->", brace + 1) if brace >= 0 else -1
-
-          if brace < 0 or arrow < 0:
-              print("ERROR: Could not locate the worker callback lambda.")
-              print()
-              print("Relevant source:")
-              print(source[max(0, pos-500):min(len(source), pos+1800)])
-              sys.exit(1)
-
-          old_params = source[brace + 1:arrow].strip()
-
-          # WorkerAdapter.run expects:
-          # (Boolean, String, String) -> Unit
-          source = (
-              source[:brace + 1]
-              + "\n            ok, text, detail "
-              + source[arrow:]
-          )
-
-          # Convert the original v0.3.0 result-object references
-          # into the three callback parameters.
+          # Convert the old callback result object references.
           source = source.replace("res.ok", "ok")
           source = source.replace("res.text", "text")
           source = source.replace("res.detail", "detail")
 
           path.write_text(source)
 
-          print("SUCCESS: MainActivity worker callback repaired.")
-          print(f"Previous callback parameters: {old_params!r}")
-
           check = path.read_text()
 
-          worker_pos = check.find(marker)
-
-          if worker_pos < 0:
-              print("ERROR: WorkerAdapter call disappeared during repair.")
-              sys.exit(1)
-
-          if check.find("ok, text, detail", worker_pos) < 0:
-              print("ERROR: Three callback parameters were not installed.")
+          if "ok, text, detail ->" not in check:
+              print(
+                  "ERROR: Correct worker callback parameters "
+                  "were not installed."
+              )
               sys.exit(1)
 
           if "res.ok" in check:
-              print("ERROR: Old res.ok reference remains.")
+              print("ERROR: res.ok still exists.")
               sys.exit(1)
 
           if "res.text" in check:
-              print("ERROR: Old res.text reference remains.")
+              print("ERROR: res.text still exists.")
               sys.exit(1)
 
           if "res.detail" in check:
-              print("ERROR: Old res.detail reference remains.")
+              print("ERROR: res.detail still exists.")
               sys.exit(1)
 
-          print("MainActivity callback repair VERIFIED.")
+          print("==============================================")
+          print("MAIN ACTIVITY CALLBACK REPAIRED")
+          print("==============================================")
+          print(f"Matched pattern: {matched}")
+          print("Callback: ok, text, detail")
+
           PY
 
       - name: Verify MainActivity repair
@@ -233,7 +256,7 @@ jobs:
           FILE="$HABITAT_PROJECT_DIR/app/src/main/java/com/habitat/core/MainActivity.kt"
 
           echo "=============================================="
-          echo "MAIN ACTIVITY AFTER REPAIR"
+          echo "VERIFYING MAIN ACTIVITY"
           echo "=============================================="
 
           grep -n -C 8 "adapter.run" "$FILE" || true
@@ -253,13 +276,16 @@ jobs:
               print("ERROR: WorkerAdapter run call was not found.")
               sys.exit(1)
 
-          repaired_pos = source.find(
-              "ok, text, detail",
+          callback_pos = source.find(
+              "ok, text, detail ->",
               worker_pos
           )
 
-          if repaired_pos < 0:
-              print("ERROR: Three callback parameters were not found.")
+          if callback_pos < 0:
+              print(
+                  "ERROR: Correct worker callback was not found "
+                  "after adapter.run."
+              )
               sys.exit(1)
 
           if "res.ok" in source:
@@ -274,7 +300,21 @@ jobs:
               print("ERROR: res.detail remains.")
               sys.exit(1)
 
+          # Make sure the Kotlin interpolation survived.
+          if "${t.id}" not in source:
+              print(
+                  "WARNING: ${t.id} was not found. "
+                  "Checking source manually."
+              )
+
+          if "${t.title}" not in source:
+              print(
+                  "WARNING: ${t.title} was not found. "
+                  "Checking source manually."
+              )
+
           print("MainActivity callback repair VERIFIED.")
+
           PY
 
       - name: Repair WorkerAdapter
@@ -374,6 +414,48 @@ jobs:
             "$CORE/WorkerAdapter.kt"
 
           echo "WorkerAdapter repair verified."
+
+      - name: Pre-build Kotlin sanity check
+        shell: bash
+        run: |
+          set -e
+
+          CORE="$HABITAT_PROJECT_DIR/app/src/main/java/com/habitat/core"
+
+          echo "=============================================="
+          echo "KOTLIN SOURCE SANITY CHECK"
+          echo "=============================================="
+
+          for file in \
+            MainActivity.kt \
+            BrainAdapter.kt \
+            WorkerAdapter.kt \
+            WorkerRegistry.kt \
+            Models.kt \
+            TaskStore.kt \
+            HologramView.kt \
+            HabitatWidget.kt
+          do
+            test -f "$CORE/$file"
+            echo "OK: $file"
+          done
+
+          echo ""
+          echo "Checking for accidental callback corruption..."
+
+          if grep -R -n \
+            'jobs\.submit\|workerScreen\|worker\.id\|worker\.title' \
+            "$CORE/MainActivity.kt"; then
+
+            echo ""
+            echo "ERROR: MainActivity contains suspicious corruption."
+            echo ""
+            echo "MainActivity:"
+            nl -ba "$CORE/MainActivity.kt"
+            exit 1
+          fi
+
+          echo "No known callback-corruption patterns found."
 
       - name: Build Habitat v0.3.0
         working-directory: ${{ env.HABITAT_PROJECT_DIR }}
