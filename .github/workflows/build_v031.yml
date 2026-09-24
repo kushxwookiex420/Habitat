@@ -40,20 +40,78 @@ jobs:
           mkdir HabitatBuild
           unzip -q Habitat-Android-v0.3.0-Ax-Edition.zip -d HabitatBuild
           echo "PROJECT=$(find HabitatBuild -type f -name settings.gradle.kts -print -quit | xargs dirname)" >> "$GITHUB_ENV"
-      - name: Replace Habitat home with Galaxy Brain UI
+      - name: Replace Habitat home with 3D Neural Galaxy
         shell: bash
         run: |
           set -e
           CORE="$PROJECT/app/src/main/java/com/habitat/core"
           mkdir -p "$CORE"
-          echo 'cGFja2FnZSBjb20uaGFiaXRhdC5jb3JlCmltcG9ydCBhbmRyb2lkLmFwcC5BY3Rpdml0eQppbXBvcnQgYW5kcm9pZC5vcy5CdW5kbGUKaW1wb3J0IGFuZHJvaWQuZ3JhcGhpY3MuQ29sb3IKaW1wb3J0IGFuZHJvaWQudmlldy5XaW5kb3cKaW1wb3J0IGFuZHJvaWQudmlldy5XaW5kb3dNYW5hZ2VyCmNsYXNzIE1haW5BY3Rpdml0eTpBY3Rpdml0eSgpewogb3ZlcnJpZGUgZnVuIG9uQ3JlYXRlKGI6QnVuZGxlPyl7c3VwZXIub25DcmVhdGUoYik7cmVxdWVzdFdpbmRvd0ZlYXR1cmUoV2luZG93LkZFQVRVUkVfTk9fVElUTEUpO3dpbmRvdy5zZXRGbGFncyhXaW5kb3dNYW5hZ2VyLkxheW91dFBhcmFtcy5GTEFHX0ZVTExTQ1JFRU4sV2luZG93TWFuYWdlci5MYXlvdXRQYXJhbXMuRkxBR19GVUxMU0NSRUVOKTt3aW5kb3cuc3RhdHVzQmFyQ29sb3I9Q29sb3IucmdiKDIsMywxMik7d2luZG93Lm5hdmlnYXRpb25CYXJDb2xvcj1Db2xvci5yZ2IoMiwzLDEyKTtzZXRDb250ZW50VmlldyhHYWxheHlIYWJpdGF0Vmlldyh0aGlzKSl9Cn0=' | base64 -d > "$CORE/MainActivity.kt"
-          echo 'cGFja2FnZSBjb20uaGFiaXRhdC5jb3JlCmltcG9ydCBhbmRyb2lkLmNvbnRlbnQuQ29udGV4dAppbXBvcnQgYW5kcm9pZC5ncmFwaGljcy4qCmltcG9ydCBhbmRyb2lkLnZpZXcuVmlldwppbXBvcnQga290bGluLm1hdGguKgppbXBvcnQga290bGluLnJhbmRvbS5SYW5kb20KY2xhc3MgR2FsYXh5SGFiaXRhdFZpZXcoYzpDb250ZXh0KTpWaWV3KGMpewogcHJpdmF0ZSB2YWwgcD1QYWludCgzKTtwcml2YXRlIHZhbCB0eD1QYWludCgzKTtwcml2YXRlIHZhbCBzdGFycz1BcnJheUxpc3Q8RmxvYXRBcnJheT4oKTtwcml2YXRlIHZhciB0PTBmO3ByaXZhdGUgdmFyIGJtcDpCaXRtYXA/PW51bGwKIGluaXR7c2V0TGF5ZXJUeXBlKFZpZXcuTEFZRVJfVFlQRV9TT0ZUV0FSRSxudWxsKTtyZXBlYXQoMTgwKXtzdGFycys9ZmxvYXRBcnJheU9mKFJhbmRvbS5uZXh0RmxvYXQoKSxSYW5kb20ubmV4dEZsb2F0KCksLjVmK1JhbmRvbS5uZXh0RmxvYXQoKSoxLjhmKX07dmFsIGlkPXJlc291cmNlcy5nZXRJZGVudGlmaWVyKCJheF9wb3J0cmFpdCIsImRyYXdhYmxlIixjLnBhY2thZ2VOYW1lKTtpZihpZCE9MClibXA9Qml0bWFwRmFjdG9yeS5kZWNvZGVSZXNvdXJjZShyZXNvdXJjZXMsaWQpfQogb3ZlcnJpZGUgZnVuIG9uRHJhdyhjOkNhbnZhcyl7dmFsIHc9d2lkdGgudG9GbG9hdCgpO3ZhbCBoPWhlaWdodC50b0Zsb2F0KCk7dmFsIHg9dy8yO3ZhbCB5PWgqLjQ5ZjtwLnNoYWRlcj1SYWRpYWxHcmFkaWVudCh4LHkqLjdmLG1heCh3LGgpKi45ZixpbnRBcnJheU9mKENvbG9yLnJnYigzMiw4LDcwKSxDb2xvci5yZ2IoNiwxMCwzMCksQ29sb3IucmdiKDEsMiwxMCkpLGZsb2F0QXJyYXlPZigwZiwuNDVmLDFmKSxTaGFkZXIuVGlsZU1vZGUuQ0xBTVApO2MuZHJhd1JlY3QoMGYsMGYsdyxoLHApO3Auc2hhZGVyPW51bGw7Zm9yKGkgaW4gMC4uNSl7dmFsIG54PXcqKC4wOGYraSouMThmKTt2YWwgbnk9aCooLjE1ZisoaSozNyU2MCkvMTAwZik7cC5zaGFkZXI9UmFkaWFsR3JhZGllbnQobngsbnksdyouMmYsQ29sb3IuYXJnYigzOCw4MCw0MCwyMjApLENvbG9yLlRSQU5TUEFSRU5ULFNoYWRlci5UaWxlTW9kZS5DTEFNUCk7Yy5kcmF3Q2lyY2xlKG54LG55LHcqLjE4ZixwKX07cC5zaGFkZXI9bnVsbDtmb3IocyBpbiBzdGFycyl7cC5jb2xvcj1Db2xvci5hcmdiKCgxMDArODAqc2luKHQrc1swXSoxMikpLnRvSW50KCkuY29lcmNlSW4oMjUsMjIwKSwyMTAsMjI1LDI1NSk7Yy5kcmF3Q2lyY2xlKHNbMF0qdyxzWzFdKmgsc1syXSxwKX07aGVhZGVyKGMsdyk7YnJhaW4oYyx4LHktaCouMjNmLG1pbih3LGgpKi4xNWYpO2hvbG8oYyx4LHksdyxoKTtmbG9vcihjLHgsdyxoKTtmb290ZXIoYyx3LGgpO3QrPS4wMzVmO3Bvc3RJbnZhbGlkYXRlRGVsYXllZCgzMyl9CiBwcml2YXRlIGZ1biBoZWFkZXIoYzpDYW52YXMsdzpGbG9hdCl7dHgudHlwZWZhY2U9VHlwZWZhY2UuREVGQVVMVF9CT0xEO3R4LnRleHRBbGlnbj1QYWludC5BbGlnbi5MRUZUO3R4LnRleHRTaXplPTI0Zjt0eC5jb2xvcj1Db2xvci5XSElURTtjLmRyYXdUZXh0KCJIQUJJVEFUIiwyOGYsNDJmLHR4KTt0eC50eXBlZmFjZT1UeXBlZmFjZS5ERUZBVUxUO3R4LnRleHRTaXplPTExZjt0eC5jb2xvcj1Db2xvci5yZ2IoMTI1LDE4NSwyNTUpO2MuZHJhd1RleHQoIkFYIENPUkUgLSBHQUxBWFkgTU9ERSIsMzBmLDU5Zix0eCk7cC5jb2xvcj1Db2xvci5yZ2IoNzAsMjQ1LDE1NSk7Yy5kcmF3Q2lyY2xlKHctNTRmLDMzZiw1ZixwKTt0eC50ZXh0QWxpZ249UGFpbnQuQWxpZ24uUklHSFQ7dHguY29sb3I9Q29sb3IucmdiKDEzMCwyNTUsMTkwKTtjLmRyYXdUZXh0KCJBWCBPTkxJTkUiLHctMzBmLDM3Zix0eCl9CiBwcml2YXRlIGZ1biBicmFpbihjOkNhbnZhcyx4OkZsb2F0LHk6RmxvYXQscjpGbG9hdCl7dmFsIHE9dCouOGY7cC5zdHlsZT1QYWludC5TdHlsZS5TVFJPS0U7cC5zdHJva2VXaWR0aD0yLjVmO3AuY29sb3I9Q29sb3IucmdiKDg1LDIwNSwyNTUpO3Auc2V0U2hhZG93TGF5ZXIoMThmLDBmLDBmLENvbG9yLnJnYig1NSwxOTAsMjU1KSk7Yy5kcmF3T3ZhbCh4LXIqMS4wNWYseS1yKi43MmYseCtyKjEuMDVmLHkrciouNzJmLHApO2MuZHJhd092YWwoeC1yKi44MmYseS1yKi41OGYseCtyKi44MmYseStyKi41OGYscCk7cC5jbGVhclNoYWRvd0xheWVyKCk7Zm9yKHNpZGUgaW4gLTEuLjEgc3RlcCAyKXt2YWwgej1QYXRoKCk7Zm9yKGkgaW4gMC4uMTgpe3ZhbCBhPWkvMThmO3ZhbCB4eD14K3NpZGUqKHIqLjA4ZityKi43OGYqYSk7dmFsIHl5PXkrc2luKGEqMTgrcSkqciouMThmK2NvcyhhKjkrcSkqciouMDhmO2lmKGk9PTApei5tb3ZlVG8oeHgseXkpZWxzZSB6LmxpbmVUbyh4eCx5eSl9O2MuZHJhd1BhdGgoeixwKX07Zm9yKGkgaW4gMC4uMTApe3ZhbCBhPXEraSouNTdmO3Auc3R5bGU9UGFpbnQuU3R5bGUuRklMTDtwLmNvbG9yPUNvbG9yLnJnYigxMDUsMjI1LDI1NSk7Yy5kcmF3Q2lyY2xlKHgrY29zKGEpKnIqMS4xOGYseStzaW4oYSkqciouNzhmLDMuNWYscCl9O3R4LnRleHRBbGlnbj1QYWludC5BbGlnbi5DRU5URVI7dHgudHlwZWZhY2U9VHlwZWZhY2UuREVGQVVMVF9CT0xEO3R4LnRleHRTaXplPTExZjt0eC5jb2xvcj1Db2xvci5yZ2IoMTI1LDIwNSwyNTUpO2MuZHJhd1RleHQoIkFYIE5FVVJBTCBDT1JFIix4LHkrcioxLjAyZix0eCl9CiBwcml2YXRlIGZ1biBob2xvKGM6Q2FudmFzLHg6RmxvYXQseTpGbG9hdCx3OkZsb2F0LGg6RmxvYXQpe3Auc3R5bGU9UGFpbnQuU3R5bGUuU1RST0tFO3Auc3Ryb2tlV2lkdGg9MS41ZjtwLmNvbG9yPUNvbG9yLmFyZ2IoOTUsNjUsMjA1LDI1NSk7cC5zZXRTaGFkb3dMYXllcigxNmYsMGYsMGYsQ29sb3IucmdiKDQ1LDE4NSwyNTUpKTtjLmRyYXdPdmFsKHgtdyouMzNmLHktaCouMzdmLHgrdyouMzNmLHkraCouMzhmLHApO2MuZHJhd092YWwoeC13Ki4yN2YseS1oKi4zMWYseCt3Ki4yN2YseStoKi4zMmYscCk7cC5jbGVhclNoYWRvd0xheWVyKCk7Ym1wPy5sZXR7Yi0+dmFsIHNjPW1pbih3Ki41OGYvYi53aWR0aCxoKi42NmYvYi5oZWlnaHQpO3ZhbCBkdz1iLndpZHRoKnNjO3ZhbCBkaD1iLmhlaWdodCpzYzt2YWwgbD14LWR3LzI7dmFsIHRvcD15LWRoKi41N2Y7cC5hbHBoYT0xOTA7cC5zZXRTaGFkb3dMYXllcigyNGYsMGYsMGYsQ29sb3IucmdiKDQwLDIwMCwyNTUpKTtjLmRyYXdCaXRtYXAoYixudWxsLFJlY3RGKGwsdG9wLGwrZHcsdG9wK2RoKSxwKTtwLmNsZWFyU2hhZG93TGF5ZXIoKTtwLmFscGhhPTI1NTtwLmNvbG9yPUNvbG9yLmFyZ2IoMzUsNjAsMjIwLDI1NSk7Yy5kcmF3UmVjdChsLHRvcCxsK2R3LHRvcCtkaCxwKX07cC5zdHlsZT1QYWludC5TdHlsZS5TVFJPS0U7cC5zdHJva2VXaWR0aD0xZjtwLmNvbG9yPUNvbG9yLmFyZ2IoNzAsOTAsMjEwLDI1NSk7dmFyIHl5PXktaCouM2Y7d2hpbGUoeXk8eStoKi4zNWYpe2MuZHJhd0xpbmUoeC13Ki4yN2YseXkseCt3Ki4yN2YseXkscCk7eXkrPThmfX0KIHByaXZhdGUgZnVuIGZsb29yKGM6Q2FudmFzLHg6RmxvYXQsdzpGbG9hdCxoOkZsb2F0KXtwLnN0eWxlPVBhaW50LlN0eWxlLlNUUk9LRTtwLnN0cm9rZVdpZHRoPTIuNWY7cC5jb2xvcj1Db2xvci5yZ2IoNDUsMTg1LDI1NSk7cC5zZXRTaGFkb3dMYXllcigyMGYsMGYsMGYsQ29sb3IucmdiKDMwLDE2MCwyNTUpKTtjLmRyYXdPdmFsKHgtdyouM2YsaCouNzhmLHgrdyouM2YsaCouODlmLHApO2MuZHJhd092YWwoeC13Ki4yZixoKi44MDVmLHgrdyouMmYsaCouODY1ZixwKTtwLmNsZWFyU2hhZG93TGF5ZXIoKTtwLnN0eWxlPVBhaW50LlN0eWxlLkZJTEx9CiBwcml2YXRlIGZ1biBmb290ZXIoYzpDYW52YXMsdzpGbG9hdCxoOkZsb2F0KXt2YWwgYnc9dyouNjhmO3ZhbCBsPSh3LWJ3KS8yO3ZhbCB0b3A9aCouOTFmO3AuY29sb3I9Q29sb3IuYXJnYigxNzUsMTAsMjIsNDIpO2MuZHJhd1JvdW5kUmVjdChsLHRvcCxsK2J3LHRvcCs0NGYsMjJmLDIyZixwKTtwLnN0eWxlPVBhaW50LlN0eWxlLlNUUk9LRTtwLnN0cm9rZVdpZHRoPTEuNWY7cC5jb2xvcj1Db2xvci5yZ2IoNTUsMTkwLDI1NSk7Yy5kcmF3Um91bmRSZWN0KGwsdG9wLGwrYncsdG9wKzQ0ZiwyMmYsMjJmLHApO3Auc3R5bGU9UGFpbnQuU3R5bGUuRklMTDtwLmNvbG9yPUNvbG9yLnJnYig2NSwyMDUsMjU1KTtjLmRyYXdDaXJjbGUobCsyM2YsdG9wKzIyZiw4ZixwKTt0eC50ZXh0QWxpZ249UGFpbnQuQWxpZ24uTEVGVDt0eC50eXBlZmFjZT1UeXBlZmFjZS5ERUZBVUxUX0JPTEQ7dHgudGV4dFNpemU9MTJmO3R4LmNvbG9yPUNvbG9yLldISVRFO2MuZHJhd1RleHQoIlRBTEsgVE8gQVgiLGwrMzlmLHRvcCsyNmYsdHgpO3R4LnRleHRBbGlnbj1QYWludC5BbGlnbi5SSUdIVDt0eC50eXBlZmFjZT1UeXBlZmFjZS5ERUZBVUxUO3R4LnRleHRTaXplPTEwZjt0eC5jb2xvcj1Db2xvci5yZ2IoMTMwLDE5MCwyMzApO2MuZHJhd1RleHQoIkJSQUlOIC0gT05MSU5FIixsK2J3LTE4Zix0b3ArMjZmLHR4KTt0eC50ZXh0QWxpZ249UGFpbnQuQWxpZ24uQ0VOVEVSO3R4LnRleHRTaXplPTlmO3R4LmNvbG9yPUNvbG9yLnJnYigxMDAsMTQ1LDE4NSk7Yy5kcmF3VGV4dCgiR0FMQVhZIEhBQklUQVQgLSB2MC4zLjIiLHcsaCouOTg1Zix0eCl9Cn0=' | base64 -d > "$CORE/GalaxyHabitatView.kt"
+          cat > "$CORE/MainActivity.kt" <<'KT'
+package com.habitat.core
+import android.app.Activity
+import android.os.Bundle
+import android.graphics.Color
+import android.view.Window
+import android.view.WindowManager
+class MainActivity:Activity(){
+ override fun onCreate(b:Bundle?){super.onCreate(b);requestWindowFeature(Window.FEATURE_NO_TITLE);window.setFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN,WindowManager.LayoutParams.FLAG_FULLSCREEN);window.statusBarColor=Color.BLACK;window.navigationBarColor=Color.BLACK;setContentView(GalaxyHabitatView(this))}
+}
+KT
+          cat > "$CORE/GalaxyHabitatView.kt" <<'KT'
+package com.habitat.core
+import android.content.Context
+import android.graphics.*
+import android.view.View
+import kotlin.math.*
+import kotlin.random.Random
+
+class GalaxyHabitatView(c:Context):View(c){
+ private val p=Paint(3); private val tx=Paint(3); private val pts=ArrayList<FloatArray>(); private var t=0f
+ init{setLayerType(View.LAYER_TYPE_SOFTWARE,null);repeat(420){pts.add(floatArrayOf(Random.nextFloat()*2f-1f,Random.nextFloat()*2f-1f,Random.nextFloat()*2f-1f,Random.nextFloat()))}}
+ override fun onDraw(c:Canvas){
+  val w=width.toFloat();val h=height.toFloat();val cx=w/2;val cy=h*.5f;val R=min(w,h)*.30f
+  p.shader=RadialGradient(cx,cy,R*2.2f,intArrayOf(Color.rgb(38,8,75),Color.rgb(7,13,35),Color.BLACK),floatArrayOf(0f,.45f,1f),Shader.TileMode.CLAMP);c.drawRect(0f,0f,w,h,p);p.shader=null
+  galaxy(c,w,h,cx,cy); brain(c,cx,cy,R); labels(c,w,h); t+=.018f;postInvalidateDelayed(30)
+ }
+ private fun galaxy(c:Canvas,w:Float,h:Float,cx:Float,cy:Float){
+  for(i in 0..1100){val a=i*.47f;val r=(i%220)/220f*max(w,h)*.72f;val x=cx+cos(a)*r;val y=cy+sin(a)*r*.38f; p.color=Color.argb((25+70*sin(i*.13+t)).toInt().coerceIn(10,100),120+(i%90),150+(i%80),255);c.drawCircle(x,y,(i%4)*.45f+.4f,p)}
+  p.color=Color.argb(100,110,150,255);c.drawCircle(cx,cy,max(w,h)*.46f,p)
+ }
+ private fun brain(c:Canvas,cx:Float,cy:Float,r:Float){
+  val rot=t*.9f
+  p.style=Paint.Style.STROKE;p.strokeWidth=2.2f;p.color=Color.rgb(105,220,255);p.setShadowLayer(28f,0f,0f,Color.rgb(35,170,255))
+  for(k in 0..9){
+   val z=(k-5)/5f;val ww=r*sqrt(max(0f,1-z*z));val yy=cy+z*r*.72f
+   c.drawOval(cx-ww,yy-r*.38f,cx+ww,yy+r*.38f,p)
+  }
+  for(side in -1..1 step 2){for(k in 0..7){
+   val path=Path();var first=true
+   for(q in 0..40){val u=q/40f;val yy=cy-r*.75f+u*r*1.5f;val wave=sin(u*PI*5+k*.75+rot)*r*.10f;val xx=cx+side*(r*.08f+wave+(1f-abs(u-.5f)*1.55f)*r*.55f)
+    if(first){path.moveTo(xx,yy);first=false}else path.lineTo(xx,yy)}
+   c.drawPath(path,p)
+  }}
+  p.clearShadowLayer();p.style=Paint.Style.FILL
+  for(i in 0..45){val a=i*.78f+rot;val rr=r*(.35f+.38f*((sin(i*4.1f)+1f)/2f));val x=cx+cos(a)*rr;val y=cy+sin(a)*rr*.75f;p.color=Color.argb(190,90+(i%80),205+(i%40),255);c.drawCircle(x,y,2.2f+(i%3),p)}
+  p.style=Paint.Style.STROKE;p.strokeWidth=1f;p.color=Color.argb(100,100,230,255);c.drawCircle(cx,cy,r*1.12f,p)
+  c.drawArc(cx-r*1.18f,cy-r*1.18f,cx+r*1.18f,cy+r*1.18f,rot*57f,150f,false,p)
+  c.drawArc(cx-r*1.28f,cy-r*1.28f,cx+r*1.28f,cy+r*1.28f,180f+rot*43f,120f,false,p)
+  p.style=Paint.Style.FILL
+ }
+ private fun labels(c:Canvas,w:Float,h:Float){
+  tx.textAlign=Paint.Align.CENTER;tx.typeface=Typeface.DEFAULT_BOLD;tx.textSize=26f;tx.color=Color.WHITE;c.drawText("HABITAT",w/2,55f,tx)
+  tx.textSize=11f;tx.typeface=Typeface.DEFAULT;tx.color=Color.rgb(115,205,255);c.drawText("AX  •  NEURAL CORE",w/2,75f,tx)
+  tx.textSize=10f;tx.color=Color.argb(180,170,205,240);c.drawText("A LIVING DIGITAL MIND",w/2,h*.88f,tx)
+  tx.textSize=9f;tx.color=Color.argb(140,120,165,210);c.drawText("GALAXY HABITAT  •  v0.3.3",w/2,h*.97f,tx)
+ }
+}
+KT
           python3 - "$PROJECT/app/build.gradle.kts" <<'PY'
 import sys
 from pathlib import Path
 p=Path(sys.argv[1]);s=p.read_text()
-s=s.replace('versionCode = 5, versionName = "0.3.0"','versionCode = 7, versionName = "0.3.2"')
-s=s.replace('versionCode = 6, versionName = "0.3.1"','versionCode = 7, versionName = "0.3.2"')
+import re
+s=re.sub(r'versionCode\s*=\s*\d+', 'versionCode = 8', s, count=1)
+s=re.sub(r'versionName\s*=\s*"[^"]+"', 'versionName = "0.3.3"', s, count=1)
 p.write_text(s)
 PY
       - name: Build APK
