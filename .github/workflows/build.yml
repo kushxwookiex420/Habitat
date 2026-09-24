@@ -757,14 +757,14 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: Habitat-v0.3.3-Ax-debug-apk
-          path: artifact/Habitat-v0.3.2-Ax-debug.apk
+          path: artifact/Habitat-v0.3.3-Ax-debug.apk
           if-no-files-found: error
 
       - name: Upload source
         uses: actions/upload-artifact@v4
         with:
           name: Habitat-v0.3.3-Ax-source
-          path: artifact/Habitat-v0.3.2-Ax-source.zip
+          path: artifact/Habitat-v0.3.3-Ax-source.zip
           if-no-files-found: error
 
       - name: Habitat v0.3.3 success
@@ -777,7 +777,7 @@ jobs:
           echo "================================================"
           echo ""
           echo "APK:"
-          ls -lh artifact/Habitat-v0.3.2-Ax-debug.apk
+          ls -lh artifact/Habitat-v0.3.3-Ax-debug.apk
           echo ""
           echo "SOURCE:"
-          ls -lh artifact/Habitat-v0.3.2-Ax-source.zip
+          ls -lh artifact/Habitat-v0.3.3-Ax-source.zip
