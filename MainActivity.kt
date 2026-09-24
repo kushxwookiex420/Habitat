@@ -7,6 +7,7 @@ import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
 import android.view.Gravity
 import android.view.View
+import android.view.WindowInsets
 import android.view.WindowManager
 import android.view.animation.AlphaAnimation
 import android.widget.*
@@ -33,8 +34,6 @@ class MainActivity : Activity() {
     private val card = Color.rgb(17, 21, 31)
     private val textColor = Color.WHITE
     private val muted = Color.rgb(150, 162, 180)
-
-    // Large command-console background
     private val inputBg = Color.rgb(20, 25, 36)
 
     private fun dp(v: Int): Int =
@@ -46,7 +45,6 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Keep the large command console usable above the keyboard.
         window.setSoftInputMode(
             WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
         )
@@ -59,16 +57,45 @@ class MainActivity : Activity() {
         super.onDestroy()
     }
 
+    /*
+     * =========================================================
+     * HABITAT BASE LAYOUT
+     * =========================================================
+     *
+     * Automatically adds Samsung's bottom navigation/gesture
+     * inset so Habitat controls remain above the system area.
+     */
+
     private fun base(): LinearLayout =
         LinearLayout(this).apply {
+
             orientation = LinearLayout.VERTICAL
+
             setBackgroundColor(bg)
+
             setPadding(
                 dp(14),
                 dp(12),
                 dp(14),
                 dp(10)
             )
+
+            setOnApplyWindowInsetsListener { view, insets ->
+
+                val navigationBottom =
+                    insets.getInsets(
+                        WindowInsets.Type.navigationBars()
+                    ).bottom
+
+                view.setPadding(
+                    dp(14),
+                    dp(12),
+                    dp(14),
+                    dp(10) + navigationBottom
+                )
+
+                insets
+            }
         }
 
     private fun label(
@@ -85,16 +112,20 @@ class MainActivity : Activity() {
         value: String,
         onClick: () -> Unit
     ) = Button(this).apply {
+
         text = value
         textSize = 12f
         setTextColor(textColor)
+
         setOnClickListener {
             onClick()
         }
+
         background = rounded(
             Color.rgb(27, 34, 48),
             dp(12)
         )
+
         minHeight = dp(44)
     }
 
@@ -103,8 +134,12 @@ class MainActivity : Activity() {
         radius: Int
     ): GradientDrawable =
         GradientDrawable().apply {
+
             setColor(color)
-            cornerRadius = radius.toFloat()
+
+            cornerRadius =
+                radius.toFloat()
+
             setStroke(
                 dp(1),
                 Color.rgb(42, 55, 75)
@@ -116,7 +151,9 @@ class MainActivity : Activity() {
         subtitle: String
     ): LinearLayout =
         LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
+
+            orientation =
+                LinearLayout.VERTICAL
 
             addView(
                 label(title, 27f)
@@ -137,14 +174,25 @@ class MainActivity : Activity() {
             )
         }
 
+    /*
+     * =========================================================
+     * NAVIGATION
+     * =========================================================
+     */
+
     private fun install(root: LinearLayout) {
 
         content = root
 
-        val nav = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER
-        }
+        val nav =
+            LinearLayout(this).apply {
+
+                orientation =
+                    LinearLayout.HORIZONTAL
+
+                gravity =
+                    Gravity.CENTER
+            }
 
         listOf(
             "Home",
@@ -192,6 +240,11 @@ class MainActivity : Activity() {
         )
 
         setContentView(root)
+
+        /*
+         * Re-apply insets after the view enters the window.
+         */
+        root.requestApplyInsets()
     }
 
     private fun setStatus(
@@ -205,6 +258,12 @@ class MainActivity : Activity() {
             status.setTextColor(color)
         }
     }
+
+    /*
+     * =========================================================
+     * HOME
+     * =========================================================
+     */
 
     private fun showHome() {
 
@@ -245,27 +304,31 @@ class MainActivity : Activity() {
             }
         )
 
-        val art = FrameLayout(this).apply {
-            background = rounded(
-                Color.rgb(12, 15, 23),
-                dp(18)
-            )
-        }
+        val art =
+            FrameLayout(this).apply {
 
-        axImage = ImageView(this).apply {
+                background =
+                    rounded(
+                        Color.rgb(12, 15, 23),
+                        dp(18)
+                    )
+            }
 
-            setImageResource(
-                R.drawable.ax_portrait
-            )
+        axImage =
+            ImageView(this).apply {
 
-            scaleType =
-                ImageView.ScaleType.CENTER_CROP
+                setImageResource(
+                    R.drawable.ax_portrait
+                )
 
-            alpha = .98f
+                scaleType =
+                    ImageView.ScaleType.CENTER_CROP
 
-            contentDescription =
-                "Ax companion"
-        }
+                alpha = .98f
+
+                contentDescription =
+                    "Ax companion"
+            }
 
         art.addView(
             axImage,
@@ -275,10 +338,11 @@ class MainActivity : Activity() {
             )
         )
 
-        val overlay = label(
-            "AX  •  ONLINE\n\"I'm here. What's the mission?\"",
-            16f
-        )
+        val overlay =
+            label(
+                "AX  •  ONLINE\n\"I'm here. What's the mission?\"",
+                16f
+            )
 
         overlay.setPadding(
             dp(14),
@@ -287,21 +351,23 @@ class MainActivity : Activity() {
             dp(12)
         )
 
-        overlay.background = rounded(
-            Color.argb(
-                215,
-                7,
-                9,
-                15
-            ),
-            dp(14)
-        )
+        overlay.background =
+            rounded(
+                Color.argb(
+                    215,
+                    7,
+                    9,
+                    15
+                ),
+                dp(14)
+            )
 
-        val op = FrameLayout.LayoutParams(
-            -1,
-            dp(76),
-            Gravity.BOTTOM
-        )
+        val op =
+            FrameLayout.LayoutParams(
+                -1,
+                dp(76),
+                Gravity.BOTTOM
+            )
 
         op.setMargins(
             dp(10),
@@ -367,6 +433,7 @@ class MainActivity : Activity() {
 
         val grid =
             LinearLayout(this).apply {
+
                 orientation =
                     LinearLayout.VERTICAL
             }
@@ -426,7 +493,10 @@ class MainActivity : Activity() {
                 Gravity.CENTER_VERTICAL
 
             background =
-                rounded(card, dp(14))
+                rounded(
+                    card,
+                    dp(14)
+                )
 
             setPadding(
                 dp(12),
@@ -444,7 +514,10 @@ class MainActivity : Activity() {
                         LinearLayout.VERTICAL
 
                     addView(
-                        label(title, 14f)
+                        label(
+                            title,
+                            14f
+                        )
                     )
 
                     addView(
@@ -480,6 +553,12 @@ class MainActivity : Activity() {
                 }
         }
 
+    /*
+     * =========================================================
+     * CHAT
+     * =========================================================
+     */
+
     private fun showChat() {
 
         val root = base()
@@ -491,11 +570,16 @@ class MainActivity : Activity() {
             )
         )
 
-        status = label(
-            "● BRAIN ADAPTER: READY",
-            12f,
-            Color.rgb(120, 220, 150)
-        )
+        status =
+            label(
+                "● BRAIN ADAPTER: READY",
+                12f,
+                Color.rgb(
+                    120,
+                    220,
+                    150
+                )
+            )
 
         root.addView(
             status,
@@ -514,6 +598,7 @@ class MainActivity : Activity() {
 
         val log =
             LinearLayout(this).apply {
+
                 orientation =
                     LinearLayout.VERTICAL
 
@@ -545,9 +630,9 @@ class MainActivity : Activity() {
         )
 
         /*
-         * =========================================================
+         * =====================================================
          * LARGE AX COMMAND CONSOLE
-         * =========================================================
+         * =====================================================
          */
 
         val input =
@@ -560,16 +645,14 @@ class MainActivity : Activity() {
                     muted
                 )
 
-                // Bright white text for maximum visibility.
                 setTextColor(
                     Color.WHITE
                 )
 
-                // Larger typing text.
                 textSize = 18f
 
-                // Multi-line command console.
-                isSingleLine = false
+                isSingleLine =
+                    false
 
                 minLines = 5
                 maxLines = 7
@@ -578,7 +661,6 @@ class MainActivity : Activity() {
                     Gravity.TOP or
                     Gravity.START
 
-                // Large internal writing space.
                 setPadding(
                     dp(18),
                     dp(18),
@@ -592,17 +674,22 @@ class MainActivity : Activity() {
                         dp(16)
                     )
 
-                includeFontPadding = true
+                includeFontPadding =
+                    true
 
-                isFocusable = true
+                isFocusable =
+                    true
 
-                isFocusableInTouchMode = true
+                isFocusableInTouchMode =
+                    true
 
-                isCursorVisible = true
+                isCursorVisible =
+                    true
 
-                setSelectAllOnFocus(false)
+                setSelectAllOnFocus(
+                    false
+                )
 
-                // Keep the cursor and typing area obvious.
                 setOnFocusChangeListener {
                         view,
                         hasFocus ->
@@ -749,7 +836,8 @@ class MainActivity : Activity() {
                                 )
                             }
 
-                            BrainAdapter.State.CONNECTING -> Unit
+                            BrainAdapter.State.CONNECTING ->
+                                Unit
                         }
 
                         scroll.post {
@@ -761,17 +849,18 @@ class MainActivity : Activity() {
                 }
             }
 
-        /*
-         * 180dp = substantially larger than the old 100dp box.
-         */
         root.addView(
             input,
             LinearLayout.LayoutParams(
                 -1,
                 dp(180)
             ).apply {
-                topMargin = dp(10)
-                bottomMargin = dp(8)
+
+                topMargin =
+                    dp(10)
+
+                bottomMargin =
+                    dp(8)
             }
         )
 
@@ -785,7 +874,6 @@ class MainActivity : Activity() {
 
         install(root)
 
-        // Put the cursor in the command console immediately.
         input.requestFocus()
     }
 
@@ -836,6 +924,12 @@ class MainActivity : Activity() {
                         dp(6)
                 }
         }
+
+    /*
+     * =========================================================
+     * PROJECTS
+     * =========================================================
+     */
 
     private fun showProjects() {
 
@@ -903,7 +997,10 @@ class MainActivity : Activity() {
                 LinearLayout.VERTICAL
 
             background =
-                rounded(card, dp(15))
+                rounded(
+                    card,
+                    dp(15)
+                )
 
             setPadding(
                 dp(14),
@@ -921,7 +1018,10 @@ class MainActivity : Activity() {
                         LinearLayout.HORIZONTAL
 
                     addView(
-                        label(name, 16f),
+                        label(
+                            name,
+                            16f
+                        ),
                         LinearLayout.LayoutParams(
                             0,
                             -2,
@@ -962,6 +1062,12 @@ class MainActivity : Activity() {
                 }
         }
 
+    /*
+     * =========================================================
+     * BRAIN
+     * =========================================================
+     */
+
     private fun showBrain() {
 
         val root = base()
@@ -987,7 +1093,9 @@ class MainActivity : Activity() {
                     textColor
                 )
 
-                setSingleLine(true)
+                setSingleLine(
+                    true
+                )
 
                 setText(
                     brainAdapter.endpoint()
@@ -1049,8 +1157,13 @@ class MainActivity : Activity() {
 
         val items =
             listOf(
+
                 "Brain Adapter" to
-                    if (brainAdapter.endpoint().isBlank())
+                    if (
+                        brainAdapter
+                            .endpoint()
+                            .isBlank()
+                    )
                         "NOT CONNECTED"
                     else
                         "ENDPOINT READY",
@@ -1195,6 +1308,12 @@ class MainActivity : Activity() {
         install(root)
     }
 
+    /*
+     * =========================================================
+     * SCENES
+     * =========================================================
+     */
+
     private fun showScenes() {
 
         val root = base()
@@ -1208,11 +1327,20 @@ class MainActivity : Activity() {
 
         val scenes =
             listOf(
-                "Desk" to "Command center",
-                "Chat" to "Just you and Ax",
-                "Planning" to "Ideas → action",
-                "Relax" to "Unwind and reset",
-                "Night City" to "Same Ax, different atmosphere"
+                "Desk" to
+                    "Command center",
+
+                "Chat" to
+                    "Just you and Ax",
+
+                "Planning" to
+                    "Ideas → action",
+
+                "Relax" to
+                    "Unwind and reset",
+
+                "Night City" to
+                    "Same Ax, different atmosphere"
             )
 
         scenes.forEach { (name, desc) ->
@@ -1252,7 +1380,8 @@ class MainActivity : Activity() {
                     -1,
                     dp(64)
                 ).apply {
-                    bottomMargin = dp(8)
+                    bottomMargin =
+                        dp(8)
                 }
             )
         }
@@ -1280,6 +1409,12 @@ class MainActivity : Activity() {
             else ->
                 "🌃"
         }
+
+    /*
+     * =========================================================
+     * MORE
+     * =========================================================
+     */
 
     private fun showMore() {
 
@@ -1339,6 +1474,12 @@ class MainActivity : Activity() {
         install(root)
     }
 
+    /*
+     * =========================================================
+     * AX ANIMATION
+     * =========================================================
+     */
+
     private fun animateAx() {
 
         if (!::axImage.isInitialized)
@@ -1350,7 +1491,8 @@ class MainActivity : Activity() {
                 1f
             )
 
-        a.duration = 450
+        a.duration =
+            450
 
         axImage.startAnimation(a)
     }
