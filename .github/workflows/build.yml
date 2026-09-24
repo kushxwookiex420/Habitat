@@ -34,13 +34,15 @@ jobs:
           java-version: "17"
 
       # ============================================================
-      # GRADLE
+      # GRADLE 8.9
+      #
+      # v0.3.0 Android Gradle Plugin requires Gradle 8.9+
       # ============================================================
 
-      - name: Set up Gradle
+      - name: Set up Gradle 8.9
         uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: "8.7"
+          gradle-version: "8.9"
 
       # ============================================================
       # ANDROID SDK
@@ -97,7 +99,7 @@ jobs:
           "$SDKMANAGER" "build-tools;35.0.0"
 
       # ============================================================
-      # EXTRACT THE REAL v0.3.0 PROJECT
+      # EXTRACT THE REAL HABITAT v0.3.0 PROJECT
       # ============================================================
 
       - name: Extract Habitat v0.3.0 project
@@ -125,7 +127,12 @@ jobs:
 
           if [ -z "$PROJECT_DIR" ]; then
             echo "ERROR: v0.3.0 Gradle project was not found."
-            find HabitatBuild -maxdepth 4 -type f | sort
+
+            find HabitatBuild \
+              -maxdepth 5 \
+              -type f \
+              | sort
+
             exit 1
           fi
 
@@ -135,7 +142,7 @@ jobs:
           echo "HABITAT_PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
       # ============================================================
-      # VERIFY v0.3.0 PROJECT
+      # VERIFY REAL v0.3.0 SOURCE
       # ============================================================
 
       - name: Verify Habitat v0.3.0 source
@@ -165,6 +172,7 @@ jobs:
 
           echo ""
           echo "Core v0.3.0 files verified:"
+
           find "$PROJECT/app/src/main/java/com/habitat/core" \
             -type f \
             -maxdepth 1 \
@@ -202,6 +210,8 @@ jobs:
 
           echo "=============================================="
           echo "BUILDING HABITAT v0.3.0"
+          echo "GRADLE VERSION:"
+          gradle --version
           echo "=============================================="
 
           gradle clean assembleDebug \
@@ -249,7 +259,7 @@ jobs:
             artifact/Habitat-v0.3.0-Ax-debug.apk
 
       # ============================================================
-      # SOURCE ARCHIVE
+      # CREATE SOURCE ARCHIVE
       # ============================================================
 
       - name: Create v0.3.0 source archive
@@ -300,6 +310,9 @@ jobs:
           echo ""
           echo "REAL v0.3.0 PROJECT:"
           echo "$HABITAT_PROJECT_DIR"
+          echo ""
+          echo "GRADLE:"
+          gradle --version | head -n 5
           echo ""
           echo "ARCHITECTURE:"
           echo "Ax / Habitat Orchestrator"
