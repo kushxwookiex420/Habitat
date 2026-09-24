@@ -1,4 +1,4 @@
-name: Habitat v0.3.0 Ax Edition
+name: Habitat v0.3.2 Ax Edition
 
 on:
   workflow_dispatch:
@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   build:
-    name: Build Habitat v0.3.0 APK
+    name: Build Habitat v0.3.2 APK
     runs-on: ubuntu-latest
 
     steps:
@@ -70,12 +70,12 @@ jobs:
           "$SDKMANAGER" "platforms;android-35"
           "$SDKMANAGER" "build-tools;35.0.0"
 
-      - name: Extract Habitat v0.3.0 project
+      - name: Extract Habitat v0.3.2 project
         shell: bash
         run: |
           set -e
 
-          ZIP="$GITHUB_WORKSPACE/Habitat-Android-v0.3.0-Ax-Edition.zip"
+          ZIP="$GITHUB_WORKSPACE/Habitat-Android-v0.3.2-Ax-Edition.zip"
 
           test -f "$ZIP"
 
@@ -102,7 +102,7 @@ jobs:
           echo "=============================================="
           echo "$PROJECT_DIR"
 
-      - name: Verify Habitat v0.3.0 source
+      - name: Verify Habitat v0.3.2 source
         shell: bash
         run: |
           set -e
@@ -124,7 +124,7 @@ jobs:
           test -f "$CORE/HologramView.kt"
           test -f "$CORE/HabitatWidget.kt"
 
-          echo "Habitat v0.3.0 source verified."
+          echo "Habitat v0.3.2 source verified."
 
       - name: Inspect MainActivity worker call
         shell: bash
@@ -429,7 +429,7 @@ jobs:
 
           echo "WorkerAdapter repair verified."
 
-      - name: Repair Habitat v0.3.1 hologram and navigation UI
+      - name: Repair Habitat v0.3.2 hologram and navigation UI
         shell: bash
         run: |
           set -e
@@ -444,7 +444,7 @@ jobs:
               s=s.replace("import android.view.View"+NL,"import android.view.View"+NL+"import android.view.WindowInsets"+NL)
           s=s.replace("override fun onCreate(b:Bundle?){super.onCreate(b);home()}", "override fun onCreate(b:Bundle?){" + NL + "  super.onCreate(b)" + NL + "  window.navigationBarColor=bg" + NL + "  window.statusBarColor=bg" + NL + "  home()" + NL + "}")
           s=s.replace("root.setPadding(dp(12),dp(12),dp(12),dp(8));", "root.setPadding(dp(12),dp(12),dp(12),dp(8))" + NL + "  root.setOnApplyWindowInsetsListener { v, insets ->" + NL + "   val navBottom = if(android.os.Build.VERSION.SDK_INT >= 30) insets.getInsets(WindowInsets.Type.navigationBars()).bottom else insets.systemWindowInsetBottom" + NL + "   v.setPadding(dp(12),dp(12),dp(12),dp(8)+navBottom)" + NL + "   insets" + NL + "  }" + NL + "  root.requestApplyInsets();")
-          s=s.replace("v0.3.0","v0.3.1")
+          s=s.replace("v0.3.2","v0.3.2")
           p.write_text(s)
           gradle=Path(sys.argv[1]).parents[5] / "app" / "build.gradle.kts"
           if gradle.exists():
@@ -453,65 +453,180 @@ jobs:
           PY
           cat > "$CORE/HologramView.kt" <<'KT'
           package com.habitat.core
-          
+
           import android.content.Context
           import android.graphics.*
+          import android.view.MotionEvent
           import android.view.View
+          import kotlin.math.abs
           import kotlin.math.sin
-          
+
           class HologramView(context: Context): View(context) {
-              private val linePaint=Paint(Paint.ANTI_ALIAS_FLAG)
-              private val imagePaint=Paint(Paint.ANTI_ALIAS_FLAG)
+              private val p=Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+              private val glow=Paint(Paint.ANTI_ALIAS_FLAG)
               private var phase=0f
-              private val audrey: Bitmap = BitmapFactory.decodeResource(resources, R.drawable.ax_portrait)
-              init { setLayerType(View.LAYER_TYPE_SOFTWARE,null) }
+              private var targetYaw=0f
+              private var yaw=0f
+              private var pulse=0f
+              private var touchDown=false
+              private val audrey: Bitmap = BitmapFactory.decodeResource(resources,R.drawable.ax_portrait)
+
+              init {
+                  setLayerType(View.LAYER_TYPE_SOFTWARE,null)
+                  isClickable=true
+              }
+
+              override fun onTouchEvent(e: MotionEvent): Boolean {
+                  when(e.actionMasked){
+                      MotionEvent.ACTION_DOWN -> {
+                          touchDown=true
+                          targetYaw=((e.x/width.toFloat())-.5f)*2.0f
+                          pulse=1f
+                          invalidate()
+                          return true
+                      }
+                      MotionEvent.ACTION_MOVE -> {
+                          targetYaw=((e.x/width.toFloat())-.5f)*2.0f
+                          pulse=1f
+                          invalidate()
+                          return true
+                      }
+                      MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                          touchDown=false
+                          targetYaw=0f
+                          performClick()
+                          return true
+                      }
+                  }
+                  return true
+              }
+
+              override fun performClick(): Boolean {
+                  super.performClick()
+                  return true
+              }
+
+              private fun drawHoloPerson(c:Canvas,w:Float,h:Float,cx:Float,cy:Float){
+                  if(audrey.isRecycled) return
+
+                  val src=Rect(
+                      (audrey.width*.31f).toInt(),
+                      (audrey.height*.035f).toInt(),
+                      (audrey.width*.99f).toInt(),
+                      (audrey.height*.875f).toInt()
+                  )
+
+                  val scale=minOf((w*.54f)/src.width(),(h*.78f)/src.height())
+                  val dw=src.width()*scale
+                  val dh=src.height()*scale
+                  val bob=sin(phase*.065f)*h*.006f
+                  val yawEase=yaw
+                  val width3d=dw*(.76f+.24f*abs(kotlin.math.cos(yawEase)))
+                  val left=cx-width3d/2f
+                  val top=cy-dh*.56f+bob
+
+                  c.save()
+
+                  // Volumetric depth: faint offset layers create a 3D scan-volume impression.
+                  p.alpha=34
+                  p.color=Color.rgb(40,190,255)
+                  for(i in -3..3){
+                      val depth=i*2.2f
+                      val xShift=sin(yawEase)*depth
+                      val r=RectF(left+xShift,top+depth*.18f,left+width3d+xShift,top+dh+depth*.18f)
+                      c.drawBitmap(audrey,src,r,p)
+                  }
+
+                  // Main projected layer with animated horizontal compression/shear.
+                  val skew=sin(yawEase)*.075f
+                  val m=Matrix()
+                  m.setPolyToPoly(
+                      floatArrayOf(
+                          src.left.toFloat(),src.top.toFloat(),
+                          src.right.toFloat(),src.top.toFloat(),
+                          src.right.toFloat(),src.bottom.toFloat(),
+                          src.left.toFloat(),src.bottom.toFloat()
+                      ),
+                      floatArrayOf(
+                          left+dw*.10f,top,
+                          left+width3d-dw*.10f+skew*dw,top,
+                          left+width3d-dw*.03f-skew*dw,top+dh,
+                          left+dw*.03f,top+dh
+                      ),
+                      4
+                  )
+
+                  p.alpha=220
+                  p.setShadowLayer(22f,0f,0f,Color.rgb(30,185,255))
+                  c.drawBitmap(audrey,src,m,p)
+                  p.clearShadowLayer()
+
+                  // Cyan hologram veil.
+                  glow.color=Color.argb(32,70,210,255)
+                  glow.style=Paint.Style.FILL
+                  c.drawRect(left,top,left+width3d,top+dh,glow)
+
+                  c.restore()
+              }
+
               override fun onDraw(c:Canvas){
                   super.onDraw(c)
                   val w=width.toFloat()
                   val h=height.toFloat()
                   val cx=w/2f
-                  val cy=h*.47f
-                  c.drawColor(Color.rgb(5,9,16))
-                  linePaint.style=Paint.Style.STROKE
-                  linePaint.strokeWidth=2f
-                  linePaint.color=Color.rgb(40,150,220)
-                  linePaint.setShadowLayer(14f,0f,0f,Color.rgb(40,170,255))
-                  c.drawOval(cx-w*.30f,cy-h*.40f,cx+w*.30f,cy+h*.40f,linePaint)
-                  c.drawOval(cx-w*.23f,cy-h*.33f,cx+w*.23f,cy+h*.33f,linePaint)
-                  linePaint.clearShadowLayer()
-                  if(!audrey.isRecycled){
-                      val src=Rect((audrey.width*.25f).toInt(),(audrey.height*.03f).toInt(),(audrey.width*.99f).toInt(),(audrey.height*.84f).toInt())
-                      val scale=minOf((w*.54f)/src.width(),(h*.78f)/src.height())
-                      val dw=src.width()*scale
-                      val dh=src.height()*scale
-                      val left=cx-dw/2f
-                      val top=cy-dh*.54f
-                      imagePaint.alpha=215
-                      imagePaint.setShadowLayer(20f,0f,0f,Color.rgb(45,185,255))
-                      c.drawBitmap(audrey,src,RectF(left,top,left+dw,top+dh),imagePaint)
-                      imagePaint.clearShadowLayer()
-                      imagePaint.color=Color.argb(28,70,205,255)
-                      c.drawRect(left,top,left+dw,top+dh,imagePaint)
+                  val cy=h*.46f
+
+                  c.drawColor(Color.rgb(4,8,15))
+
+                  yaw += (targetYaw-yaw)*.12f
+                  if(!touchDown) targetYaw*=.94f
+                  pulse*=.90f
+
+                  // Holographic portal.
+                  p.style=Paint.Style.STROKE
+                  p.strokeWidth=2f
+                  p.color=Color.rgb(40,160,230)
+                  p.setShadowLayer(14f,0f,0f,Color.rgb(30,170,255))
+                  c.drawOval(cx-w*.30f,cy-h*.40f,cx+w*.30f,cy+h*.40f,p)
+                  c.drawOval(cx-w*.23f,cy-h*.33f,cx+w*.23f,cy+h*.33f,p)
+                  p.clearShadowLayer()
+
+                  drawHoloPerson(c,w,h,cx,cy)
+
+                  // Moving depth rings / projector base.
+                  p.strokeWidth=3f
+                  p.color=Color.rgb(45,195,255)
+                  p.setShadowLayer(16f+18f*pulse,0f,0f,Color.rgb(45,195,255))
+                  val ring=h*.80f+sin(phase*.08f)*3f
+                  c.drawOval(cx-w*.27f,ring,cx+w*.27f,ring+h*.095f,p)
+                  p.strokeWidth=1.5f
+                  c.drawOval(cx-w*.19f,ring+h*.025f,cx+w*.19f,ring+h*.075f,p)
+                  p.clearShadowLayer()
+
+                  // Scan field and animated particles.
+                  p.strokeWidth=1f
+                  p.color=Color.argb(95,55,135,190)
+                  for(y in 0 until height step 8){
+                      val off=sin((y+phase)*.055f)*3f
+                      c.drawLine(0f,y.toFloat(),w,y.toFloat()+off,p)
                   }
-                  linePaint.strokeWidth=3f
-                  linePaint.color=Color.rgb(50,195,255)
-                  linePaint.setShadowLayer(16f,0f,0f,Color.rgb(50,195,255))
-                  c.drawOval(cx-w*.27f,h*.80f,cx+w*.27f,h*.90f,linePaint)
-                  c.drawOval(cx-w*.19f,h*.825f,cx+w*.19f,h*.875f,linePaint)
-                  linePaint.clearShadowLayer()
-                  linePaint.strokeWidth=1f
-                  linePaint.color=Color.argb(105,55,125,180)
-                  for(y in 0 until height step 9){
-                      val off=(sin((y+phase)*.05)*3).toFloat()
-                      c.drawLine(0f,y.toFloat(),w,y.toFloat()+off,linePaint)
+
+                  p.style=Paint.Style.FILL
+                  p.color=Color.argb(150,115,225,255)
+                  for(i in 0..11){
+                      val px=cx+sin(phase*.018f+i*1.71f)*w*.24f
+                      val py=cy+h*.32f+sin(phase*.027f+i*.83f)*h*.22f
+                      val r=1.2f+abs(sin(phase*.05f+i))*1.8f
+                      c.drawCircle(px,py,r,p)
                   }
-                  linePaint.style=Paint.Style.FILL
-                  linePaint.color=Color.rgb(170,235,255)
-                  linePaint.textAlign=Paint.Align.CENTER
-                  linePaint.textSize=16f
-                  c.drawText("AX • AUDREY HOLOGRAM",cx,h*.95f,linePaint)
-                  phase+=1.2f
-                  postInvalidateDelayed(40)
+
+                  p.color=Color.rgb(170,235,255)
+                  p.textAlign=Paint.Align.CENTER
+                  p.textSize=14f
+                  c.drawText(if(touchDown) "AX • INTERACTIVE HOLOGRAM" else "AX • AUDREY 3D HOLOGRAM",cx,h*.95f,p)
+
+                  phase+=1.15f
+                  postInvalidateDelayed(32)
               }
           }
           KT
@@ -571,14 +686,14 @@ jobs:
 
           PY
 
-      - name: Build Habitat v0.3.0
+      - name: Build Habitat v0.3.2
         working-directory: ${{ env.HABITAT_PROJECT_DIR }}
         shell: bash
         run: |
           set -e
 
           echo "=============================================="
-          echo "BUILDING HABITAT v0.3.0"
+          echo "BUILDING HABITAT v0.3.2"
           echo "=============================================="
 
           gradle --version
@@ -616,7 +731,7 @@ jobs:
           mkdir -p artifact
 
           cp "$APK" \
-            artifact/Habitat-v0.3.0-Ax-debug.apk
+            artifact/Habitat-v0.3.2-Ax-debug.apk
 
       - name: Create source archive
         shell: bash
@@ -626,34 +741,34 @@ jobs:
           cd "$HABITAT_PROJECT_DIR"
 
           zip -qr \
-            "$GITHUB_WORKSPACE/artifact/Habitat-v0.3.0-Ax-source.zip" \
+            "$GITHUB_WORKSPACE/artifact/Habitat-v0.3.2-Ax-source.zip" \
             .
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: Habitat-v0.3.0-Ax-debug-apk
-          path: artifact/Habitat-v0.3.0-Ax-debug.apk
+          name: Habitat-v0.3.2-Ax-debug-apk
+          path: artifact/Habitat-v0.3.2-Ax-debug.apk
           if-no-files-found: error
 
       - name: Upload source
         uses: actions/upload-artifact@v4
         with:
-          name: Habitat-v0.3.0-Ax-source
-          path: artifact/Habitat-v0.3.0-Ax-source.zip
+          name: Habitat-v0.3.2-Ax-source
+          path: artifact/Habitat-v0.3.2-Ax-source.zip
           if-no-files-found: error
 
-      - name: Habitat v0.3.0 success
+      - name: Habitat v0.3.2 success
         shell: bash
         run: |
           echo ""
           echo "================================================"
-          echo "       HABITAT v0.3.0 AX EDITION"
+          echo "       HABITAT v0.3.2 AX EDITION"
           echo "          BUILD SUCCESSFUL"
           echo "================================================"
           echo ""
           echo "APK:"
-          ls -lh artifact/Habitat-v0.3.0-Ax-debug.apk
+          ls -lh artifact/Habitat-v0.3.2-Ax-debug.apk
           echo ""
           echo "SOURCE:"
-          ls -lh artifact/Habitat-v0.3.0-Ax-source.zip
+          ls -lh artifact/Habitat-v0.3.2-Ax-source.zip
