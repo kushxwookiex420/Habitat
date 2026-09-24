@@ -1,4 +1,4 @@
-name: Habitat 1.1 Ax Core
+name: Habitat v0.2.2 Ax Core
 
 on:
   workflow_dispatch:
@@ -8,13 +8,21 @@ permissions:
 
 jobs:
   build:
-    name: Build Habitat 1.1 APK
+    name: Build Habitat v0.2.2 APK
     runs-on: ubuntu-latest
 
     steps:
 
+      # ============================================================
+      # CHECKOUT
+      # ============================================================
+
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      # ============================================================
+      # JAVA
+      # ============================================================
 
       - name: Set up Java
         uses: actions/setup-java@v5
@@ -22,10 +30,18 @@ jobs:
           distribution: temurin
           java-version: "17"
 
+      # ============================================================
+      # GRADLE
+      # ============================================================
+
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "8.7"
+
+      # ============================================================
+      # ANDROID SDK
+      # ============================================================
 
       - name: Locate Android SDK
         shell: bash
@@ -73,7 +89,16 @@ jobs:
           "$SDKMANAGER" "platforms;android-35"
           "$SDKMANAGER" "build-tools;35.0.0"
 
-      - name: Create clean Habitat project
+      # ============================================================
+      # CREATE BUILD PROJECT
+      #
+      # IMPORTANT:
+      # We create only the Gradle shell here.
+      # MainActivity.kt and BrainAdapter.kt come DIRECTLY
+      # from the GitHub repository.
+      # ============================================================
+
+      - name: Create clean Habitat build project
         shell: bash
         run: |
           set -e
@@ -82,6 +107,10 @@ jobs:
 
           mkdir -p HabitatBuild/app/src/main/java/com/habitat/core
           mkdir -p HabitatBuild/app/src/main/res/values
+
+      # ============================================================
+      # GRADLE SETTINGS
+      # ============================================================
 
       - name: Write Gradle settings
         shell: bash
@@ -96,7 +125,9 @@ jobs:
           }
 
           dependencyResolutionManagement {
-              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositoriesMode.set(
+                  RepositoriesMode.FAIL_ON_PROJECT_REPOS
+              )
 
               repositories {
                   google()
@@ -109,14 +140,23 @@ jobs:
           include(":app")
           EOF
 
+      # ============================================================
+      # ROOT GRADLE
+      # ============================================================
+
       - name: Write root Gradle build
         shell: bash
         run: |
           cat > HabitatBuild/build.gradle.kts <<'EOF'
           plugins {
               id("com.android.application") version "8.6.1" apply false
+              id("org.jetbrains.kotlin.android") version "2.0.21" apply false
           }
           EOF
+
+      # ============================================================
+      # GRADLE PROPERTIES
+      # ============================================================
 
       - name: Write Gradle properties
         shell: bash
@@ -127,25 +167,32 @@ jobs:
           android.nonTransitiveRClass=true
           EOF
 
+      # ============================================================
+      # APP GRADLE
+      # ============================================================
+
       - name: Write Android app build
         shell: bash
         run: |
           cat > HabitatBuild/app/build.gradle.kts <<'EOF'
           plugins {
               id("com.android.application")
+              id("org.jetbrains.kotlin.android")
           }
 
           android {
               namespace = "com.habitat.core"
+
               compileSdk = 35
 
               defaultConfig {
                   applicationId = "com.habitat.core"
+
                   minSdk = 24
                   targetSdk = 35
 
-                  versionCode = 101
-                  versionName = "1.1"
+                  versionCode = 202
+                  versionName = "0.2.2"
               }
 
               buildTypes {
@@ -162,8 +209,16 @@ jobs:
                   sourceCompatibility = JavaVersion.VERSION_17
                   targetCompatibility = JavaVersion.VERSION_17
               }
+
+              kotlinOptions {
+                  jvmTarget = "17"
+              }
           }
           EOF
+
+      # ============================================================
+      # MANIFEST
+      # ============================================================
 
       - name: Write Android manifest
         shell: bash
@@ -205,6 +260,10 @@ jobs:
           </manifest>
           EOF
 
+      # ============================================================
+      # THEME
+      # ============================================================
+
       - name: Write Android theme
         shell: bash
         run: |
@@ -228,1327 +287,120 @@ jobs:
           </resources>
           EOF
 
-      - name: Write HabitatStore
+      # ============================================================
+      # COPY THE REAL HABITAT BRAIN ADAPTER
+      #
+      # DO NOT WRITE A REPLACEMENT HERE.
+      # This is the verified aa624822... BrainAdapter.kt.
+      # ============================================================
+
+      - name: Copy repository BrainAdapter
         shell: bash
         run: |
-          cat > HabitatBuild/app/src/main/java/com/habitat/core/HabitatStore.java <<'EOF'
-          package com.habitat.core;
+          set -e
 
-          import android.content.Context;
-          import android.content.SharedPreferences;
+          test -f "$GITHUB_WORKSPACE/BrainAdapter.kt"
 
-          public final class HabitatStore {
+          cp "$GITHUB_WORKSPACE/BrainAdapter.kt" \
+            HabitatBuild/app/src/main/java/com/habitat/core/BrainAdapter.kt
 
-              private static final String PREFS =
-                  "habitat_memory";
+          echo "======================================"
+          echo "BRAIN ADAPTER SOURCE"
+          echo "======================================"
 
-              private HabitatStore() {
-              }
+          sha256sum "$GITHUB_WORKSPACE/BrainAdapter.kt"
+          sha256sum \
+            "HabitatBuild/app/src/main/java/com/habitat/core/BrainAdapter.kt"
 
-              private static SharedPreferences prefs(
-                  Context context
-              ) {
+      # ============================================================
+      # COPY THE REAL HABITAT MAIN ACTIVITY
+      #
+      # THIS IS THE IMPORTANT FIX.
+      #
+      # The APK now uses the MainActivity.kt that you committed
+      # to the repository.
+      # ============================================================
 
-                  return context.getSharedPreferences(
-                      PREFS,
-                      Context.MODE_PRIVATE
-                  );
-              }
-
-              public static void save(
-                  Context context,
-                  String key,
-                  String value
-              ) {
-
-                  prefs(context)
-                      .edit()
-                      .putString(key, value)
-                      .apply();
-              }
-
-              public static String load(
-                  Context context,
-                  String key,
-                  String fallback
-              ) {
-
-                  return prefs(context)
-                      .getString(key, fallback);
-              }
-
-              public static void clear(
-                  Context context
-              ) {
-
-                  prefs(context)
-                      .edit()
-                      .clear()
-                      .apply();
-              }
-          }
-          EOF
-
-      - name: Write BrainAdapter
+      - name: Copy repository MainActivity
         shell: bash
         run: |
-          cat > HabitatBuild/app/src/main/java/com/habitat/core/BrainAdapter.java <<'EOF'
-          package com.habitat.core;
+          set -e
 
-          import org.json.JSONObject;
+          test -f "$GITHUB_WORKSPACE/MainActivity.kt"
 
-          import java.io.BufferedReader;
-          import java.io.InputStream;
-          import java.io.InputStreamReader;
-          import java.io.OutputStream;
-          import java.net.HttpURLConnection;
-          import java.net.URL;
-          import java.nio.charset.StandardCharsets;
+          cp "$GITHUB_WORKSPACE/MainActivity.kt" \
+            HabitatBuild/app/src/main/java/com/habitat/core/MainActivity.kt
 
-          public final class BrainAdapter {
+          echo "======================================"
+          echo "MAIN ACTIVITY SOURCE"
+          echo "======================================"
 
-              private BrainAdapter() {
-              }
+          sha256sum "$GITHUB_WORKSPACE/MainActivity.kt"
+          sha256sum \
+            "HabitatBuild/app/src/main/java/com/habitat/core/MainActivity.kt"
 
-              public interface Callback {
+      # ============================================================
+      # VERIFY WE ARE BUILDING THE REAL FILES
+      # ============================================================
 
-                  void success(
-                      String response
-                  );
-
-                  void failure(
-                      String error
-                  );
-              }
-
-              public static void chat(
-                  String endpoint,
-                  String message,
-                  Callback callback
-              ) {
-
-                  new Thread(() -> {
-
-                      HttpURLConnection connection =
-                          null;
-
-                      try {
-
-                          URL url =
-                              new URL(endpoint);
-
-                          connection =
-                              (HttpURLConnection)
-                                  url.openConnection();
-
-                          connection.setRequestMethod(
-                              "POST"
-                          );
-
-                          connection.setConnectTimeout(
-                              15000
-                          );
-
-                          connection.setReadTimeout(
-                              45000
-                          );
-
-                          connection.setDoOutput(
-                              true
-                          );
-
-                          connection.setRequestProperty(
-                              "Content-Type",
-                              "application/json"
-                          );
-
-                          connection.setRequestProperty(
-                              "Accept",
-                              "application/json"
-                          );
-
-                          JSONObject body =
-                              new JSONObject();
-
-                          body.put(
-                              "message",
-                              message
-                          );
-
-                          byte[] data =
-                              body.toString()
-                                  .getBytes(
-                                      StandardCharsets.UTF_8
-                                  );
-
-                          connection
-                              .setFixedLengthStreamingMode(
-                                  data.length
-                              );
-
-                          try (
-                              OutputStream output =
-                                  connection.getOutputStream()
-                          ) {
-
-                              output.write(data);
-                              output.flush();
-                          }
-
-                          int status =
-                              connection.getResponseCode();
-
-                          InputStream stream;
-
-                          if (
-                              status >= 200 &&
-                              status < 300
-                          ) {
-
-                              stream =
-                                  connection.getInputStream();
-
-                          } else {
-
-                              stream =
-                                  connection.getErrorStream();
-                          }
-
-                          String result =
-                              readStream(stream);
-
-                          if (
-                              status >= 200 &&
-                              status < 300
-                          ) {
-
-                              callback.success(
-                                  parseResponse(result)
-                              );
-
-                          } else {
-
-                              callback.failure(
-                                  "Brain server returned HTTP " +
-                                  status +
-                                  ": " +
-                                  result
-                              );
-                          }
-
-                      } catch (Exception error) {
-
-                          callback.failure(
-                              error.getClass()
-                                  .getSimpleName() +
-                              ": " +
-                              String.valueOf(
-                                  error.getMessage()
-                              )
-                          );
-
-                      } finally {
-
-                          if (connection != null) {
-                              connection.disconnect();
-                          }
-                      }
-
-                  }).start();
-              }
-
-              private static String readStream(
-                  InputStream stream
-              ) throws Exception {
-
-                  if (stream == null) {
-                      return "";
-                  }
-
-                  StringBuilder result =
-                      new StringBuilder();
-
-                  try (
-                      BufferedReader reader =
-                          new BufferedReader(
-                              new InputStreamReader(
-                                  stream,
-                                  StandardCharsets.UTF_8
-                              )
-                          )
-                  ) {
-
-                      String line;
-
-                      while (
-                          (line = reader.readLine()) != null
-                      ) {
-
-                          result.append(line);
-                      }
-                  }
-
-                  return result.toString();
-              }
-
-              private static String parseResponse(
-                  String raw
-              ) {
-
-                  try {
-
-                      JSONObject object =
-                          new JSONObject(raw);
-
-                      if (
-                          object.has("response")
-                      ) {
-
-                          return object.optString(
-                              "response",
-                              raw
-                          );
-                      }
-
-                      if (
-                          object.has("message")
-                      ) {
-
-                          return object.optString(
-                              "message",
-                              raw
-                          );
-                      }
-
-                      return raw;
-
-                  } catch (Exception ignored) {
-
-                      return raw;
-                  }
-              }
-          }
-          EOF
-
-      - name: Write Habitat Engine
-        shell: bash
-        run: |
-          cat > HabitatBuild/app/src/main/java/com/habitat/core/HabitatEngine.java <<'EOF'
-          package com.habitat.core;
-
-          import java.util.ArrayList;
-          import java.util.List;
-
-          public final class HabitatEngine {
-
-              private HabitatEngine() {
-              }
-
-              public static String understand(
-                  String input
-              ) {
-
-                  if (input == null) {
-                      return "";
-                  }
-
-                  return input.trim();
-              }
-
-              public static List<String> plan(
-                  String input
-              ) {
-
-                  List<String> plan =
-                      new ArrayList<>();
-
-                  plan.add("UNDERSTAND");
-                  plan.add("CHECK MEMORY");
-                  plan.add("CHECK PROJECT");
-                  plan.add("SELECT TOOLS");
-                  plan.add("PLAN");
-                  plan.add("ACT");
-                  plan.add("OBSERVE");
-                  plan.add("VERIFY");
-                  plan.add("STORE RESULT");
-
-                  return plan;
-              }
-          }
-          EOF
-
-      - name: Write Agent Registry
-        shell: bash
-        run: |
-          cat > HabitatBuild/app/src/main/java/com/habitat/core/AgentRegistry.java <<'EOF'
-          package com.habitat.core;
-
-          import java.util.Arrays;
-          import java.util.List;
-
-          public final class AgentRegistry {
-
-              private AgentRegistry() {
-              }
-
-              public static List<String> all() {
-
-                  return Arrays.asList(
-                      "Ax Core",
-                      "Research Agent",
-                      "Project Agent",
-                      "Automation Agent",
-                      "Content Agent",
-                      "Commerce Agent"
-                  );
-              }
-          }
-          EOF
-
-      - name: Write Tool Registry
-        shell: bash
-        run: |
-          cat > HabitatBuild/app/src/main/java/com/habitat/core/ToolRegistry.java <<'EOF'
-          package com.habitat.core;
-
-          import java.util.Arrays;
-          import java.util.List;
-
-          public final class ToolRegistry {
-
-              private ToolRegistry() {
-              }
-
-              public static List<String> all() {
-
-                  return Arrays.asList(
-                      "Memory",
-                      "Projects",
-                      "Tasks",
-                      "Brain",
-                      "Network",
-                      "Android"
-                  );
-              }
-          }
-          EOF
-
-      - name: Write MainActivity
-        shell: bash
-        run: |
-          cat > HabitatBuild/app/src/main/java/com/habitat/core/MainActivity.java <<'EOF'
-          package com.habitat.core;
-
-          import android.app.Activity;
-          import android.graphics.Color;
-          import android.os.Bundle;
-          import android.os.Handler;
-          import android.os.Looper;
-          import android.text.InputType;
-          import android.view.Gravity;
-          import android.view.KeyEvent;
-          import android.view.View;
-          import android.view.Window;
-          import android.view.inputmethod.EditorInfo;
-          import android.view.inputmethod.InputMethodManager;
-          import android.content.Context;
-          import android.widget.Button;
-          import android.widget.EditText;
-          import android.widget.LinearLayout;
-          import android.widget.ScrollView;
-          import android.widget.TextView;
-          import android.widget.Toast;
-
-          import java.text.SimpleDateFormat;
-          import java.util.Date;
-          import java.util.Locale;
-
-          public class MainActivity extends Activity {
-
-              private static final int BG =
-                  Color.rgb(5, 8, 13);
-
-              private static final int PANEL =
-                  Color.rgb(11, 17, 25);
-
-              private static final int TEXT =
-                  Color.rgb(235, 240, 248);
-
-              private static final int MUTED =
-                  Color.rgb(145, 157, 173);
-
-              private static final int ACCENT =
-                  Color.rgb(80, 200, 255);
-
-              /*
-               * LIVE HABITAT AX CORE
-               */
-              private static final String BRAIN_ENDPOINT =
-                  "https://habitat-1-szzd.onrender.com/chat";
-
-              private LinearLayout root;
-              private LinearLayout content;
-              private TextView output;
-              private EditText input;
-
-              private final Handler handler =
-                  new Handler(
-                      Looper.getMainLooper()
-                  );
-
-              @Override
-              protected void onCreate(
-                  Bundle state
-              ) {
-
-                  super.onCreate(state);
-
-                  Window window =
-                      getWindow();
-
-                  window.setStatusBarColor(BG);
-                  window.setNavigationBarColor(BG);
-
-                  /*
-                   * Auto-connect to Ax Core.
-                   *
-                   * We only write the default endpoint
-                   * when no endpoint already exists.
-                   */
-                  String savedEndpoint =
-                      HabitatStore.load(
-                          this,
-                          "brain_endpoint",
-                          ""
-                      );
-
-                  if (
-                      savedEndpoint == null ||
-                      savedEndpoint.trim().isEmpty()
-                  ) {
-
-                      HabitatStore.save(
-                          this,
-                          "brain_endpoint",
-                          BRAIN_ENDPOINT
-                      );
-                  }
-
-                  showHome();
-              }
-
-              private TextView label(
-                  String text,
-                  float size
-              ) {
-
-                  TextView view =
-                      new TextView(this);
-
-                  view.setText(text);
-                  view.setTextSize(size);
-                  view.setTextColor(TEXT);
-
-                  view.setPadding(
-                      0,
-                      8,
-                      0,
-                      8
-                  );
-
-                  return view;
-              }
-
-              private TextView muted(
-                  String text
-              ) {
-
-                  TextView view =
-                      new TextView(this);
-
-                  view.setText(text);
-                  view.setTextSize(12);
-                  view.setTextColor(MUTED);
-
-                  view.setPadding(
-                      0,
-                      4,
-                      0,
-                      12
-                  );
-
-                  return view;
-              }
-
-              private Button button(
-                  String text
-              ) {
-
-                  Button button =
-                      new Button(this);
-
-                  button.setText(text);
-                  button.setTextSize(12);
-                  button.setTextColor(TEXT);
-                  button.setAllCaps(false);
-
-                  return button;
-              }
-
-              private void base(
-                  String title
-              ) {
-
-                  root =
-                      new LinearLayout(this);
-
-                  root.setOrientation(
-                      LinearLayout.VERTICAL
-                  );
-
-                  root.setBackgroundColor(BG);
-
-                  root.setPadding(
-                      18,
-                      14,
-                      18,
-                      0
-                  );
-
-                  TextView header =
-                      label(
-                          title,
-                          24
-                      );
-
-                  header.setTextColor(
-                      ACCENT
-                  );
-
-                  header.setGravity(
-                      Gravity.CENTER_VERTICAL
-                  );
-
-                  root.addView(
-                      header,
-                      new LinearLayout.LayoutParams(
-                          -1,
-                          58
-                      )
-                  );
-
-                  root.addView(
-                      muted(
-                          "AX CORE  •  HABITAT AI OPERATING ENVIRONMENT"
-                      )
-                  );
-
-                  content =
-                      new LinearLayout(this);
-
-                  content.setOrientation(
-                      LinearLayout.VERTICAL
-                  );
-
-                  ScrollView scroll =
-                      new ScrollView(this);
-
-                  scroll.addView(content);
-
-                  root.addView(
-                      scroll,
-                      new LinearLayout.LayoutParams(
-                          -1,
-                          0,
-                          1
-                      )
-                  );
-
-                  LinearLayout nav =
-                      new LinearLayout(this);
-
-                  nav.setOrientation(
-                      LinearLayout.HORIZONTAL
-                  );
-
-                  String[] names = {
-                      "HOME",
-                      "PROJECTS",
-                      "BRAIN",
-                      "AGENTS",
-                      "MORE"
-                  };
-
-                  for (
-                      String name :
-                      names
-                  ) {
-
-                      Button navButton =
-                          button(name);
-
-                      navButton.setTextSize(
-                          10
-                      );
-
-                      nav.addView(
-                          navButton,
-                          new LinearLayout.LayoutParams(
-                              0,
-                              55,
-                              1
-                          )
-                      );
-
-                      if (
-                          name.equals("HOME")
-                      ) {
-
-                          navButton.setOnClickListener(
-                              v -> showHome()
-                          );
-                      }
-
-                      if (
-                          name.equals("PROJECTS")
-                      ) {
-
-                          navButton.setOnClickListener(
-                              v -> showProjects()
-                          );
-                      }
-
-                      if (
-                          name.equals("BRAIN")
-                      ) {
-
-                          navButton.setOnClickListener(
-                              v -> showBrain()
-                          );
-                      }
-
-                      if (
-                          name.equals("AGENTS")
-                      ) {
-
-                          navButton.setOnClickListener(
-                              v -> showAgents()
-                          );
-                      }
-
-                      if (
-                          name.equals("MORE")
-                      ) {
-
-                          navButton.setOnClickListener(
-                              v -> showMore()
-                          );
-                      }
-                  }
-
-                  root.addView(nav);
-
-                  setContentView(root);
-              }
-
-              private void showHome() {
-
-                  base("HABITAT");
-
-                  content.addView(
-                      muted(
-                          "● HABITAT ONLINE"
-                      )
-                  );
-
-                  addPanel(
-                      "AX CORE",
-                      "The central intelligence layer for Habitat.\n\n" +
-                      "UNDERSTAND → PLAN → ACT → OBSERVE → VERIFY → CONTINUE"
-                  );
-
-                  addPanel(
-                      "ACTIVE PROJECTS",
-                      "DropPilot AI\n" +
-                      "Vice City Files\n" +
-                      "Habitat"
-                  );
-
-                  addPanel(
-                      "SYSTEMS",
-                      "Memory      READY\n" +
-                      "Projects    READY\n" +
-                      "Agents      READY\n" +
-                      "Tasks       READY\n" +
-                      "Tools       READY\n" +
-                      "Brain       ONLINE"
-                  );
-
-                  TextView command =
-                      label(
-                          "COMMAND CONSOLE",
-                          17
-                      );
-
-                  content.addView(command);
-
-                  input =
-                      new EditText(this);
-
-                  input.setHint(
-                      "Talk to Ax..."
-                  );
-
-                  input.setTextColor(TEXT);
-                  input.setHintTextColor(
-                      MUTED
-                  );
-
-                  input.setSingleLine(true);
-
-                  input.setInputType(
-                      InputType.TYPE_CLASS_TEXT |
-                      InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
-                  );
-
-                  input.setImeOptions(
-                      EditorInfo.IME_ACTION_SEND
-                  );
-
-                  content.addView(
-                      input,
-                      new LinearLayout.LayoutParams(
-                          -1,
-                          60
-                      )
-                  );
-
-                  Button send =
-                      button(
-                          "SEND TO AX"
-                      );
-
-                  send.setOnClickListener(
-                      v -> sendMessage()
-                  );
-
-                  content.addView(send);
-
-                  input.setOnEditorActionListener(
-                      (v, action, event) -> {
-
-                          if (
-                              action ==
-                                  EditorInfo.IME_ACTION_SEND
-                              ||
-                              (
-                                  event != null &&
-                                  event.getKeyCode() ==
-                                      KeyEvent.KEYCODE_ENTER &&
-                                  event.getAction() ==
-                                      KeyEvent.ACTION_DOWN
-                              )
-                          ) {
-
-                              sendMessage();
-
-                              return true;
-                          }
-
-                          return false;
-                      }
-                  );
-
-                  output =
-                      label(
-                          "",
-                          14
-                      );
-
-                  content.addView(output);
-              }
-
-              private void sendMessage() {
-
-                  if (input == null) {
-                      return;
-                  }
-
-                  String message =
-                      input.getText()
-                          .toString()
-                          .trim();
-
-                  if (
-                      message.isEmpty()
-                  ) {
-
-                      return;
-                  }
-
-                  if (
-                      output != null
-                  ) {
-
-                      output.append(
-                          "\n\nYOU\n" +
-                          message +
-                          "\n\nAX\nThinking..."
-                      );
-                  }
-
-                  /*
-                   * Clear the input.
-                   */
-                  input.setText("");
-
-                  /*
-                   * Hide the Android keyboard
-                   * immediately after sending.
-                   */
-                  InputMethodManager imm =
-                      (InputMethodManager)
-                          getSystemService(
-                              Context.INPUT_METHOD_SERVICE
-                          );
-
-                  if (imm != null) {
-
-                      imm.hideSoftInputFromWindow(
-                          input.getWindowToken(),
-                          0
-                      );
-                  }
-
-                  input.clearFocus();
-
-                  /*
-                   * Always have a usable endpoint.
-                   */
-                  String endpoint =
-                      HabitatStore.load(
-                          this,
-                          "brain_endpoint",
-                          BRAIN_ENDPOINT
-                      );
-
-                  if (
-                      endpoint == null ||
-                      endpoint.trim().isEmpty()
-                  ) {
-
-                      endpoint =
-                          BRAIN_ENDPOINT;
-
-                      HabitatStore.save(
-                          this,
-                          "brain_endpoint",
-                          BRAIN_ENDPOINT
-                      );
-                  }
-
-                  HabitatStore.save(
-                      this,
-                      "last_message",
-                      message
-                  );
-
-                  final String finalEndpoint =
-                      endpoint;
-
-                  BrainAdapter.chat(
-                      finalEndpoint,
-                      message,
-                      new BrainAdapter.Callback() {
-
-                          @Override
-                          public void success(
-                              String response
-                          ) {
-
-                              handler.post(
-                                  () -> {
-
-                                      if (
-                                          output != null
-                                      ) {
-
-                                          output.append(
-                                              "\n\nAX\n" +
-                                              response
-                                          );
-                                      }
-                                  }
-                              );
-                          }
-
-                          @Override
-                          public void failure(
-                              String error
-                          ) {
-
-                              handler.post(
-                                  () -> {
-
-                                      if (
-                                          output != null
-                                      ) {
-
-                                          output.append(
-                                              "\n\nAX CONNECTION ERROR\n" +
-                                              error
-                                          );
-                                      }
-                                  }
-                              );
-                          }
-                      }
-                  );
-              }
-
-              private void addPanel(
-                  String title,
-                  String body
-              ) {
-
-                  LinearLayout panel =
-                      new LinearLayout(this);
-
-                  panel.setOrientation(
-                      LinearLayout.VERTICAL
-                  );
-
-                  panel.setBackgroundColor(
-                      PANEL
-                  );
-
-                  panel.setPadding(
-                      18,
-                      14,
-                      18,
-                      14
-                  );
-
-                  TextView titleView =
-                      label(
-                          title,
-                          16
-                      );
-
-                  titleView.setTextColor(
-                      ACCENT
-                  );
-
-                  TextView bodyView =
-                      label(
-                          body,
-                          13
-                      );
-
-                  bodyView.setTextColor(
-                      TEXT
-                  );
-
-                  panel.addView(
-                      titleView
-                  );
-
-                  panel.addView(
-                      bodyView
-                  );
-
-                  LinearLayout.LayoutParams params =
-                      new LinearLayout.LayoutParams(
-                          -1,
-                          -2
-                      );
-
-                  params.setMargins(
-                      0,
-                      0,
-                      0,
-                      12
-                  );
-
-                  content.addView(
-                      panel,
-                      params
-                  );
-              }
-
-              private void showProjects() {
-
-                  base("PROJECTS");
-
-                  addPanel(
-                      "DROPPILOT AI",
-                      "Commerce automation workspace\n\n" +
-                      "Research → Score → Verify → List → Monitor"
-                  );
-
-                  Button drop =
-                      button(
-                          "OPEN DROPPILOT"
-                      );
-
-                  drop.setOnClickListener(
-                      v -> Toast.makeText(
-                          this,
-                          "DropPilot workspace ready.",
-                          Toast.LENGTH_SHORT
-                      ).show()
-                  );
-
-                  content.addView(drop);
-
-                  addPanel(
-                      "VICE CITY FILES",
-                      "Content automation workspace\n\n" +
-                      "Research → Script → Create → Publish → Analyze"
-                  );
-
-                  Button vice =
-                      button(
-                          "OPEN VICE CITY FILES"
-                      );
-
-                  vice.setOnClickListener(
-                      v -> Toast.makeText(
-                          this,
-                          "Vice City Files workspace ready.",
-                          Toast.LENGTH_SHORT
-                      ).show()
-                  );
-
-                  content.addView(vice);
-
-                  addPanel(
-                      "HABITAT",
-                      "The platform that runs the other projects."
-                  );
-              }
-
-              private void showBrain() {
-
-                  base("BRAIN");
-
-                  String saved =
-                      HabitatStore.load(
-                          this,
-                          "brain_endpoint",
-                          BRAIN_ENDPOINT
-                      );
-
-                  addPanel(
-                      "BRAIN ONLINE",
-                      "Ax Core is connected to the live Habitat Brain.\n\n" +
-                      saved
-                  );
-
-                  addPanel(
-                      "LIVE BACKEND",
-                      "Habitat backend: ONLINE\n" +
-                      "Ax Core: READY\n" +
-                      "Connection: HTTPS\n" +
-                      "Endpoint: /chat"
-                  );
-
-                  EditText endpoint =
-                      new EditText(this);
-
-                  endpoint.setHint(
-                      "Brain /chat endpoint"
-                  );
-
-                  endpoint.setText(saved);
-
-                  endpoint.setTextColor(
-                      TEXT
-                  );
-
-                  endpoint.setHintTextColor(
-                      MUTED
-                  );
-
-                  endpoint.setSingleLine(
-                      true
-                  );
-
-                  content.addView(
-                      endpoint,
-                      new LinearLayout.LayoutParams(
-                          -1,
-                          60
-                      )
-                  );
-
-                  Button save =
-                      button(
-                          "SAVE BRAIN ENDPOINT"
-                      );
-
-                  save.setOnClickListener(
-                      v -> {
-
-                          String value =
-                              endpoint.getText()
-                                  .toString()
-                                  .trim();
-
-                          if (
-                              value.isEmpty()
-                          ) {
-
-                              value =
-                                  BRAIN_ENDPOINT;
-                          }
-
-                          HabitatStore.save(
-                              this,
-                              "brain_endpoint",
-                              value
-                          );
-
-                          Toast.makeText(
-                              this,
-                              "Brain endpoint saved.",
-                              Toast.LENGTH_SHORT
-                          ).show();
-                      }
-                  );
-
-                  content.addView(save);
-
-                  addPanel(
-                      "STATUS",
-                      "ONLINE — Ax Core Brain connected"
-                  );
-              }
-
-              private void showAgents() {
-
-                  base("AGENTS");
-
-                  addPanel(
-                      "AGENT COORDINATOR",
-                      "Ax Core coordinates specialized Habitat agents."
-                  );
-
-                  addPanel(
-                      "AVAILABLE AGENTS",
-                      "Ax Core\n" +
-                      "Research Agent\n" +
-                      "Project Agent\n" +
-                      "Automation Agent\n" +
-                      "Content Agent\n" +
-                      "Commerce Agent"
-                  );
-
-                  addPanel(
-                      "EXECUTION LOOP",
-                      "1. Understand\n" +
-                      "2. Plan\n" +
-                      "3. Select tools\n" +
-                      "4. Execute\n" +
-                      "5. Observe\n" +
-                      "6. Verify\n" +
-                      "7. Store result"
-                  );
-              }
-
-              private void showMore() {
-
-                  base("MORE");
-
-                  addPanel(
-                      "MEMORY",
-                      "Local Habitat memory is active."
-                  );
-
-                  String last =
-                      HabitatStore.load(
-                          this,
-                          "last_message",
-                          "No command recorded yet."
-                      );
-
-                  addPanel(
-                      "LAST COMMAND",
-                      last
-                  );
-
-                  String time =
-                      new SimpleDateFormat(
-                          "yyyy-MM-dd HH:mm:ss",
-                          Locale.US
-                      ).format(
-                          new Date()
-                      );
-
-                  addPanel(
-                      "SYSTEM",
-                      "Habitat 1.1\n" +
-                      "Ax Core\n" +
-                      "Build: Debug\n" +
-                      "Brain: ONLINE\n" +
-                      "Session: " +
-                      time
-                  );
-
-                  Button clear =
-                      button(
-                          "CLEAR LOCAL MEMORY"
-                      );
-
-                  clear.setOnClickListener(
-                      v -> {
-
-                          /*
-                           * Clear user memory but immediately
-                           * restore the live Brain endpoint.
-                           */
-                          HabitatStore.clear(
-                              this
-                          );
-
-                          HabitatStore.save(
-                              this,
-                              "brain_endpoint",
-                              BRAIN_ENDPOINT
-                          );
-
-                          Toast.makeText(
-                              this,
-                              "Local memory cleared. Ax Core remains connected.",
-                              Toast.LENGTH_SHORT
-                          ).show();
-                      }
-                  );
-
-                  content.addView(clear);
-              }
-          }
-          EOF
-
-      - name: Validate generated project
-        working-directory: HabitatBuild
+      - name: Verify Habitat source
         shell: bash
         run: |
           set -e
 
           echo "======================================"
-          echo "HABITAT PROJECT"
+          echo "HABITAT SOURCE VERIFICATION"
           echo "======================================"
 
-          find . -type f | sort
+          echo ""
+          echo "Repository files:"
+          find "$GITHUB_WORKSPACE" \
+            -maxdepth 2 \
+            -type f \
+            | sort
 
           echo ""
-          echo "Gradle:"
-          gradle --version
+          echo "Build project files:"
+          find HabitatBuild \
+            -type f \
+            | sort
 
           echo ""
-          echo "Android SDK:"
-          echo "$ANDROID_HOME"
+          echo "MainActivity.kt:"
+          test -f \
+            HabitatBuild/app/src/main/java/com/habitat/core/MainActivity.kt
+
+          echo ""
+          echo "BrainAdapter.kt:"
+          test -f \
+            HabitatBuild/app/src/main/java/com/habitat/core/BrainAdapter.kt
+
+          echo ""
+          echo "Checking package declarations:"
+
+          grep -n \
+            "package com.habitat.core" \
+            HabitatBuild/app/src/main/java/com/habitat/core/MainActivity.kt
+
+          grep -n \
+            "package com.habitat.core" \
+            HabitatBuild/app/src/main/java/com/habitat/core/BrainAdapter.kt
+
+          echo ""
+          echo "Checking live Brain endpoint:"
+
+          grep -n \
+            "habitat-1-szzd.onrender.com/chat" \
+            HabitatBuild/app/src/main/java/com/habitat/core/BrainAdapter.kt
+
+          echo ""
+          echo "======================================"
+          echo "SOURCE VERIFICATION PASSED"
+          echo "======================================"
+
+      # ============================================================
+      # BUILD
+      # ============================================================
 
       - name: Build debug APK
         working-directory: HabitatBuild
@@ -1557,12 +409,16 @@ jobs:
           set -e
 
           echo "======================================"
-          echo "BUILDING HABITAT 1.1 AX CORE"
+          echo "BUILDING HABITAT v0.2.2"
           echo "======================================"
 
           gradle clean assembleDebug \
             --no-daemon \
             --stacktrace
+
+      # ============================================================
+      # VERIFY APK
+      # ============================================================
 
       - name: Verify APK
         shell: bash
@@ -1588,13 +444,20 @@ jobs:
             exit 1
           fi
 
-          echo "APK FOUND:"
+          echo "======================================"
+          echo "APK FOUND"
+          echo "======================================"
+
           echo "$APK"
 
           mkdir -p artifact
 
           cp "$APK" \
-            artifact/Habitat-1.1-Ax-Core-debug.apk
+            artifact/Habitat-v0.2.2-Ax-debug.apk
+
+      # ============================================================
+      # SOURCE ARCHIVE
+      # ============================================================
 
       - name: Create source archive
         shell: bash
@@ -1604,39 +467,55 @@ jobs:
           cd HabitatBuild
 
           zip -qr \
-            "$GITHUB_WORKSPACE/artifact/Habitat-1.1-Ax-Core-source.zip" \
+            "$GITHUB_WORKSPACE/artifact/Habitat-v0.2.2-Ax-source.zip" \
             .
+
+      # ============================================================
+      # UPLOAD APK
+      # ============================================================
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Habitat-1.1-Ax-Core-debug-apk
-          path: artifact/Habitat-1.1-Ax-Core-debug.apk
+          name: Habitat-v0.2.2-Ax-debug-apk
+          path: artifact/Habitat-v0.2.2-Ax-debug.apk
           if-no-files-found: error
+
+      # ============================================================
+      # UPLOAD SOURCE
+      # ============================================================
 
       - name: Upload source artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Habitat-1.1-Ax-Core-source
-          path: artifact/Habitat-1.1-Ax-Core-source.zip
+          name: Habitat-v0.2.2-Ax-source
+          path: artifact/Habitat-v0.2.2-Ax-source.zip
           if-no-files-found: error
+
+      # ============================================================
+      # SUCCESS REPORT
+      # ============================================================
 
       - name: Build success report
         shell: bash
         run: |
           echo ""
           echo "=============================================="
-          echo "          HABITAT 1.1 AX CORE"
+          echo "          HABITAT v0.2.2 AX CORE"
           echo "             BUILD SUCCESSFUL"
           echo "=============================================="
+          echo ""
+          echo "SOURCE:"
+          echo "Repository MainActivity.kt"
+          echo "Repository BrainAdapter.kt"
           echo ""
           echo "LIVE BRAIN:"
           echo "https://habitat-1-szzd.onrender.com/chat"
           echo ""
           echo "APK:"
-          ls -lh artifact/Habitat-1.1-Ax-Core-debug.apk
+          ls -lh artifact/Habitat-v0.2.2-Ax-debug.apk
           echo ""
           echo "SOURCE:"
-          ls -lh artifact/Habitat-1.1-Ax-Core-source.zip
+          ls -lh artifact/Habitat-v0.2.2-Ax-source.zip
           echo ""
           echo "=============================================="
