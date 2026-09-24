@@ -25,8 +25,23 @@ class BrainAdapter(private val context: Context) {
 
     companion object {
         private const val LIVE_ENDPOINT =
-            "https://habitat-cr46.onrender.com/chat"
+            "https://habitat-1-szzd.onrender.com/chat"
+
+        private const val PREFS =
+            "habitat_brain"
+
+        private const val HISTORY_KEY =
+            "conversation_history"
+
+        private const val MAX_HISTORY =
+            20
     }
+
+    private val prefs =
+        context.getSharedPreferences(
+            PREFS,
+            Context.MODE_PRIVATE
+        )
 
     private val executor =
         Executors.newSingleThreadExecutor()
@@ -36,8 +51,63 @@ class BrainAdapter(private val context: Context) {
     }
 
     fun setEndpoint(value: String) {
-        // Intentionally ignored.
-        // Habitat always uses the current live brain endpoint.
+        // Habitat always uses the live brain endpoint.
+    }
+
+    private fun loadHistory(): JSONArray {
+        val saved =
+            prefs.getString(
+                HISTORY_KEY,
+                "[]"
+            ) ?: "[]"
+
+        return try {
+            JSONArray(saved)
+        } catch (error: Exception) {
+            JSONArray()
+        }
+    }
+
+    private fun saveHistory(history: JSONArray) {
+        prefs.edit()
+            .putString(
+                HISTORY_KEY,
+                history.toString()
+            )
+            .apply()
+    }
+
+    private fun addToHistory(
+        userMessage: String,
+        assistantMessage: String
+    ) {
+        val history = loadHistory()
+
+        history.put(
+            JSONObject().apply {
+                put(
+                    "user",
+                    userMessage
+                )
+
+                put(
+                    "assistant",
+                    assistantMessage
+                )
+            }
+        )
+
+        while (history.length() > MAX_HISTORY) {
+            history.remove(0)
+        }
+
+        saveHistory(history)
+    }
+
+    fun clearMemory() {
+        prefs.edit()
+            .remove(HISTORY_KEY)
+            .apply()
     }
 
     fun send(
@@ -54,15 +124,24 @@ class BrainAdapter(private val context: Context) {
             var connection: HttpURLConnection? = null
 
             try {
-                val url = URL(LIVE_ENDPOINT)
+                val url =
+                    URL(LIVE_ENDPOINT)
 
                 connection =
-                    url.openConnection() as HttpURLConnection
+                    url.openConnection()
+                        as HttpURLConnection
 
-                connection.requestMethod = "POST"
-                connection.connectTimeout = 15000
-                connection.readTimeout = 30000
-                connection.doOutput = true
+                connection.requestMethod =
+                    "POST"
+
+                connection.connectTimeout =
+                    15000
+
+                connection.readTimeout =
+                    60000
+
+                connection.doOutput =
+                    true
 
                 connection.setRequestProperty(
                     "Content-Type",
@@ -74,8 +153,12 @@ class BrainAdapter(private val context: Context) {
                     "application/json"
                 )
 
+                val history =
+                    loadHistory()
+
                 val body =
                     JSONObject().apply {
+
                         put(
                             "message",
                             message
@@ -83,8 +166,9 @@ class BrainAdapter(private val context: Context) {
 
                         put(
                             "history",
-                            JSONArray()
+                            history
                         )
+
                     }.toString()
 
                 connection.outputStream.use { output ->
@@ -108,13 +192,18 @@ class BrainAdapter(private val context: Context) {
                 val responseText =
                     stream
                         ?.bufferedReader()
-                        ?.use { it.readText() }
+                        ?.use {
+                            it.readText()
+                        }
                         ?: ""
 
                 if (responseCode !in 200..299) {
+
                     callback(
                         Result(
-                            state = State.ERROR,
+                            state =
+                                State.ERROR,
+
                             detail =
                                 "HTTP $responseCode: $responseText"
                         )
@@ -133,9 +222,12 @@ class BrainAdapter(private val context: Context) {
                     )
 
                 if (reply.isBlank()) {
+
                     callback(
                         Result(
-                            state = State.ERROR,
+                            state =
+                                State.ERROR,
+
                             detail =
                                 "Brain returned an empty response."
                         )
@@ -144,10 +236,21 @@ class BrainAdapter(private val context: Context) {
                     return@execute
                 }
 
+                addToHistory(
+                    userMessage =
+                        message,
+
+                    assistantMessage =
+                        reply
+                )
+
                 callback(
                     Result(
-                        state = State.CONNECTED,
-                        text = reply
+                        state =
+                            State.CONNECTED,
+
+                        text =
+                            reply
                     )
                 )
 
@@ -155,7 +258,9 @@ class BrainAdapter(private val context: Context) {
 
                 callback(
                     Result(
-                        state = State.ERROR,
+                        state =
+                            State.ERROR,
+
                         detail =
                             error.message
                                 ?: error.javaClass.simpleName
@@ -163,6 +268,7 @@ class BrainAdapter(private val context: Context) {
                 )
 
             } finally {
+
                 connection?.disconnect()
             }
         }
