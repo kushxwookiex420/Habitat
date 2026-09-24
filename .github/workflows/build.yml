@@ -13,32 +13,44 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Set up Java
-        uses: actions/setup-java@v5
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "17"
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "8.9"
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-      - name: Install Android 35
+      - name: Locate Android SDK
         run: |
-          yes | sdkmanager --licenses >/dev/null 2>&1 || true
-          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+          set -e
+          for SDK in "$ANDROID_HOME" "$ANDROID_SDK_ROOT" "/usr/local/lib/android/sdk"; do
+            if [ -n "$SDK" ] && [ -d "$SDK" ]; then
+              echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
+              echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
+              echo "$SDK/platform-tools" >> "$GITHUB_PATH"
+              echo "$SDK/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
+              exit 0
+            fi
+          done
+          echo "Android SDK not found"; exit 1
+      - name: Install Android SDK packages
+        run: |
+          set -e
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          if [ ! -f "$SDKMANAGER" ]; then SDKMANAGER="$(find "$ANDROID_HOME" -type f -name sdkmanager | head -n 1)"; fi
+          test -f "$SDKMANAGER"
+          yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
+          "$SDKMANAGER" "platform-tools" "platforms;android-35" "build-tools;35.0.0"
       - name: Build debug APK
         run: gradle clean :app:assembleDebug --no-daemon --stacktrace
-      - name: Verify APK
+      - name: Verify and package
         run: |
+          set -e
           test -f app/build/outputs/apk/debug/app-debug.apk
-          ls -lh app/build/outputs/apk/debug/app-debug.apk
-      - name: Package source
-        run: |
           mkdir -p artifact
           cp app/build/outputs/apk/debug/app-debug.apk artifact/Habitat-v0.3.3-Ax-debug.apk
           zip -qr artifact/Habitat-v0.3.3-Ax-source.zip . -x ".git/*" "artifact/*"
+          ls -lh artifact/*
       - uses: actions/upload-artifact@v4
         with:
           name: Habitat-v0.3.3-Ax-debug-apk
