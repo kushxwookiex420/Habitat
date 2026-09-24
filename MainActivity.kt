@@ -2,8 +2,8 @@ package com.habitat.core
 
 import android.app.Activity
 import android.app.Dialog
-import android.content.Context
 import android.graphics.Color
+import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.os.Bundle
@@ -11,7 +11,6 @@ import android.view.Gravity
 import android.view.View
 import android.view.WindowInsets
 import android.view.WindowManager
-import android.view.inputmethod.InputMethodManager
 import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
@@ -62,13 +61,14 @@ class MainActivity : Activity() {
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             root.setOnApplyWindowInsetsListener { view, insets ->
+
                 val bars = insets.getInsets(
                     WindowInsets.Type.systemBars()
                 )
 
                 view.setPadding(
                     0,
-                    bars.top,
+                                       bars.top,
                     0,
                     bars.bottom
                 )
@@ -86,12 +86,14 @@ class MainActivity : Activity() {
     ): LinearLayout {
 
         val bar = LinearLayout(this)
+
         bar.orientation = LinearLayout.HORIZONTAL
         bar.gravity = Gravity.CENTER_VERTICAL
         bar.setPadding(16, 12, 16, 12)
         bar.setBackgroundColor(panel)
 
         val menu = TextView(this)
+
         menu.text = "☰"
         menu.textSize = 27f
         menu.setTextColor(white)
@@ -111,15 +113,18 @@ class MainActivity : Activity() {
         )
 
         val titles = LinearLayout(this)
+
         titles.orientation = LinearLayout.VERTICAL
 
         val titleView = TextView(this)
+
         titleView.text = title
         titleView.textSize = 18f
         titleView.setTextColor(white)
-        titleView.setTypeface(null, android.graphics.Typeface.BOLD)
+        titleView.setTypeface(null, Typeface.BOLD)
 
         val subtitleView = TextView(this)
+
         subtitleView.text = subtitle
         subtitleView.textSize = 11f
         subtitleView.setTextColor(muted)
@@ -137,6 +142,7 @@ class MainActivity : Activity() {
         )
 
         val dot = TextView(this)
+
         dot.text = "●"
         dot.textSize = 14f
         dot.setTextColor(green)
@@ -166,46 +172,40 @@ class MainActivity : Activity() {
         )
 
         val scroll = ScrollView(this)
+
         scroll.isFillViewport = true
 
         val chat = LinearLayout(this)
+
         chat.orientation = LinearLayout.VERTICAL
         chat.setPadding(18, 18, 18, 18)
 
         val welcome = TextView(this)
+
         welcome.text = "Habitat"
         welcome.textSize = 30f
         welcome.setTextColor(white)
-        welcome.setTypeface(null, android.graphics.Typeface.BOLD)
+        welcome.setTypeface(null, Typeface.BOLD)
 
-        chat.addView(
-            welcome,
-            LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            )
-        )
+        chat.addView(welcome)
 
         val intro = TextView(this)
-        intro.text = "Your AI environment. Talk to Ax, manage projects, and build the system."
+
+        intro.text =
+            "Your AI environment. Talk to Ax, manage projects, and build the system."
+
         intro.textSize = 14f
         intro.setTextColor(muted)
         intro.setPadding(0, 4, 0, 18)
 
+        chat.addView(intro)
+
         chat.addView(
-            intro,
-            LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
+            bubble(
+                "Ax",
+                "Habitat online.\n\nWhat are we working on?"
             )
         )
-
-        val axBubble = bubble(
-            "Ax",
-            "Habitat online.\n\nWhat are we working on?"
-        )
-
-        chat.addView(axBubble)
 
         val spacer = Space(this)
 
@@ -230,12 +230,14 @@ class MainActivity : Activity() {
         )
 
         val composer = LinearLayout(this)
+
         composer.orientation = LinearLayout.HORIZONTAL
         composer.gravity = Gravity.CENTER_VERTICAL
         composer.setPadding(12, 10, 12, 10)
         composer.setBackgroundColor(panel)
 
         val input = EditText(this)
+
         input.hint = "Message Ax..."
         input.setHintTextColor(muted)
         input.setTextColor(white)
@@ -243,8 +245,10 @@ class MainActivity : Activity() {
         input.setSingleLine(false)
         input.maxLines = 4
         input.setPadding(16, 12, 16, 12)
-        input.setBackground(
-            roundedBackground(inputBg, 22f)
+
+        input.background = roundedBackground(
+            inputBg,
+            22f
         )
 
         composer.addView(
@@ -259,12 +263,15 @@ class MainActivity : Activity() {
         )
 
         val send = Button(this)
+
         send.text = "➤"
         send.textSize = 20f
         send.setTextColor(Color.WHITE)
-        send.setBackground(
-            roundedBackground(blue, 22f)
+        send.background = roundedBackground(
+            blue,
+            22f
         )
+
         send.minWidth = 52
         send.minHeight = 52
 
@@ -304,34 +311,53 @@ class MainActivity : Activity() {
 
                 runOnUiThread {
 
-                    input.isEnabled = true
-                    send.isEnabled = true
-
-                    chat.addView(
-                        bubble(
-                            "Ax",
-                            result.message
-                        )
-                    )
-
-                    scroll.post {
-                        scroll.fullScroll(View.FOCUS_DOWN)
-                    }
-
                     when (result.state) {
 
                         BrainAdapter.State.CONNECTED -> {
-                            Toast.makeText(
-                                this,
-                                "Ax connected",
-                                Toast.LENGTH_SHORT
-                            ).show()
+
+                            input.isEnabled = true
+                            send.isEnabled = true
+
+                            chat.addView(
+                                bubble(
+                                    "Ax",
+                                    result.text
+                                )
+                            )
+
+                            scroll.post {
+                                scroll.fullScroll(View.FOCUS_DOWN)
+                            }
                         }
 
                         BrainAdapter.State.ERROR -> {
+
+                            input.isEnabled = true
+                            send.isEnabled = true
+
+                            val errorText =
+                                if (result.detail.isNotBlank()) {
+                                    "Brain error:\n${result.detail}"
+                                } else {
+                                    "Brain error."
+                                }
+
+                            chat.addView(
+                                bubble(
+                                    "Ax",
+                                    errorText
+                                )
+                            )
+
+                            scroll.post {
+                                scroll.fullScroll(View.FOCUS_DOWN)
+                            }
+
                             Toast.makeText(
                                 this,
-                                "Brain error: ${result.message}",
+                                result.detail.ifBlank {
+                                    "Brain error"
+                                },
                                 Toast.LENGTH_LONG
                             ).show()
                         }
@@ -340,19 +366,20 @@ class MainActivity : Activity() {
                         }
 
                         BrainAdapter.State.DISCONNECTED -> {
-                            Toast.makeText(
-                                this,
-                                "Brain disconnected",
-                                Toast.LENGTH_SHORT
-                            ).show()
+
+                            input.isEnabled = true
+                            send.isEnabled = true
+
+                            chat.addView(
+                                bubble(
+                                    "Ax",
+                                    "Brain disconnected."
+                                )
+                            )
                         }
                     }
                 }
             }
-        }
-
-        input.setOnEditorActionListener { _, _, _ ->
-            false
         }
 
         root.addView(
@@ -371,15 +398,17 @@ class MainActivity : Activity() {
         val dialog = Dialog(this)
 
         val menuRoot = LinearLayout(this)
+
         menuRoot.orientation = LinearLayout.VERTICAL
         menuRoot.setPadding(20, 20, 20, 20)
         menuRoot.setBackgroundColor(panel)
 
         val title = TextView(this)
+
         title.text = "HABITAT"
         title.textSize = 22f
         title.setTextColor(white)
-        title.setTypeface(null, android.graphics.Typeface.BOLD)
+        title.setTypeface(null, Typeface.BOLD)
         title.setPadding(8, 8, 8, 18)
 
         menuRoot.addView(title)
@@ -416,20 +445,13 @@ class MainActivity : Activity() {
 
         dialog.setContentView(menuRoot)
 
-        val window = dialog.window
-
-        window?.setBackgroundDrawable(
+        dialog.window?.setBackgroundDrawable(
             roundedBackground(panel, 20f)
-        )
-
-        window?.setLayout(
-            (resources.displayMetrics.widthPixels * 0.88).toInt(),
-            WindowManager.LayoutParams.WRAP_CONTENT
         )
 
         dialog.show()
 
-        window?.setLayout(
+        dialog.window?.setLayout(
             (resources.displayMetrics.widthPixels * 0.88).toInt(),
             WindowManager.LayoutParams.WRAP_CONTENT
         )
@@ -477,6 +499,7 @@ class MainActivity : Activity() {
         )
 
         val content = LinearLayout(this)
+
         content.orientation = LinearLayout.VERTICAL
         content.setPadding(18, 20, 18, 20)
 
@@ -522,6 +545,7 @@ class MainActivity : Activity() {
         )
 
         val content = LinearLayout(this)
+
         content.orientation = LinearLayout.VERTICAL
         content.setPadding(18, 20, 18, 20)
 
@@ -560,6 +584,7 @@ class MainActivity : Activity() {
 
         clear.text = "Clear Local Memory"
         clear.setTextColor(white)
+
         clear.background = roundedBackground(
             panel2,
             14f
@@ -607,6 +632,7 @@ class MainActivity : Activity() {
         )
 
         val content = LinearLayout(this)
+
         content.orientation = LinearLayout.VERTICAL
         content.setPadding(18, 20, 18, 20)
 
@@ -652,6 +678,7 @@ class MainActivity : Activity() {
         )
 
         val content = LinearLayout(this)
+
         content.orientation = LinearLayout.VERTICAL
         content.setPadding(18, 20, 18, 20)
 
@@ -731,6 +758,7 @@ class MainActivity : Activity() {
         )
 
         val content = LinearLayout(this)
+
         content.orientation = LinearLayout.VERTICAL
         content.setPadding(18, 20, 18, 20)
 
@@ -780,17 +808,20 @@ class MainActivity : Activity() {
     ): LinearLayout {
 
         val container = LinearLayout(this)
+
         container.orientation = LinearLayout.VERTICAL
 
         val label = TextView(this)
+
         label.text = speaker
         label.textSize = 12f
         label.setTextColor(
             if (speaker == "Ax") blue else muted
         )
-        label.setTypeface(null, android.graphics.Typeface.BOLD)
+        label.setTypeface(null, Typeface.BOLD)
 
         val text = TextView(this)
+
         text.text = message
         text.textSize = 16f
         text.setTextColor(white)
@@ -822,6 +853,7 @@ class MainActivity : Activity() {
     ): LinearLayout {
 
         val card = LinearLayout(this)
+
         card.orientation = LinearLayout.VERTICAL
         card.setPadding(18, 16, 18, 16)
 
@@ -831,12 +863,14 @@ class MainActivity : Activity() {
         )
 
         val titleView = TextView(this)
+
         titleView.text = title
         titleView.textSize = 17f
         titleView.setTextColor(white)
-        titleView.setTypeface(null, android.graphics.Typeface.BOLD)
+        titleView.setTypeface(null, Typeface.BOLD)
 
         val descriptionView = TextView(this)
+
         descriptionView.text = description
         descriptionView.textSize = 14f
         descriptionView.setTextColor(muted)
@@ -864,15 +898,18 @@ class MainActivity : Activity() {
     ): LinearLayout {
 
         val row = LinearLayout(this)
+
         row.orientation = LinearLayout.HORIZONTAL
         row.gravity = Gravity.CENTER_VERTICAL
         row.setPadding(16, 15, 16, 15)
+
         row.background = roundedBackground(
             panel2,
             14f
         )
 
         val nameView = TextView(this)
+
         nameView.text = name
         nameView.textSize = 16f
         nameView.setTextColor(white)
@@ -887,6 +924,7 @@ class MainActivity : Activity() {
         )
 
         val statusView = TextView(this)
+
         statusView.text = "● $status"
         statusView.textSize = 13f
         statusView.setTextColor(color)
@@ -913,7 +951,6 @@ class MainActivity : Activity() {
         val drawable = GradientDrawable()
 
         drawable.setColor(color)
-
         drawable.cornerRadius = radius
 
         return drawable
