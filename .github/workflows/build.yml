@@ -539,24 +539,15 @@ jobs:
 
                   // Main projected layer with animated horizontal compression/shear.
                   val skew=sin(yawEase)*.075f
-                  val m=Matrix()
-                  val srcPts=floatArrayOf(
-                          src.left.toFloat(),src.top.toFloat(),
-                          src.right.toFloat(),src.top.toFloat(),
-                          src.right.toFloat(),src.bottom.toFloat(),
-                          src.left.toFloat(),src.bottom.toFloat()
-                  )
-                  val dstPts=floatArrayOf(
-                          left+dw*.10f,top,
-                          left+width3d-dw*.10f+skew*dw,top,
-                          left+width3d-dw*.03f-skew*dw,top+dh,
-                          left+dw*.03f,top+dh
-                  )
-                  m.setPolyToPoly(srcPts,0,dstPts,0,4)
+                  val scaleX=.76f+.24f*abs(kotlin.math.cos(yawEase))
 
                   p.alpha=220
                   p.setShadowLayer(22f,0f,0f,Color.rgb(30,185,255))
-                  c.drawBitmap(audrey,src,m,p)
+                  c.save()
+                  c.scale(scaleX,1f,cx,cy)
+                  c.skew(skew,0f)
+                  c.drawBitmap(audrey,src,RectF(left,top,left+dw,top+dh),p)
+                  c.restore()
                   p.clearShadowLayer()
 
                   // Cyan hologram veil.
