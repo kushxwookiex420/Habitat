@@ -4,8 +4,8 @@ import android.app.Activity
 import android.content.Context
 import android.graphics.Color
 import android.graphics.drawable.GradientDrawable
-import android.os.Bundle
 import android.os.Build
+import android.os.Bundle
 import android.view.Gravity
 import android.view.View
 import android.view.WindowInsets
@@ -13,8 +13,6 @@ import android.view.WindowManager
 import android.view.inputmethod.InputMethodManager
 import android.widget.*
 import android.text.InputType
-import android.view.ViewGroup
-import android.view.animation.AlphaAnimation
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -22,22 +20,18 @@ import java.util.Locale
 class MainActivity : Activity() {
 
     private lateinit var root: LinearLayout
-    private lateinit var content: LinearLayout
-
-    private val prefs by lazy {
-        getSharedPreferences("habitat", Context.MODE_PRIVATE)
-    }
 
     private lateinit var brainAdapter: BrainAdapter
 
-    private val accent = Color.rgb(80, 190, 255)
-    private val accent2 = Color.rgb(120, 230, 190)
-    private val bg = Color.rgb(10, 12, 17)
-    private val card = Color.rgb(20, 24, 32)
-    private val card2 = Color.rgb(26, 31, 41)
-    private val text = Color.rgb(240, 245, 250)
-    private val muted = Color.rgb(145, 155, 170)
-    private val inputBg = Color.rgb(28, 33, 42)
+    private val bg = Color.rgb(10, 11, 15)
+    private val panel = Color.rgb(20, 22, 28)
+    private val panel2 = Color.rgb(27, 30, 38)
+    private val inputBg = Color.rgb(31, 34, 42)
+
+    private val white = Color.rgb(242, 244, 248)
+    private val muted = Color.rgb(145, 151, 163)
+    private val blue = Color.rgb(80, 180, 255)
+    private val green = Color.rgb(105, 220, 165)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -46,9 +40,13 @@ class MainActivity : Activity() {
             WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
         )
 
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            window.setDecorFitsSystemWindows(true)
+        }
+
         brainAdapter = BrainAdapter(this)
 
-        showHome()
+        showChatHome()
     }
 
     override fun onDestroy() {
@@ -60,38 +58,34 @@ class MainActivity : Activity() {
         super.onDestroy()
     }
 
-    // ------------------------------------------------------------
-    // BASIC HELPERS
-    // ------------------------------------------------------------
+    // ============================================================
+    // MAIN HABITAT SHELL
+    // ============================================================
 
     private fun dp(value: Int): Int {
         return (value * resources.displayMetrics.density).toInt()
     }
 
-    private fun now(): String {
-        return SimpleDateFormat(
-            "h:mm a",
-            Locale.getDefault()
-        ).format(Date())
-    }
+    private fun createRoot(): LinearLayout {
 
-    private fun safeRoot(): LinearLayout {
         val r = LinearLayout(this)
+
         r.orientation = LinearLayout.VERTICAL
         r.setBackgroundColor(bg)
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+
             r.setOnApplyWindowInsetsListener { view, insets ->
 
-                val bars = insets.getInsets(
+                val systemBars = insets.getInsets(
                     WindowInsets.Type.systemBars()
                 )
 
                 view.setPadding(
-                    dp(12),
-                    bars.top + dp(8),
-                    dp(12),
-                    bars.bottom + dp(8)
+                    dp(10),
+                    systemBars.top,
+                    dp(10),
+                    systemBars.bottom
                 )
 
                 insets
@@ -101,8 +95,9 @@ class MainActivity : Activity() {
         return r
     }
 
-    private fun setupScreen() {
-        root = safeRoot()
+    private fun startScreen() {
+
+        root = createRoot()
 
         setContentView(root)
 
@@ -111,46 +106,73 @@ class MainActivity : Activity() {
         }
     }
 
-    // ------------------------------------------------------------
-    // MAIN APP SHELL
-    // ------------------------------------------------------------
+    // ============================================================
+    // TOP BAR
+    // ============================================================
 
-    private fun shell(title: String): LinearLayout {
+    private fun topBar(
+        title: String,
+        subtitle: String = "AX • ONLINE"
+    ): LinearLayout {
 
-        val wrapper = LinearLayout(this)
-        wrapper.orientation = LinearLayout.VERTICAL
-        wrapper.setBackgroundColor(bg)
+        val bar = LinearLayout(this)
 
-        // TOP HEADER
-        val header = LinearLayout(this)
-        header.orientation = LinearLayout.HORIZONTAL
-        header.gravity = Gravity.CENTER_VERTICAL
-        header.setPadding(
+        bar.orientation = LinearLayout.HORIZONTAL
+        bar.gravity = Gravity.CENTER_VERTICAL
+
+        bar.setPadding(
             dp(4),
+            dp(10),
             dp(4),
-            dp(4),
-            dp(8)
+            dp(10)
         )
 
-        val titleBox = LinearLayout(this)
-        titleBox.orientation = LinearLayout.VERTICAL
+        // LEFT MENU
+        val menu = TextView(this)
 
-        val titleText = TextView(this)
-        titleText.text = title
-        titleText.textColor = text
-        titleText.textSize = 22f
-        titleText.setTypeface(null, android.graphics.Typeface.BOLD)
+        menu.text = "☰"
+        menu.textColor = white
+        menu.textSize = 25f
+        menu.gravity = Gravity.CENTER
 
-        val status = TextView(this)
-        status.text = "AX • ONLINE"
-        status.textColor = accent2
-        status.textSize = 11f
+        menu.setOnClickListener {
+            showMenu()
+        }
 
-        titleBox.addView(titleText)
-        titleBox.addView(status)
+        bar.addView(
+            menu,
+            LinearLayout.LayoutParams(
+                dp(48),
+                dp(48)
+            )
+        )
 
-        header.addView(
-            titleBox,
+        // TITLE
+        val titles = LinearLayout(this)
+
+        titles.orientation = LinearLayout.VERTICAL
+
+        val mainTitle = TextView(this)
+
+        mainTitle.text = title
+        mainTitle.textColor = white
+        mainTitle.textSize = 19f
+        mainTitle.setTypeface(
+            null,
+            android.graphics.Typeface.BOLD
+        )
+
+        val sub = TextView(this)
+
+        sub.text = subtitle
+        sub.textColor = green
+        sub.textSize = 11f
+
+        titles.addView(mainTitle)
+        titles.addView(sub)
+
+        bar.addView(
+            titles,
             LinearLayout.LayoutParams(
                 0,
                 LinearLayout.LayoutParams.WRAP_CONTENT,
@@ -158,410 +180,153 @@ class MainActivity : Activity() {
             )
         )
 
-        val menu = button("☰", accent)
-        menu.setOnClickListener {
-            showMore()
-        }
+        // RIGHT STATUS
+        val status = TextView(this)
 
-        header.addView(
-            menu,
+        status.text = "●"
+        status.textColor = green
+        status.textSize = 18f
+        status.gravity = Gravity.CENTER
+
+        bar.addView(
+            status,
             LinearLayout.LayoutParams(
-                dp(48),
-                dp(44)
+                dp(40),
+                dp(48)
             )
         )
 
-        wrapper.addView(header)
-
-        // TOP NAVIGATION
-        val navScroll = HorizontalScrollView(this)
-        navScroll.isHorizontalScrollBarEnabled = false
-
-        val nav = LinearLayout(this)
-        nav.orientation = LinearLayout.HORIZONTAL
-        nav.setPadding(
-            0,
-            0,
-            0,
-            dp(10)
-        )
-
-        nav.addView(navButton("Home") {
-            showHome()
-        })
-
-        nav.addView(navButton("Chat") {
-            showChat()
-        })
-
-        nav.addView(navButton("Projects") {
-            showProjects()
-        })
-
-        nav.addView(navButton("Brain") {
-            showBrain()
-        })
-
-        nav.addView(navButton("Scenes") {
-            showScenes()
-        })
-
-        nav.addView(navButton("More") {
-            showMore()
-        })
-
-        navScroll.addView(nav)
-
-        wrapper.addView(
-            navScroll,
-            LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                dp(52)
-            )
-        )
-
-        return wrapper
+        return bar
     }
 
-    private fun navButton(
-        label: String,
-        action: () -> Unit
-    ): TextView {
+    // ============================================================
+    // CHAT HOME
+    // ============================================================
 
-        val b = TextView(this)
+    private fun showChatHome() {
 
-        b.text = label
-        b.textColor = text
-        b.textSize = 13f
-        b.gravity = Gravity.CENTER
-        b.setPadding(
-            dp(18),
-            0,
-            dp(18),
-            0
-        )
-
-        val drawable = GradientDrawable()
-        drawable.cornerRadius = dp(20).toFloat()
-        drawable.setColor(card)
-
-        b.background = drawable
-
-        b.setOnClickListener {
-            action()
-        }
-
-        val params = LinearLayout.LayoutParams(
-            LinearLayout.LayoutParams.WRAP_CONTENT,
-            dp(40)
-        )
-
-        params.setMargins(
-            0,
-            0,
-            dp(8),
-            0
-        )
-
-        b.layoutParams = params
-
-        return b
-    }
-
-    private fun button(
-        label: String,
-        color: Int = text
-    ): TextView {
-
-        val b = TextView(this)
-
-        b.text = label
-        b.textColor = color
-        b.textSize = 16f
-        b.gravity = Gravity.CENTER
-
-        val drawable = GradientDrawable()
-        drawable.cornerRadius = dp(14).toFloat()
-        drawable.setColor(card2)
-
-        b.background = drawable
-
-        return b
-    }
-
-    // ------------------------------------------------------------
-    // HOME
-    // ------------------------------------------------------------
-
-    private fun showHome() {
-
-        setupScreen()
-
-        val shell = shell("HABITAT")
+        startScreen()
 
         root.addView(
-            shell,
-            LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            )
+            topBar("HABITAT")
         )
 
-        val scroll = ScrollView(this)
-        scroll.isFillViewport = true
+        // --------------------------------------------------------
+        // CHAT AREA
+        // --------------------------------------------------------
 
-        content = LinearLayout(this)
-        content.orientation = LinearLayout.VERTICAL
-        content.setPadding(
-            dp(4),
-            dp(4),
-            dp(4),
-            dp(16)
-        )
+        val chatScroll = ScrollView(this)
 
-        // AX STATUS CARD
-        val statusCard = cardLayout()
-
-        val statusTitle = TextView(this)
-        statusTitle.text = "AX CORE"
-        statusTitle.textColor = accent
-        statusTitle.textSize = 18f
-        statusTitle.setTypeface(null, android.graphics.Typeface.BOLD)
-
-        val statusText = TextView(this)
-        statusText.text =
-            "The central intelligence layer for Habitat"
-        statusText.textColor = muted
-        statusText.textSize = 14f
-
-        statusCard.addView(statusTitle)
-        statusCard.addView(statusText)
-
-        content.addView(statusCard)
-
-        // CORE LOOP
-        val loopCard = cardLayout()
-
-        val loopTitle = TextView(this)
-        loopTitle.text = "CORE LOOP"
-        loopTitle.textColor = text
-        loopTitle.textSize = 15f
-        loopTitle.setTypeface(null, android.graphics.Typeface.BOLD)
-
-        val loop = TextView(this)
-        loop.text =
-            "UNDERSTAND  →  PLAN  →  ACT\n" +
-            "OBSERVE  →  VERIFY  →  CONTINUE"
-        loop.textColor = accent2
-        loop.textSize = 14f
-        loop.setPadding(
-            0,
-            dp(8),
-            0,
-            0
-        )
-
-        loopCard.addView(loopTitle)
-        loopCard.addView(loop)
-
-        content.addView(loopCard)
-
-        // AX PORTRAIT
-        try {
-
-            val image = ImageView(this)
-
-            val bitmap = resources.getIdentifier(
-                "ax_portrait",
-                "drawable",
-                packageName
-            )
-
-            if (bitmap != 0) {
-                image.setImageResource(bitmap)
-            }
-
-            image.scaleType = ImageView.ScaleType.CENTER_CROP
-
-            val imageParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                dp(250)
-            )
-
-            imageParams.setMargins(
-                0,
-                dp(6),
-                0,
-                dp(6)
-            )
-
-            content.addView(
-                image,
-                imageParams
-            )
-
-        } catch (_: Exception) {
-        }
-
-        // TALK TO AX
-        val talk = button(
-            "CHAT WITH AX  →",
-            accent
-        )
-
-        talk.textSize = 16f
-        talk.setTypeface(null, android.graphics.Typeface.BOLD)
-
-        talk.setOnClickListener {
-            showChat()
-        }
-
-        content.addView(
-            talk,
-            LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                dp(52)
-            )
-        )
-
-        // PROJECTS
-        val projectsTitle = TextView(this)
-        projectsTitle.text = "ACTIVE PROJECTS"
-        projectsTitle.textColor = text
-        projectsTitle.textSize = 16f
-        projectsTitle.setTypeface(null, android.graphics.Typeface.BOLD)
-        projectsTitle.setPadding(
-            dp(4),
-            dp(18),
-            dp(4),
-            dp(8)
-        )
-
-        content.addView(projectsTitle)
-
-        content.addView(
-            projectProgress(
-                "DropPilot",
-                "AI commerce engine",
-                "BUILDING"
-            )
-        )
-
-        content.addView(
-            projectProgress(
-                "Vice City Files",
-                "GTA 6 media engine",
-                "ACTIVE"
-            )
-        )
-
-        content.addView(
-            projectProgress(
-                "Habitat",
-                "AI operating environment",
-                "BUILDING"
-            )
-        )
-
-        // SYSTEMS
-        val systemsTitle = TextView(this)
-        systemsTitle.text = "SYSTEMS"
-        systemsTitle.textColor = text
-        systemsTitle.textSize = 16f
-        systemsTitle.setTypeface(null, android.graphics.Typeface.BOLD)
-        systemsTitle.setPadding(
-            dp(4),
-            dp(18),
-            dp(4),
-            dp(8)
-        )
-
-        content.addView(systemsTitle)
-
-        content.addView(infoRow("Memory", "READY"))
-        content.addView(infoRow("Projects", "READY"))
-        content.addView(infoRow("Agents", "READY"))
-        content.addView(infoRow("Tasks", "READY"))
-        content.addView(infoRow("Tools", "READY"))
-        content.addView(infoRow("Brain", "ONLINE"))
-
-        scroll.addView(content)
-
-        root.addView(
-            scroll,
-            LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                0,
-                1f
-            )
-        )
-    }
-
-    // ------------------------------------------------------------
-    // CHAT
-    // ------------------------------------------------------------
-
-    private fun showChat() {
-
-        setupScreen()
-
-        val shell = shell("CHAT WITH AX")
-
-        root.addView(
-            shell,
-            LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            )
-        )
+        chatScroll.isFillViewport = true
 
         val messages = LinearLayout(this)
+
         messages.orientation = LinearLayout.VERTICAL
+
         messages.setPadding(
-            dp(2),
             dp(6),
-            dp(2),
-            dp(12)
+            dp(12),
+            dp(6),
+            dp(18)
         )
 
-        val scroll = ScrollView(this)
-        scroll.isFillViewport = true
-        scroll.addView(messages)
+        // HABITAT WELCOME
+        val welcome = LinearLayout(this)
 
-        root.addView(
-            scroll,
-            LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                0,
-                1f
-            )
+        welcome.orientation = LinearLayout.VERTICAL
+
+        welcome.gravity = Gravity.CENTER
+
+        welcome.setPadding(
+            dp(20),
+            dp(30),
+            dp(20),
+            dp(30)
         )
 
-        // INITIAL MESSAGE
+        val habitat = TextView(this)
+
+        habitat.text = "HABITAT"
+        habitat.textColor = white
+        habitat.textSize = 30f
+        habitat.gravity = Gravity.CENTER
+
+        habitat.setTypeface(
+            null,
+            android.graphics.Typeface.BOLD
+        )
+
+        val ax = TextView(this)
+
+        ax.text = "AX CORE"
+        ax.textColor = blue
+        ax.textSize = 14f
+        ax.gravity = Gravity.CENTER
+
+        val description = TextView(this)
+
+        description.text =
+            "Your AI operating environment"
+
+        description.textColor = muted
+        description.textSize = 14f
+        description.gravity = Gravity.CENTER
+
+        welcome.addView(habitat)
+        welcome.addView(ax)
+        welcome.addView(description)
+
+        messages.addView(welcome)
+
         messages.addView(
             bubble(
                 "AX",
-                "Habitat online.\nWhat are we working on?",
+                "Habitat online.\n\nWhat are we working on?",
                 false
             )
         )
 
-        // COMPOSER
-        val composer = LinearLayout(this)
-        composer.orientation = LinearLayout.HORIZONTAL
-        composer.gravity = Gravity.CENTER_VERTICAL
-        composer.setPadding(
-            dp(2),
-            dp(6),
-            dp(2),
-            dp(6)
+        chatScroll.addView(messages)
+
+        root.addView(
+            chatScroll,
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                0,
+                1f
+            )
         )
+
+        // --------------------------------------------------------
+        // CHATGPT-STYLE COMPOSER
+        // --------------------------------------------------------
+
+        val composerOuter = LinearLayout(this)
+
+        composerOuter.orientation =
+            LinearLayout.VERTICAL
+
+        composerOuter.setPadding(
+            dp(4),
+            dp(6),
+            dp(4),
+            dp(8)
+        )
+
+        val composer = LinearLayout(this)
+
+        composer.orientation =
+            LinearLayout.HORIZONTAL
+
+        composer.gravity =
+            Gravity.CENTER_VERTICAL
 
         val input = EditText(this)
 
         input.hint = "Message Ax..."
         input.hintTextColor = muted
-        input.setTextColor(text)
+        input.setTextColor(white)
+
         input.textSize = 16f
 
         input.inputType =
@@ -569,20 +334,29 @@ class MainActivity : Activity() {
             InputType.TYPE_TEXT_FLAG_MULTI_LINE or
             InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
 
-        input.gravity = Gravity.TOP or Gravity.START
+        input.gravity =
+            Gravity.CENTER_VERTICAL or
+            Gravity.START
+
+        input.setSingleLine(false)
+
+        input.maxLines = 5
 
         input.setPadding(
-            dp(16),
+            dp(17),
+            dp(8),
             dp(12),
-            dp(12),
-            dp(12)
+            dp(8)
         )
 
-        val inputDrawable = GradientDrawable()
-        inputDrawable.cornerRadius = dp(22).toFloat()
-        inputDrawable.setColor(inputBg)
+        val inputShape = GradientDrawable()
 
-        input.background = inputDrawable
+        inputShape.cornerRadius =
+            dp(24).toFloat()
+
+        inputShape.setColor(inputBg)
+
+        input.background = inputShape
 
         composer.addView(
             input,
@@ -593,23 +367,31 @@ class MainActivity : Activity() {
             )
         )
 
+        // SEND BUTTON
         val send = TextView(this)
 
         send.text = "↑"
         send.textColor = Color.WHITE
-        send.textSize = 24f
+        send.textSize = 25f
         send.gravity = Gravity.CENTER
-        send.setTypeface(null, android.graphics.Typeface.BOLD)
 
-        val sendDrawable = GradientDrawable()
-        sendDrawable.cornerRadius = dp(29).toFloat()
-        sendDrawable.setColor(accent.toArgb())
+        send.setTypeface(
+            null,
+            android.graphics.Typeface.BOLD
+        )
 
-        send.background = sendDrawable
+        val sendShape = GradientDrawable()
+
+        sendShape.shape =
+            GradientDrawable.OVAL
+
+        sendShape.setColor(blue)
+
+        send.background = sendShape
 
         val sendParams = LinearLayout.LayoutParams(
-            dp(54),
-            dp(54)
+            dp(52),
+            dp(52)
         )
 
         sendParams.setMargins(
@@ -624,17 +406,30 @@ class MainActivity : Activity() {
             sendParams
         )
 
-        root.addView(
+        composerOuter.addView(
             composer,
             LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
-                dp(70)
+                dp(62)
             )
         )
 
+        root.addView(
+            composerOuter,
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                dp(76)
+            )
+        )
+
+        // --------------------------------------------------------
+        // SEND
+        // --------------------------------------------------------
+
         fun sendMessage() {
 
-            val message = input.text.toString().trim()
+            val message =
+                input.text.toString().trim()
 
             if (message.isEmpty()) {
                 return
@@ -650,20 +445,25 @@ class MainActivity : Activity() {
 
             input.setText("")
 
-            scroll.post {
-                scroll.fullScroll(View.FOCUS_DOWN)
+            chatScroll.post {
+                chatScroll.fullScroll(
+                    View.FOCUS_DOWN
+                )
             }
 
-            messages.addView(
+            val thinking =
                 bubble(
                     "AX",
                     "Thinking…",
                     false
                 )
-            )
 
-            scroll.post {
-                scroll.fullScroll(View.FOCUS_DOWN)
+            messages.addView(thinking)
+
+            chatScroll.post {
+                chatScroll.fullScroll(
+                    View.FOCUS_DOWN
+                )
             }
 
             brainAdapter.send(
@@ -681,11 +481,9 @@ class MainActivity : Activity() {
 
                         runOnUiThread {
 
-                            if (messages.childCount > 0) {
-                                messages.removeViewAt(
-                                    messages.childCount - 1
-                                )
-                            }
+                            messages.removeView(
+                                thinking
+                            )
 
                             messages.addView(
                                 bubble(
@@ -695,8 +493,8 @@ class MainActivity : Activity() {
                                 )
                             )
 
-                            scroll.post {
-                                scroll.fullScroll(
+                            chatScroll.post {
+                                chatScroll.fullScroll(
                                     View.FOCUS_DOWN
                                 )
                             }
@@ -709,22 +507,20 @@ class MainActivity : Activity() {
 
                         runOnUiThread {
 
-                            if (messages.childCount > 0) {
-                                messages.removeViewAt(
-                                    messages.childCount - 1
-                                )
-                            }
+                            messages.removeView(
+                                thinking
+                            )
 
                             messages.addView(
                                 bubble(
                                     "AX",
-                                    "I couldn't complete that request yet.\n\n$error",
+                                    "I couldn't complete that request.\n\n$error",
                                     false
                                 )
                             )
 
-                            scroll.post {
-                                scroll.fullScroll(
+                            chatScroll.post {
+                                chatScroll.fullScroll(
                                     View.FOCUS_DOWN
                                 )
                             }
@@ -738,13 +534,12 @@ class MainActivity : Activity() {
             sendMessage()
         }
 
+        // Keep Enter as a normal newline.
         input.setOnEditorActionListener { _, _, _ ->
             false
         }
 
-        input.requestFocus()
-
-        // Don't automatically force the keyboard open.
+        // Do NOT automatically open keyboard.
         val imm = getSystemService(
             Context.INPUT_METHOD_SERVICE
         ) as InputMethodManager
@@ -755,55 +550,296 @@ class MainActivity : Activity() {
         )
     }
 
-    // ------------------------------------------------------------
+    // ============================================================
+    // CHAT BUBBLE
+    // ============================================================
+
+    private fun bubble(
+        speaker: String,
+        message: String,
+        user: Boolean
+    ): LinearLayout {
+
+        val wrapper = LinearLayout(this)
+
+        wrapper.orientation =
+            LinearLayout.VERTICAL
+
+        wrapper.gravity =
+            if (user) {
+                Gravity.END
+            } else {
+                Gravity.START
+            }
+
+        wrapper.setPadding(
+            dp(4),
+            dp(6),
+            dp(4),
+            dp(6)
+        )
+
+        val name = TextView(this)
+
+        name.text =
+            if (user) "YOU" else "AX"
+
+        name.textColor =
+            if (user) blue else green
+
+        name.textSize = 10f
+
+        name.setPadding(
+            dp(5),
+            0,
+            dp(5),
+            dp(4)
+        )
+
+        wrapper.addView(name)
+
+        val body = TextView(this)
+
+        body.text = message
+
+        body.textColor = white
+        body.textSize = 16f
+
+        body.setPadding(
+            dp(16),
+            dp(13),
+            dp(16),
+            dp(13)
+        )
+
+        val shape = GradientDrawable()
+
+        shape.cornerRadius =
+            dp(19).toFloat()
+
+        shape.setColor(
+            if (user) {
+                Color.rgb(35, 57, 75)
+            } else {
+                panel
+            }
+        )
+
+        body.background = shape
+
+        val width =
+            (resources.displayMetrics.widthPixels * 0.84f).toInt()
+
+        wrapper.addView(
+            body,
+            LinearLayout.LayoutParams(
+                width,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+        )
+
+        return wrapper
+    }
+
+    // ============================================================
+    // TOP MENU
+    // ============================================================
+
+    private fun showMenu() {
+
+        val dialog = Dialog(this)
+
+        val box = LinearLayout(this)
+
+        box.orientation =
+            LinearLayout.VERTICAL
+
+        box.setPadding(
+            dp(18),
+            dp(18),
+            dp(18),
+            dp(18)
+        )
+
+        val shape = GradientDrawable()
+
+        shape.cornerRadius =
+            dp(22).toFloat()
+
+        shape.setColor(panel2)
+
+        box.background = shape
+
+        val title = TextView(this)
+
+        title.text = "HABITAT"
+        title.textColor = white
+        title.textSize = 21f
+
+        title.setTypeface(
+            null,
+            android.graphics.Typeface.BOLD
+        )
+
+        box.addView(
+            title,
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                dp(50)
+            )
+        )
+
+        addMenuItem(
+            box,
+            "Chat with Ax"
+        ) {
+            dialog.dismiss()
+            showChatHome()
+        }
+
+        addMenuItem(
+            box,
+            "Projects"
+        ) {
+            dialog.dismiss()
+            showProjects()
+        }
+
+        addMenuItem(
+            box,
+            "Brain"
+        ) {
+            dialog.dismiss()
+            showBrain()
+        }
+
+        addMenuItem(
+            box,
+            "Scenes"
+        ) {
+            dialog.dismiss()
+            showScenes()
+        }
+
+        addMenuItem(
+            box,
+            "Systems"
+        ) {
+            dialog.dismiss()
+            showSystems()
+        }
+
+        addMenuItem(
+            box,
+            "About Habitat"
+        ) {
+            dialog.dismiss()
+            showAbout()
+        }
+
+        dialog.setContentView(box)
+
+        val window = dialog.window
+
+        if (window != null) {
+
+            window.setBackgroundDrawableResource(
+                android.R.color.transparent
+            )
+
+            window.setLayout(
+                dp(310),
+                WindowManager.LayoutParams.WRAP_CONTENT
+            )
+        }
+
+        dialog.show()
+
+        dialog.window?.setLayout(
+            dp(310),
+            WindowManager.LayoutParams.WRAP_CONTENT
+        )
+    }
+
+    private fun addMenuItem(
+        parent: LinearLayout,
+        label: String,
+        action: () -> Unit
+    ) {
+
+        val item = TextView(this)
+
+        item.text = label
+        item.textColor = white
+        item.textSize = 16f
+        item.gravity = Gravity.CENTER_VERTICAL
+
+        item.setPadding(
+            dp(14),
+            0,
+            dp(14),
+            0
+        )
+
+        item.setOnClickListener {
+            action()
+        }
+
+        parent.addView(
+            item,
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                dp(52)
+            )
+        )
+    }
+
+    // ============================================================
     // PROJECTS
-    // ------------------------------------------------------------
+    // ============================================================
 
     private fun showProjects() {
 
-        setupScreen()
-
-        val shell = shell("PROJECTS")
+        startScreen()
 
         root.addView(
-            shell,
-            LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            )
+            topBar("PROJECTS")
         )
 
         val scroll = ScrollView(this)
 
         val list = LinearLayout(this)
-        list.orientation = LinearLayout.VERTICAL
+
+        list.orientation =
+            LinearLayout.VERTICAL
+
         list.setPadding(
             dp(4),
-            dp(4),
+            dp(10),
             dp(4),
             dp(20)
         )
 
         list.addView(
-            projectCard(
+            infoCard(
                 "DropPilot AI",
-                "AI-powered TikTok Shop commerce system",
+                "AI commerce engine",
                 "RESEARCH → SCORE → VERIFY → SELECT → LIST → MONITOR"
             )
         )
 
         list.addView(
-            projectCard(
+            infoCard(
                 "Vice City Files",
-                "GTA 6 content and media engine",
+                "GTA 6 media engine",
                 "RESEARCH → SCRIPT → CREATE → PUBLISH → ANALYZE"
             )
         )
 
         list.addView(
-            projectCard(
+            infoCard(
                 "Habitat",
-                "The AI environment that coordinates everything",
+                "AI operating environment",
                 "UNDERSTAND → PLAN → ACT → OBSERVE → VERIFY → CONTINUE"
             )
         )
@@ -820,215 +856,85 @@ class MainActivity : Activity() {
         )
     }
 
-    private fun projectCard(
-        name: String,
-        description: String,
-        flow: String
-    ): LinearLayout {
-
-        val c = cardLayout()
-
-        val title = TextView(this)
-        title.text = name
-        title.textColor = accent
-        title.textSize = 19f
-        title.setTypeface(null, android.graphics.Typeface.BOLD)
-
-        val desc = TextView(this)
-        desc.text = description
-        desc.textColor = text
-        desc.textSize = 14f
-        desc.setPadding(
-            0,
-            dp(6),
-            0,
-            dp(10)
-        )
-
-        val flowText = TextView(this)
-        flowText.text = flow
-        flowText.textColor = accent2
-        flowText.textSize = 12f
-
-        c.addView(title)
-        c.addView(desc)
-        c.addView(flowText)
-
-        return c
-    }
-
-    private fun projectProgress(
-        name: String,
-        description: String,
-        state: String
-    ): LinearLayout {
-
-        val row = LinearLayout(this)
-        row.orientation = LinearLayout.HORIZONTAL
-        row.gravity = Gravity.CENTER_VERTICAL
-
-        row.setPadding(
-            dp(14),
-            dp(12),
-            dp(14),
-            dp(12)
-        )
-
-        val drawable = GradientDrawable()
-        drawable.cornerRadius = dp(14).toFloat()
-        drawable.setColor(card)
-
-        row.background = drawable
-
-        val info = LinearLayout(this)
-        info.orientation = LinearLayout.VERTICAL
-
-        val title = TextView(this)
-        title.text = name
-        title.textColor = text
-        title.textSize = 15f
-        title.setTypeface(null, android.graphics.Typeface.BOLD)
-
-        val desc = TextView(this)
-        desc.text = description
-        desc.textColor = muted
-        desc.textSize = 12f
-
-        info.addView(title)
-        info.addView(desc)
-
-        row.addView(
-            info,
-            LinearLayout.LayoutParams(
-                0,
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-                1f
-            )
-        )
-
-        val stateText = TextView(this)
-        stateText.text = state
-        stateText.textColor = accent2
-        stateText.textSize = 11f
-
-        row.addView(stateText)
-
-        val params = LinearLayout.LayoutParams(
-            LinearLayout.LayoutParams.MATCH_PARENT,
-            LinearLayout.LayoutParams.WRAP_CONTENT
-        )
-
-        params.setMargins(
-            0,
-            0,
-            0,
-            dp(8)
-        )
-
-        row.layoutParams = params
-
-        return row
-    }
-
-    // ------------------------------------------------------------
+    // ============================================================
     // BRAIN
-    // ------------------------------------------------------------
+    // ============================================================
 
     private fun showBrain() {
 
-        setupScreen()
-
-        val shell = shell("AX BRAIN")
+        startScreen()
 
         root.addView(
-            shell,
-            LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            )
+            topBar("AX BRAIN")
         )
 
         val scroll = ScrollView(this)
 
         val list = LinearLayout(this)
-        list.orientation = LinearLayout.VERTICAL
+
+        list.orientation =
+            LinearLayout.VERTICAL
+
         list.setPadding(
             dp(4),
-            dp(4),
+            dp(10),
             dp(4),
             dp(20)
         )
 
-        val status = cardLayout()
-
-        val title = TextView(this)
-        title.text = "BRAIN STATUS"
-        title.textColor = accent
-        title.textSize = 18f
-        title.setTypeface(null, android.graphics.Typeface.BOLD)
-
-        val online = TextView(this)
-        online.text = "ONLINE"
-        online.textColor = accent2
-        online.textSize = 16f
-        online.setPadding(
-            0,
-            dp(8),
-            0,
-            dp(8)
-        )
-
-        val endpoint = TextView(this)
-        endpoint.text =
-            "Habitat Core → Ax Brain → OpenRouter"
-        endpoint.textColor = muted
-        endpoint.textSize = 13f
-
-        status.addView(title)
-        status.addView(online)
-        status.addView(endpoint)
-
-        list.addView(status)
-
         list.addView(
-            infoRow(
-                "Brain Adapter",
-                "CONNECTED"
+            infoCard(
+                "BRAIN",
+                "ONLINE",
+                "BrainAdapter connected to the Habitat backend."
             )
         )
 
         list.addView(
-            infoRow(
-                "Conversation Memory",
+            statusRow(
+                "Memory",
                 "READY"
             )
         )
 
         list.addView(
-            infoRow(
+            statusRow(
                 "Reasoning",
                 "READY"
             )
         )
 
         list.addView(
-            infoRow(
-                "Agent Coordination",
+            statusRow(
+                "Agents",
                 "READY"
             )
         )
 
         list.addView(
-            infoRow(
-                "Tool Layer",
+            statusRow(
+                "Tools",
                 "READY"
             )
         )
 
-        val clear = button(
-            "CLEAR LOCAL CONVERSATION MEMORY",
-            Color.rgb(255, 150, 150)
+        list.addView(
+            statusRow(
+                "Tasks",
+                "READY"
+            )
         )
+
+        val clear = TextView(this)
+
+        clear.text =
+            "CLEAR LOCAL CONVERSATION MEMORY"
+
+        clear.textColor =
+            Color.rgb(255, 145, 145)
+
+        clear.textSize = 13f
+        clear.gravity = Gravity.CENTER
 
         clear.setOnClickListener {
 
@@ -1045,7 +951,7 @@ class MainActivity : Activity() {
             clear,
             LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
-                dp(52)
+                dp(58)
             )
         )
 
@@ -1061,209 +967,61 @@ class MainActivity : Activity() {
         )
     }
 
-    // ------------------------------------------------------------
+    // ============================================================
     // SCENES
-    // ------------------------------------------------------------
+    // ============================================================
 
     private fun showScenes() {
 
-        setupScreen()
-
-        val shell = shell("SCENES")
+        startScreen()
 
         root.addView(
-            shell,
-            LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            )
-        )
-
-        val scroll = ScrollView(this)
-
-        val grid = LinearLayout(this)
-        grid.orientation = LinearLayout.VERTICAL
-        grid.setPadding(
-            dp(4),
-            dp(4),
-            dp(4),
-            dp(20)
-        )
-
-        grid.addView(
-            sceneIcon(
-                "⌂",
-                "COMMAND CENTER",
-                "Main Habitat control environment"
-            )
-        )
-
-        grid.addView(
-            sceneIcon(
-                "◉",
-                "CHAT WITH AX",
-                "Direct conversation with the core"
-            )
-        )
-
-        grid.addView(
-            sceneIcon(
-                "◆",
-                "PROJECT CONTROL",
-                "Manage active Habitat projects"
-            )
-        )
-
-        grid.addView(
-            sceneIcon(
-                "⚙",
-                "SYSTEM CONTROL",
-                "Tools, tasks, agents and automation"
-            )
-        )
-
-        scroll.addView(grid)
-
-        root.addView(
-            scroll,
-            LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                0,
-                1f
-            )
-        )
-    }
-
-    private fun sceneIcon(
-        icon: String,
-        titleText: String,
-        description: String
-    ): LinearLayout {
-
-        val c = cardLayout()
-
-        val iconView = TextView(this)
-        iconView.text = icon
-        iconView.textColor = accent
-        iconView.textSize = 28f
-
-        val title = TextView(this)
-        title.text = titleText
-        title.textColor = text
-        title.textSize = 17f
-        title.setTypeface(null, android.graphics.Typeface.BOLD)
-
-        val desc = TextView(this)
-        desc.text = description
-        desc.textColor = muted
-        desc.textSize = 13f
-
-        c.addView(iconView)
-        c.addView(title)
-        c.addView(desc)
-
-        return c
-    }
-
-    // ------------------------------------------------------------
-    // MORE
-    // ------------------------------------------------------------
-
-    private fun showMore() {
-
-        setupScreen()
-
-        val shell = shell("HABITAT")
-
-        root.addView(
-            shell,
-            LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            )
+            topBar("SCENES")
         )
 
         val scroll = ScrollView(this)
 
         val list = LinearLayout(this)
-        list.orientation = LinearLayout.VERTICAL
+
+        list.orientation =
+            LinearLayout.VERTICAL
+
         list.setPadding(
             dp(4),
-            dp(4),
+            dp(10),
             dp(4),
             dp(20)
         )
 
-        val about = cardLayout()
-
-        val title = TextView(this)
-        title.text = "HABITAT v0.2.2"
-        title.textColor = accent
-        title.textSize = 20f
-        title.setTypeface(null, android.graphics.Typeface.BOLD)
-
-        val description = TextView(this)
-        description.text =
-            "An AI environment built around Ax.\n\n" +
-            "Habitat is designed to become more than a chat interface. " +
-            "The long-term system combines memory, reasoning, projects, " +
-            "agents, tools, tasks, automation and Android interaction."
-        description.textColor = text
-        description.textSize = 14f
-        description.setPadding(
-            0,
-            dp(10),
-            0,
-            0
-        )
-
-        about.addView(title)
-        about.addView(description)
-
-        list.addView(about)
-
         list.addView(
-            infoRow(
-                "Version",
-                "v0.2.2"
+            infoCard(
+                "COMMAND CENTER",
+                "Habitat home",
+                "Central environment for Ax and all active projects."
             )
         )
 
         list.addView(
-            infoRow(
-                "Core",
-                "AX"
+            infoCard(
+                "AX CHAT",
+                "Conversation",
+                "Direct communication with the Habitat intelligence layer."
             )
         )
 
         list.addView(
-            infoRow(
-                "Environment",
-                "HABITAT"
+            infoCard(
+                "PROJECT CONTROL",
+                "Projects",
+                "Manage DropPilot, Vice City Files and Habitat."
             )
         )
 
         list.addView(
-            infoRow(
-                "Backend",
-                "ONLINE"
-            )
-        )
-
-        val chat = button(
-            "RETURN TO AX  →",
-            accent
-        )
-
-        chat.setOnClickListener {
-            showChat()
-        }
-
-        list.addView(
-            chat,
-            LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                dp(52)
+            infoCard(
+                "SYSTEM CONTROL",
+                "Systems",
+                "Agents, tasks, tools, memory and automation."
             )
         )
 
@@ -1279,28 +1037,178 @@ class MainActivity : Activity() {
         )
     }
 
-    // ------------------------------------------------------------
-    // UI COMPONENTS
-    // ------------------------------------------------------------
+    // ============================================================
+    // SYSTEMS
+    // ============================================================
 
-    private fun cardLayout(): LinearLayout {
+    private fun showSystems() {
 
-        val c = LinearLayout(this)
+        startScreen()
 
-        c.orientation = LinearLayout.VERTICAL
-
-        c.setPadding(
-            dp(16),
-            dp(16),
-            dp(16),
-            dp(16)
+        root.addView(
+            topBar("SYSTEMS")
         )
 
-        val drawable = GradientDrawable()
-        drawable.cornerRadius = dp(18).toFloat()
-        drawable.setColor(card)
+        val scroll = ScrollView(this)
 
-        c.background = drawable
+        val list = LinearLayout(this)
+
+        list.orientation =
+            LinearLayout.VERTICAL
+
+        list.setPadding(
+            dp(4),
+            dp(10),
+            dp(4),
+            dp(20)
+        )
+
+        list.addView(
+            statusRow(
+                "Memory",
+                "READY"
+            )
+        )
+
+        list.addView(
+            statusRow(
+                "Projects",
+                "READY"
+            )
+        )
+
+        list.addView(
+            statusRow(
+                "Agents",
+                "READY"
+            )
+        )
+
+        list.addView(
+            statusRow(
+                "Tasks",
+                "READY"
+            )
+        )
+
+        list.addView(
+            statusRow(
+                "Tools",
+                "READY"
+            )
+        )
+
+        list.addView(
+            statusRow(
+                "Brain",
+                "ONLINE"
+            )
+        )
+
+        scroll.addView(list)
+
+        root.addView(
+            scroll,
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                0,
+                1f
+            )
+        )
+    }
+
+    // ============================================================
+    // ABOUT
+    // ============================================================
+
+    private fun showAbout() {
+
+        startScreen()
+
+        root.addView(
+            topBar("HABITAT")
+        )
+
+        val scroll = ScrollView(this)
+
+        val list = LinearLayout(this)
+
+        list.orientation =
+            LinearLayout.VERTICAL
+
+        list.setPadding(
+            dp(4),
+            dp(10),
+            dp(4),
+            dp(20)
+        )
+
+        list.addView(
+            infoCard(
+                "HABITAT v0.2.2",
+                "AX AI OPERATING ENVIRONMENT",
+                "Habitat is being built as an AI environment rather than a simple chatbot."
+            )
+        )
+
+        list.addView(
+            infoCard(
+                "CORE LOOP",
+                "UNDERSTAND → PLAN → ACT",
+                "OBSERVE → VERIFY → CONTINUE"
+            )
+        )
+
+        list.addView(
+            infoCard(
+                "LONG-TERM",
+                "MEMORY • AGENTS • TOOLS • TASKS",
+                "Android control, automation, projects and intelligent coordination."
+            )
+        )
+
+        scroll.addView(list)
+
+        root.addView(
+            scroll,
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                0,
+                1f
+            )
+        )
+    }
+
+    // ============================================================
+    // COMPONENTS
+    // ============================================================
+
+    private fun infoCard(
+        title: String,
+        subtitle: String,
+        description: String
+    ): LinearLayout {
+
+        val card = LinearLayout(this)
+
+        card.orientation =
+            LinearLayout.VERTICAL
+
+        card.setPadding(
+            dp(17),
+            dp(17),
+            dp(17),
+            dp(17)
+        )
+
+        val shape = GradientDrawable()
+
+        shape.cornerRadius =
+            dp(19).toFloat()
+
+        shape.setColor(panel)
+
+        card.background = shape
 
         val params = LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT,
@@ -1314,41 +1222,82 @@ class MainActivity : Activity() {
             dp(10)
         )
 
-        c.layoutParams = params
+        card.layoutParams = params
 
-        return c
+        val titleView = TextView(this)
+
+        titleView.text = title
+        titleView.textColor = blue
+        titleView.textSize = 18f
+
+        titleView.setTypeface(
+            null,
+            android.graphics.Typeface.BOLD
+        )
+
+        val subtitleView = TextView(this)
+
+        subtitleView.text = subtitle
+        subtitleView.textColor = green
+        subtitleView.textSize = 12f
+
+        subtitleView.setPadding(
+            0,
+            dp(5),
+            0,
+            dp(8)
+        )
+
+        val descView = TextView(this)
+
+        descView.text = description
+        descView.textColor = muted
+        descView.textSize = 14f
+
+        card.addView(titleView)
+        card.addView(subtitleView)
+        card.addView(descView)
+
+        return card
     }
 
-    private fun infoRow(
+    private fun statusRow(
         label: String,
         value: String
     ): LinearLayout {
 
         val row = LinearLayout(this)
 
-        row.orientation = LinearLayout.HORIZONTAL
-        row.gravity = Gravity.CENTER_VERTICAL
+        row.orientation =
+            LinearLayout.HORIZONTAL
+
+        row.gravity =
+            Gravity.CENTER_VERTICAL
 
         row.setPadding(
+            dp(16),
             dp(14),
-            dp(12),
-            dp(14),
-            dp(12)
+            dp(16),
+            dp(14)
         )
 
-        val drawable = GradientDrawable()
-        drawable.cornerRadius = dp(14).toFloat()
-        drawable.setColor(card)
+        val shape = GradientDrawable()
 
-        row.background = drawable
+        shape.cornerRadius =
+            dp(15).toFloat()
 
-        val l = TextView(this)
-        l.text = label
-        l.textColor = text
-        l.textSize = 14f
+        shape.setColor(panel)
+
+        row.background = shape
+
+        val labelView = TextView(this)
+
+        labelView.text = label
+        labelView.textColor = white
+        labelView.textSize = 14f
 
         row.addView(
-            l,
+            labelView,
             LinearLayout.LayoutParams(
                 0,
                 LinearLayout.LayoutParams.WRAP_CONTENT,
@@ -1356,12 +1305,13 @@ class MainActivity : Activity() {
             )
         )
 
-        val v = TextView(this)
-        v.text = value
-        v.textColor = accent2
-        v.textSize = 12f
+        val valueView = TextView(this)
 
-        row.addView(v)
+        valueView.text = value
+        valueView.textColor = green
+        valueView.textSize = 12f
+
+        row.addView(valueView)
 
         val params = LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT,
@@ -1378,93 +1328,5 @@ class MainActivity : Activity() {
         row.layoutParams = params
 
         return row
-    }
-
-    private fun bubble(
-        speaker: String,
-        message: String,
-        user: Boolean
-    ): LinearLayout {
-
-        val wrapper = LinearLayout(this)
-
-        wrapper.orientation = LinearLayout.VERTICAL
-
-        wrapper.gravity =
-            if (user) Gravity.END else Gravity.START
-
-        wrapper.setPadding(
-            dp(4),
-            dp(5),
-            dp(4),
-            dp(5)
-        )
-
-        val label = TextView(this)
-        label.text = "$speaker  •  ${now()}"
-        label.textColor =
-            if (user) accent else accent2
-        label.textSize = 10f
-
-        val textView = TextView(this)
-        textView.text = message
-        textView.textColor = text
-        textView.textSize = 15f
-
-        textView.setPadding(
-            dp(15),
-            dp(12),
-            dp(15),
-            dp(12)
-        )
-
-        val drawable = GradientDrawable()
-
-        drawable.cornerRadius = dp(18).toFloat()
-
-        drawable.setColor(
-            if (user) {
-                Color.rgb(31, 55, 72)
-            } else {
-                card
-            }
-        )
-
-        textView.background = drawable
-
-        val maxWidth =
-            (resources.displayMetrics.widthPixels * 0.84f).toInt()
-
-        wrapper.addView(label)
-
-        wrapper.addView(
-            textView,
-            LinearLayout.LayoutParams(
-                maxWidth,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            )
-        )
-
-        return wrapper
-    }
-
-    private fun animateAx(view: View) {
-
-        val animation = AlphaAnimation(
-            0.65f,
-            1.0f
-        )
-
-        animation.duration = 900
-        animation.repeatMode =
-            AlphaAnimation.REVERSE
-        animation.repeatCount =
-            AlphaAnimation.INFINITE
-
-        view.startAnimation(animation)
-    }
-
-    private fun Int.toArgb(): Int {
-        return this
     }
 }
