@@ -7,20 +7,37 @@ app.use(express.json({ limit: "1mb" }));
 
 const port = process.env.PORT || 8080;
 
-const apiKey = process.env.OPENAI_API_KEY;
+const apiKey = process.env.OPENROUTER_API_KEY;
+const model = "openrouter/free";
 
 if (!apiKey) {
-  console.warn("WARNING: OPENAI_API_KEY is not configured.");
+  console.warn(
+    "WARNING: OPENROUTER_API_KEY is not configured."
+  );
 }
 
 const client = new OpenAI({
-  apiKey
+  apiKey,
+  baseURL: "https://openrouter.ai/api/v1",
+  defaultHeaders: {
+    "HTTP-Referer": "https://habitat-1-szzd.onrender.com",
+    "X-Title": "Habitat Ax Core"
+  }
 });
 
 /*
- * HABITAT AX CORE BACKEND
+ * HABITAT AX CORE
+ *
+ * FREE BRAIN EDITION
+ *
+ * Provider:
+ *   OpenRouter
+ *
+ * Model:
+ *   openrouter/free
  *
  * Endpoints:
+ *   GET  /
  *   GET  /health
  *   POST /chat
  */
@@ -28,7 +45,11 @@ const client = new OpenAI({
 app.get("/", (req, res) => {
   res.json({
     habitat: "online",
-    brain: "ready",
+    brain: apiKey ? "ready" : "missing_api_key",
+    backend: "ready",
+    provider: "openrouter",
+    model,
+    free_brain: true,
     message: "Habitat Ax Core backend is running."
   });
 });
@@ -38,7 +59,9 @@ app.get("/health", (req, res) => {
     habitat: "online",
     brain: apiKey ? "ready" : "missing_api_key",
     backend: "ready",
-    model: "gpt-5.6-luna"
+    provider: "openrouter",
+    model,
+    free_brain: true
   });
 });
 
@@ -54,6 +77,13 @@ app.post("/chat", async (req, res) => {
       });
     }
 
+    if (!apiKey) {
+      return res.status(500).json({
+        error:
+          "OPENROUTER_API_KEY is not configured on the Habitat server."
+      });
+    }
+
     const history = Array.isArray(
       req.body?.history
     )
@@ -62,29 +92,13 @@ app.post("/chat", async (req, res) => {
 
     const recentHistory = history.slice(-20);
 
-    const context = recentHistory
-      .map(item => {
-        const user = String(
-          item?.user || ""
-        );
-
-        const assistant = String(
-          item?.assistant || ""
-        );
-
-        return (
-          `USER: ${user}\n` +
-          `AX: ${assistant}`
-        );
-      })
-      .join("\n\n");
-
     const systemPrompt = `
 You are Ax, the central intelligence of Habitat.
 
 Habitat is the user's personal AI operating environment.
 
 Your role is to:
+
 - understand the user's objective
 - reason about the task
 - use available tools when connected
@@ -97,6 +111,7 @@ Your role is to:
 - help develop Habitat itself
 
 Current Habitat projects:
+
 1. DropPilot AI
 2. Vice City Files
 3. Habitat
@@ -111,44 +126,63 @@ VERIFY
 STORE RESULT
 
 You are not merely a chatbot.
+
 You are the intelligence layer coordinating Habitat.
 
-Be direct, natural, and useful.
+Be direct, natural, practical, and useful.
 `;
 
-    const prompt = context
-      ? `
-Previous Habitat conversation:
+    const messages = [
+      {
+        role: "system",
+        content: systemPrompt
+      }
+    ];
 
-${context}
+    for (const item of recentHistory) {
+      const userMessage = String(
+        item?.user || ""
+      ).trim();
 
-CURRENT USER COMMAND:
+      const assistantMessage = String(
+        item?.assistant || ""
+      ).trim();
 
-${message}
-`
-      : message;
+      if (userMessage) {
+        messages.push({
+          role: "user",
+          content: userMessage
+        });
+      }
 
-    if (!apiKey) {
-      return res.status(500).json({
-        error:
-          "OPENAI_API_KEY is not configured on the Habitat server."
-      });
+      if (assistantMessage) {
+        messages.push({
+          role: "assistant",
+          content: assistantMessage
+        });
+      }
     }
 
+    messages.push({
+      role: "user",
+      content: message
+    });
+
     const response =
-      await client.responses.create({
-        model: "gpt-5.6-luna",
-        instructions: systemPrompt,
-        input: prompt
+      await client.chat.completions.create({
+        model,
+        messages
       });
 
     const output =
-      response.output_text || "";
+      response.choices?.[0]?.message?.content || "";
 
     res.json({
       response: output,
-      model: "gpt-5.6-luna",
-      habitat: "online"
+      model,
+      provider: "openrouter",
+      habitat: "online",
+      free_brain: true
     });
 
   } catch (error) {
