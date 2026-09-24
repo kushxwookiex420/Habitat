@@ -16,16 +16,8 @@ jobs:
 
     steps:
 
-      # ============================================================
-      # CHECKOUT
-      # ============================================================
-
       - name: Checkout repository
         uses: actions/checkout@v4
-
-      # ============================================================
-      # JAVA 17
-      # ============================================================
 
       - name: Set up Java 17
         uses: actions/setup-java@v5
@@ -33,18 +25,10 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      # ============================================================
-      # GRADLE 8.9
-      # ============================================================
-
       - name: Set up Gradle 8.9
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "8.9"
-
-      # ============================================================
-      # LOCATE ANDROID SDK
-      # ============================================================
 
       - name: Locate Android SDK
         shell: bash
@@ -64,13 +48,8 @@ jobs:
 
           echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
           echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
-
           echo "$SDK/platform-tools" >> "$GITHUB_PATH"
           echo "$SDK/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
-
-      # ============================================================
-      # ANDROID SDK
-      # ============================================================
 
       - name: Install Android SDK packages
         shell: bash
@@ -90,10 +69,6 @@ jobs:
           "$SDKMANAGER" "platform-tools"
           "$SDKMANAGER" "platforms;android-35"
           "$SDKMANAGER" "build-tools;35.0.0"
-
-      # ============================================================
-      # EXTRACT REAL v0.3.0 PROJECT
-      # ============================================================
 
       - name: Extract Habitat v0.3.0 project
         shell: bash
@@ -125,10 +100,6 @@ jobs:
           echo "PROJECT:"
           echo "$PROJECT_DIR"
 
-      # ============================================================
-      # VERIFY v0.3.0 SOURCE
-      # ============================================================
-
       - name: Verify Habitat v0.3.0 source
         shell: bash
         run: |
@@ -136,10 +107,6 @@ jobs:
 
           PROJECT="$HABITAT_PROJECT_DIR"
           CORE="$PROJECT/app/src/main/java/com/habitat/core"
-
-          echo "=============================================="
-          echo "HABITAT v0.3.0 SOURCE"
-          echo "=============================================="
 
           test -f "$PROJECT/settings.gradle.kts"
           test -f "$PROJECT/build.gradle.kts"
@@ -155,15 +122,9 @@ jobs:
           test -f "$CORE/HologramView.kt"
           test -f "$CORE/HabitatWidget.kt"
 
-          echo ""
-          echo "Core files:"
-          find "$CORE" -maxdepth 1 -type f | sort
+          echo "Habitat v0.3.0 source verified."
 
-      # ============================================================
-      # SHOW ORIGINAL WORKER SOURCE
-      # ============================================================
-
-      - name: Inspect WorkerAdapter and MainActivity
+      - name: Inspect MainActivity worker call
         shell: bash
         run: |
           set -e
@@ -171,35 +132,10 @@ jobs:
           CORE="$HABITAT_PROJECT_DIR/app/src/main/java/com/habitat/core"
 
           echo "=============================================="
-          echo "ORIGINAL WORKER ADAPTER"
+          echo "MAIN ACTIVITY WORKER CALL"
           echo "=============================================="
 
-          nl -ba "$CORE/WorkerAdapter.kt"
-
-          echo ""
-          echo "=============================================="
-          echo "WORKER REGISTRY"
-          echo "=============================================="
-
-          nl -ba "$CORE/WorkerRegistry.kt"
-
-          echo ""
-          echo "=============================================="
-          echo "MAIN ACTIVITY"
-          echo "=============================================="
-
-          nl -ba "$CORE/MainActivity.kt"
-
-      # ============================================================
-      # REPAIR WORKER ADAPTER
-      #
-      # MainActivity expects:
-      #
-      # run(worker) { ok, text, detail -> ... }
-      #
-      # The supplied ZIP has a malformed WorkerAdapter.
-      # We replace only that broken adapter.
-      # ============================================================
+          grep -n "workerAdapter.run" "$CORE/MainActivity.kt" || true
 
       - name: Repair WorkerAdapter
         shell: bash
@@ -235,6 +171,7 @@ jobs:
 
               fun run(
                   worker: Worker,
+                  task: String,
                   callback: (Boolean, String, String) -> Unit
               ): Future<*> {
 
@@ -245,7 +182,7 @@ jobs:
                           callback(
                               true,
                               "Worker task completed.",
-                              "Delegated worker execution completed successfully."
+                              "Delegated task received: $task"
                           )
 
                       } catch (e: Exception) {
@@ -271,10 +208,6 @@ jobs:
 
           nl -ba "$CORE/WorkerAdapter.kt"
 
-      # ============================================================
-      # VERIFY REPAIR
-      # ============================================================
-
       - name: Verify repaired WorkerAdapter
         shell: bash
         run: |
@@ -291,6 +224,9 @@ jobs:
           grep -q "worker: Worker" \
             "$CORE/WorkerAdapter.kt"
 
+          grep -q "task: String" \
+            "$CORE/WorkerAdapter.kt"
+
           grep -q "(Boolean, String, String)" \
             "$CORE/WorkerAdapter.kt"
 
@@ -298,10 +234,6 @@ jobs:
             "$CORE/WorkerAdapter.kt"
 
           echo "WorkerAdapter repair verified."
-
-      # ============================================================
-      # BUILD
-      # ============================================================
 
       - name: Build Habitat v0.3.0
         working-directory: ${{ env.HABITAT_PROJECT_DIR }}
@@ -318,10 +250,6 @@ jobs:
           gradle clean assembleDebug \
             --no-daemon \
             --stacktrace
-
-      # ============================================================
-      # VERIFY APK
-      # ============================================================
 
       - name: Verify APK
         shell: bash
@@ -359,10 +287,6 @@ jobs:
           cp "$APK" \
             artifact/Habitat-v0.3.0-Ax-debug.apk
 
-      # ============================================================
-      # SOURCE ARCHIVE
-      # ============================================================
-
       - name: Create source archive
         shell: bash
         run: |
@@ -374,10 +298,6 @@ jobs:
             "$GITHUB_WORKSPACE/artifact/Habitat-v0.3.0-Ax-source.zip" \
             .
 
-      # ============================================================
-      # UPLOAD APK
-      # ============================================================
-
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
@@ -385,20 +305,12 @@ jobs:
           path: artifact/Habitat-v0.3.0-Ax-debug.apk
           if-no-files-found: error
 
-      # ============================================================
-      # UPLOAD SOURCE
-      # ============================================================
-
       - name: Upload source
         uses: actions/upload-artifact@v4
         with:
           name: Habitat-v0.3.0-Ax-source
           path: artifact/Habitat-v0.3.0-Ax-source.zip
           if-no-files-found: error
-
-      # ============================================================
-      # SUCCESS
-      # ============================================================
 
       - name: Habitat v0.3.0 success
         shell: bash
@@ -414,5 +326,3 @@ jobs:
           echo ""
           echo "SOURCE:"
           ls -lh artifact/Habitat-v0.3.0-Ax-source.zip
-          echo ""
-          echo "================================================"
