@@ -453,48 +453,36 @@ jobs:
           PY
           cat > "$CORE/HologramView.kt" <<'KT'
           package com.habitat.core
-
+          
           import android.content.Context
           import android.graphics.*
           import android.view.MotionEvent
           import android.view.View
-          import kotlin.math.abs
-          import kotlin.math.sin
-
+          import kotlin.math.*
+          
           class HologramView(context: Context): View(context) {
-              private val p=Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+              private val p=Paint(Paint.ANTI_ALIAS_FLAG)
               private val holo=Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
               private val glow=Paint(Paint.ANTI_ALIAS_FLAG)
+              private val starPaint=Paint(Paint.ANTI_ALIAS_FLAG)
               private var phase=0f
-              private var targetYaw=0f
               private var yaw=0f
-              private var pulse=0f
+              private var targetYaw=0f
               private var touchDown=false
               private val audrey: Bitmap = BitmapFactory.decodeResource(resources,R.drawable.ax_portrait)
-
+          
               init {
                   setLayerType(View.LAYER_TYPE_SOFTWARE,null)
                   isClickable=true
-
-                  // Convert the source portrait into a luminous cyan hologram.
-                  // Dark source pixels become transparent; bright subject detail remains.
-                  val cm=ColorMatrix(floatArrayOf(
-                      0.05f,0.10f,0.02f,0f,0f,
-                      0.10f,0.55f,0.10f,0f,35f,
-                      0.05f,0.20f,0.70f,0f,55f,
-                      0.10f,0.42f,0.18f,0f,0f,
-                      0f,0f,0f,0f,0f
-                  ))
-                  holo.colorFilter=ColorMatrixColorFilter(cm)
+                  holo.alpha=145
                   holo.xfermode=PorterDuffXfermode(PorterDuff.Mode.SCREEN)
               }
-
+          
               override fun onTouchEvent(e: MotionEvent): Boolean {
                   when(e.actionMasked){
                       MotionEvent.ACTION_DOWN, MotionEvent.ACTION_MOVE -> {
                           touchDown=true
-                          targetYaw=((e.x/width.toFloat())-.5f)*1.8f
-                          pulse=1f
+                          targetYaw=((e.x/width.toFloat())-.5f)*1.5f
                           invalidate()
                           return true
                       }
@@ -507,134 +495,140 @@ jobs:
                   }
                   return true
               }
-
-              override fun performClick(): Boolean {
-                  super.performClick()
-                  return true
+              override fun performClick(): Boolean { super.performClick(); return true }
+          
+              private fun galaxy(c:Canvas,w:Float,h:Float) {
+                  val bg=LinearGradient(0f,0f,w,h,Color.rgb(2,3,16),Color.rgb(7,2,25),Shader.TileMode.CLAMP)
+                  p.shader=bg; c.drawRect(0f,0f,w,h,p); p.shader=null
+          
+                  // Soft nebula clouds.
+                  val neb=RadialGradient(w*.22f,h*.25f,w*.48f,
+                      intArrayOf(Color.argb(75,75,25,180),Color.argb(20,25,70,160),Color.TRANSPARENT),
+                      floatArrayOf(0f,.48f,1f),Shader.TileMode.CLAMP)
+                  p.shader=neb; c.drawCircle(w*.22f,h*.25f,w*.48f,p); p.shader=null
+                  val neb2=RadialGradient(w*.78f,h*.68f,w*.52f,
+                      intArrayOf(Color.argb(55,15,100,190),Color.argb(15,90,20,170),Color.TRANSPARENT),
+                      floatArrayOf(0f,.5f,1f),Shader.TileMode.CLAMP)
+                  p.shader=neb2; c.drawCircle(w*.78f,h*.68f,w*.52f,p); p.shader=null
+          
+                  // Deep-space stars.
+                  starPaint.style=Paint.Style.FILL
+                  for(i in 0..95){
+                      val x=(sin(i*91.7+1.3)*.5+.5)*w
+                      val y=(sin(i*47.3+4.2)*.5+.5)*h
+                      val tw=.55f+abs(sin(phase*.018f+i))*1.35f
+                      starPaint.color=Color.argb((70+abs(sin(i*2.1))*150).toInt(),180,215,255)
+                      c.drawCircle(x,y,tw,starPaint)
+                  }
               }
-
-              private fun drawHologram(c:Canvas,w:Float,h:Float,cx:Float,cy:Float){
+          
+              private fun brain(c:Canvas,cx:Float,cy:Float,r:Float) {
+                  c.save()
+                  c.translate(cx,cy)
+                  val spin=phase*.022f
+                  c.rotate(sin(spin)*8f)
+                  val sx=.72f+.28f*abs(cos(spin))
+                  c.scale(sx,1f)
+          
+                  // Glowing brain silhouette made from two lobes.
+                  glow.style=Paint.Style.STROKE
+                  glow.strokeWidth=2.4f
+                  glow.color=Color.argb(190,110,220,255)
+                  glow.setShadowLayer(22f,0f,0f,Color.rgb(70,190,255))
+                  val left=Path(); val right=Path()
+                  left.moveTo(-8f,-r*.78f)
+                  left.cubicTo(-r*.48f,-r*.92f,-r*.92f,-r*.38f,-r*.76f,.05f)
+                  left.cubicTo(-r*.94f,r*.52f,-r*.42f,r*.78f,-8f,r*.68f)
+                  right.moveTo(8f,-r*.78f)
+                  right.cubicTo(r*.48f,-r*.92f,r*.92f,-r*.38f,r*.76f,.05f)
+                  right.cubicTo(r*.94f,r*.52f,r*.42f,r*.78f,8f,r*.68f)
+                  c.drawPath(left,glow); c.drawPath(right,glow)
+                  glow.clearShadowLayer()
+          
+                  // Rotating neural network arcs.
+                  p.style=Paint.Style.STROKE
+                  p.strokeWidth=1.15f
+                  p.color=Color.argb(125,125,235,255)
+                  for(i in 0..12){
+                      val yy=-r*.65f+i*r*.105f
+                      val bend=sin(spin+i*.7f)*r*.12f
+                      val path=Path()
+                      path.moveTo(-r*.62f,yy)
+                      path.cubicTo(-r*.28f,yy-bend,r*.28f,yy+bend,r*.62f,yy)
+                      c.drawPath(path,p)
+                  }
+                  // Central corpus callosum.
+                  p.color=Color.argb(170,170,245,255)
+                  c.drawLine(0f,-r*.67f,0f,r*.62f,p)
+          
+                  // Neural nodes.
+                  p.style=Paint.Style.FILL
+                  for(i in 0..25){
+                      val a=i*1.93f+spin
+                      val rr=r*(.22f+(i%5)*.095f)
+                      val x=cos(a)*rr
+                      val y=sin(a)*rr*.82f
+                      c.drawCircle(x,y,2f+abs(sin(phase*.04f+i))*1.4f,p)
+                  }
+                  c.restore()
+              }
+          
+              private fun drawAudrey(c:Canvas,w:Float,h:Float) {
                   if(audrey.isRecycled) return
-
-                  val src=Rect(
-                      (audrey.width*.31f).toInt(),
-                      (audrey.height*.035f).toInt(),
-                      (audrey.width*.99f).toInt(),
-                      (audrey.height*.875f).toInt()
-                  )
-                  val scale=minOf((w*.54f)/src.width(),(h*.78f)/src.height())
+                  val src=Rect((audrey.width*.31f).toInt(),(audrey.height*.035f).toInt(),
+                      (audrey.width*.99f).toInt(),(audrey.height*.875f).toInt())
+                  val scale=minOf((w*.43f)/src.width(),(h*.55f)/src.height())
                   val dw=src.width()*scale
                   val dh=src.height()*scale
-                  val bob=sin(phase*.065f)*h*.006f
-                  val width3d=dw*(.74f+.26f*abs(kotlin.math.cos(yaw)))
-                  val left=cx-width3d/2f
-                  val top=cy-dh*.56f+bob
-
+                  val cx=w*.50f
+                  val top=h*.38f-dh*.42f
                   c.save()
-
-                  // Deep ghost volumes: separated cyan layers make the projection visibly translucent.
-                  holo.alpha=28
-                  for(i in -5..5){
-                      val d=i*2.5f
-                      c.drawBitmap(audrey,src,RectF(left+d*sin(yaw),top+d*.15f,left+dw+d*sin(yaw),top+dh+d*.15f),holo)
-                  }
-
-                  // Main transparent cyan projection.
-                  holo.alpha=128
-                  c.save()
-                  c.scale(.74f+.26f*abs(kotlin.math.cos(yaw)),1f,cx,cy)
-                  c.skew(sin(yaw)*.06f,0f)
-                  c.drawBitmap(audrey,src,RectF(left,top,left+dw,top+dh),holo)
+                  c.scale(.76f+.24f*abs(cos(yaw)),1f,cx,h*.52f)
+                  // No frame, box, oval or border: only the translucent character.
+                  holo.alpha=35
+                  c.drawBitmap(audrey,src,RectF(cx-dw/2f,top,cx+dw/2f,top+dh),holo)
+                  holo.alpha=105
+                  c.drawBitmap(audrey,src,RectF(cx-dw/2f+sin(phase*.05f)*2f,top,cx+dw/2f+sin(phase*.05f)*2f,top+dh),holo)
                   c.restore()
-
-                  // Brighter facial/body detail passes.
-                  holo.alpha=72
-                  c.save()
-                  c.translate(sin(phase*.09f)*2f,0f)
-                  c.drawBitmap(audrey,src,RectF(left,top,left+dw,top+dh),holo)
-                  c.restore()
-
-                  c.restore()
-
-                  // Animated horizontal hologram breaks.
-                  val bandCount=17
+          
+                  // Fine hologram scan breaks only over the character area.
                   p.style=Paint.Style.FILL
-                  p.color=Color.argb(105,35,205,255)
-                  for(i in 0 until bandCount){
-                      val yy=top+(i+.5f)/bandCount*dh
-                      val wobble=sin(phase*.08f+i)*3f
-                      c.drawRect(left+wobble,yy,left+dw+wobble,yy+2f,p)
-                  }
-
-                  // Cyan aura around the projection volume.
-                  glow.style=Paint.Style.STROKE
-                  glow.strokeWidth=2f
-                  glow.color=Color.argb(75,55,210,255)
-                  glow.setShadowLayer(24f,0f,0f,Color.rgb(20,185,255))
-                  c.drawRoundRect(left-5f,top-5f,left+dw+5f,top+dh+5f,18f,18f,glow)
-                  glow.clearShadowLayer()
-              }
-
-              override fun onDraw(c:Canvas){
-                  super.onDraw(c)
-                  val w=width.toFloat()
-                  val h=height.toFloat()
-                  val cx=w/2f
-                  val cy=h*.46f
-
-                  c.drawColor(Color.rgb(3,8,15))
-
-                  yaw+=(targetYaw-yaw)*.12f
-                  if(!touchDown) targetYaw*=.94f
-                  pulse*=.90f
-
-                  // Projection field.
-                  p.style=Paint.Style.STROKE
-                  p.strokeWidth=2f
-                  p.color=Color.rgb(35,155,225)
-                  p.setShadowLayer(18f,0f,0f,Color.rgb(20,175,255))
-                  c.drawOval(cx-w*.30f,cy-h*.40f,cx+w*.30f,cy+h*.40f,p)
-                  c.drawOval(cx-w*.23f,cy-h*.33f,cx+w*.23f,cy+h*.33f,p)
-                  p.clearShadowLayer()
-
-                  drawHologram(c,w,h,cx,cy)
-
-                  // Projector rings.
-                  p.strokeWidth=3f
-                  p.color=Color.rgb(40,195,255)
-                  p.setShadowLayer(18f+20f*pulse,0f,0f,Color.rgb(40,195,255))
-                  val ring=h*.80f+sin(phase*.08f)*3f
-                  c.drawOval(cx-w*.27f,ring,cx+w*.27f,ring+h*.095f,p)
-                  p.strokeWidth=1.5f
-                  c.drawOval(cx-w*.19f,ring+h*.025f,cx+w*.19f,ring+h*.075f,p)
-                  p.clearShadowLayer()
-
-                  // Full-field scanlines, plus a moving bright scan bar.
-                  p.strokeWidth=1f
-                  p.color=Color.argb(72,55,135,190)
-                  for(y in 0 until height step 7){
-                      val off=sin((y+phase)*.055f)*3f
-                      c.drawLine(0f,y.toFloat(),w,y.toFloat()+off,p)
-                  }
-                  p.color=Color.argb(135,80,220,255)
-                  val scanY=(phase*2.6f)%h
-                  c.drawRect(w*.12f,scanY,w*.88f,scanY+2f,p)
-
-                  // Floating projection particles.
-                  p.style=Paint.Style.FILL
-                  p.color=Color.argb(150,110,230,255)
+                  p.color=Color.argb(55,145,225,255)
                   for(i in 0..15){
-                      val px=cx+sin(phase*.018f+i*1.71f)*w*.27f
-                      val py=cy+h*.18f+sin(phase*.027f+i*.83f)*h*.32f
-                      c.drawCircle(px,py,1.1f+abs(sin(phase*.05f+i))*1.8f,p)
+                      val yy=top+i/15f*dh
+                      c.drawRect(cx-dw*.49f,yy,cx+dw*.49f,yy+1f,p)
                   }
-
-                  p.color=Color.rgb(175,240,255)
+              }
+          
+              override fun onDraw(c:Canvas) {
+                  super.onDraw(c)
+                  val w=width.toFloat(); val h=height.toFloat()
+                  galaxy(c,w,h)
+          
+                  yaw+=(targetYaw-yaw)*.10f
+                  if(!touchDown) targetYaw*=.94f
+          
+                  // Central floating brain replaces the old blue projection cage.
+                  brain(c,w*.50f,h*.29f,min(w,h)*.105f)
+          
+                  // Audrey is a ghostly companion below the brain, without any blue frame.
+                  drawAudrey(c,w,h)
+          
+                  // Subtle orbit trails around the brain, not around Audrey.
+                  p.style=Paint.Style.STROKE
+                  p.strokeWidth=1.2f
+                  p.color=Color.argb(70,100,205,255)
+                  c.save(); c.rotate(phase*.45f,w*.5f,h*.29f)
+                  c.drawOval(w*.34f,h*.17f,w*.66f,h*.41f,p)
+                  c.restore()
+          
+                  p.style=Paint.Style.FILL
                   p.textAlign=Paint.Align.CENTER
-                  p.textSize=14f
-                  c.drawText(if(touchDown) "AX • INTERACTIVE HOLOGRAM" else "AX • AUDREY HOLOGRAPHIC PROJECTION",cx,h*.95f,p)
-
-                  phase+=1.15f
+                  p.textSize=12f
+                  p.color=Color.argb(190,170,225,255)
+                  c.drawText(if(touchDown) "AX • LINK ACTIVE" else "AX • NEURAL CORE ONLINE",w*.5f,h*.93f,p)
+          
+                  phase+=1f
                   postInvalidateDelayed(32)
               }
           }
