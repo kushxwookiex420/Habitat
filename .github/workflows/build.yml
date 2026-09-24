@@ -283,17 +283,27 @@ jobs:
 
           PY
 
-      - name: Repair WorkerAdapter
+      - name: Wire live Claude worker
         shell: bash
         run: |
           set -e
 
           CORE="$HABITAT_PROJECT_DIR/app/src/main/java/com/habitat/core"
+          MANIFEST="$HABITAT_PROJECT_DIR/app/src/main/AndroidManifest.xml"
 
-          cat > "$CORE/WorkerAdapter.kt" <<'EOF'
-          package com.habitat.core
+          python3 - "$CORE/WorkerAdapter.kt" "$MANIFEST" <<'PY'
+          import sys
+          from pathlib import Path
+
+          worker_path = Path(sys.argv[1])
+          manifest_path = Path(sys.argv[2])
+
+          worker = r'''package com.habitat.core
 
           import android.content.Context
+          import org.json.JSONObject
+          import java.net.HttpURLConnection
+          import java.net.URL
           import java.util.concurrent.Executors
           import java.util.concurrent.Future
 
@@ -302,9 +312,7 @@ jobs:
           ) {
 
               private val registry = WorkerRegistry(context)
-
-              private val executor =
-                  Executors.newCachedThreadPool()
+              private val executor = Executors.newCachedThreadPool()
 
               fun listWorkers(): List<Any> {
                   return try {
@@ -320,24 +328,49 @@ jobs:
                   task: String,
                   callback: (Boolean, String, String) -> Unit
               ): Future<*> {
-
                   return executor.submit {
-
                       try {
+                          val url = URL("https://habitat-1-szzd.onrender.com/worker/claude")
+                          val connection = url.openConnection() as HttpURLConnection
+                          connection.requestMethod = "POST"
+                          connection.connectTimeout = 15000
+                          connection.readTimeout = 120000
+                          connection.doOutput = true
+                          connection.setRequestProperty("Content-Type", "application/json")
 
-                          callback(
-                              true,
-                              "Worker task completed.",
-                              "Delegated task received: $task"
-                          )
+                          val payload = JSONObject().apply {
+                              put("worker", worker.id)
+                              put("task", task)
+                          }.toString()
 
+                          connection.outputStream.use { output ->
+                              output.write(payload.toByteArray(Charsets.UTF_8))
+                          }
+
+                          val code = connection.responseCode
+                          val stream = if (code in 200..299) {
+                              connection.inputStream
+                          } else {
+                              connection.errorStream
+                          }
+
+                          val body = stream?.bufferedReader()?.use { it.readText() } ?: ""
+                          connection.disconnect()
+
+                          val json = try { JSONObject(body) } catch (_: Exception) {
+                              JSONObject()
+                          }
+
+                          if (code in 200..299 && json.optBoolean("ok", false)) {
+                              val report = json.optString("response", "Claude returned an empty report.")
+                              callback(true, report, "Claude worker completed the delegated mission.")
+                          } else {
+                              val error = json.optString("error", "Claude worker request failed.")
+                              val detail = json.optString("details", "HTTP $code")
+                              callback(false, error, detail)
+                          }
                       } catch (e: Exception) {
-
-                          callback(
-                              false,
-                              "Worker task failed.",
-                              e.message ?: "Unknown worker error"
-                          )
+                          callback(false, "Claude worker connection failed.", e.message ?: "Unknown worker error")
                       }
                   }
               }
@@ -346,9 +379,28 @@ jobs:
                   executor.shutdownNow()
               }
           }
-          EOF
+          '''
 
-          echo "WorkerAdapter repaired."
+          worker_path.write_text(worker)
+
+          manifest = manifest_path.read_text()
+          if "android.permission.INTERNET" not in manifest:
+              marker = "<manifest"
+              start = manifest.find(marker)
+              close = manifest.find(">", start)
+              if start < 0 or close < 0:
+                  print("ERROR: AndroidManifest.xml manifest tag not found.")
+                  sys.exit(1)
+              manifest = manifest[:close+1] + '\n    <uses-permission android:name="android.permission.INTERNET" />' + manifest[close+1:]
+              manifest_path.write_text(manifest)
+
+          print("Live Claude worker wired.")
+          PY
+
+          grep -q 'https://habitat-1-szzd.onrender.com/worker/claude' "$CORE/WorkerAdapter.kt"
+          grep -q 'android.permission.INTERNET' "$MANIFEST"
+
+          echo "Claude worker endpoint: /worker/claude"
 
       - name: Verify repaired WorkerAdapter
         shell: bash
