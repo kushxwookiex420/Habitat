@@ -132,10 +132,75 @@ jobs:
           CORE="$HABITAT_PROJECT_DIR/app/src/main/java/com/habitat/core"
 
           echo "=============================================="
-          echo "MAIN ACTIVITY WORKER CALL"
+          echo "MAIN ACTIVITY WORKER CALL - BEFORE REPAIR"
           echo "=============================================="
 
           grep -n "workerAdapter.run" "$CORE/MainActivity.kt" || true
+
+      - name: Repair MainActivity worker callback
+        shell: bash
+        run: |
+          set -e
+
+          PROJECT="$HABITAT_PROJECT_DIR"
+          FILE="$PROJECT/app/src/main/java/com/habitat/core/MainActivity.kt"
+
+          test -f "$FILE"
+
+          python3 - "$FILE" <<'PY'
+          import re
+          import sys
+          from pathlib import Path
+
+          path = Path(sys.argv[1])
+          source = path.read_text()
+
+          pattern = r'(workerAdapter\.run\s*\(\s*worker\s*,\s*task\s*\)\s*\{\s*)ok\s*->'
+
+          replacement = r'\1ok, text, detail ->'
+
+          repaired, count = re.subn(
+              pattern,
+              replacement,
+              source,
+              count=1
+          )
+
+          if count != 1:
+              print("ERROR: Expected MainActivity worker callback was not found.")
+              print()
+              print("WorkerAdapter calls found:")
+              for line_number, line in enumerate(
+                  source.splitlines(),
+                  start=1
+              ):
+                  if "workerAdapter.run" in line:
+                      print(f"{line_number}: {line}")
+              sys.exit(1)
+
+          path.write_text(repaired)
+
+          print("MainActivity worker callback repaired.")
+          PY
+
+          echo "=============================================="
+          echo "MAIN ACTIVITY WORKER CALL - AFTER REPAIR"
+          echo "=============================================="
+
+          grep -n "workerAdapter.run" "$FILE"
+
+      - name: Verify repaired MainActivity callback
+        shell: bash
+        run: |
+          set -e
+
+          CORE="$HABITAT_PROJECT_DIR/app/src/main/java/com/habitat/core"
+
+          grep -Eq \
+            'workerAdapter\.run[[:space:]]*\([[:space:]]*worker,[[:space:]]*task[[:space:]]*\)[[:space:]]*\{[[:space:]]*ok,[[:space:]]*text,[[:space:]]*detail[[:space:]]*->' \
+            "$CORE/MainActivity.kt"
+
+          echo "MainActivity callback repair verified."
 
       - name: Repair WorkerAdapter
         shell: bash
