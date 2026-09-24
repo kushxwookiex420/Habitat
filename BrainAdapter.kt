@@ -24,36 +24,20 @@ class BrainAdapter(private val context: Context) {
     )
 
     companion object {
-        private const val PREFS = "habitat_brain"
-        private const val ENDPOINT_KEY = "endpoint"
-
-        private const val DEFAULT_ENDPOINT =
+        private const val LIVE_ENDPOINT =
             "https://habitat-cr46.onrender.com/chat"
     }
-
-    private val prefs =
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
     private val executor =
         Executors.newSingleThreadExecutor()
 
     fun endpoint(): String {
-        val saved = prefs.getString(ENDPOINT_KEY, "") ?: ""
-
-        return if (saved.isBlank()) {
-            DEFAULT_ENDPOINT
-        } else {
-            saved
-        }
+        return LIVE_ENDPOINT
     }
 
     fun setEndpoint(value: String) {
-        prefs.edit()
-            .putString(
-                ENDPOINT_KEY,
-                value.trim()
-            )
-            .apply()
+        // Intentionally ignored.
+        // Habitat always uses the current live brain endpoint.
     }
 
     fun send(
@@ -67,10 +51,12 @@ class BrainAdapter(private val context: Context) {
         )
 
         executor.execute {
-            try {
-                val url = URL(endpoint())
+            var connection: HttpURLConnection? = null
 
-                val connection =
+            try {
+                val url = URL(LIVE_ENDPOINT)
+
+                connection =
                     url.openConnection() as HttpURLConnection
 
                 connection.requestMethod = "POST"
@@ -120,11 +106,10 @@ class BrainAdapter(private val context: Context) {
                     }
 
                 val responseText =
-                    stream?.bufferedReader()
+                    stream
+                        ?.bufferedReader()
                         ?.use { it.readText() }
                         ?: ""
-
-                connection.disconnect()
 
                 if (responseCode !in 200..299) {
                     callback(
@@ -176,6 +161,9 @@ class BrainAdapter(private val context: Context) {
                                 ?: error.javaClass.simpleName
                     )
                 )
+
+            } finally {
+                connection?.disconnect()
             }
         }
     }
