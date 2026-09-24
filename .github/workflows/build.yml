@@ -16,16 +16,8 @@ jobs:
 
     steps:
 
-      # ============================================================
-      # CHECKOUT
-      # ============================================================
-
       - name: Checkout repository
         uses: actions/checkout@v4
-
-      # ============================================================
-      # JAVA
-      # ============================================================
 
       - name: Set up Java 17
         uses: actions/setup-java@v5
@@ -33,18 +25,10 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      # ============================================================
-      # GRADLE
-      # ============================================================
-
       - name: Set up Gradle 8.9
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "8.9"
-
-      # ============================================================
-      # ANDROID SDK
-      # ============================================================
 
       - name: Locate Android SDK
         shell: bash
@@ -68,9 +52,6 @@ jobs:
           echo "$SDK/platform-tools" >> "$GITHUB_PATH"
           echo "$SDK/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
 
-          echo "Android SDK:"
-          echo "$SDK"
-
       - name: Install Android SDK packages
         shell: bash
         run: |
@@ -89,10 +70,6 @@ jobs:
           "$SDKMANAGER" "platform-tools"
           "$SDKMANAGER" "platforms;android-35"
           "$SDKMANAGER" "build-tools;35.0.0"
-
-      # ============================================================
-      # EXTRACT REAL v0.3.0 PROJECT
-      # ============================================================
 
       - name: Extract Habitat v0.3.0 project
         shell: bash
@@ -128,14 +105,8 @@ jobs:
 
           echo "HABITAT_PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
-          echo "=============================================="
-          echo "HABITAT v0.3.0 PROJECT"
-          echo "=============================================="
+          echo "Habitat project:"
           echo "$PROJECT_DIR"
-
-      # ============================================================
-      # VERIFY SOURCE
-      # ============================================================
 
       - name: Verify Habitat v0.3.0 source
         shell: bash
@@ -161,10 +132,6 @@ jobs:
 
           echo "Habitat v0.3.0 source verified."
 
-      # ============================================================
-      # SHOW ORIGINAL WORKER CALL
-      # ============================================================
-
       - name: Inspect MainActivity before repair
         shell: bash
         run: |
@@ -176,25 +143,7 @@ jobs:
           echo "MAIN ACTIVITY BEFORE REPAIR"
           echo "=============================================="
 
-          grep -n -C 2 "workerAdapter.run" "$FILE" || true
-
-      # ============================================================
-      # REPAIR MAINACTIVITY CALLBACK
-      #
-      # WorkerAdapter expects:
-      #
-      # (Boolean, String, String) -> Unit
-      #
-      # The original v0.3.0 MainActivity uses:
-      #
-      # { ok -> ... }
-      #
-      # but then references text/detail.
-      #
-      # We convert it to:
-      #
-      # { ok, text, detail -> ... }
-      # ============================================================
+          grep -n -C 3 "workerAdapter.run" "$FILE" || true
 
       - name: Repair MainActivity worker callback
         shell: bash
@@ -210,77 +159,72 @@ jobs:
           import sys
           from pathlib import Path
 
-          file_path = Path(sys.argv[1])
-          source = file_path.read_text()
+          path = Path(sys.argv[1])
+          source = path.read_text()
 
-          # First attempt: exact known v0.3.0 form.
-          exact_patterns = [
-              (
-                  r'workerAdapter\.run\s*\(\s*worker\s*,\s*task\s*\)\s*\{\s*ok\s*->',
-                  'workerAdapter.run(worker, task) { ok, text, detail ->'
-              ),
-              (
-                  r'workerAdapter\.run\s*\(\s*worker\s*,\s*task\s*\)\s*\{\s*ok\s*,\s*->',
-                  'workerAdapter.run(worker, task) { ok, text, detail ->'
-              )
-          ]
+          # Find the first workerAdapter.run(...) callback regardless
+          # of whitespace or line wrapping.
+          call = re.search(
+              r'workerAdapter\.run\s*\(.*?\)\s*\{\s*([^{}]*?)\s*->',
+              source,
+              flags=re.DOTALL
+          )
 
-          repaired = False
-
-          for pattern, replacement in exact_patterns:
-              new_source, count = re.subn(
-                  pattern,
-                  replacement,
-                  source,
-                  count=1
-              )
-
-              if count == 1:
-                  source = new_source
-                  repaired = True
-                  break
-
-          # Fallback: locate the workerAdapter call and replace
-          # whatever lambda parameter list is present.
-          if not repaired:
-              fallback = re.compile(
-                  r'(workerAdapter\.run\s*\(\s*worker\s*,\s*task\s*\)'
-                  r'\s*\{\s*)'
-                  r'(?:ok(?:\s*,\s*(?:text|detail))*)?'
-                  r'\s*->'
-              )
-
-              new_source, count = fallback.subn(
-                  r'\1ok, text, detail ->',
-                  source,
-                  count=1
-              )
-
-              if count == 1:
-                  source = new_source
-                  repaired = True
-
-          if not repaired:
-              print("ERROR: Could not find the MainActivity worker callback.")
+          if not call:
+              print("ERROR: MainActivity workerAdapter.run callback was not found.")
               print()
-              print("WorkerAdapter calls found:")
-              for number, line in enumerate(
-                  source.splitlines(),
-                  start=1
-              ):
+              print("Relevant lines:")
+              for n, line in enumerate(source.splitlines(), 1):
                   if "workerAdapter.run" in line:
-                      print(f"{number}: {line}")
-
+                      print(f"{n}: {line}")
               sys.exit(1)
 
-          file_path.write_text(source)
+          old_params = call.group(1).strip()
 
-          print("SUCCESS: MainActivity worker callback repaired.")
+          # WorkerAdapter expects:
+          #
+          # (Boolean, String, String) -> Unit
+          #
+          # MainActivity uses:
+          #
+          # ok
+          # text
+          # detail
+          #
+          # Therefore the callback must receive all three values.
+
+          if old_params != "ok, text, detail":
+              start, end = call.span(1)
+
+              source = (
+                  source[:start]
+                  + "ok, text, detail"
+                  + source[end:]
+              )
+
+              path.write_text(source)
+
+              print(
+                  "SUCCESS: repaired MainActivity callback "
+                  f"({old_params!r} -> 'ok, text, detail')."
+              )
+          else:
+              print("SUCCESS: MainActivity callback was already correct.")
+
+          # Verify immediately.
+          verify = re.search(
+              r'workerAdapter\.run\s*\(.*?\)\s*\{\s*'
+              r'ok\s*,\s*text\s*,\s*detail\s*->',
+              source,
+              flags=re.DOTALL
+          )
+
+          if not verify:
+              print("ERROR: MainActivity callback repair could not be verified.")
+              sys.exit(1)
+
+          print("MainActivity callback repair VERIFIED.")
           PY
-
-      # ============================================================
-      # VERIFY MAINACTIVITY REPAIR
-      # ============================================================
 
       - name: Verify MainActivity repair
         shell: bash
@@ -293,23 +237,26 @@ jobs:
           echo "MAIN ACTIVITY AFTER REPAIR"
           echo "=============================================="
 
-          grep -n -C 2 "workerAdapter.run" "$FILE"
+          grep -n -C 3 "workerAdapter.run" "$FILE"
 
-          if ! grep -Eq \
-            'workerAdapter\.run[[:space:]]*\([[:space:]]*worker,[[:space:]]*task[[:space:]]*\)[[:space:]]*\{[[:space:]]*ok,[[:space:]]*text,[[:space:]]*detail[[:space:]]*->' \
-            "$FILE"; then
+          python3 - "$FILE" <<'PY'
+          import re
+          import sys
+          from pathlib import Path
 
-            echo ""
-            echo "ERROR: MainActivity callback repair was not verified."
-            exit 1
-          fi
+          source = Path(sys.argv[1]).read_text()
 
-          echo ""
-          echo "MainActivity callback repair VERIFIED."
+          if not re.search(
+              r'workerAdapter\.run\s*\(.*?\)\s*\{\s*'
+              r'ok\s*,\s*text\s*,\s*detail\s*->',
+              source,
+              flags=re.DOTALL
+          ):
+              print("ERROR: MainActivity callback repair was not verified.")
+              sys.exit(1)
 
-      # ============================================================
-      # REPAIR WORKERADAPTER
-      # ============================================================
+          print("MainActivity callback repair VERIFIED.")
+          PY
 
       - name: Repair WorkerAdapter
         shell: bash
@@ -376,15 +323,7 @@ jobs:
           }
           EOF
 
-          echo "=============================================="
-          echo "WORKER ADAPTER REPAIRED"
-          echo "=============================================="
-
-          nl -ba "$CORE/WorkerAdapter.kt"
-
-      # ============================================================
-      # VERIFY WORKERADAPTER
-      # ============================================================
+          echo "WorkerAdapter repaired."
 
       - name: Verify WorkerAdapter repair
         shell: bash
@@ -401,10 +340,6 @@ jobs:
           grep -q "Executors.newCachedThreadPool" "$FILE"
 
           echo "WorkerAdapter repair VERIFIED."
-
-      # ============================================================
-      # FINAL PRE-BUILD CHECK
-      # ============================================================
 
       - name: Final source sanity check
         shell: bash
@@ -429,10 +364,6 @@ jobs:
           echo ""
           echo "Source check complete."
 
-      # ============================================================
-      # BUILD
-      # ============================================================
-
       - name: Build Habitat v0.3.0
         working-directory: ${{ env.HABITAT_PROJECT_DIR }}
         shell: bash
@@ -448,10 +379,6 @@ jobs:
           gradle clean assembleDebug \
             --no-daemon \
             --stacktrace
-
-      # ============================================================
-      # VERIFY APK
-      # ============================================================
 
       - name: Verify APK
         shell: bash
@@ -470,28 +397,16 @@ jobs:
 
           if [ -z "$APK" ]; then
             echo "ERROR: APK was not produced."
-
-            find "$PROJECT/app/build" \
-              -type f 2>/dev/null \
-              | sort || true
-
             exit 1
           fi
-
-          echo "=============================================="
-          echo "APK FOUND"
-          echo "=============================================="
-
-          echo "$APK"
 
           mkdir -p "$GITHUB_WORKSPACE/artifact"
 
           cp "$APK" \
             "$GITHUB_WORKSPACE/artifact/Habitat-v0.3.0-Ax-debug.apk"
 
-      # ============================================================
-      # CREATE SOURCE ARCHIVE
-      # ============================================================
+          echo "APK FOUND:"
+          echo "$APK"
 
       - name: Create source archive
         shell: bash
@@ -504,10 +419,6 @@ jobs:
             "$GITHUB_WORKSPACE/artifact/Habitat-v0.3.0-Ax-source.zip" \
             .
 
-      # ============================================================
-      # UPLOAD APK
-      # ============================================================
-
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
@@ -515,20 +426,12 @@ jobs:
           path: artifact/Habitat-v0.3.0-Ax-debug.apk
           if-no-files-found: error
 
-      # ============================================================
-      # UPLOAD SOURCE
-      # ============================================================
-
       - name: Upload source
         uses: actions/upload-artifact@v4
         with:
           name: Habitat-v0.3.0-Ax-source
           path: artifact/Habitat-v0.3.0-Ax-source.zip
           if-no-files-found: error
-
-      # ============================================================
-      # SUCCESS
-      # ============================================================
 
       - name: Habitat v0.3.0 success
         shell: bash
