@@ -1,14 +1,17 @@
-name: Habitat v0.2.2 Ax Core
+name: Habitat v0.3.0 Ax Edition
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - main
 
 permissions:
   contents: read
 
 jobs:
   build:
-    name: Build Habitat v0.2.2 APK
+    name: Build Habitat v0.3.0 APK
     runs-on: ubuntu-latest
 
     steps:
@@ -21,10 +24,10 @@ jobs:
         uses: actions/checkout@v4
 
       # ============================================================
-      # JAVA
+      # JAVA 17
       # ============================================================
 
-      - name: Set up Java
+      - name: Set up Java 17
         uses: actions/setup-java@v5
         with:
           distribution: temurin
@@ -67,6 +70,10 @@ jobs:
           echo "$SDK/platform-tools" >> "$GITHUB_PATH"
           echo "$SDK/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
 
+      # ============================================================
+      # ANDROID SDK PACKAGES
+      # ============================================================
+
       - name: Install Android SDK packages
         shell: bash
         run: |
@@ -90,327 +97,112 @@ jobs:
           "$SDKMANAGER" "build-tools;35.0.0"
 
       # ============================================================
-      # CREATE BUILD PROJECT
-      #
-      # IMPORTANT:
-      # We create only the Gradle shell here.
-      # MainActivity.kt and BrainAdapter.kt come DIRECTLY
-      # from the GitHub repository.
+      # EXTRACT THE REAL v0.3.0 PROJECT
       # ============================================================
 
-      - name: Create clean Habitat build project
+      - name: Extract Habitat v0.3.0 project
         shell: bash
         run: |
           set -e
+
+          ZIP="$GITHUB_WORKSPACE/Habitat-Android-v0.3.0-Ax-Edition.zip"
+
+          test -f "$ZIP"
 
           rm -rf HabitatBuild
+          mkdir -p HabitatBuild
 
-          mkdir -p HabitatBuild/app/src/main/java/com/habitat/core
-          mkdir -p HabitatBuild/app/src/main/res/values
+          unzip -q "$ZIP" -d HabitatBuild
 
-      # ============================================================
-      # GRADLE SETTINGS
-      # ============================================================
+          PROJECT_DIR="$(
+            find HabitatBuild \
+              -type f \
+              -name "settings.gradle.kts" \
+              -print \
+              | head -n 1 \
+              | xargs dirname
+          )"
 
-      - name: Write Gradle settings
-        shell: bash
-        run: |
-          cat > HabitatBuild/settings.gradle.kts <<'EOF'
-          pluginManagement {
-              repositories {
-                  google()
-                  mavenCentral()
-                  gradlePluginPortal()
-              }
-          }
+          if [ -z "$PROJECT_DIR" ]; then
+            echo "ERROR: v0.3.0 Gradle project was not found."
+            find HabitatBuild -maxdepth 4 -type f | sort
+            exit 1
+          fi
 
-          dependencyResolutionManagement {
-              repositoriesMode.set(
-                  RepositoriesMode.FAIL_ON_PROJECT_REPOS
-              )
+          echo "PROJECT DIRECTORY:"
+          echo "$PROJECT_DIR"
 
-              repositories {
-                  google()
-                  mavenCentral()
-              }
-          }
-
-          rootProject.name = "Habitat"
-
-          include(":app")
-          EOF
+          echo "HABITAT_PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
       # ============================================================
-      # ROOT GRADLE
+      # VERIFY v0.3.0 PROJECT
       # ============================================================
 
-      - name: Write root Gradle build
-        shell: bash
-        run: |
-          cat > HabitatBuild/build.gradle.kts <<'EOF'
-          plugins {
-              id("com.android.application") version "8.6.1" apply false
-              id("org.jetbrains.kotlin.android") version "2.0.21" apply false
-          }
-          EOF
-
-      # ============================================================
-      # GRADLE PROPERTIES
-      # ============================================================
-
-      - name: Write Gradle properties
-        shell: bash
-        run: |
-          cat > HabitatBuild/gradle.properties <<'EOF'
-          org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
-          android.useAndroidX=true
-          android.nonTransitiveRClass=true
-          EOF
-
-      # ============================================================
-      # APP GRADLE
-      # ============================================================
-
-      - name: Write Android app build
-        shell: bash
-        run: |
-          cat > HabitatBuild/app/build.gradle.kts <<'EOF'
-          plugins {
-              id("com.android.application")
-              id("org.jetbrains.kotlin.android")
-          }
-
-          android {
-              namespace = "com.habitat.core"
-
-              compileSdk = 35
-
-              defaultConfig {
-                  applicationId = "com.habitat.core"
-
-                  minSdk = 24
-                  targetSdk = 35
-
-                  versionCode = 202
-                  versionName = "0.2.2"
-              }
-
-              buildTypes {
-                  release {
-                      isMinifyEnabled = false
-                  }
-
-                  debug {
-                      isMinifyEnabled = false
-                  }
-              }
-
-              compileOptions {
-                  sourceCompatibility = JavaVersion.VERSION_17
-                  targetCompatibility = JavaVersion.VERSION_17
-              }
-
-              kotlinOptions {
-                  jvmTarget = "17"
-              }
-          }
-          EOF
-
-      # ============================================================
-      # MANIFEST
-      # ============================================================
-
-      - name: Write Android manifest
-        shell: bash
-        run: |
-          cat > HabitatBuild/app/src/main/AndroidManifest.xml <<'EOF'
-          <?xml version="1.0" encoding="utf-8"?>
-
-          <manifest
-              xmlns:android="http://schemas.android.com/apk/res/android">
-
-              <uses-permission
-                  android:name="android.permission.INTERNET" />
-
-              <application
-                  android:allowBackup="true"
-                  android:label="Habitat"
-                  android:supportsRtl="true"
-                  android:theme="@style/HabitatTheme">
-
-                  <activity
-                      android:name=".MainActivity"
-                      android:screenOrientation="portrait"
-                      android:exported="true">
-
-                      <intent-filter>
-
-                          <action
-                              android:name="android.intent.action.MAIN" />
-
-                          <category
-                              android:name="android.intent.category.LAUNCHER" />
-
-                      </intent-filter>
-
-                  </activity>
-
-              </application>
-
-          </manifest>
-          EOF
-
-      # ============================================================
-      # THEME
-      # ============================================================
-
-      - name: Write Android theme
-        shell: bash
-        run: |
-          cat > HabitatBuild/app/src/main/res/values/styles.xml <<'EOF'
-          <?xml version="1.0" encoding="utf-8"?>
-
-          <resources>
-
-              <style
-                  name="HabitatTheme"
-                  parent="android:style/Theme.Material.NoActionBar">
-
-                  <item name="android:fontFamily">sans</item>
-                  <item name="android:windowLightStatusBar">false</item>
-                  <item name="android:statusBarColor">#05080D</item>
-                  <item name="android:navigationBarColor">#05080D</item>
-                  <item name="android:windowActionModeOverlay">true</item>
-
-              </style>
-
-          </resources>
-          EOF
-
-      # ============================================================
-      # COPY THE REAL HABITAT BRAIN ADAPTER
-      #
-      # DO NOT WRITE A REPLACEMENT HERE.
-      # This is the verified aa624822... BrainAdapter.kt.
-      # ============================================================
-
-      - name: Copy repository BrainAdapter
+      - name: Verify Habitat v0.3.0 source
         shell: bash
         run: |
           set -e
 
-          test -f "$GITHUB_WORKSPACE/BrainAdapter.kt"
+          PROJECT="$HABITAT_PROJECT_DIR"
 
-          cp "$GITHUB_WORKSPACE/BrainAdapter.kt" \
-            HabitatBuild/app/src/main/java/com/habitat/core/BrainAdapter.kt
+          echo "=============================================="
+          echo "HABITAT v0.3.0 SOURCE VERIFICATION"
+          echo "=============================================="
 
-          echo "======================================"
-          echo "BRAIN ADAPTER SOURCE"
-          echo "======================================"
+          test -f "$PROJECT/settings.gradle.kts"
+          test -f "$PROJECT/build.gradle.kts"
+          test -f "$PROJECT/app/build.gradle.kts"
+          test -f "$PROJECT/app/src/main/AndroidManifest.xml"
 
-          sha256sum "$GITHUB_WORKSPACE/BrainAdapter.kt"
-          sha256sum \
-            "HabitatBuild/app/src/main/java/com/habitat/core/BrainAdapter.kt"
-
-      # ============================================================
-      # COPY THE REAL HABITAT MAIN ACTIVITY
-      #
-      # THIS IS THE IMPORTANT FIX.
-      #
-      # The APK now uses the MainActivity.kt that you committed
-      # to the repository.
-      # ============================================================
-
-      - name: Copy repository MainActivity
-        shell: bash
-        run: |
-          set -e
-
-          test -f "$GITHUB_WORKSPACE/MainActivity.kt"
-
-          cp "$GITHUB_WORKSPACE/MainActivity.kt" \
-            HabitatBuild/app/src/main/java/com/habitat/core/MainActivity.kt
-
-          echo "======================================"
-          echo "MAIN ACTIVITY SOURCE"
-          echo "======================================"
-
-          sha256sum "$GITHUB_WORKSPACE/MainActivity.kt"
-          sha256sum \
-            "HabitatBuild/app/src/main/java/com/habitat/core/MainActivity.kt"
-
-      # ============================================================
-      # VERIFY WE ARE BUILDING THE REAL FILES
-      # ============================================================
-
-      - name: Verify Habitat source
-        shell: bash
-        run: |
-          set -e
-
-          echo "======================================"
-          echo "HABITAT SOURCE VERIFICATION"
-          echo "======================================"
+          test -f "$PROJECT/app/src/main/java/com/habitat/core/MainActivity.kt"
+          test -f "$PROJECT/app/src/main/java/com/habitat/core/BrainAdapter.kt"
+          test -f "$PROJECT/app/src/main/java/com/habitat/core/WorkerAdapter.kt"
+          test -f "$PROJECT/app/src/main/java/com/habitat/core/WorkerRegistry.kt"
+          test -f "$PROJECT/app/src/main/java/com/habitat/core/Models.kt"
+          test -f "$PROJECT/app/src/main/java/com/habitat/core/TaskStore.kt"
+          test -f "$PROJECT/app/src/main/java/com/habitat/core/HologramView.kt"
+          test -f "$PROJECT/app/src/main/java/com/habitat/core/HabitatWidget.kt"
 
           echo ""
-          echo "Repository files:"
-          find "$GITHUB_WORKSPACE" \
-            -maxdepth 2 \
+          echo "Core v0.3.0 files verified:"
+          find "$PROJECT/app/src/main/java/com/habitat/core" \
             -type f \
+            -maxdepth 1 \
             | sort
 
           echo ""
-          echo "Build project files:"
-          find HabitatBuild \
-            -type f \
-            | sort
+          echo "Checking v0.3.0 architecture..."
+
+          grep -R "WorkerAdapter" \
+            "$PROJECT/app/src/main/java/com/habitat/core"
+
+          grep -R "WorkerRegistry" \
+            "$PROJECT/app/src/main/java/com/habitat/core"
+
+          grep -R "TaskStore" \
+            "$PROJECT/app/src/main/java/com/habitat/core"
+
+          grep -R "HologramView" \
+            "$PROJECT/app/src/main/java/com/habitat/core"
 
           echo ""
-          echo "MainActivity.kt:"
-          test -f \
-            HabitatBuild/app/src/main/java/com/habitat/core/MainActivity.kt
-
-          echo ""
-          echo "BrainAdapter.kt:"
-          test -f \
-            HabitatBuild/app/src/main/java/com/habitat/core/BrainAdapter.kt
-
-          echo ""
-          echo "Checking package declarations:"
-
-          grep -n \
-            "package com.habitat.core" \
-            HabitatBuild/app/src/main/java/com/habitat/core/MainActivity.kt
-
-          grep -n \
-            "package com.habitat.core" \
-            HabitatBuild/app/src/main/java/com/habitat/core/BrainAdapter.kt
-
-          echo ""
-          echo "Checking live Brain endpoint:"
-
-          grep -n \
-            "habitat-1-szzd.onrender.com/chat" \
-            HabitatBuild/app/src/main/java/com/habitat/core/BrainAdapter.kt
-
-          echo ""
-          echo "======================================"
-          echo "SOURCE VERIFICATION PASSED"
-          echo "======================================"
+          echo "=============================================="
+          echo "v0.3.0 SOURCE VERIFICATION PASSED"
+          echo "=============================================="
 
       # ============================================================
       # BUILD
       # ============================================================
 
-      - name: Build debug APK
-        working-directory: HabitatBuild
+      - name: Build Habitat v0.3.0
+        working-directory: ${{ env.HABITAT_PROJECT_DIR }}
         shell: bash
         run: |
           set -e
 
-          echo "======================================"
-          echo "BUILDING HABITAT v0.2.2"
-          echo "======================================"
+          echo "=============================================="
+          echo "BUILDING HABITAT v0.3.0"
+          echo "=============================================="
 
           gradle clean assembleDebug \
             --no-daemon \
@@ -425,97 +217,102 @@ jobs:
         run: |
           set -e
 
+          PROJECT="$HABITAT_PROJECT_DIR"
+
           APK="$(
-            find HabitatBuild \
+            find "$PROJECT" \
               -type f \
-              -name '*.apk' \
-              -path '*/build/outputs/apk/*' \
+              -name "*.apk" \
+              -path "*/build/outputs/apk/*" \
               | head -n 1
           )"
 
           if [ -z "$APK" ]; then
+            echo "ERROR: Habitat v0.3.0 APK was not produced."
 
-            echo "ERROR: APK was not produced."
-
-            find HabitatBuild/app/build \
+            find "$PROJECT/app/build" \
               -type f 2>/dev/null \
               | sort || true
 
             exit 1
           fi
 
-          echo "======================================"
-          echo "APK FOUND"
-          echo "======================================"
+          echo "=============================================="
+          echo "HABITAT v0.3.0 APK FOUND"
+          echo "=============================================="
 
           echo "$APK"
 
           mkdir -p artifact
 
           cp "$APK" \
-            artifact/Habitat-v0.2.2-Ax-debug.apk
+            artifact/Habitat-v0.3.0-Ax-debug.apk
 
       # ============================================================
       # SOURCE ARCHIVE
       # ============================================================
 
-      - name: Create source archive
+      - name: Create v0.3.0 source archive
         shell: bash
         run: |
           set -e
 
-          cd HabitatBuild
+          cd "$HABITAT_PROJECT_DIR"
 
           zip -qr \
-            "$GITHUB_WORKSPACE/artifact/Habitat-v0.2.2-Ax-source.zip" \
+            "$GITHUB_WORKSPACE/artifact/Habitat-v0.3.0-Ax-source.zip" \
             .
 
       # ============================================================
       # UPLOAD APK
       # ============================================================
 
-      - name: Upload APK artifact
+      - name: Upload Habitat v0.3.0 APK
         uses: actions/upload-artifact@v4
         with:
-          name: Habitat-v0.2.2-Ax-debug-apk
-          path: artifact/Habitat-v0.2.2-Ax-debug.apk
+          name: Habitat-v0.3.0-Ax-debug-apk
+          path: artifact/Habitat-v0.3.0-Ax-debug.apk
           if-no-files-found: error
 
       # ============================================================
       # UPLOAD SOURCE
       # ============================================================
 
-      - name: Upload source artifact
+      - name: Upload Habitat v0.3.0 source
         uses: actions/upload-artifact@v4
         with:
-          name: Habitat-v0.2.2-Ax-source
-          path: artifact/Habitat-v0.2.2-Ax-source.zip
+          name: Habitat-v0.3.0-Ax-source
+          path: artifact/Habitat-v0.3.0-Ax-source.zip
           if-no-files-found: error
 
       # ============================================================
       # SUCCESS REPORT
       # ============================================================
 
-      - name: Build success report
+      - name: Habitat v0.3.0 success report
         shell: bash
         run: |
           echo ""
-          echo "=============================================="
-          echo "          HABITAT v0.2.2 AX CORE"
+          echo "================================================"
+          echo "          HABITAT v0.3.0 AX EDITION"
           echo "             BUILD SUCCESSFUL"
-          echo "=============================================="
+          echo "================================================"
           echo ""
-          echo "SOURCE:"
-          echo "Repository MainActivity.kt"
-          echo "Repository BrainAdapter.kt"
+          echo "REAL v0.3.0 PROJECT:"
+          echo "$HABITAT_PROJECT_DIR"
           echo ""
-          echo "LIVE BRAIN:"
-          echo "https://habitat-1-szzd.onrender.com/chat"
+          echo "ARCHITECTURE:"
+          echo "Ax / Habitat Orchestrator"
+          echo "WorkerAdapter"
+          echo "WorkerRegistry"
+          echo "TaskStore"
+          echo "HologramView"
+          echo "HabitatWidget"
           echo ""
           echo "APK:"
-          ls -lh artifact/Habitat-v0.2.2-Ax-debug.apk
+          ls -lh artifact/Habitat-v0.3.0-Ax-debug.apk
           echo ""
           echo "SOURCE:"
-          ls -lh artifact/Habitat-v0.2.2-Ax-source.zip
+          ls -lh artifact/Habitat-v0.3.0-Ax-source.zip
           echo ""
-          echo "=============================================="
+          echo "================================================"
