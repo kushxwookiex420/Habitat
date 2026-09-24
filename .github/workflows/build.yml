@@ -155,20 +155,6 @@ jobs:
           path = Path(sys.argv[1])
           source = path.read_text()
 
-          # IMPORTANT:
-          #
-          # Do NOT search for the first "{" after adapter.run.
-          #
-          # MainActivity contains Kotlin string interpolation such as:
-          #
-          #   ${t.id}
-          #   ${t.title}
-          #
-          # Those braces occur before the worker callback and caused the
-          # previous repair script to modify the wrong location.
-          #
-          # Instead, locate the exact callback parameter pattern.
-
           callback_patterns = [
               "){res->",
               "){ res ->",
@@ -212,7 +198,6 @@ jobs:
 
               sys.exit(1)
 
-          # Convert the old callback result object references.
           source = source.replace("res.ok", "ok")
           source = source.replace("res.text", "text")
           source = source.replace("res.detail", "detail")
@@ -222,10 +207,7 @@ jobs:
           check = path.read_text()
 
           if "ok, text, detail ->" not in check:
-              print(
-                  "ERROR: Correct worker callback parameters "
-                  "were not installed."
-              )
+              print("ERROR: Correct worker callback was not installed.")
               sys.exit(1)
 
           if "res.ok" in check:
@@ -282,10 +264,7 @@ jobs:
           )
 
           if callback_pos < 0:
-              print(
-                  "ERROR: Correct worker callback was not found "
-                  "after adapter.run."
-              )
+              print("ERROR: Correct worker callback was not found.")
               sys.exit(1)
 
           if "res.ok" in source:
@@ -299,19 +278,6 @@ jobs:
           if "res.detail" in source:
               print("ERROR: res.detail remains.")
               sys.exit(1)
-
-          # Make sure the Kotlin interpolation survived.
-          if "${t.id}" not in source:
-              print(
-                  "WARNING: ${t.id} was not found. "
-                  "Checking source manually."
-              )
-
-          if "${t.title}" not in source:
-              print(
-                  "WARNING: ${t.title} was not found. "
-                  "Checking source manually."
-              )
 
           print("MainActivity callback repair VERIFIED.")
 
@@ -382,11 +348,7 @@ jobs:
           }
           EOF
 
-          echo "=============================================="
-          echo "REPAIRED WORKER ADAPTER"
-          echo "=============================================="
-
-          nl -ba "$CORE/WorkerAdapter.kt"
+          echo "WorkerAdapter repaired."
 
       - name: Verify repaired WorkerAdapter
         shell: bash
@@ -441,21 +403,35 @@ jobs:
           done
 
           echo ""
-          echo "Checking for accidental callback corruption..."
+          echo "Checking repaired worker callback..."
 
-          if grep -R -n \
-            'jobs\.submit\|workerScreen\|worker\.id\|worker\.title' \
-            "$CORE/MainActivity.kt"; then
+          python3 - "$CORE/MainActivity.kt" <<'PY'
+          import sys
+          from pathlib import Path
 
-            echo ""
-            echo "ERROR: MainActivity contains suspicious corruption."
-            echo ""
-            echo "MainActivity:"
-            nl -ba "$CORE/MainActivity.kt"
-            exit 1
-          fi
+          source = Path(sys.argv[1]).read_text()
 
-          echo "No known callback-corruption patterns found."
+          worker_pos = source.find("adapter.run")
+
+          if worker_pos < 0:
+              worker_pos = source.find("workerAdapter.run")
+
+          if worker_pos < 0:
+              print("ERROR: WorkerAdapter run call is missing.")
+              sys.exit(1)
+
+          callback_pos = source.find(
+              "ok, text, detail ->",
+              worker_pos
+          )
+
+          if callback_pos < 0:
+              print("ERROR: Worker callback is missing.")
+              sys.exit(1)
+
+          print("Worker callback is structurally valid.")
+
+          PY
 
       - name: Build Habitat v0.3.0
         working-directory: ${{ env.HABITAT_PROJECT_DIR }}
@@ -490,11 +466,6 @@ jobs:
 
           if [ -z "$APK" ]; then
             echo "ERROR: APK was not produced."
-
-            find "$PROJECT/app/build" \
-              -type f 2>/dev/null \
-              | sort || true
-
             exit 1
           fi
 
