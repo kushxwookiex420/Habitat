@@ -200,6 +200,79 @@ Be direct, natural, practical, and useful.
   }
 });
 
+
+app.post("/worker/claude", async (req, res) => {
+  try {
+    const task = String(req.body?.task || "").trim();
+
+    if (!task) {
+      return res.status(400).json({
+        ok: false,
+        worker: "claude",
+        error: "task required"
+      });
+    }
+
+    if (!apiKey) {
+      return res.status(500).json({
+        ok: false,
+        worker: "claude",
+        error: "OPENROUTER_API_KEY is not configured on the Habitat server."
+      });
+    }
+
+    const workerModel = "anthropic/claude-sonnet-5";
+
+    const workerSystemPrompt = `
+You are Claude, a specialized worker inside Habitat.
+
+Ax is the central intelligence and manager of Habitat.
+You are a delegated worker, not the main brain.
+
+Complete the assigned mission directly.
+Return a concise, useful report for Ax.
+Do not claim actions you did not actually perform.
+If information is missing, state exactly what is missing.
+
+Mission:
+`;
+
+    const response = await client.chat.completions.create({
+      model: workerModel,
+      messages: [
+        {
+          role: "system",
+          content: workerSystemPrompt
+        },
+        {
+          role: "user",
+          content: task
+        }
+      ]
+    });
+
+    const output =
+      response.choices?.[0]?.message?.content || "";
+
+    return res.json({
+      ok: true,
+      worker: "claude",
+      model: workerModel,
+      response: output
+    });
+
+  } catch (error) {
+    console.error("HABITAT CLAUDE WORKER ERROR:", error);
+
+    return res.status(500).json({
+      ok: false,
+      worker: "claude",
+      error: "Claude worker error",
+      details: String(error?.message || error)
+    });
+  }
+});
+
 app.listen(
   port,
   "0.0.0.0",
