@@ -135,7 +135,7 @@ jobs:
           echo "MAIN ACTIVITY WORKER CALL"
           echo "=============================================="
 
-          grep -n "workerAdapter.run" "$CORE/MainActivity.kt" || true
+          grep -n -C 8 "adapter.run" "$CORE/MainActivity.kt" || true
 
       - name: Repair MainActivity worker callback
         shell: bash
@@ -153,11 +153,17 @@ jobs:
           path = Path(sys.argv[1])
           source = path.read_text()
 
-          marker = "workerAdapter"
+          # v0.3.0 uses "adapter" for WorkerAdapter.
+          # Keep workerAdapter as a compatibility fallback.
+          marker = "adapter.run"
           pos = source.find(marker)
 
           if pos < 0:
-              print("ERROR: MainActivity does not contain 'workerAdapter'.")
+              marker = "workerAdapter.run"
+              pos = source.find(marker)
+
+          if pos < 0:
+              print("ERROR: MainActivity does not contain a WorkerAdapter run call.")
               print(source)
               sys.exit(1)
 
@@ -167,17 +173,25 @@ jobs:
           if brace < 0 or arrow < 0:
               print("ERROR: Could not locate the worker callback lambda.")
               print()
-              print("Relevant source around workerAdapter:")
-              print(source[max(0, pos-300):min(len(source), pos+1200)])
+              print("Relevant source:")
+              print(source[max(0, pos-500):min(len(source), pos+1800)])
               sys.exit(1)
 
           old_params = source[brace + 1:arrow].strip()
 
+          # WorkerAdapter.run expects:
+          # (Boolean, String, String) -> Unit
           source = (
               source[:brace + 1]
               + "\n            ok, text, detail "
               + source[arrow:]
           )
+
+          # Convert the original v0.3.0 result-object references
+          # into the three callback parameters.
+          source = source.replace("res.ok", "ok")
+          source = source.replace("res.text", "text")
+          source = source.replace("res.detail", "detail")
 
           path.write_text(source)
 
@@ -186,11 +200,26 @@ jobs:
 
           check = path.read_text()
 
-          worker_pos = check.find("workerAdapter")
-          repaired_pos = check.find("ok, text, detail", worker_pos)
+          worker_pos = check.find(marker)
 
-          if worker_pos < 0 or repaired_pos < 0:
-              print("ERROR: MainActivity callback repair could not be verified.")
+          if worker_pos < 0:
+              print("ERROR: WorkerAdapter call disappeared during repair.")
+              sys.exit(1)
+
+          if check.find("ok, text, detail", worker_pos) < 0:
+              print("ERROR: Three callback parameters were not installed.")
+              sys.exit(1)
+
+          if "res.ok" in check:
+              print("ERROR: Old res.ok reference remains.")
+              sys.exit(1)
+
+          if "res.text" in check:
+              print("ERROR: Old res.text reference remains.")
+              sys.exit(1)
+
+          if "res.detail" in check:
+              print("ERROR: Old res.detail reference remains.")
               sys.exit(1)
 
           print("MainActivity callback repair VERIFIED.")
@@ -207,7 +236,7 @@ jobs:
           echo "MAIN ACTIVITY AFTER REPAIR"
           echo "=============================================="
 
-          grep -n -C 5 "workerAdapter" "$FILE"
+          grep -n -C 8 "adapter.run" "$FILE" || true
 
           python3 - "$FILE" <<'PY'
           import sys
@@ -215,11 +244,34 @@ jobs:
 
           source = Path(sys.argv[1]).read_text()
 
-          worker_pos = source.find("workerAdapter")
-          repaired_pos = source.find("ok, text, detail", worker_pos)
+          worker_pos = source.find("adapter.run")
 
-          if worker_pos < 0 or repaired_pos < 0:
-              print("ERROR: MainActivity callback repair was not verified.")
+          if worker_pos < 0:
+              worker_pos = source.find("workerAdapter.run")
+
+          if worker_pos < 0:
+              print("ERROR: WorkerAdapter run call was not found.")
+              sys.exit(1)
+
+          repaired_pos = source.find(
+              "ok, text, detail",
+              worker_pos
+          )
+
+          if repaired_pos < 0:
+              print("ERROR: Three callback parameters were not found.")
+              sys.exit(1)
+
+          if "res.ok" in source:
+              print("ERROR: res.ok remains.")
+              sys.exit(1)
+
+          if "res.text" in source:
+              print("ERROR: res.text remains.")
+              sys.exit(1)
+
+          if "res.detail" in source:
+              print("ERROR: res.detail remains.")
               sys.exit(1)
 
           print("MainActivity callback repair VERIFIED.")
