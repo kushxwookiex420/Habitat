@@ -1,6 +1,7 @@
 package com.habitat.core
 
 import android.app.Activity
+import android.app.Dialog
 import android.content.Context
 import android.graphics.Color
 import android.graphics.drawable.GradientDrawable
@@ -13,14 +14,10 @@ import android.view.WindowManager
 import android.view.inputmethod.InputMethodManager
 import android.widget.*
 import android.text.InputType
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 
 class MainActivity : Activity() {
 
     private lateinit var root: LinearLayout
-
     private lateinit var brainAdapter: BrainAdapter
 
     private val bg = Color.rgb(10, 11, 15)
@@ -57,10 +54,6 @@ class MainActivity : Activity() {
 
         super.onDestroy()
     }
-
-    // ============================================================
-    // MAIN HABITAT SHELL
-    // ============================================================
 
     private fun dp(value: Int): Int {
         return (value * resources.displayMetrics.density).toInt()
@@ -106,10 +99,6 @@ class MainActivity : Activity() {
         }
     }
 
-    // ============================================================
-    // TOP BAR
-    // ============================================================
-
     private fun topBar(
         title: String,
         subtitle: String = "AX • ONLINE"
@@ -127,11 +116,10 @@ class MainActivity : Activity() {
             dp(10)
         )
 
-        // LEFT MENU
         val menu = TextView(this)
 
         menu.text = "☰"
-        menu.textColor = white
+        menu.setTextColor(white)
         menu.textSize = 25f
         menu.gravity = Gravity.CENTER
 
@@ -147,7 +135,6 @@ class MainActivity : Activity() {
             )
         )
 
-        // TITLE
         val titles = LinearLayout(this)
 
         titles.orientation = LinearLayout.VERTICAL
@@ -155,8 +142,9 @@ class MainActivity : Activity() {
         val mainTitle = TextView(this)
 
         mainTitle.text = title
-        mainTitle.textColor = white
+        mainTitle.setTextColor(white)
         mainTitle.textSize = 19f
+
         mainTitle.setTypeface(
             null,
             android.graphics.Typeface.BOLD
@@ -165,7 +153,7 @@ class MainActivity : Activity() {
         val sub = TextView(this)
 
         sub.text = subtitle
-        sub.textColor = green
+        sub.setTextColor(green)
         sub.textSize = 11f
 
         titles.addView(mainTitle)
@@ -180,11 +168,10 @@ class MainActivity : Activity() {
             )
         )
 
-        // RIGHT STATUS
         val status = TextView(this)
 
         status.text = "●"
-        status.textColor = green
+        status.setTextColor(green)
         status.textSize = 18f
         status.gravity = Gravity.CENTER
 
@@ -199,10 +186,6 @@ class MainActivity : Activity() {
         return bar
     }
 
-    // ============================================================
-    // CHAT HOME
-    // ============================================================
-
     private fun showChatHome() {
 
         startScreen()
@@ -210,10 +193,6 @@ class MainActivity : Activity() {
         root.addView(
             topBar("HABITAT")
         )
-
-        // --------------------------------------------------------
-        // CHAT AREA
-        // --------------------------------------------------------
 
         val chatScroll = ScrollView(this)
 
@@ -230,11 +209,9 @@ class MainActivity : Activity() {
             dp(18)
         )
 
-        // HABITAT WELCOME
         val welcome = LinearLayout(this)
 
         welcome.orientation = LinearLayout.VERTICAL
-
         welcome.gravity = Gravity.CENTER
 
         welcome.setPadding(
@@ -247,7 +224,7 @@ class MainActivity : Activity() {
         val habitat = TextView(this)
 
         habitat.text = "HABITAT"
-        habitat.textColor = white
+        habitat.setTextColor(white)
         habitat.textSize = 30f
         habitat.gravity = Gravity.CENTER
 
@@ -259,7 +236,7 @@ class MainActivity : Activity() {
         val ax = TextView(this)
 
         ax.text = "AX CORE"
-        ax.textColor = blue
+        ax.setTextColor(blue)
         ax.textSize = 14f
         ax.gravity = Gravity.CENTER
 
@@ -268,7 +245,7 @@ class MainActivity : Activity() {
         description.text =
             "Your AI operating environment"
 
-        description.textColor = muted
+        description.setTextColor(muted)
         description.textSize = 14f
         description.gravity = Gravity.CENTER
 
@@ -296,10 +273,6 @@ class MainActivity : Activity() {
                 1f
             )
         )
-
-        // --------------------------------------------------------
-        // CHATGPT-STYLE COMPOSER
-        // --------------------------------------------------------
 
         val composerOuter = LinearLayout(this)
 
@@ -339,7 +312,6 @@ class MainActivity : Activity() {
             Gravity.START
 
         input.setSingleLine(false)
-
         input.maxLines = 5
 
         input.setPadding(
@@ -367,11 +339,10 @@ class MainActivity : Activity() {
             )
         )
 
-        // SEND BUTTON
         val send = TextView(this)
 
         send.text = "↑"
-        send.textColor = Color.WHITE
+        send.setTextColor(Color.WHITE)
         send.textSize = 25f
         send.gravity = Gravity.CENTER
 
@@ -422,10 +393,6 @@ class MainActivity : Activity() {
             )
         )
 
-        // --------------------------------------------------------
-        // SEND
-        // --------------------------------------------------------
-
         fun sendMessage() {
 
             val message =
@@ -466,20 +433,14 @@ class MainActivity : Activity() {
                 )
             }
 
-            brainAdapter.send(
-                message,
-                object : BrainAdapter.Callback {
+            // CURRENT BrainAdapter API
+            brainAdapter.send(message) { result ->
 
-                    override fun onStateChanged(
-                        state: BrainAdapter.State
-                    ) {
-                    }
+                runOnUiThread {
 
-                    override fun onResponse(
-                        response: String
-                    ) {
+                    when (result.state) {
 
-                        runOnUiThread {
+                        BrainAdapter.State.CONNECTED -> {
 
                             messages.removeView(
                                 thinking
@@ -488,7 +449,7 @@ class MainActivity : Activity() {
                             messages.addView(
                                 bubble(
                                     "AX",
-                                    response,
+                                    result.text,
                                     false
                                 )
                             )
@@ -499,13 +460,8 @@ class MainActivity : Activity() {
                                 )
                             }
                         }
-                    }
 
-                    override fun onError(
-                        error: String
-                    ) {
-
-                        runOnUiThread {
+                        BrainAdapter.State.ERROR -> {
 
                             messages.removeView(
                                 thinking
@@ -514,7 +470,7 @@ class MainActivity : Activity() {
                             messages.addView(
                                 bubble(
                                     "AX",
-                                    "I couldn't complete that request.\n\n$error",
+                                    "I couldn't complete that request.\n\n${result.detail}",
                                     false
                                 )
                             )
@@ -524,22 +480,25 @@ class MainActivity : Activity() {
                                     View.FOCUS_DOWN
                                 )
                             }
+                        }
+
+                        BrainAdapter.State.CONNECTING,
+                        BrainAdapter.State.DISCONNECTED -> {
+                            // Keep thinking bubble visible.
                         }
                     }
                 }
-            )
+            }
         }
 
         send.setOnClickListener {
             sendMessage()
         }
 
-        // Keep Enter as a normal newline.
         input.setOnEditorActionListener { _, _, _ ->
             false
         }
 
-        // Do NOT automatically open keyboard.
         val imm = getSystemService(
             Context.INPUT_METHOD_SERVICE
         ) as InputMethodManager
@@ -549,10 +508,6 @@ class MainActivity : Activity() {
             0
         )
     }
-
-    // ============================================================
-    // CHAT BUBBLE
-    // ============================================================
 
     private fun bubble(
         speaker: String,
@@ -584,8 +539,9 @@ class MainActivity : Activity() {
         name.text =
             if (user) "YOU" else "AX"
 
-        name.textColor =
+        name.setTextColor(
             if (user) blue else green
+        )
 
         name.textSize = 10f
 
@@ -601,8 +557,7 @@ class MainActivity : Activity() {
         val body = TextView(this)
 
         body.text = message
-
-        body.textColor = white
+        body.setTextColor(white)
         body.textSize = 16f
 
         body.setPadding(
@@ -641,10 +596,6 @@ class MainActivity : Activity() {
         return wrapper
     }
 
-    // ============================================================
-    // TOP MENU
-    // ============================================================
-
     private fun showMenu() {
 
         val dialog = Dialog(this)
@@ -673,7 +624,7 @@ class MainActivity : Activity() {
         val title = TextView(this)
 
         title.text = "HABITAT"
-        title.textColor = white
+        title.setTextColor(white)
         title.textSize = 21f
 
         title.setTypeface(
@@ -689,71 +640,43 @@ class MainActivity : Activity() {
             )
         )
 
-        addMenuItem(
-            box,
-            "Chat with Ax"
-        ) {
+        addMenuItem(box, "Chat with Ax") {
             dialog.dismiss()
             showChatHome()
         }
 
-        addMenuItem(
-            box,
-            "Projects"
-        ) {
+        addMenuItem(box, "Projects") {
             dialog.dismiss()
             showProjects()
         }
 
-        addMenuItem(
-            box,
-            "Brain"
-        ) {
+        addMenuItem(box, "Brain") {
             dialog.dismiss()
             showBrain()
         }
 
-        addMenuItem(
-            box,
-            "Scenes"
-        ) {
+        addMenuItem(box, "Scenes") {
             dialog.dismiss()
             showScenes()
         }
 
-        addMenuItem(
-            box,
-            "Systems"
-        ) {
+        addMenuItem(box, "Systems") {
             dialog.dismiss()
             showSystems()
         }
 
-        addMenuItem(
-            box,
-            "About Habitat"
-        ) {
+        addMenuItem(box, "About Habitat") {
             dialog.dismiss()
             showAbout()
         }
 
         dialog.setContentView(box)
 
-        val window = dialog.window
-
-        if (window != null) {
-
-            window.setBackgroundDrawableResource(
-                android.R.color.transparent
-            )
-
-            window.setLayout(
-                dp(310),
-                WindowManager.LayoutParams.WRAP_CONTENT
-            )
-        }
-
         dialog.show()
+
+        dialog.window?.setBackgroundDrawableResource(
+            android.R.color.transparent
+        )
 
         dialog.window?.setLayout(
             dp(310),
@@ -770,7 +693,7 @@ class MainActivity : Activity() {
         val item = TextView(this)
 
         item.text = label
-        item.textColor = white
+        item.setTextColor(white)
         item.textSize = 16f
         item.gravity = Gravity.CENTER_VERTICAL
 
@@ -793,10 +716,6 @@ class MainActivity : Activity() {
             )
         )
     }
-
-    // ============================================================
-    // PROJECTS
-    // ============================================================
 
     private fun showProjects() {
 
@@ -856,10 +775,6 @@ class MainActivity : Activity() {
         )
     }
 
-    // ============================================================
-    // BRAIN
-    // ============================================================
-
     private fun showBrain() {
 
         startScreen()
@@ -890,48 +805,20 @@ class MainActivity : Activity() {
             )
         )
 
-        list.addView(
-            statusRow(
-                "Memory",
-                "READY"
-            )
-        )
-
-        list.addView(
-            statusRow(
-                "Reasoning",
-                "READY"
-            )
-        )
-
-        list.addView(
-            statusRow(
-                "Agents",
-                "READY"
-            )
-        )
-
-        list.addView(
-            statusRow(
-                "Tools",
-                "READY"
-            )
-        )
-
-        list.addView(
-            statusRow(
-                "Tasks",
-                "READY"
-            )
-        )
+        list.addView(statusRow("Memory", "READY"))
+        list.addView(statusRow("Reasoning", "READY"))
+        list.addView(statusRow("Agents", "READY"))
+        list.addView(statusRow("Tools", "READY"))
+        list.addView(statusRow("Tasks", "READY"))
 
         val clear = TextView(this)
 
         clear.text =
             "CLEAR LOCAL CONVERSATION MEMORY"
 
-        clear.textColor =
+        clear.setTextColor(
             Color.rgb(255, 145, 145)
+        )
 
         clear.textSize = 13f
         clear.gravity = Gravity.CENTER
@@ -966,10 +853,6 @@ class MainActivity : Activity() {
             )
         )
     }
-
-    // ============================================================
-    // SCENES
-    // ============================================================
 
     private fun showScenes() {
 
@@ -1037,10 +920,6 @@ class MainActivity : Activity() {
         )
     }
 
-    // ============================================================
-    // SYSTEMS
-    // ============================================================
-
     private fun showSystems() {
 
         startScreen()
@@ -1063,47 +942,12 @@ class MainActivity : Activity() {
             dp(20)
         )
 
-        list.addView(
-            statusRow(
-                "Memory",
-                "READY"
-            )
-        )
-
-        list.addView(
-            statusRow(
-                "Projects",
-                "READY"
-            )
-        )
-
-        list.addView(
-            statusRow(
-                "Agents",
-                "READY"
-            )
-        )
-
-        list.addView(
-            statusRow(
-                "Tasks",
-                "READY"
-            )
-        )
-
-        list.addView(
-            statusRow(
-                "Tools",
-                "READY"
-            )
-        )
-
-        list.addView(
-            statusRow(
-                "Brain",
-                "ONLINE"
-            )
-        )
+        list.addView(statusRow("Memory", "READY"))
+        list.addView(statusRow("Projects", "READY"))
+        list.addView(statusRow("Agents", "READY"))
+        list.addView(statusRow("Tasks", "READY"))
+        list.addView(statusRow("Tools", "READY"))
+        list.addView(statusRow("Brain", "ONLINE"))
 
         scroll.addView(list)
 
@@ -1116,10 +960,6 @@ class MainActivity : Activity() {
             )
         )
     }
-
-    // ============================================================
-    // ABOUT
-    // ============================================================
 
     private fun showAbout() {
 
@@ -1179,10 +1019,6 @@ class MainActivity : Activity() {
         )
     }
 
-    // ============================================================
-    // COMPONENTS
-    // ============================================================
-
     private fun infoCard(
         title: String,
         subtitle: String,
@@ -1227,7 +1063,7 @@ class MainActivity : Activity() {
         val titleView = TextView(this)
 
         titleView.text = title
-        titleView.textColor = blue
+        titleView.setTextColor(blue)
         titleView.textSize = 18f
 
         titleView.setTypeface(
@@ -1238,7 +1074,7 @@ class MainActivity : Activity() {
         val subtitleView = TextView(this)
 
         subtitleView.text = subtitle
-        subtitleView.textColor = green
+        subtitleView.setTextColor(green)
         subtitleView.textSize = 12f
 
         subtitleView.setPadding(
@@ -1251,7 +1087,7 @@ class MainActivity : Activity() {
         val descView = TextView(this)
 
         descView.text = description
-        descView.textColor = muted
+        descView.setTextColor(muted)
         descView.textSize = 14f
 
         card.addView(titleView)
@@ -1293,7 +1129,7 @@ class MainActivity : Activity() {
         val labelView = TextView(this)
 
         labelView.text = label
-        labelView.textColor = white
+        labelView.setTextColor(white)
         labelView.textSize = 14f
 
         row.addView(
@@ -1308,7 +1144,7 @@ class MainActivity : Activity() {
         val valueView = TextView(this)
 
         valueView.text = value
-        valueView.textColor = green
+        valueView.setTextColor(green)
         valueView.textSize = 12f
 
         row.addView(valueView)
