@@ -7,6 +7,7 @@ import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
 import android.view.Gravity
 import android.view.View
+import android.view.WindowManager
 import android.view.animation.AlphaAnimation
 import android.widget.*
 import java.text.SimpleDateFormat
@@ -32,6 +33,8 @@ class MainActivity : Activity() {
     private val card = Color.rgb(17, 21, 31)
     private val textColor = Color.WHITE
     private val muted = Color.rgb(150, 162, 180)
+
+    // Large command-console background
     private val inputBg = Color.rgb(20, 25, 36)
 
     private fun dp(v: Int): Int =
@@ -42,6 +45,12 @@ class MainActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        // Keep the large command console usable above the keyboard.
+        window.setSoftInputMode(
+            WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
+        )
+
         showHome()
     }
 
@@ -535,31 +544,55 @@ class MainActivity : Activity() {
             )
         )
 
+        /*
+         * =========================================================
+         * LARGE AX COMMAND CONSOLE
+         * =========================================================
+         */
+
         val input =
             EditText(this).apply {
 
                 hint =
-                    "Type a message to Ax..."
+                    "Type your message to Ax..."
 
                 setHintTextColor(
                     muted
                 )
 
+                // Bright white text for maximum visibility.
                 setTextColor(
                     Color.WHITE
                 )
 
-                textSize = 16f
+                // Larger typing text.
+                textSize = 18f
 
-                setSingleLine(false)
+                // Multi-line command console.
+                isSingleLine = false
+
+                minLines = 5
+                maxLines = 7
 
                 gravity =
                     Gravity.TOP or
                     Gravity.START
 
-                minLines = 2
+                // Large internal writing space.
+                setPadding(
+                    dp(18),
+                    dp(18),
+                    dp(18),
+                    dp(18)
+                )
 
-                maxLines = 5
+                background =
+                    rounded(
+                        inputBg,
+                        dp(16)
+                    )
+
+                includeFontPadding = true
 
                 isFocusable = true
 
@@ -569,40 +602,29 @@ class MainActivity : Activity() {
 
                 setSelectAllOnFocus(false)
 
-                background =
-                    rounded(
-                        inputBg,
-                        dp(12)
-                    )
-
-                setPadding(
-                    dp(14),
-                    dp(13),
-                    dp(14),
-                    dp(13)
-                )
-
-                includeFontPadding = true
-
+                // Keep the cursor and typing area obvious.
                 setOnFocusChangeListener {
                         view,
                         hasFocus ->
 
                     if (hasFocus) {
+
                         view.background =
                             rounded(
                                 Color.rgb(
-                                    24,
-                                    31,
-                                    45
+                                    25,
+                                    33,
+                                    48
                                 ),
-                                dp(12)
+                                dp(16)
                             )
+
                     } else {
+
                         view.background =
                             rounded(
                                 inputBg,
-                                dp(12)
+                                dp(16)
                             )
                     }
                 }
@@ -617,7 +639,9 @@ class MainActivity : Activity() {
                         .trim()
 
                 if (m.isEmpty()) {
+
                     input.requestFocus()
+
                     return@button
                 }
 
@@ -737,14 +761,17 @@ class MainActivity : Activity() {
                 }
             }
 
+        /*
+         * 180dp = substantially larger than the old 100dp box.
+         */
         root.addView(
             input,
             LinearLayout.LayoutParams(
                 -1,
-                dp(100)
+                dp(180)
             ).apply {
-                topMargin = dp(6)
-                bottomMargin = dp(7)
+                topMargin = dp(10)
+                bottomMargin = dp(8)
             }
         )
 
@@ -752,12 +779,13 @@ class MainActivity : Activity() {
             send,
             LinearLayout.LayoutParams(
                 -1,
-                dp(54)
+                dp(58)
             )
         )
 
         install(root)
 
+        // Put the cursor in the command console immediately.
         input.requestFocus()
     }
 
