@@ -1,117 +1,186 @@
 package com.habitat.core
 
 import android.content.Context
+import org.json.JSONArray
 import org.json.JSONObject
-import java.io.BufferedReader
-import java.io.InputStreamReader
-import java.io.OutputStreamWriter
 import java.net.HttpURLConnection
 import java.net.URL
+import java.nio.charset.StandardCharsets
 import java.util.concurrent.Executors
 
-/**
- * Thin network boundary between Habitat and a future real AI brain.
- * No API key is stored in the app.
- *
- * Expected request JSON:
- * { "message":"...", "source":"Habitat", "client":"Ax" }
- *
- * The response may be JSON with one of: response, reply, message, text.
- * A plain-text response is also accepted.
- */
 class BrainAdapter(private val context: Context) {
-    enum class State { DISCONNECTED, CONNECTING, CONNECTED, ERROR }
 
-    data class Result(val state: State, val text: String, val detail: String = "")
+    enum class State {
+        CONNECTED,
+        DISCONNECTED,
+        ERROR,
+        CONNECTING
+    }
 
-    private val executor = Executors.newSingleThreadExecutor()
+    data class Result(
+        val state: State,
+        val text: String = "",
+        val detail: String = ""
+    )
 
-    fun endpoint(): String = context
-        .getSharedPreferences("habitat", Context.MODE_PRIVATE)
-        .getString("brain_endpoint", "")
-        ?.trim()
-        .orEmpty()
+    companion object {
+        private const val PREFS = "habitat_brain"
+        private const val ENDPOINT_KEY = "endpoint"
+
+        private const val DEFAULT_ENDPOINT =
+            "https://habitat-cr46.onrender.com/chat"
+    }
+
+    private val prefs =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+
+    private val executor =
+        Executors.newSingleThreadExecutor()
+
+    fun endpoint(): String {
+        val saved = prefs.getString(ENDPOINT_KEY, "") ?: ""
+
+        return if (saved.isBlank()) {
+            DEFAULT_ENDPOINT
+        } else {
+            saved
+        }
+    }
 
     fun setEndpoint(value: String) {
-        context.getSharedPreferences("habitat", Context.MODE_PRIVATE)
-            .edit()
-            .putString("brain_endpoint", value.trim())
+        prefs.edit()
+            .putString(
+                ENDPOINT_KEY,
+                value.trim()
+            )
             .apply()
     }
 
-    fun send(message: String, callback: (Result) -> Unit) {
-        val endpoint = endpoint()
-        if (endpoint.isBlank()) {
-            callback(Result(State.DISCONNECTED, "", "No brain endpoint is configured."))
-            return
-        }
+    fun send(
+        message: String,
+        callback: (Result) -> Unit
+    ) {
+        callback(
+            Result(
+                state = State.CONNECTING
+            )
+        )
 
         executor.execute {
-            val result = try {
-                post(endpoint, message)
-            } catch (e: Exception) {
-                Result(State.ERROR, "", e.message ?: "Connection error")
+            try {
+                val url = URL(endpoint())
+
+                val connection =
+                    url.openConnection() as HttpURLConnection
+
+                connection.requestMethod = "POST"
+                connection.connectTimeout = 15000
+                connection.readTimeout = 30000
+                connection.doOutput = true
+
+                connection.setRequestProperty(
+                    "Content-Type",
+                    "application/json"
+                )
+
+                connection.setRequestProperty(
+                    "Accept",
+                    "application/json"
+                )
+
+                val body =
+                    JSONObject().apply {
+                        put(
+                            "message",
+                            message
+                        )
+
+                        put(
+                            "history",
+                            JSONArray()
+                        )
+                    }.toString()
+
+                connection.outputStream.use { output ->
+                    output.write(
+                        body.toByteArray(
+                            StandardCharsets.UTF_8
+                        )
+                    )
+                }
+
+                val responseCode =
+                    connection.responseCode
+
+                val stream =
+                    if (responseCode in 200..299) {
+                        connection.inputStream
+                    } else {
+                        connection.errorStream
+                    }
+
+                val responseText =
+                    stream?.bufferedReader()
+                        ?.use { it.readText() }
+                        ?: ""
+
+                connection.disconnect()
+
+                if (responseCode !in 200..299) {
+                    callback(
+                        Result(
+                            state = State.ERROR,
+                            detail =
+                                "HTTP $responseCode: $responseText"
+                        )
+                    )
+
+                    return@execute
+                }
+
+                val json =
+                    JSONObject(responseText)
+
+                val reply =
+                    json.optString(
+                        "response",
+                        ""
+                    )
+
+                if (reply.isBlank()) {
+                    callback(
+                        Result(
+                            state = State.ERROR,
+                            detail =
+                                "Brain returned an empty response."
+                        )
+                    )
+
+                    return@execute
+                }
+
+                callback(
+                    Result(
+                        state = State.CONNECTED,
+                        text = reply
+                    )
+                )
+
+            } catch (error: Exception) {
+
+                callback(
+                    Result(
+                        state = State.ERROR,
+                        detail =
+                            error.message
+                                ?: error.javaClass.simpleName
+                    )
+                )
             }
-            callback(result)
         }
     }
 
     fun shutdown() {
         executor.shutdownNow()
-    }
-
-    private fun post(endpoint: String, message: String): Result {
-        val connection = (URL(endpoint).openConnection() as HttpURLConnection).apply {
-            requestMethod = "POST"
-            connectTimeout = 8000
-            readTimeout = 15000
-            doOutput = true
-            setRequestProperty("Content-Type", "application/json; charset=UTF-8")
-            setRequestProperty("Accept", "application/json, text/plain, */*")
-        }
-
-        return try {
-            val body = JSONObject().apply {
-                put("message", message)
-                put("source", "Habitat")
-                put("client", "Ax")
-            }.toString()
-
-            OutputStreamWriter(connection.outputStream, Charsets.UTF_8).use { it.write(body) }
-
-            val code = connection.responseCode
-            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
-            val response = stream?.let { input ->
-                BufferedReader(InputStreamReader(input, Charsets.UTF_8)).use { reader ->
-                    buildString {
-                        var line: String?
-                        while (reader.readLine().also { line = it } != null) append(line)
-                    }
-                }
-            }.orEmpty()
-
-            if (code !in 200..299) {
-                Result(State.ERROR, "", "HTTP $code${if (response.isNotBlank()) ": $response" else ""}")
-            } else {
-                Result(State.CONNECTED, extractText(response).ifBlank { "Brain connected, but returned no text." })
-            }
-        } finally {
-            connection.disconnect()
-        }
-    }
-
-    private fun extractText(raw: String): String {
-        val trimmed = raw.trim()
-        if (trimmed.isBlank()) return ""
-        return try {
-            val json = JSONObject(trimmed)
-            listOf("response", "reply", "message", "text")
-                .firstNotNullOfOrNull { key ->
-                    if (json.has(key) && !json.isNull(key)) json.optString(key) else null
-                }
-                ?: trimmed
-        } catch (_: Exception) {
-            trimmed
-        }
     }
 }
