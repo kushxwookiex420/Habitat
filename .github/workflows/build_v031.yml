@@ -40,84 +40,22 @@ jobs:
           mkdir HabitatBuild
           unzip -q Habitat-Android-v0.3.0-Ax-Edition.zip -d HabitatBuild
           echo "PROJECT=$(find HabitatBuild -type f -name settings.gradle.kts -print -quit | xargs dirname)" >> "$GITHUB_ENV"
-      - name: Patch Habitat UI and hologram
+      - name: Replace Habitat home with Galaxy Brain UI
         shell: bash
         run: |
           set -e
           CORE="$PROJECT/app/src/main/java/com/habitat/core"
-          python3 - "$CORE/MainActivity.kt" <<'PY'
-          import sys
-          from pathlib import Path
-          p=Path(sys.argv[1]); s=p.read_text()
-          s=s.replace('import android.view.View\n','import android.view.View\nimport android.view.WindowInsets\n')
-          s=s.replace('override fun onCreate(b:Bundle?){super.onCreate(b);home()}', '''override fun onCreate(b:Bundle?){
-  super.onCreate(b)
-  window.navigationBarColor=bg
-  window.statusBarColor=bg
-  home()
-}''')
-          s=s.replace('root.setPadding(dp(12),dp(12),dp(12),dp(8));', '''root.setPadding(dp(12),dp(12),dp(12),dp(8))
-  root.setOnApplyWindowInsetsListener { v, insets ->
-   val navBottom = if(android.os.Build.VERSION.SDK_INT >= 30) insets.getInsets(WindowInsets.Type.navigationBars()).bottom else insets.systemWindowInsetBottom
-   v.setPadding(dp(12),dp(12),dp(12),dp(8)+navBottom)
-   insets
-  }
-  root.requestApplyInsets();''')
-          old=''){res->runOnUiThread{if(res.ok){tasks.upsert(t.copy(status="COMPLETE",result=res.text));log.addView(txt("AX • ${w.name} REPORT\\n${res.text}",14f).apply{setPadding(dp(12),dp(12),dp(12),dp(12));background=box()})}else{tasks.upsert(t.copy(status="ERROR",result=res.detail));log.addView(txt("AX • Worker unavailable\\n${res.detail}",14f,Color.rgb(255,150,150)))};scroll.post{scroll.fullScroll(View.FOCUS_DOWN)}}}}'
-          new=''){ok,text,detail->runOnUiThread{if(ok){tasks.upsert(t.copy(status="COMPLETE",result=text));log.addView(txt("AX • ${w.name} REPORT\\n$text",14f).apply{setPadding(dp(12),dp(12),dp(12),dp(12));background=box()})}else{tasks.upsert(t.copy(status="ERROR",result=detail));log.addView(txt("AX • Worker unavailable\\n$detail",14f,Color.rgb(255,150,150)))};scroll.post{scroll.fullScroll(View.FOCUS_DOWN)}}}}'
-          if old not in s: raise SystemExit('callback pattern not found')
-          s=s.replace(old,new)
-          s=s.replace('v0.3.0','v0.3.1')
-          p.write_text(s)
-          PY
-          cat > "$CORE/HologramView.kt" <<'KT'
-          package com.habitat.core
-
-          import android.content.Context
-          import android.graphics.*
-          import android.view.View
-          import kotlin.math.sin
-
-          class HologramView(context: Context): View(context) {
-              private val linePaint=Paint(Paint.ANTI_ALIAS_FLAG)
-              private val imagePaint=Paint(Paint.ANTI_ALIAS_FLAG)
-              private var phase=0f
-              private val audrey: Bitmap = BitmapFactory.decodeResource(resources, R.drawable.ax_portrait)
-              init { setLayerType(View.LAYER_TYPE_SOFTWARE,null) }
-              override fun onDraw(c:Canvas){
-                  super.onDraw(c)
-                  val w=width.toFloat(); val h=height.toFloat(); val cx=w/2f; val cy=h*.47f
-                  c.drawColor(Color.rgb(5,9,16))
-                  linePaint.style=Paint.Style.STROKE; linePaint.strokeWidth=2f; linePaint.color=Color.rgb(40,150,220)
-                  linePaint.setShadowLayer(14f,0f,0f,Color.rgb(40,170,255))
-                  c.drawOval(cx-w*.30f,cy-h*.40f,cx+w*.30f,cy+h*.40f,linePaint)
-                  c.drawOval(cx-w*.23f,cy-h*.33f,cx+w*.23f,cy+h*.33f,linePaint)
-                  linePaint.clearShadowLayer()
-                  if(!audrey.isRecycled){
-                      val src=Rect((audrey.width*.25f).toInt(),(audrey.height*.03f).toInt(),(audrey.width*.99f).toInt(),(audrey.height*.84f).toInt())
-                      val maxW=w*.54f; val maxH=h*.78f
-                      val scale=minOf(maxW/src.width(),maxH/src.height())
-                      val dw=src.width()*scale; val dh=src.height()*scale
-                      val left=cx-dw/2f; val top=cy-dh*.54f
-                      imagePaint.alpha=215; imagePaint.setShadowLayer(20f,0f,0f,Color.rgb(45,185,255))
-                      c.drawBitmap(audrey,src,RectF(left,top,left+dw,top+dh),imagePaint)
-                      imagePaint.clearShadowLayer()
-                      imagePaint.color=Color.argb(28,70,205,255); c.drawRect(left,top,left+dw,top+dh,imagePaint)
-                  }
-                  linePaint.strokeWidth=3f; linePaint.color=Color.rgb(50,195,255); linePaint.setShadowLayer(16f,0f,0f,Color.rgb(50,195,255))
-                  c.drawOval(cx-w*.27f,h*.80f,cx+w*.27f,h*.90f,linePaint); c.drawOval(cx-w*.19f,h*.825f,cx+w*.19f,h*.875f,linePaint)
-                  linePaint.clearShadowLayer(); linePaint.strokeWidth=1f; linePaint.color=Color.argb(105,55,125,180)
-                  for(y in 0 until height step 9){ val off=(sin((y+phase)*.05)*3).toFloat(); c.drawLine(0f,y.toFloat(),w,y.toFloat()+off,linePaint) }
-                  linePaint.style=Paint.Style.FILL; linePaint.color=Color.rgb(170,235,255); linePaint.textAlign=Paint.Align.CENTER; linePaint.textSize=16f
-                  c.drawText("AX • AUDREY HOLOGRAM",cx,h*.95f,linePaint); phase+=1.2f; postInvalidateDelayed(40)
-              }
-          }
-          KT
+          mkdir -p "$CORE"
+          echo 'cGFja2FnZSBjb20uaGFiaXRhdC5jb3JlCmltcG9ydCBhbmRyb2lkLmFwcC5BY3Rpdml0eQppbXBvcnQgYW5kcm9pZC5vcy5CdW5kbGUKaW1wb3J0IGFuZHJvaWQuZ3JhcGhpY3MuQ29sb3IKaW1wb3J0IGFuZHJvaWQudmlldy5XaW5kb3cKaW1wb3J0IGFuZHJvaWQudmlldy5XaW5kb3dNYW5hZ2VyCmNsYXNzIE1haW5BY3Rpdml0eTpBY3Rpdml0eSgpewogb3ZlcnJpZGUgZnVuIG9uQ3JlYXRlKGI6QnVuZGxlPyl7c3VwZXIub25DcmVhdGUoYik7cmVxdWVzdFdpbmRvd0ZlYXR1cmUoV2luZG93LkZFQVRVUkVfTk9fVElUTEUpO3dpbmRvdy5zZXRGbGFncyhXaW5kb3dNYW5hZ2VyLkxheW91dFBhcmFtcy5GTEFHX0ZVTExTQ1JFRU4sV2luZG93TWFuYWdlci5MYXlvdXRQYXJhbXMuRkxBR19GVUxMU0NSRUVOKTt3aW5kb3cuc3RhdHVzQmFyQ29sb3I9Q29sb3IucmdiKDIsMywxMik7d2luZG93Lm5hdmlnYXRpb25CYXJDb2xvcj1Db2xvci5yZ2IoMiwzLDEyKTtzZXRDb250ZW50VmlldyhHYWxheHlIYWJpdGF0Vmlldyh0aGlzKSl9Cn0=' | base64 -d > "$CORE/MainActivity.kt"
+          echo 'cGFja2FnZSBjb20uaGFiaXRhdC5jb3JlCmltcG9ydCBhbmRyb2lkLmNvbnRlbnQuQ29udGV4dAppbXBvcnQgYW5kcm9pZC5ncmFwaGljcy4qCmltcG9ydCBhbmRyb2lkLnZpZXcuVmlldwppbXBvcnQga290bGluLm1hdGguKgppbXBvcnQga290bGluLnJhbmRvbS5SYW5kb20KY2xhc3MgR2FsYXh5SGFiaXRhdFZpZXcoYzpDb250ZXh0KTpWaWV3KGMpewogcHJpdmF0ZSB2YWwgcD1QYWludCgzKTtwcml2YXRlIHZhbCB0eD1QYWludCgzKTtwcml2YXRlIHZhbCBzdGFycz1BcnJheUxpc3Q8RmxvYXRBcnJheT4oKTtwcml2YXRlIHZhciB0PTBmO3ByaXZhdGUgdmFyIGJtcDpCaXRtYXA/PW51bGwKIGluaXR7c2V0TGF5ZXJUeXBlKFZpZXcuTEFZRVJfVFlQRV9TT0ZUV0FSRSxudWxsKTtyZXBlYXQoMTgwKXtzdGFycys9ZmxvYXRBcnJheU9mKFJhbmRvbS5uZXh0RmxvYXQoKSxSYW5kb20ubmV4dEZsb2F0KCksLjVmK1JhbmRvbS5uZXh0RmxvYXQoKSoxLjhmKX07dmFsIGlkPXJlc291cmNlcy5nZXRJZGVudGlmaWVyKCJheF9wb3J0cmFpdCIsImRyYXdhYmxlIixjLnBhY2thZ2VOYW1lKTtpZihpZCE9MClibXA9Qml0bWFwRmFjdG9yeS5kZWNvZGVSZXNvdXJjZShyZXNvdXJjZXMsaWQpfQogb3ZlcnJpZGUgZnVuIG9uRHJhdyhjOkNhbnZhcyl7dmFsIHc9d2lkdGgudG9GbG9hdCgpO3ZhbCBoPWhlaWdodC50b0Zsb2F0KCk7dmFsIHg9dy8yO3ZhbCB5PWgqLjQ5ZjtwLnNoYWRlcj1SYWRpYWxHcmFkaWVudCh4LHkqLjdmLG1heCh3LGgpKi45ZixpbnRBcnJheU9mKENvbG9yLnJnYigzMiw4LDcwKSxDb2xvci5yZ2IoNiwxMCwzMCksQ29sb3IucmdiKDEsMiwxMCkpLGZsb2F0QXJyYXlPZigwZiwuNDVmLDFmKSxTaGFkZXIuVGlsZU1vZGUuQ0xBTVApO2MuZHJhd1JlY3QoMGYsMGYsdyxoLHApO3Auc2hhZGVyPW51bGw7Zm9yKGkgaW4gMC4uNSl7dmFsIG54PXcqKC4wOGYraSouMThmKTt2YWwgbnk9aCooLjE1ZisoaSozNyU2MCkvMTAwZik7cC5zaGFkZXI9UmFkaWFsR3JhZGllbnQobngsbnksdyouMmYsQ29sb3IuYXJnYigzOCw4MCw0MCwyMjApLENvbG9yLlRSQU5TUEFSRU5ULFNoYWRlci5UaWxlTW9kZS5DTEFNUCk7Yy5kcmF3Q2lyY2xlKG54LG55LHcqLjE4ZixwKX07cC5zaGFkZXI9bnVsbDtmb3IocyBpbiBzdGFycyl7cC5jb2xvcj1Db2xvci5hcmdiKCgxMDArODAqc2luKHQrc1swXSoxMikpLnRvSW50KCkuY29lcmNlSW4oMjUsMjIwKSwyMTAsMjI1LDI1NSk7Yy5kcmF3Q2lyY2xlKHNbMF0qdyxzWzFdKmgsc1syXSxwKX07aGVhZGVyKGMsdyk7YnJhaW4oYyx4LHktaCouMjNmLG1pbih3LGgpKi4xNWYpO2hvbG8oYyx4LHksdyxoKTtmbG9vcihjLHgsdyxoKTtmb290ZXIoYyx3LGgpO3QrPS4wMzVmO3Bvc3RJbnZhbGlkYXRlRGVsYXllZCgzMyl9CiBwcml2YXRlIGZ1biBoZWFkZXIoYzpDYW52YXMsdzpGbG9hdCl7dHgudHlwZWZhY2U9VHlwZWZhY2UuREVGQVVMVF9CT0xEO3R4LnRleHRBbGlnbj1QYWludC5BbGlnbi5MRUZUO3R4LnRleHRTaXplPTI0Zjt0eC5jb2xvcj1Db2xvci5XSElURTtjLmRyYXdUZXh0KCJIQUJJVEFUIiwyOGYsNDJmLHR4KTt0eC50eXBlZmFjZT1UeXBlZmFjZS5ERUZBVUxUO3R4LnRleHRTaXplPTExZjt0eC5jb2xvcj1Db2xvci5yZ2IoMTI1LDE4NSwyNTUpO2MuZHJhd1RleHQoIkFYIENPUkUgLSBHQUxBWFkgTU9ERSIsMzBmLDU5Zix0eCk7cC5jb2xvcj1Db2xvci5yZ2IoNzAsMjQ1LDE1NSk7Yy5kcmF3Q2lyY2xlKHctNTRmLDMzZiw1ZixwKTt0eC50ZXh0QWxpZ249UGFpbnQuQWxpZ24uUklHSFQ7dHguY29sb3I9Q29sb3IucmdiKDEzMCwyNTUsMTkwKTtjLmRyYXdUZXh0KCJBWCBPTkxJTkUiLHctMzBmLDM3Zix0eCl9CiBwcml2YXRlIGZ1biBicmFpbihjOkNhbnZhcyx4OkZsb2F0LHk6RmxvYXQscjpGbG9hdCl7dmFsIHE9dCouOGY7cC5zdHlsZT1QYWludC5TdHlsZS5TVFJPS0U7cC5zdHJva2VXaWR0aD0yLjVmO3AuY29sb3I9Q29sb3IucmdiKDg1LDIwNSwyNTUpO3Auc2V0U2hhZG93TGF5ZXIoMThmLDBmLDBmLENvbG9yLnJnYig1NSwxOTAsMjU1KSk7Yy5kcmF3T3ZhbCh4LXIqMS4wNWYseS1yKi43MmYseCtyKjEuMDVmLHkrciouNzJmLHApO2MuZHJhd092YWwoeC1yKi44MmYseS1yKi41OGYseCtyKi44MmYseStyKi41OGYscCk7cC5jbGVhclNoYWRvd0xheWVyKCk7Zm9yKHNpZGUgaW4gLTEuLjEgc3RlcCAyKXt2YWwgej1QYXRoKCk7Zm9yKGkgaW4gMC4uMTgpe3ZhbCBhPWkvMThmO3ZhbCB4eD14K3NpZGUqKHIqLjA4ZityKi43OGYqYSk7dmFsIHl5PXkrc2luKGEqMTgrcSkqciouMThmK2NvcyhhKjkrcSkqciouMDhmO2lmKGk9PTApei5tb3ZlVG8oeHgseXkpZWxzZSB6LmxpbmVUbyh4eCx5eSl9O2MuZHJhd1BhdGgoeixwKX07Zm9yKGkgaW4gMC4uMTApe3ZhbCBhPXEraSouNTdmO3Auc3R5bGU9UGFpbnQuU3R5bGUuRklMTDtwLmNvbG9yPUNvbG9yLnJnYigxMDUsMjI1LDI1NSk7Yy5kcmF3Q2lyY2xlKHgrY29zKGEpKnIqMS4xOGYseStzaW4oYSkqciouNzhmLDMuNWYscCl9O3R4LnRleHRBbGlnbj1QYWludC5BbGlnbi5DRU5URVI7dHgudHlwZWZhY2U9VHlwZWZhY2UuREVGQVVMVF9CT0xEO3R4LnRleHRTaXplPTExZjt0eC5jb2xvcj1Db2xvci5yZ2IoMTI1LDIwNSwyNTUpO2MuZHJhd1RleHQoIkFYIE5FVVJBTCBDT1JFIix4LHkrcioxLjAyZix0eCl9CiBwcml2YXRlIGZ1biBob2xvKGM6Q2FudmFzLHg6RmxvYXQseTpGbG9hdCx3OkZsb2F0LGg6RmxvYXQpe3Auc3R5bGU9UGFpbnQuU3R5bGUuU1RST0tFO3Auc3Ryb2tlV2lkdGg9MS41ZjtwLmNvbG9yPUNvbG9yLmFyZ2IoOTUsNjUsMjA1LDI1NSk7cC5zZXRTaGFkb3dMYXllcigxNmYsMGYsMGYsQ29sb3IucmdiKDQ1LDE4NSwyNTUpKTtjLmRyYXdPdmFsKHgtdyouMzNmLHktaCouMzdmLHgrdyouMzNmLHkraCouMzhmLHApO2MuZHJhd092YWwoeC13Ki4yN2YseS1oKi4zMWYseCt3Ki4yN2YseStoKi4zMmYscCk7cC5jbGVhclNoYWRvd0xheWVyKCk7Ym1wPy5sZXR7Yi0+dmFsIHNjPW1pbih3Ki41OGYvYi53aWR0aCxoKi42NmYvYi5oZWlnaHQpO3ZhbCBkdz1iLndpZHRoKnNjO3ZhbCBkaD1iLmhlaWdodCpzYzt2YWwgbD14LWR3LzI7dmFsIHRvcD15LWRoKi41N2Y7cC5hbHBoYT0xOTA7cC5zZXRTaGFkb3dMYXllcigyNGYsMGYsMGYsQ29sb3IucmdiKDQwLDIwMCwyNTUpKTtjLmRyYXdCaXRtYXAoYixudWxsLFJlY3RGKGwsdG9wLGwrZHcsdG9wK2RoKSxwKTtwLmNsZWFyU2hhZG93TGF5ZXIoKTtwLmFscGhhPTI1NTtwLmNvbG9yPUNvbG9yLmFyZ2IoMzUsNjAsMjIwLDI1NSk7Yy5kcmF3UmVjdChsLHRvcCxsK2R3LHRvcCtkaCxwKX07cC5zdHlsZT1QYWludC5TdHlsZS5TVFJPS0U7cC5zdHJva2VXaWR0aD0xZjtwLmNvbG9yPUNvbG9yLmFyZ2IoNzAsOTAsMjEwLDI1NSk7dmFyIHl5PXktaCouM2Y7d2hpbGUoeXk8eStoKi4zNWYpe2MuZHJhd0xpbmUoeC13Ki4yN2YseXkseCt3Ki4yN2YseXkscCk7eXkrPThmfX0KIHByaXZhdGUgZnVuIGZsb29yKGM6Q2FudmFzLHg6RmxvYXQsdzpGbG9hdCxoOkZsb2F0KXtwLnN0eWxlPVBhaW50LlN0eWxlLlNUUk9LRTtwLnN0cm9rZVdpZHRoPTIuNWY7cC5jb2xvcj1Db2xvci5yZ2IoNDUsMTg1LDI1NSk7cC5zZXRTaGFkb3dMYXllcigyMGYsMGYsMGYsQ29sb3IucmdiKDMwLDE2MCwyNTUpKTtjLmRyYXdPdmFsKHgtdyouM2YsaCouNzhmLHgrdyouM2YsaCouODlmLHApO2MuZHJhd092YWwoeC13Ki4yZixoKi44MDVmLHgrdyouMmYsaCouODY1ZixwKTtwLmNsZWFyU2hhZG93TGF5ZXIoKTtwLnN0eWxlPVBhaW50LlN0eWxlLkZJTEx9CiBwcml2YXRlIGZ1biBmb290ZXIoYzpDYW52YXMsdzpGbG9hdCxoOkZsb2F0KXt2YWwgYnc9dyouNjhmO3ZhbCBsPSh3LWJ3KS8yO3ZhbCB0b3A9aCouOTFmO3AuY29sb3I9Q29sb3IuYXJnYigxNzUsMTAsMjIsNDIpO2MuZHJhd1JvdW5kUmVjdChsLHRvcCxsK2J3LHRvcCs0NGYsMjJmLDIyZixwKTtwLnN0eWxlPVBhaW50LlN0eWxlLlNUUk9LRTtwLnN0cm9rZVdpZHRoPTEuNWY7cC5jb2xvcj1Db2xvci5yZ2IoNTUsMTkwLDI1NSk7Yy5kcmF3Um91bmRSZWN0KGwsdG9wLGwrYncsdG9wKzQ0ZiwyMmYsMjJmLHApO3Auc3R5bGU9UGFpbnQuU3R5bGUuRklMTDtwLmNvbG9yPUNvbG9yLnJnYig2NSwyMDUsMjU1KTtjLmRyYXdDaXJjbGUobCsyM2YsdG9wKzIyZiw4ZixwKTt0eC50ZXh0QWxpZ249UGFpbnQuQWxpZ24uTEVGVDt0eC50eXBlZmFjZT1UeXBlZmFjZS5ERUZBVUxUX0JPTEQ7dHgudGV4dFNpemU9MTJmO3R4LmNvbG9yPUNvbG9yLldISVRFO2MuZHJhd1RleHQoIlRBTEsgVE8gQVgiLGwrMzlmLHRvcCsyNmYsdHgpO3R4LnRleHRBbGlnbj1QYWludC5BbGlnbi5SSUdIVDt0eC50eXBlZmFjZT1UeXBlZmFjZS5ERUZBVUxUO3R4LnRleHRTaXplPTEwZjt0eC5jb2xvcj1Db2xvci5yZ2IoMTMwLDE5MCwyMzApO2MuZHJhd1RleHQoIkJSQUlOIC0gT05MSU5FIixsK2J3LTE4Zix0b3ArMjZmLHR4KTt0eC50ZXh0QWxpZ249UGFpbnQuQWxpZ24uQ0VOVEVSO3R4LnRleHRTaXplPTlmO3R4LmNvbG9yPUNvbG9yLnJnYigxMDAsMTQ1LDE4NSk7Yy5kcmF3VGV4dCgiR0FMQVhZIEhBQklUQVQgLSB2MC4zLjIiLHcsaCouOTg1Zix0eCl9Cn0=' | base64 -d > "$CORE/GalaxyHabitatView.kt"
           python3 - "$PROJECT/app/build.gradle.kts" <<'PY'
-          import sys
-          from pathlib import Path
-          p=Path(sys.argv[1]); s=p.read_text().replace('versionCode = 5, versionName = "0.3.0"','versionCode = 6, versionName = "0.3.1"'); p.write_text(s)
-          PY
+import sys
+from pathlib import Path
+p=Path(sys.argv[1]);s=p.read_text()
+s=s.replace('versionCode = 5, versionName = "0.3.0"','versionCode = 7, versionName = "0.3.2"')
+s=s.replace('versionCode = 6, versionName = "0.3.1"','versionCode = 7, versionName = "0.3.2"')
+p.write_text(s)
+PY
       - name: Build APK
         working-directory: ${{ env.PROJECT }}
         run: gradle clean assembleDebug --no-daemon --stacktrace
@@ -127,9 +65,9 @@ jobs:
           mkdir -p artifact
           APK="$(find "$PROJECT" -type f -name '*.apk' -path '*/build/outputs/apk/*' | head -n1)"
           test -n "$APK"
-          cp "$APK" artifact/Habitat-v0.3.1-Ax-debug.apk
+          cp "$APK" artifact/Habitat-v0.3.2-Ax-Galaxy.apk
       - uses: actions/upload-artifact@v4
         with:
-          name: Habitat-v0.3.1-Ax-debug-apk
-          path: artifact/Habitat-v0.3.1-Ax-debug.apk
+          name: Habitat-v0.3.2-Ax-Galaxy-apk
+          path: artifact/Habitat-v0.3.2-Ax-Galaxy.apk
           if-no-files-found: error
