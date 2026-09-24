@@ -434,7 +434,7 @@ jobs:
         run: |
           set -e
           CORE="$HABITAT_PROJECT_DIR/app/src/main/java/com/habitat/core"
-
+      
           python3 - "$CORE/MainActivity.kt" <<'PY'
           import sys
           from pathlib import Path
@@ -445,32 +445,32 @@ jobs:
           old="override fun onCreate(b:Bundle?){super.onCreate(b);home()}"
           if old in s:
               s=s.replace(old, """override fun onCreate(b:Bundle?){
-  super.onCreate(b)
-  window.navigationBarColor=bg
-  window.statusBarColor=bg
-  home()
-}""")
+        super.onCreate(b)
+        window.navigationBarColor=bg
+        window.statusBarColor=bg
+        home()
+      }""")
           oldpad="root.setPadding(dp(12),dp(12),dp(12),dp(8));"
           if oldpad in s:
               s=s.replace(oldpad, """root.setPadding(dp(12),dp(12),dp(12),dp(8))
-  root.setOnApplyWindowInsetsListener { v, insets ->
-   val navBottom = if(android.os.Build.VERSION.SDK_INT >= 30) insets.getInsets(WindowInsets.Type.navigationBars()).bottom else insets.systemWindowInsetBottom
-   v.setPadding(dp(12),dp(12),dp(12),dp(8)+navBottom)
-   insets
-  }
-  root.requestApplyInsets();""")
+        root.setOnApplyWindowInsetsListener { v, insets ->
+         val navBottom = if(android.os.Build.VERSION.SDK_INT >= 30) insets.getInsets(WindowInsets.Type.navigationBars()).bottom else insets.systemWindowInsetBottom
+         v.setPadding(dp(12),dp(12),dp(12),dp(8)+navBottom)
+         insets
+        }
+        root.requestApplyInsets();""")
           s=s.replace("v0.3.0","v0.3.1")
           p.write_text(s)
           PY
-
+      
           cat > "$CORE/HologramView.kt" <<'KT'
           package com.habitat.core
-
+      
           import android.content.Context
           import android.graphics.*
           import android.view.View
           import kotlin.math.sin
-
+      
           class HologramView(context: Context): View(context) {
               private val linePaint=Paint(Paint.ANTI_ALIAS_FLAG)
               private val imagePaint=Paint(Paint.ANTI_ALIAS_FLAG)
@@ -526,7 +526,6 @@ jobs:
               }
           }
           KT
-
       - name: Pre-build Kotlin sanity check
         shell: bash
         run: |
