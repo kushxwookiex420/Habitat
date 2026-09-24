@@ -439,9 +439,9 @@ jobs:
           from pathlib import Path
           p=Path(sys.argv[1])
           s=p.read_text()
-          if "import android.view.WindowInsets" not in s:
           NL=chr(10)
-          s=s.replace("import android.view.View"+NL,"import android.view.View"+NL+"import android.view.WindowInsets"+NL)
+          if "import android.view.WindowInsets" not in s:
+              s=s.replace("import android.view.View"+NL,"import android.view.View"+NL+"import android.view.WindowInsets"+NL)
           s=s.replace("override fun onCreate(b:Bundle?){super.onCreate(b);home()}", "override fun onCreate(b:Bundle?){" + NL + "  super.onCreate(b)" + NL + "  window.navigationBarColor=bg" + NL + "  window.statusBarColor=bg" + NL + "  home()" + NL + "}")
           s=s.replace("root.setPadding(dp(12),dp(12),dp(12),dp(8));", "root.setPadding(dp(12),dp(12),dp(12),dp(8))" + NL + "  root.setOnApplyWindowInsetsListener { v, insets ->" + NL + "   val navBottom = if(android.os.Build.VERSION.SDK_INT >= 30) insets.getInsets(WindowInsets.Type.navigationBars()).bottom else insets.systemWindowInsetBottom" + NL + "   v.setPadding(dp(12),dp(12),dp(12),dp(8)+navBottom)" + NL + "   insets" + NL + "  }" + NL + "  root.requestApplyInsets();")
           s=s.replace("v0.3.0","v0.3.1")
