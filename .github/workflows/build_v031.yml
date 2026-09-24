@@ -1,0 +1,135 @@
+name: Habitat v0.3.1 Ax Edition
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+      - name: Android SDK
+        shell: bash
+        run: |
+          set -e
+          SDK="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
+          echo "$SDK/platform-tools" >> "$GITHUB_PATH"
+          SDKMANAGER="$SDK/cmdline-tools/latest/bin/sdkmanager"
+          [ -f "$SDKMANAGER" ] || SDKMANAGER="$(find "$SDK" -type f -name sdkmanager | head -n1)"
+          yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
+          "$SDKMANAGER" "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+      - name: Extract base project
+        shell: bash
+        run: |
+          set -e
+          rm -rf HabitatBuild
+          mkdir HabitatBuild
+          unzip -q Habitat-Android-v0.3.0-Ax-Edition.zip -d HabitatBuild
+          echo "PROJECT=$(find HabitatBuild -type f -name settings.gradle.kts -print -quit | xargs dirname)" >> "$GITHUB_ENV"
+      - name: Patch Habitat UI and hologram
+        shell: bash
+        run: |
+          set -e
+          CORE="$PROJECT/app/src/main/java/com/habitat/core"
+          python3 - "$CORE/MainActivity.kt" <<'PY'
+          import sys
+          from pathlib import Path
+          p=Path(sys.argv[1]); s=p.read_text()
+          s=s.replace('import android.view.View\n','import android.view.View\nimport android.view.WindowInsets\n')
+          s=s.replace('override fun onCreate(b:Bundle?){super.onCreate(b);home()}', '''override fun onCreate(b:Bundle?){
+  super.onCreate(b)
+  window.navigationBarColor=bg
+  window.statusBarColor=bg
+  home()
+}''')
+          s=s.replace('root.setPadding(dp(12),dp(12),dp(12),dp(8));', '''root.setPadding(dp(12),dp(12),dp(12),dp(8))
+  root.setOnApplyWindowInsetsListener { v, insets ->
+   val navBottom = if(android.os.Build.VERSION.SDK_INT >= 30) insets.getInsets(WindowInsets.Type.navigationBars()).bottom else insets.systemWindowInsetBottom
+   v.setPadding(dp(12),dp(12),dp(12),dp(8)+navBottom)
+   insets
+  }
+  root.requestApplyInsets();''')
+          old=''){res->runOnUiThread{if(res.ok){tasks.upsert(t.copy(status="COMPLETE",result=res.text));log.addView(txt("AX • ${w.name} REPORT\\n${res.text}",14f).apply{setPadding(dp(12),dp(12),dp(12),dp(12));background=box()})}else{tasks.upsert(t.copy(status="ERROR",result=res.detail));log.addView(txt("AX • Worker unavailable\\n${res.detail}",14f,Color.rgb(255,150,150)))};scroll.post{scroll.fullScroll(View.FOCUS_DOWN)}}}}'
+          new=''){ok,text,detail->runOnUiThread{if(ok){tasks.upsert(t.copy(status="COMPLETE",result=text));log.addView(txt("AX • ${w.name} REPORT\\n$text",14f).apply{setPadding(dp(12),dp(12),dp(12),dp(12));background=box()})}else{tasks.upsert(t.copy(status="ERROR",result=detail));log.addView(txt("AX • Worker unavailable\\n$detail",14f,Color.rgb(255,150,150)))};scroll.post{scroll.fullScroll(View.FOCUS_DOWN)}}}}'
+          if old not in s: raise SystemExit('callback pattern not found')
+          s=s.replace(old,new)
+          s=s.replace('v0.3.0','v0.3.1')
+          p.write_text(s)
+          PY
+          cat > "$CORE/HologramView.kt" <<'KT'
+          package com.habitat.core
+
+          import android.content.Context
+          import android.graphics.*
+          import android.view.View
+          import kotlin.math.sin
+
+          class HologramView(context: Context): View(context) {
+              private val linePaint=Paint(Paint.ANTI_ALIAS_FLAG)
+              private val imagePaint=Paint(Paint.ANTI_ALIAS_FLAG)
+              private var phase=0f
+              private val audrey: Bitmap = BitmapFactory.decodeResource(resources, R.drawable.ax_portrait)
+              init { setLayerType(View.LAYER_TYPE_SOFTWARE,null) }
+              override fun onDraw(c:Canvas){
+                  super.onDraw(c)
+                  val w=width.toFloat(); val h=height.toFloat(); val cx=w/2f; val cy=h*.47f
+                  c.drawColor(Color.rgb(5,9,16))
+                  linePaint.style=Paint.Style.STROKE; linePaint.strokeWidth=2f; linePaint.color=Color.rgb(40,150,220)
+                  linePaint.setShadowLayer(14f,0f,0f,Color.rgb(40,170,255))
+                  c.drawOval(cx-w*.30f,cy-h*.40f,cx+w*.30f,cy+h*.40f,linePaint)
+                  c.drawOval(cx-w*.23f,cy-h*.33f,cx+w*.23f,cy+h*.33f,linePaint)
+                  linePaint.clearShadowLayer()
+                  if(!audrey.isRecycled){
+                      val src=Rect((audrey.width*.25f).toInt(),(audrey.height*.03f).toInt(),(audrey.width*.99f).toInt(),(audrey.height*.84f).toInt())
+                      val maxW=w*.54f; val maxH=h*.78f
+                      val scale=minOf(maxW/src.width(),maxH/src.height())
+                      val dw=src.width()*scale; val dh=src.height()*scale
+                      val left=cx-dw/2f; val top=cy-dh*.54f
+                      imagePaint.alpha=215; imagePaint.setShadowLayer(20f,0f,0f,Color.rgb(45,185,255))
+                      c.drawBitmap(audrey,src,RectF(left,top,left+dw,top+dh),imagePaint)
+                      imagePaint.clearShadowLayer()
+                      imagePaint.color=Color.argb(28,70,205,255); c.drawRect(left,top,left+dw,top+dh,imagePaint)
+                  }
+                  linePaint.strokeWidth=3f; linePaint.color=Color.rgb(50,195,255); linePaint.setShadowLayer(16f,0f,0f,Color.rgb(50,195,255))
+                  c.drawOval(cx-w*.27f,h*.80f,cx+w*.27f,h*.90f,linePaint); c.drawOval(cx-w*.19f,h*.825f,cx+w*.19f,h*.875f,linePaint)
+                  linePaint.clearShadowLayer(); linePaint.strokeWidth=1f; linePaint.color=Color.argb(105,55,125,180)
+                  for(y in 0 until height step 9){ val off=(sin((y+phase)*.05)*3).toFloat(); c.drawLine(0f,y.toFloat(),w,y.toFloat()+off,linePaint) }
+                  linePaint.style=Paint.Style.FILL; linePaint.color=Color.rgb(170,235,255); linePaint.textAlign=Paint.Align.CENTER; linePaint.textSize=16f
+                  c.drawText("AX • AUDREY HOLOGRAM",cx,h*.95f,linePaint); phase+=1.2f; postInvalidateDelayed(40)
+              }
+          }
+          KT
+          python3 - "$PROJECT/app/build.gradle.kts" <<'PY'
+          import sys
+          from pathlib import Path
+          p=Path(sys.argv[1]); s=p.read_text().replace('versionCode = 5, versionName = "0.3.0"','versionCode = 6, versionName = "0.3.1"'); p.write_text(s)
+          PY
+      - name: Build APK
+        working-directory: ${{ env.PROJECT }}
+        run: gradle clean assembleDebug --no-daemon --stacktrace
+      - name: Package APK
+        run: |
+          set -e
+          mkdir -p artifact
+          APK="$(find "$PROJECT" -type f -name '*.apk' -path '*/build/outputs/apk/*' | head -n1)"
+          test -n "$APK"
+          cp "$APK" artifact/Habitat-v0.3.1-Ax-debug.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Habitat-v0.3.1-Ax-debug-apk
+          path: artifact/Habitat-v0.3.1-Ax-debug.apk
+          if-no-files-found: error
