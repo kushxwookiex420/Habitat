@@ -1,4 +1,4 @@
-name: Habitat v0.3.2 Ax Edition
+name: Habitat v0.3.3 Ax Edition
 
 on:
   workflow_dispatch:
@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   build:
-    name: Build Habitat v0.3.2 APK
+    name: Build Habitat v0.3.3 APK
     runs-on: ubuntu-latest
 
     steps:
@@ -70,7 +70,7 @@ jobs:
           "$SDKMANAGER" "platforms;android-35"
           "$SDKMANAGER" "build-tools;35.0.0"
 
-      - name: Extract Habitat v0.3.2 project
+      - name: Extract Habitat v0.3.3 project
         shell: bash
         run: |
           set -e
@@ -102,7 +102,7 @@ jobs:
           echo "=============================================="
           echo "$PROJECT_DIR"
 
-      - name: Verify Habitat v0.3.2 source
+      - name: Verify Habitat v0.3.3 source
         shell: bash
         run: |
           set -e
@@ -124,7 +124,7 @@ jobs:
           test -f "$CORE/HologramView.kt"
           test -f "$CORE/HabitatWidget.kt"
 
-          echo "Habitat v0.3.2 source verified."
+          echo "Habitat v0.3.3 source verified."
 
       - name: Inspect MainActivity worker call
         shell: bash
@@ -429,7 +429,7 @@ jobs:
 
           echo "WorkerAdapter repair verified."
 
-      - name: Repair Habitat v0.3.2 hologram and navigation UI
+      - name: Repair Habitat v0.3.3 hologram and navigation UI
         shell: bash
         run: |
           set -e
@@ -448,7 +448,7 @@ jobs:
           p.write_text(s)
           gradle=Path(sys.argv[1]).parents[5] / "app" / "build.gradle.kts"
           if gradle.exists():
-              g=gradle.read_text().replace('versionCode = 5, versionName = "0.3.0"','versionCode = 7, versionName = "0.3.2"')
+              g=gradle.read_text().replace('versionCode = 5, versionName = "0.3.0"','versionCode = 8, versionName = "0.3.3"')
               gradle.write_text(g)
           PY
           cat > "$CORE/HologramView.kt" <<'KT'
@@ -695,14 +695,14 @@ jobs:
 
           PY
 
-      - name: Build Habitat v0.3.2
+      - name: Build Habitat v0.3.3
         working-directory: ${{ env.HABITAT_PROJECT_DIR }}
         shell: bash
         run: |
           set -e
 
           echo "=============================================="
-          echo "BUILDING HABITAT v0.3.2"
+          echo "BUILDING HABITAT v0.3.3"
           echo "=============================================="
 
           gradle --version
@@ -740,7 +740,7 @@ jobs:
           mkdir -p artifact
 
           cp "$APK" \
-            artifact/Habitat-v0.3.2-Ax-debug.apk
+            artifact/Habitat-v0.3.3-Ax-debug.apk
 
       - name: Create source archive
         shell: bash
@@ -750,29 +750,29 @@ jobs:
           cd "$HABITAT_PROJECT_DIR"
 
           zip -qr \
-            "$GITHUB_WORKSPACE/artifact/Habitat-v0.3.2-Ax-source.zip" \
+            "$GITHUB_WORKSPACE/artifact/Habitat-v0.3.3-Ax-source.zip" \
             .
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: Habitat-v0.3.2-Ax-debug-apk
+          name: Habitat-v0.3.3-Ax-debug-apk
           path: artifact/Habitat-v0.3.2-Ax-debug.apk
           if-no-files-found: error
 
       - name: Upload source
         uses: actions/upload-artifact@v4
         with:
-          name: Habitat-v0.3.2-Ax-source
+          name: Habitat-v0.3.3-Ax-source
           path: artifact/Habitat-v0.3.2-Ax-source.zip
           if-no-files-found: error
 
-      - name: Habitat v0.3.2 success
+      - name: Habitat v0.3.3 success
         shell: bash
         run: |
           echo ""
           echo "================================================"
-          echo "       HABITAT v0.3.2 AX EDITION"
+          echo "       HABITAT v0.3.3 AX EDITION"
           echo "          BUILD SUCCESSFUL"
           echo "================================================"
           echo ""
