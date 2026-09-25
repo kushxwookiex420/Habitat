@@ -38,32 +38,32 @@ class MainActivity : Activity() {
         composer.setBackgroundColor(Color.argb(235,3,14,27))
 
         input=EditText(this)
-        input.hint="Message Ax…"
+        input.hint="Message Ax"
         input.setSingleLine(true)
         input.setTextColor(Color.WHITE)
         input.setHintTextColor(Color.rgb(110,180,205))
-        input.textSize=16f
+        input.textSize=17f
         input.setPadding(18,0,12,0)
         input.setBackgroundColor(Color.argb(210,8,28,45))
         val inputLp=LinearLayout.LayoutParams(0,58,1f)
         composer.addView(input,inputLp)
 
         val voice=Button(this)
-        voice.text="MIC"
-        voice.textSize=12f
+        voice.text="◉"
+        voice.textSize=18f
         voice.setTextColor(Color.WHITE)
         voice.setBackgroundColor(Color.rgb(9,75,103))
         composer.addView(voice,LinearLayout.LayoutParams(70,58).apply{leftMargin=8})
 
         val send=Button(this)
-        send.text="SEND"
-        send.textSize=12f
+        send.text="➤"
+        send.textSize=22f
         send.setTextColor(Color.WHITE)
         send.setBackgroundColor(Color.rgb(10,115,145))
         composer.addView(send,LinearLayout.LayoutParams(74,58).apply{leftMargin=8})
 
         val cp=FrameLayout.LayoutParams(-1,76,Gravity.BOTTOM)
-        cp.setMargins(10,0,10,86)
+        cp.setMargins(16,0,16,190)
         root.addView(composer,cp)
 
         fun submit(){
