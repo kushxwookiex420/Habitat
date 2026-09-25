@@ -47,6 +47,7 @@ class Habitat3DSurface(ctx: Context) : GLSurfaceView(ctx) {
 
         private var brain: FloatBuffer = empty()
         private var gyri: FloatBuffer = empty()
+        private var grooves: FloatBuffer = empty()
         private var cerebellum: FloatBuffer = empty()
         private var neural: FloatBuffer = empty()
         private var stars: FloatBuffer = empty()
@@ -54,6 +55,7 @@ class Habitat3DSurface(ctx: Context) : GLSurfaceView(ctx) {
 
         private var brainCount = 0
         private var gyriCount = 0
+        private var groovesCount = 0
         private var cerebellumCount = 0
         private var neuralCount = 0
         private var starsCount = 0
@@ -144,6 +146,7 @@ class Habitat3DSurface(ctx: Context) : GLSurfaceView(ctx) {
         private fun buildBrain(){
             val b=ArrayList<Float>()
             val g=ArrayList<Float>()
+            val gr=ArrayList<Float>()
             val cb=ArrayList<Float>()
             val n=ArrayList<Float>()
             val s=ArrayList<Float>()
@@ -153,10 +156,13 @@ class Habitat3DSurface(ctx: Context) : GLSurfaceView(ctx) {
             fun vertex(side:Float,t:Float,p:Float):FloatArray{
                 val rr=sin(t).toFloat()
                 val y=1.34f*cos(t)
-                val fold=1f+.055f*sin(p*7.0f+y*3.4f)+.028f*sin(p*17.0f-y*5.0f)
-                val x=side*(.26f+.91f*rr*cos(p)*fold)
-                val z=.88f*rr*sin(p)*fold
-                val taper=.94f+.06f*cos(t)
+                val frontal=1f+.10f*exp(-((y-0.45f)*(y-0.45f))*1.2f)
+                val occipital=1f+.08f*exp(-((y+0.55f)*(y+0.55f))*2.0f)
+                val lobe=frontal*occipital
+                val fold=1f+.075f*sin(p*7.0f+y*3.2f)+.035f*sin(p*15.0f-y*5.5f)+.018f*sin(p*31.0f+y*8.0f)
+                val x=side*(.245f+.93f*rr*cos(p)*fold)*lobe
+                val z=.91f*rr*sin(p)*fold*lobe
+                val taper=.95f+.05f*cos(t)
                 return floatArrayOf(x*taper,y*taper,z*taper)
             }
             val T=38
@@ -186,11 +192,11 @@ class Habitat3DSurface(ctx: Context) : GLSurfaceView(ctx) {
             }
             gyriCount=g.size/3
 
-            // Fine groove/gyri contours following the curved cortex.
+            // Dense luminous cortical texture.
             for(sideI in 0..1){
                 val side=if(sideI==0)-1f else 1f
                 for(k in 0 until 42){
-                    val t=.18f+(k/41f)*2.74f
+                    val t=.16f+(k/41f)*2.78f
                     val phase=k*.61f
                     for(j in 0..90){
                         val p=2f*PI.toFloat()*j/90f
@@ -201,6 +207,58 @@ class Habitat3DSurface(ctx: Context) : GLSurfaceView(ctx) {
                 }
             }
             gyriCount=g.size/3
+
+            // Irregular groove strokes sit just above the cortex so the silhouette
+            // reads as a folded human brain instead of a smooth ellipsoid.
+            fun groovePoint(side:Float, u:Float, phase:Float, longitudinal:Boolean):FloatArray {
+                return if (longitudinal) {
+                    val t=.13f+u*2.88f
+                    val p=phase+.22f*sin(u*PI.toFloat()*4f+phase)+.07f*sin(u*PI.toFloat()*13f-phase)
+                    vertex(side,t,p)
+                } else {
+                    val p=u*2f*PI.toFloat()
+                    val t=.20f+.70f*(.5f+.5f*sin(phase))+.11f*sin(p*4f+phase)
+                    vertex(side,t,p)
+                }
+            }
+            for(sideI in 0..1){
+                val side=if(sideI==0)-1f else 1f
+                for(k in 0 until 24){
+                    val phase=(k*.47f)%(2f*PI.toFloat())
+                    var last:FloatArray?=null
+                    for(j in 0..72){
+                        val v=groovePoint(side,j/72f,phase,true)
+                        if(last!=null){
+                            gr.add(last!![0]*1.014f);gr.add(last!![1]*1.014f);gr.add(last!![2]*1.014f)
+                            gr.add(v[0]*1.014f);gr.add(v[1]*1.014f);gr.add(v[2]*1.014f)
+                        }
+                        last=v
+                    }
+                }
+                for(k in 0 until 14){
+                    val phase=k*.71f
+                    var last:FloatArray?=null
+                    for(j in 0..80){
+                        val u=j/80f
+                        val v=groovePoint(side,u,phase,false)
+                        if(last!=null){
+                            gr.add(last!![0]*1.012f);gr.add(last!![1]*1.012f);gr.add(last!![2]*1.012f)
+                            gr.add(v[0]*1.012f);gr.add(v[1]*1.012f);gr.add(v[2]*1.012f)
+                        }
+                        last=v
+                    }
+                }
+            }
+            // Deep central fissure, kept subtle so the hemispheres read as one organ.
+            for(j in 0..90){
+                val y=-1.25f+j/90f*2.50f
+                val z=.28f*sin(j/90f*PI.toFloat())
+                gr.add(-.275f);gr.add(y);gr.add(z)
+                gr.add(-.255f);gr.add(y+.025f);gr.add(z+.01f)
+                gr.add(.275f);gr.add(y);gr.add(z)
+                gr.add(.255f);gr.add(y+.025f);gr.add(z+.01f)
+            }
+            groovesCount=gr.size/3
 
             // Cerebellum: a separate small lobulated 3D mass behind the lower brain.
             fun putCb(v:FloatArray){cb.add(v[0]);cb.add(v[1]);cb.add(v[2])}
@@ -252,7 +310,7 @@ class Habitat3DSurface(ctx: Context) : GLSurfaceView(ctx) {
                 }
             }
 
-            brain=buffer(b);gyri=buffer(g);cerebellum=buffer(cb);neural=buffer(n);stars=buffer(s);rings=buffer(r)
+            brain=buffer(b);gyri=buffer(g);grooves=buffer(gr);cerebellum=buffer(cb);neural=buffer(n);stars=buffer(s);rings=buffer(r)
         }
 
         private fun empty():FloatBuffer=ByteBuffer.allocateDirect(4).order(ByteOrder.nativeOrder()).asFloatBuffer()
@@ -304,14 +362,22 @@ class Habitat3DSurface(ctx: Context) : GLSurfaceView(ctx) {
             GLES20.glVertexAttribPointer(meshPos,3,GLES20.GL_FLOAT,false,0,cerebellum)
             GLES20.glDrawArrays(GLES20.GL_TRIANGLES,0,cerebellumCount)
 
+            GLES20.glUseProgram(lineProgram)
+            GLES20.glUniformMatrix4fv(lineMvp,1,false,out,0)
+            GLES20.glEnableVertexAttribArray(linePos)
+            GLES20.glVertexAttribPointer(linePos,3,GLES20.GL_FLOAT,false,0,grooves)
+            GLES20.glUniform4f(lineColor,.16f,.86f,1f,.42f)
+            GLES20.glLineWidth(1.35f)
+            GLES20.glDrawArrays(GLES20.GL_LINES,0,groovesCount)
+
             GLES20.glUseProgram(pointProgram)
             GLES20.glUniformMatrix4fv(pointMvp,1,false,out,0)
             GLES20.glVertexAttribPointer(pointPos,3,GLES20.GL_FLOAT,false,0,gyri)
-            GLES20.glUniform4f(pointColor,.25f,.95f,1f,.72f)
-            GLES20.glUniform1f(pointSize,2.6f)
+            GLES20.glUniform4f(pointColor,.25f,.95f,1f,.50f)
+            GLES20.glUniform1f(pointSize,2.0f)
             GLES20.glDrawArrays(GLES20.GL_POINTS,0,gyriCount)
 
-            spin+=.075f
+            spin+=.060f
         }
     }
 }
