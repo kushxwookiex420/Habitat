@@ -1,4 +1,4 @@
-name: Habitat v0.3.3 APK
+name: Habitat v0.3.4 APK
 
 on:
   push:
@@ -28,7 +28,6 @@ jobs:
               echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
               echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
               echo "$SDK/platform-tools" >> "$GITHUB_PATH"
-              echo "$SDK/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
               exit 0
             fi
           done
@@ -43,19 +42,14 @@ jobs:
           "$SDKMANAGER" "platform-tools" "platforms;android-35" "build-tools;35.0.0"
       - name: Build debug APK
         run: gradle clean :app:assembleDebug --no-daemon --stacktrace
-      - name: Verify and package
+      - name: Package
         run: |
           set -e
           test -f app/build/outputs/apk/debug/app-debug.apk
           mkdir -p artifact
-          cp app/build/outputs/apk/debug/app-debug.apk artifact/Habitat-v0.3.3-Ax-debug.apk
-          zip -qr artifact/Habitat-v0.3.3-Ax-source.zip . -x ".git/*" "artifact/*"
+          cp app/build/outputs/apk/debug/app-debug.apk artifact/Habitat-v0.3.4-Ax-debug.apk
           ls -lh artifact/*
       - uses: actions/upload-artifact@v4
         with:
-          name: Habitat-v0.3.3-Ax-debug-apk
-          path: artifact/Habitat-v0.3.3-Ax-debug.apk
-      - uses: actions/upload-artifact@v4
-        with:
-          name: Habitat-v0.3.3-Ax-source
-          path: artifact/Habitat-v0.3.3-Ax-source.zip
+          name: Habitat-v0.3.4-Ax-debug-apk
+          path: artifact/Habitat-v0.3.4-Ax-debug.apk
