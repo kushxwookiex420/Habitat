@@ -9,8 +9,8 @@ android {
         applicationId = "com.habitat"
         minSdk = 26
         targetSdk = 35
-        versionCode = 34
-        versionName = "0.3.4"
+        versionCode = 40
+        versionName = "0.4.0"
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
