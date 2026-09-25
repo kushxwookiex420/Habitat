@@ -9,17 +9,13 @@ android {
         applicationId = "com.habitat"
         minSdk = 26
         targetSdk = 35
-        versionCode = 33
-        versionName = "0.3.3"
+        versionCode = 34
+        versionName = "0.3.4"
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-    kotlinOptions {
-        jvmTarget = "17"
-    }
+    kotlinOptions { jvmTarget = "17" }
 }
-kotlin {
-    jvmToolchain(17)
-}
+kotlin { jvmToolchain(17) }
