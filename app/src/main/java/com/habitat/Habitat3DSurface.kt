@@ -23,250 +23,295 @@ class Habitat3DSurface(ctx: Context) : GLSurfaceView(ctx) {
 
     private class Renderer : GLSurfaceView.Renderer {
         var mode = 0
-        private var rot = 0f
+        private var spin = 0f
         private var w = 1
         private var h = 1
-        private var pointProgram = 0
+
         private var meshProgram = 0
-        private var pos = 0
-        private var mvp = 0
-        private var color = 0
-        private var sizeLoc = 0
+        private var lineProgram = 0
+        private var pointProgram = 0
+
         private var meshPos = 0
         private var meshMvp = 0
         private var meshColor = 0
-        private var brain: FloatBuffer
-        private var gyri: FloatBuffer
-        private var inner: FloatBuffer
-        private var stars: FloatBuffer
-        private var neural: FloatBuffer
-        private var rings: FloatBuffer
+        private var meshLight = 0
+
+        private var linePos = 0
+        private var lineMvp = 0
+        private var lineColor = 0
+
+        private var pointPos = 0
+        private var pointMvp = 0
+        private var pointColor = 0
+        private var pointSize = 0
+
+        private var brain: FloatBuffer = empty()
+        private var gyri: FloatBuffer = empty()
+        private var cerebellum: FloatBuffer = empty()
+        private var neural: FloatBuffer = empty()
+        private var stars: FloatBuffer = empty()
+        private var rings: FloatBuffer = empty()
+
         private var brainCount = 0
         private var gyriCount = 0
-        private var innerCount = 0
-        private var starsCount = 0
+        private var cerebellumCount = 0
         private var neuralCount = 0
-        private var ringsCount = 0
-        private val rnd = Random(71)
+        private var starsCount = 0
 
-        init {
-            brain = empty()
-            gyri = empty()
-            inner = empty()
-            stars = empty()
-            neural = empty()
-            rings = empty()
-        }
+        private val rnd = Random(77)
 
         override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) {
-            GLES20.glClearColor(.001f, .002f, .012f, 1f)
+            GLES20.glClearColor(.001f, .003f, .014f, 1f)
             GLES20.glEnable(GLES20.GL_DEPTH_TEST)
             GLES20.glEnable(GLES20.GL_BLEND)
             GLES20.glBlendFunc(GLES20.GL_SRC_ALPHA, GLES20.GL_ONE_MINUS_SRC_ALPHA)
 
-            val pointVs = """
+            val meshVs = """
+                attribute vec3 a;
+                uniform mat4 u;
+                uniform float light;
+                varying vec3 n;
+                varying vec3 p;
+                void main(){
+                    p=a;
+                    vec3 q=normalize(vec3(a.x/(1.16*1.16),a.y/(1.34*1.34),a.z/(.88*.88)));
+                    n=q;
+                    gl_Position=u*vec4(a,1.0);
+                }
+            """.trimIndent()
+            val meshFs = """
+                precision mediump float;
+                uniform vec4 c;
+                uniform float light;
+                varying vec3 n;
+                varying vec3 p;
+                void main(){
+                    vec3 L=normalize(vec3(-.35,.65,1.0));
+                    vec3 V=normalize(vec3(0.0,0.0,1.0));
+                    float d=max(dot(normalize(n),L),0.0);
+                    float rim=pow(1.0-max(dot(normalize(n),V),0.0),2.2);
+                    float sheen=pow(max(dot(reflect(-L,normalize(n)),V),0.0),18.0);
+                    vec3 rgb=c.rgb*(.30+.70*d)+vec3(.10,.45,.55)*rim+vec3(.30,.95,1.0)*sheen*.65;
+                    gl_FragColor=vec4(rgb,c.a*(.72+.28*d));
+                }
+            """.trimIndent()
+            meshProgram=program(meshVs,meshFs)
+            meshPos=GLES20.glGetAttribLocation(meshProgram,"a")
+            meshMvp=GLES20.glGetUniformLocation(meshProgram,"u")
+            meshColor=GLES20.glGetUniformLocation(meshProgram,"c")
+            meshLight=GLES20.glGetUniformLocation(meshProgram,"light")
+
+            val lineVs="""
+                attribute vec3 a;
+                uniform mat4 u;
+                void main(){gl_Position=u*vec4(a,1.0);}
+            """.trimIndent()
+            val lineFs="""
+                precision mediump float;
+                uniform vec4 c;
+                void main(){gl_FragColor=c;}
+            """.trimIndent()
+            lineProgram=program(lineVs,lineFs)
+            linePos=GLES20.glGetAttribLocation(lineProgram,"a")
+            lineMvp=GLES20.glGetUniformLocation(lineProgram,"u")
+            lineColor=GLES20.glGetUniformLocation(lineProgram,"c")
+
+            val pointVs="""
                 attribute vec3 a;
                 uniform mat4 u;
                 uniform float size;
-                void main(){ gl_Position=u*vec4(a,1.0); gl_PointSize=size; }
+                void main(){gl_Position=u*vec4(a,1.0);gl_PointSize=size;}
             """.trimIndent()
-            val pointFs = """
+            val pointFs="""
                 precision mediump float;
                 uniform vec4 c;
                 void main(){
                     float d=distance(gl_PointCoord,vec2(.5));
                     if(d>.5) discard;
-                    float glow=1.0-smoothstep(.02,.5,d);
-                    gl_FragColor=vec4(c.rgb,c.a*(.18+.82*glow));
+                    float g=1.0-smoothstep(.03,.5,d);
+                    gl_FragColor=vec4(c.rgb,c.a*(.12+.88*g));
                 }
             """.trimIndent()
-            pointProgram = program(pointVs, pointFs)
-            pos = GLES20.glGetAttribLocation(pointProgram, "a")
-            mvp = GLES20.glGetUniformLocation(pointProgram, "u")
-            color = GLES20.glGetUniformLocation(pointProgram, "c")
-            sizeLoc = GLES20.glGetUniformLocation(pointProgram, "size")
+            pointProgram=program(pointVs,pointFs)
+            pointPos=GLES20.glGetAttribLocation(pointProgram,"a")
+            pointMvp=GLES20.glGetUniformLocation(pointProgram,"u")
+            pointColor=GLES20.glGetUniformLocation(pointProgram,"c")
+            pointSize=GLES20.glGetUniformLocation(pointProgram,"size")
 
-            val meshVs = """
-                attribute vec3 a;
-                uniform mat4 u;
-                void main(){ gl_Position=u*vec4(a,1.0); }
-            """.trimIndent()
-            val meshFs = """
-                precision mediump float;
-                uniform vec4 c;
-                void main(){ gl_FragColor=c; }
-            """.trimIndent()
-            meshProgram = program(meshVs, meshFs)
-            meshPos = GLES20.glGetAttribLocation(meshProgram, "a")
-            meshMvp = GLES20.glGetUniformLocation(meshProgram, "u")
-            meshColor = GLES20.glGetUniformLocation(meshProgram, "c")
+            buildBrain()
+        }
 
-            val b = ArrayList<Float>()
-            val g = ArrayList<Float>()
-            val inn = ArrayList<Float>()
-            val st = ArrayList<Float>()
-            val n = ArrayList<Float>()
-            val rg = ArrayList<Float>()
+        private fun buildBrain(){
+            val b=ArrayList<Float>()
+            val g=ArrayList<Float>()
+            val cb=ArrayList<Float>()
+            val n=ArrayList<Float>()
+            val s=ArrayList<Float>()
+            val r=ArrayList<Float>()
 
-            // Anatomical-looking 3D cortical shell: two hemispheres, deep center fissure,
-            // asymmetric folds, and a real rounded silhouette.
-            val latSteps = 46
-            val lonSteps = 72
-            for (sideI in 0..1) {
-                val side = if (sideI == 0) -1f else 1f
-                for (la in 0 until latSteps) {
-                    val t0 = la.toFloat() / (latSteps - 1)
-                    val t1 = (la + 1).toFloat() / (latSteps - 1)
-                    val y0 = 1.34f * (t0 * 2f - 1f)
-                    val y1 = 1.34f * (t1 * 2f - 1f)
-                    val r0 = sin(t0 * PI).toFloat()
-                    val r1 = sin(t1 * PI).toFloat()
-                    for (lo in 0 until lonSteps) {
-                        val p0 = lo.toFloat() / lonSteps * 2f * PI.toFloat()
-                        val p1 = (lo + 1).toFloat() / lonSteps * 2f * PI.toFloat()
-                        fun vertex(y: Float, r: Float, p: Float): FloatArray {
-                            val fold = 1f + .045f*sin(p*10f + y*9f) + .035f*sin(p*19f - y*6f)
-                            val x = side*(.28f + .72f*r*cos(p)*fold)
-                            val z = .82f*r*sin(p)*fold
-                            return floatArrayOf(x, y, z)
-                        }
-                        val v00=vertex(y0,r0,p0); val v10=vertex(y1,r1,p0)
-                        val v01=vertex(y0,r0,p1); val v11=vertex(y1,r1,p1)
-                        fun tri(a:FloatArray,bv:FloatArray,c:FloatArray){
-                            b.add(a[0]);b.add(a[1]);b.add(a[2])
-                            b.add(bv[0]);b.add(bv[1]);b.add(bv[2])
-                            b.add(c[0]);b.add(c[1]);b.add(c[2])
-                        }
-                        tri(v00,v10,v01); tri(v01,v10,v11)
+            fun put(v:FloatArray){b.add(v[0]);b.add(v[1]);b.add(v[2])}
+            fun vertex(side:Float,t:Float,p:Float):FloatArray{
+                val rr=sin(t).toFloat()
+                val y=1.34f*cos(t)
+                val fold=1f+.055f*sin(p*7.0f+y*3.4f)+.028f*sin(p*17.0f-y*5.0f)
+                val x=side*(.26f+.91f*rr*cos(p)*fold)
+                val z=.88f*rr*sin(p)*fold
+                val taper=.94f+.06f*cos(t)
+                return floatArrayOf(x*taper,y*taper,z*taper)
+            }
+            val T=38
+            val P=72
+            for(sideI in 0..1){
+                val side=if(sideI==0)-1f else 1f
+                for(i in 0 until T-1){
+                    val t0=PI.toFloat()*i/(T-1)
+                    val t1=PI.toFloat()*(i+1)/(T-1)
+                    for(j in 0 until P){
+                        val p0=2f*PI.toFloat()*j/P
+                        val p1=2f*PI.toFloat()*(j+1)/P
+                        val a=vertex(side,t0,p0);val bb=vertex(side,t1,p0);val c=vertex(side,t0,p1);val d=vertex(side,t1,p1)
+                        put(a);put(bb);put(c);put(c);put(bb);put(d)
                     }
                 }
             }
             brainCount=b.size/3
 
-            // Dense glowing cortical points reinforce the hologram and folds.
-            repeat(6200) {
-                val side=if(it and 1==0)-1f else 1f
-                val y=(rnd.nextFloat()*2f-1f)*1.30f
-                val rr=sqrt(max(0f,1f-(y/1.34f)*(y/1.34f)))
+            // Dense cortical surface sampling: makes the folds read as a luminous 3D structure.
+            repeat(7000){
+                val side=if(it%2==0)-1f else 1f
+                val t=.08f+rnd.nextFloat()*(PI.toFloat()-.16f)
                 val p=rnd.nextFloat()*2f*PI.toFloat()
-                val fold=1f+.055f*sin(p*11f+y*8f)+.035f*sin(p*21f-y*5f)
-                g.add(side*(.30f+.72f*rr*cos(p)*fold));g.add(y);g.add(.83f*rr*sin(p)*fold)
+                val v=vertex(side,t,p)
+                g.add(v[0]);g.add(v[1]);g.add(v[2])
             }
             gyriCount=g.size/3
 
-            repeat(1700) {
-                val side=if(it and 1==0)-1f else 1f
-                val a=rnd.nextFloat()*PI.toFloat()
-                val p=rnd.nextFloat()*2f*PI.toFloat()
-                val r=.08f+.55f*rnd.nextFloat()
-                inn.add(side*(.22f+.43f*sin(a)*cos(p)*r))
-                inn.add(1.05f*cos(a)*r)
-                inn.add(.60f*sin(a)*sin(p)*r)
+            // Fine groove/gyri contours following the curved cortex.
+            for(sideI in 0..1){
+                val side=if(sideI==0)-1f else 1f
+                for(k in 0 until 42){
+                    val t=.18f+(k/41f)*2.74f
+                    val phase=k*.61f
+                    for(j in 0..90){
+                        val p=2f*PI.toFloat()*j/90f
+                        val tt=t+.055f*sin(p*3f+phase)+.025f*sin(p*9f-phase)
+                        val v=vertex(side,tt,p)
+                        g.add(v[0]*1.006f);g.add(v[1]*1.006f);g.add(v[2]*1.006f)
+                    }
+                }
             }
-            innerCount=inn.size/3
+            gyriCount=g.size/3
 
-            repeat(950) {
-                st.add((rnd.nextFloat()-.5f)*12f);st.add((rnd.nextFloat()-.5f)*8f);st.add((rnd.nextFloat()-.5f)*9f)
+            // Cerebellum: a separate small lobulated 3D mass behind the lower brain.
+            fun putCb(v:FloatArray){cb.add(v[0]);cb.add(v[1]);cb.add(v[2])}
+            val ct=20;val cp=40
+            for(i in 0 until ct-1){
+                val t0=PI.toFloat()*i/(ct-1);val t1=PI.toFloat()*(i+1)/(ct-1)
+                for(j in 0 until cp){
+                    val p0=2f*PI.toFloat()*j/cp;val p1=2f*PI.toFloat()*(j+1)/cp
+                    fun cv(t:Float,p:Float):FloatArray{
+                        val rr=sin(t);val fold=1f+.08f*sin(p*12f)
+                        return floatArrayOf(.0f+.34f*rr*cos(p)*fold,-1.05f+.48f*cos(t),-.30f+.34f*rr*sin(p)*fold)
+                    }
+                    val a=cv(t0,p0);val bb=cv(t1,p0);val c=cv(t0,p1);val d=cv(t1,p1)
+                    putCb(a);putCb(bb);putCb(c);putCb(c);putCb(bb);putCb(d)
+                }
             }
-            starsCount=st.size/3
+            cerebellumCount=cb.size/3
 
-            // Fine neural arcs.
-            repeat(85) { k ->
+            // Neural pathways, bright enough to visibly travel through the brain.
+            repeat(70){k->
                 val side=if(k%2==0)-1f else 1f
                 val phase=rnd.nextFloat()*6.28f
-                var px=0f;var py=0f;var pz=0f
-                repeat(25) { j ->
-                    val t=j/24f
-                    val y=(t-.5f)*2.45f
-                    val z=.62f*sin(t*PI.toFloat()*2f+phase)+.12f*sin(t*PI.toFloat()*9f)
-                    val x=side*(.30f+.50f*sin(t*PI.toFloat())+.06f*sin(t*PI.toFloat()*13f+phase))
-                    if(j>0){n.add(px);n.add(py);n.add(pz);n.add(x);n.add(y);n.add(z)}
-                    px=x;py=y;pz=z
+                var last=floatArrayOf(0f,0f,0f)
+                for(j in 0..22){
+                    val t=j/22f
+                    val y=(t-.5f)*2.15f
+                    val x=side*(.30f+.47f*sin(t*PI.toFloat())+.08f*sin(t*PI.toFloat()*7f+phase))
+                    val z=.50f*sin(t*PI.toFloat()*PI.toFloat()+phase)*(.75f+.25f*sin(t*PI.toFloat()))
+                    val cur=floatArrayOf(x,y,z)
+                    if(j>0){n.add(last[0]);n.add(last[1]);n.add(last[2]);n.add(cur[0]);n.add(cur[1]);n.add(cur[2])}
+                    last=cur
                 }
             }
             neuralCount=n.size/3
 
-            // Three clean orbital rings, each drawn separately to avoid connector artifacts.
+            repeat(1100){
+                s.add((rnd.nextFloat()-.5f)*12f);s.add((rnd.nextFloat()-.5f)*8f);s.add((rnd.nextFloat()-.5f)*9f)
+            }
+            starsCount=s.size/3
+
             for(axis in 0..2){
                 for(i in 0..160){
-                    val a=i/160f*2f*PI.toFloat()
-                    val rr=1.72f
+                    val a=2f*PI.toFloat()*i/160f;val q=1.75f
                     when(axis){
-                        0->{rg.add(0f);rg.add(rr*cos(a));rg.add(rr*sin(a))}
-                        1->{rg.add(rr*cos(a));rg.add(0f);rg.add(rr*sin(a))}
-                        else->{rg.add(rr*cos(a));rg.add(rr*sin(a));rg.add(0f)}
+                        0->{r.add(0f);r.add(q*cos(a));r.add(q*sin(a))}
+                        1->{r.add(q*cos(a));r.add(0f);r.add(q*sin(a))}
+                        else->{r.add(q*cos(a));r.add(q*sin(a));r.add(0f)}
                     }
                 }
             }
-            ringsCount=rg.size/3
 
-            brain=buffer(b);gyri=buffer(g);inner=buffer(inn);stars=buffer(st);neural=buffer(n);rings=buffer(rg)
+            brain=buffer(b);gyri=buffer(g);cerebellum=buffer(cb);neural=buffer(n);stars=buffer(s);rings=buffer(r)
         }
 
         private fun empty():FloatBuffer=ByteBuffer.allocateDirect(4).order(ByteOrder.nativeOrder()).asFloatBuffer()
         private fun buffer(a:ArrayList<Float>):FloatBuffer=ByteBuffer.allocateDirect(a.size*4).order(ByteOrder.nativeOrder()).asFloatBuffer().apply{a.forEach{put(it)};position(0)}
-        private fun shader(type:Int,src:String):Int{
-            val s=GLES20.glCreateShader(type);GLES20.glShaderSource(s,src);GLES20.glCompileShader(s);return s
-        }
-        private fun program(v:String,f:String):Int{
-            val p=GLES20.glCreateProgram();GLES20.glAttachShader(p,shader(GLES20.GL_VERTEX_SHADER,v));GLES20.glAttachShader(p,shader(GLES20.GL_FRAGMENT_SHADER,f));GLES20.glLinkProgram(p);return p
-        }
+        private fun shader(type:Int,src:String):Int{val s=GLES20.glCreateShader(type);GLES20.glShaderSource(s,src);GLES20.glCompileShader(s);return s}
+        private fun program(v:String,f:String):Int{val p=GLES20.glCreateProgram();GLES20.glAttachShader(p,shader(GLES20.GL_VERTEX_SHADER,v));GLES20.glAttachShader(p,shader(GLES20.GL_FRAGMENT_SHADER,f));GLES20.glLinkProgram(p);return p}
 
         override fun onSurfaceChanged(gl:GL10?,ww:Int,hh:Int){w=ww;h=hh;GLES20.glViewport(0,0,w,h)}
 
         override fun onDrawFrame(gl:GL10?){
             GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT or GLES20.GL_DEPTH_BUFFER_BIT)
-            val p=FloatArray(16);val v=FloatArray(16);val m=FloatArray(16);val mv=FloatArray(16);val out=FloatArray(16)
-            Matrix.perspectiveM(p,0,44f,w.toFloat()/h.toFloat(),.4f,40f)
-            Matrix.setLookAtM(v,0,0f,.0f,6.1f,0f,0f,0f,0f,1f,0f)
-            Matrix.setIdentityM(m,0)
-            Matrix.rotateM(m,0,rot,0f,1f,0f)
-            Matrix.rotateM(m,0,7f*sin(rot*.20f),1f,0f,0f)
-            val pulse=.94f+.08f*sin(rot*.055f)
-            Matrix.scaleM(m,0,pulse,pulse,pulse)
-            Matrix.multiplyMM(mv,0,v,0,m,0);Matrix.multiplyMM(out,0,p,0,mv,0)
+            val proj=FloatArray(16);val view=FloatArray(16);val model=FloatArray(16);val mv=FloatArray(16);val out=FloatArray(16)
+            Matrix.perspectiveM(proj,0,42f,w.toFloat()/h.toFloat(),.35f,40f)
+            Matrix.setLookAtM(view,0,0f,.05f,6.25f,0f,0f,0f,0f,1f,0f)
+            Matrix.setIdentityM(model,0)
+            Matrix.rotateM(model,0,spin,0f,1f,0f)
+            Matrix.rotateM(model,0,8f*sin(spin*.17f),1f,0f,0f)
+            val pulse=.96f+.045f*sin(spin*.055f)
+            Matrix.scaleM(model,0,pulse,pulse,pulse)
+            Matrix.multiplyMM(mv,0,view,0,model,0);Matrix.multiplyMM(out,0,proj,0,mv,0)
 
             GLES20.glUseProgram(pointProgram)
-            GLES20.glUniformMatrix4fv(mvp,1,false,out,0)
-            GLES20.glEnableVertexAttribArray(pos)
-
-            GLES20.glVertexAttribPointer(pos,3,GLES20.GL_FLOAT,false,0,stars)
-            GLES20.glUniform4f(color,.12f,.32f,.82f,.32f);GLES20.glUniform1f(sizeLoc,2.1f)
+            GLES20.glUniformMatrix4fv(pointMvp,1,false,out,0)
+            GLES20.glEnableVertexAttribArray(pointPos)
+            GLES20.glVertexAttribPointer(pointPos,3,GLES20.GL_FLOAT,false,0,stars)
+            GLES20.glUniform4f(pointColor,.10f,.38f,.95f,.38f);GLES20.glUniform1f(pointSize,2.0f)
             GLES20.glDrawArrays(GLES20.GL_POINTS,0,starsCount)
 
-            GLES20.glVertexAttribPointer(pos,3,GLES20.GL_FLOAT,false,0,rings)
-            GLES20.glUniform4f(color,.08f,.74f,1f,.34f);GLES20.glUniform1f(sizeLoc,2f)
-            for(i in 0..2) GLES20.glDrawArrays(GLES20.GL_LINE_STRIP,i*161,161)
+            GLES20.glUseProgram(lineProgram)
+            GLES20.glUniformMatrix4fv(lineMvp,1,false,out,0)
+            GLES20.glEnableVertexAttribArray(linePos)
+            GLES20.glVertexAttribPointer(linePos,3,GLES20.GL_FLOAT,false,0,rings)
+            GLES20.glUniform4f(lineColor,.08f,.75f,1f,.28f)
+            for(i in 0..2)GLES20.glDrawArrays(GLES20.GL_LINE_STRIP,i*161,161)
 
-            GLES20.glVertexAttribPointer(pos,3,GLES20.GL_FLOAT,false,0,neural)
-            GLES20.glUniform4f(color,.12f,.82f,1f,.44f);GLES20.glUniform1f(sizeLoc,2.2f)
+            GLES20.glVertexAttribPointer(linePos,3,GLES20.GL_FLOAT,false,0,neural)
+            GLES20.glUniform4f(lineColor,.20f,.92f,1f,.60f)
             GLES20.glDrawArrays(GLES20.GL_LINES,0,neuralCount)
 
-            // Soft inner core.
-            GLES20.glVertexAttribPointer(pos,3,GLES20.GL_FLOAT,false,0,inner)
-            GLES20.glUniform4f(color,.36f,.95f,1f,.34f);GLES20.glUniform1f(sizeLoc,4.0f)
-            GLES20.glDrawArrays(GLES20.GL_POINTS,0,innerCount)
-
-            // Anatomical shell.
             GLES20.glUseProgram(meshProgram)
             GLES20.glUniformMatrix4fv(meshMvp,1,false,out,0)
+            GLES20.glUniform1f(meshLight,1f)
+            GLES20.glUniform4f(meshColor,.035f,.63f,.86f,.62f)
             GLES20.glEnableVertexAttribArray(meshPos)
             GLES20.glVertexAttribPointer(meshPos,3,GLES20.GL_FLOAT,false,0,brain)
-            GLES20.glUniform4f(meshColor,.05f,.68f,.92f,.20f)
             GLES20.glDrawArrays(GLES20.GL_TRIANGLES,0,brainCount)
 
-            // Bright cortical contour points over the shell.
+            GLES20.glUniform4f(meshColor,.035f,.70f,.92f,.52f)
+            GLES20.glVertexAttribPointer(meshPos,3,GLES20.GL_FLOAT,false,0,cerebellum)
+            GLES20.glDrawArrays(GLES20.GL_TRIANGLES,0,cerebellumCount)
+
             GLES20.glUseProgram(pointProgram)
-            GLES20.glUniformMatrix4fv(mvp,1,false,out,0)
-            GLES20.glVertexAttribPointer(pos,3,GLES20.GL_FLOAT,false,0,gyri)
-            GLES20.glUniform4f(color,.18f,.88f,1f,if(mode==0).92f else .82f)
-            GLES20.glUniform1f(sizeLoc,3.5f)
+            GLES20.glUniformMatrix4fv(pointMvp,1,false,out,0)
+            GLES20.glVertexAttribPointer(pointPos,3,GLES20.GL_FLOAT,false,0,gyri)
+            GLES20.glUniform4f(pointColor,.25f,.95f,1f,.72f)
+            GLES20.glUniform1f(pointSize,2.6f)
             GLES20.glDrawArrays(GLES20.GL_POINTS,0,gyriCount)
 
-            // Central fissure highlight.
-            GLES20.glUniform4f(color,.55f,1f,1f,.75f)
-            GLES20.glUniform1f(sizeLoc,2.4f)
-            rot+=.115f
+            spin+=.075f
         }
     }
 }
