@@ -96,8 +96,8 @@ class Habitat3DSurface(ctx:Context):GLSurfaceView(ctx){
                 repeat(22){j->
                     val t=j/21f
                     val y=(t-.5f)*2.15f
-                    val z=.62f*sin(t*PI*2f+phase)+.15f*sin(t*PI*7f)
-                    val x=side*(.34f+.40f*sin(t*PI)+.08f*sin(t*PI*9f+phase))
+                    val z=.62f*sin(t*PI.toFloat()*2f+phase)+.15f*sin(t*PI.toFloat()*7f)
+                    val x=side*(.34f+.40f*sin(t*PI.toFloat())+.08f*sin(t*PI.toFloat()*9f+phase))
                     if(j>0){n.add(prevX);n.add(prevY);n.add(prevZ);n.add(x);n.add(y);n.add(z)}
                     prevX=x;prevY=y;prevZ=z
                 }
@@ -109,9 +109,9 @@ class Habitat3DSurface(ctx:Context):GLSurfaceView(ctx){
                 repeat(181){i->
                     val a=i/180f*2f*PI.toFloat()
                     val rr=1.72f
-                    val x=when(axis){0->0f else rr*cos(a)}
-                    val y=when(axis){1->0f else rr*sin(a)}
-                    val z=when(axis){0->rr*sin(a) else rr*cos(a)}
+                    val x=when(axis){0->0f;else->rr*cos(a)}
+                    val y=when(axis){1->0f;else->rr*sin(a)}
+                    val z=when(axis){0->rr*sin(a);else->rr*cos(a)}
                     rg.add(x);rg.add(y);rg.add(z)
                     if(i>0){
                         // duplicate segment endpoints for GL_LINES
