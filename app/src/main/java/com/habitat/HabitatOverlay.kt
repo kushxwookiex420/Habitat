@@ -52,23 +52,23 @@ class HabitatOverlay(ctx:Context):View(ctx){
         }
 
         // bottom navigation
-        val y=height*.84f;val cell=width/4f
+        val y=height*.87f;val cell=width/4f
         for(i in 0..3){
             val l=cell*i+7;val r=cell*(i+1)-7
             paint.style=Paint.Style.FILL
             paint.color=if(i==selected)Color.argb(220,12,92,125)else Color.argb(205,3,15,29)
-            c.drawRoundRect(l,y,r,y+height*.09f,22f,22f,paint)
+            c.drawRoundRect(l,y,r,y+height*.065f,22f,22f,paint)
             paint.style=Paint.Style.STROKE;paint.strokeWidth=2.5f
             paint.color=if(i==selected)Color.rgb(80,225,255)else Color.rgb(30,100,130)
             c.drawRoundRect(l,y,r,y+height*.09f,22f,22f,paint)
             paint.style=Paint.Style.FILL;paint.color=Color.WHITE;paint.textSize=s*.022f
-            c.drawText(names[i],(l+r)/2f,y+height*.056f,paint)
+            c.drawText(names[i],(l+r)/2f,y+height*.041f,paint)
         }
     }
 
     override fun onTouchEvent(e:MotionEvent):Boolean{
         if(e.actionMasked!=MotionEvent.ACTION_UP)return true
-        if(e.y>height*.82f){
+        if(e.y>height*.85f){
             selected=((e.x/(width/4f)).toInt()).coerceIn(0,3)
             panel=true
             onSectionChanged?.invoke(selected)
