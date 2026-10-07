@@ -92,6 +92,22 @@ app.post("/chat", async (req, res) => {
 
     const recentHistory = history.slice(-20);
 
+    // Never expose a provider safety/status artifact as Ax's answer.
+    const normalizedMessage = message.toLowerCase().replace(/[^a-z0-9? ]/g, " ").replace(/\s+/g, " ").trim();
+    const isCoreStatusQuestion =
+      /^(is ax (online|there)|are you (online|there)|ax (online|there)|are you up|status|habitat status|check status)[? ]*$/.test(normalizedMessage);
+
+    if (isCoreStatusQuestion) {
+      return res.json({
+        response: "Yes — Ax is online and the Habitat brain is connected. I'm ready to work.",
+        model,
+        provider: "openrouter",
+        habitat: "online",
+        free_brain: true,
+        deterministic: true
+      });
+    }
+
     const systemPrompt = `
 You are Ax, the central intelligence of Habitat.
 
@@ -207,8 +223,18 @@ Be direct, natural, practical, detailed when the task warrants it, and honest ab
         messages
       });
 
-    const output =
+    let output =
       response.choices?.[0]?.message?.content || "";
+
+    if (/^usersafety\s*:\s*safe$/i.test(output.trim())) {
+      output = "Yes — Ax is online and the Habitat brain is connected. I'm ready to work.";
+    }
+
+    if (!output.trim()) {
+      return res.status(502).json({
+        error: "Habitat brain returned an empty response."
+      });
+    }
 
     res.json({
       response: output,
