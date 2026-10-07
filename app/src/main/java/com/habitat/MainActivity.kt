@@ -20,6 +20,7 @@ class MainActivity : Activity() {
     private lateinit var ui: HabitatOverlay
     private lateinit var brain: BrainAdapter
     private val voiceCode = 700
+    private var lastTaskId: String? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -116,7 +117,56 @@ class MainActivity : Activity() {
                 mission.contains("vice city files") ||
                 mission.startsWith("vicecity:")
 
-            if (isViceCityMission) {
+
+            val isCreateSystemCheck = mission.contains("create a test task") &&
+                mission.contains("system check")
+            val isDelegateSystemCheck = mission.contains("delegate") &&
+                mission.contains("system check")
+
+            if (isCreateSystemCheck) {
+                brain.createTask(
+                    "System Check",
+                    "Verify Habitat backend connectivity and execute a real QA worker check. Do not claim Android device access unless confirmed."
+                ) { result ->
+                    runOnUiThread {
+                        setBusy(false)
+                        if (result.state == BrainAdapter.State.CONNECTED) {
+                            try {
+                                val task = JSONObject(result.text)
+                                lastTaskId = task.optString("id", null)
+                                ui.replaceLastAxMessage(
+                                    "System Check created in the real Habitat task service.\n" +
+                                    "Status: " + task.optString("status", "planned") + "\n" +
+                                    "Task ID: " + task.optString("id", "unknown") + "\n" +
+                                    "Created: " + task.optString("createdAt", "unknown")
+                                )
+                            } catch (_: Exception) {
+                                ui.replaceLastAxMessage("System Check created, but the task record could not be displayed.")
+                            }
+                        } else {
+                            ui.replaceLastAxMessage("Task service failed: " + result.detail)
+                        }
+                    }
+                }
+            } else if (isDelegateSystemCheck) {
+                val taskId = lastTaskId
+                if (taskId.isNullOrBlank()) {
+                    setBusy(false)
+                    ui.replaceLastAxMessage("No live System Check task is loaded. Create the System Check task first.")
+                } else {
+                    ui.replaceLastAxMessage("Dispatching the real Habitat QA worker…")
+                    brain.delegateTask(taskId) { result ->
+                        runOnUiThread {
+                            setBusy(false)
+                            if (result.state == BrainAdapter.State.CONNECTED) {
+                                ui.replaceLastAxMessage(result.text)
+                            } else {
+                                ui.replaceLastAxMessage("Worker execution failed: " + result.detail)
+                            }
+                        }
+                    }
+                }
+            } else if (isViceCityMission) {
                 ui.addChatMessage("AX", "Dispatching Topic Scout + Script Editor + Channel Operator…")
                 val channelContext = JSONObject().apply {
                     put("channel", "Vice City Files")
