@@ -11,6 +11,8 @@ class HabitatOverlay(ctx: Context) : View(ctx) {
     private val names = arrayOf("CHAT", "WORKERS", "TASKS", "NOTIFY")
     private var selected = 0
     private var panel = false
+    private var missionRunning = false
+    private var missionComplete = false
     private val messages = mutableListOf(
         "AX  •  Neural core online.",
         "Ready. Give me a command or delegate a task."
@@ -21,6 +23,13 @@ class HabitatOverlay(ctx: Context) : View(ctx) {
     fun addChatMessage(who: String, msg: String) {
         messages.add("$who  •  $msg")
         if (messages.size > 12) messages.removeAt(0)
+        invalidate()
+    }
+
+
+    fun setDropPilotMissionState(running: Boolean, complete: Boolean = false) {
+        missionRunning = running
+        missionComplete = complete
         invalidate()
     }
 
@@ -131,16 +140,16 @@ class HabitatOverlay(ctx: Context) : View(ctx) {
                 text(c, "TEXT / VOICE COMMANDS ACTIVE", width / 2f, bottom - height * .025f, s * .016f, Color.rgb(70, 190, 220))
             }
             1 -> {
-                row(c, "AX", "ORCHESTRATOR", top + height * .15f, true)
-                row(c, "CLAUDE", "WORKER  •  READY", top + height * .245f, false)
-                row(c, "MUSE", "WORKER  •  READY", top + height * .34f, false)
-                row(c, "DELEGATION", "CHANNEL  •  ONLINE", top + height * .435f, false)
+                row(c, "AX", if (missionRunning) "ORCHESTRATOR  •  RUNNING" else "ORCHESTRATOR  •  READY", top + height * .15f, true)
+                row(c, "PRODUCT SCOUT", if (missionRunning) "WORKER  •  RUNNING" else "WORKER  •  READY", top + height * .245f, missionRunning)
+                row(c, "LISTING OPT", if (missionRunning) "WORKER  •  RUNNING" else "WORKER  •  READY", top + height * .34f, missionRunning)
+                row(c, "GROWTH OPS", if (missionComplete) "WORKER  •  COMPLETE" else if (missionRunning) "WORKER  •  RUNNING" else "WORKER  •  READY", top + height * .435f, missionComplete || missionRunning)
             }
             2 -> {
-                row(c, "BUILD HABITAT", "ACTIVE", top + height * .15f, true)
-                row(c, "WORKER MESH", "READY", top + height * .245f, false)
-                row(c, "DROPPILOT", "QUEUED", top + height * .34f, false)
-                row(c, "AUTOMATIONS", "STANDBY", top + height * .435f, false)
+                row(c, "DROPPILOT", if (missionRunning) "MISSION  •  RUNNING" else if (missionComplete) "MISSION  •  COMPLETE" else "MISSION  •  READY", top + height * .15f, missionRunning || missionComplete)
+                row(c, "PRODUCT SCOUT", if (missionRunning) "ANALYZING", top + height * .245f, missionRunning)
+                row(c, "LISTING OPT", if (missionRunning) "AUDITING", top + height * .34f, missionRunning)
+                row(c, "GROWTH OPS", if (missionRunning) "PLANNING" else if (missionComplete) "DONE" else "STANDBY", top + height * .435f, missionComplete || missionRunning)
             }
             3 -> {
                 row(c, "HABITAT CORE", "ONLINE", top + height * .15f, true)
