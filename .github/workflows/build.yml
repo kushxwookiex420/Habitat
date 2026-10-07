@@ -52,4 +52,4 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: Habitat-v0.7-Ax-debug-apk
-          path: artifact/Habitat-v0.6-Ax-debug.apk
+          path: artifact/Habitat-v0.7-Ax-debug.apk
