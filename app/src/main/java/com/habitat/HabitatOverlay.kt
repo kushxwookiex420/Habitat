@@ -139,13 +139,19 @@ class HabitatOverlay(ctx: Context) : View(ctx) {
 
         when (selected) {
             0 -> {
-                var yy = top + height * .16f
-                for (m in messages.takeLast(6)) {
+                var yy = top + height * .15f
+                for (m in messages.takeLast(4)) {
                     val whoColor = if (m.startsWith("AX")) Color.rgb(130, 235, 255) else Color.WHITE
-                    text(c, m.take(58), left + 28, yy, s * .021f, whoColor, Paint.Align.LEFT)
-                    yy += height * .055f
+                    val parts = m.chunked(42).take(3)
+                    for (part in parts) {
+                        text(c, part, left + 28, yy, s * .018f, whoColor, Paint.Align.LEFT)
+                        yy += height * .035f
+                    }
+                    yy += height * .012f
+                    if (yy > bottom - height * .075f) break
                 }
-                text(c, "TEXT / VOICE COMMANDS ACTIVE", width / 2f, bottom - height * .025f, s * .016f, Color.rgb(70, 190, 220))
+                text(c, if (missionRunning) "AX EXECUTION LOOP  •  WORKERS ACTIVE" else "TEXT / VOICE COMMANDS ACTIVE",
+                    width / 2f, bottom - height * .025f, s * .015f, Color.rgb(70, 190, 220))
             }
             1 -> {
                 row(c, "AX", if (missionRunning) "ORCHESTRATOR  •  RUNNING" else "ORCHESTRATOR  •  READY", top + height * .15f, true)
