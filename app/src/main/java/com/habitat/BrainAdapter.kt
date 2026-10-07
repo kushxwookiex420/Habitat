@@ -15,6 +15,7 @@ class BrainAdapter(private val context: Context) {
         private const val LIVE_ENDPOINT = "https://habitat-1-szzd.onrender.com/chat"
         private const val DROPPILOT_ENDPOINT = "https://habitat-1-szzd.onrender.com/orchestrate/dropilot"
         private const val VICECITY_ENDPOINT = "https://habitat-1-szzd.onrender.com/orchestrate/vicecity"
+        private const val TASKS_ENDPOINT = "https://habitat-1-szzd.onrender.com/tasks"
         private const val PREFS = "habitat_brain"
         private const val HISTORY_KEY = "conversation_history"
         private const val MAX_HISTORY = 20
@@ -170,6 +171,82 @@ class BrainAdapter(private val context: Context) {
             } finally {
                 connection?.disconnect()
             }
+        }
+    }
+
+
+    fun createTask(title: String, description: String, callback: (Result) -> Unit) {
+        callback(Result(State.CONNECTING))
+        executor.execute {
+            var connection: HttpURLConnection? = null
+            try {
+                connection = URL(TASKS_ENDPOINT).openConnection() as HttpURLConnection
+                connection.requestMethod = "POST"
+                connection.connectTimeout = 10000
+                connection.readTimeout = 30000
+                connection.doOutput = true
+                connection.setRequestProperty("Content-Type", "application/json")
+                val body = JSONObject().apply {
+                    put("title", title)
+                    put("description", description)
+                }.toString()
+                connection.outputStream.use { it.write(body.toByteArray(StandardCharsets.UTF_8)) }
+                val code = connection.responseCode
+                val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+                val responseText = stream?.bufferedReader()?.use { it.readText() } ?: ""
+                if (code !in 200..299) {
+                    callback(Result(State.ERROR, detail = "HTTP $code: $responseText"))
+                    return@execute
+                }
+                val json = JSONObject(responseText)
+                val task = json.optJSONObject("task")
+                if (task == null) {
+                    callback(Result(State.ERROR, detail = "Task service returned no task."))
+                    return@execute
+                }
+                callback(Result(State.CONNECTED, text = task.toString()))
+            } catch (e: Exception) {
+                callback(Result(State.ERROR, detail = e.message ?: e.javaClass.simpleName))
+            } finally { connection?.disconnect() }
+        }
+    }
+
+    fun delegateTask(taskId: String, callback: (Result) -> Unit) {
+        callback(Result(State.CONNECTING))
+        executor.execute {
+            var connection: HttpURLConnection? = null
+            try {
+                connection = URL("$TASKS_ENDPOINT/$taskId/delegate").openConnection() as HttpURLConnection
+                connection.requestMethod = "POST"
+                connection.connectTimeout = 10000
+                connection.readTimeout = 90000
+                connection.doOutput = true
+                connection.setRequestProperty("Content-Type", "application/json")
+                connection.outputStream.use { it.write("{}".toByteArray(StandardCharsets.UTF_8)) }
+                val code = connection.responseCode
+                val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+                val responseText = stream?.bufferedReader()?.use { it.readText() } ?: ""
+                val json = try { JSONObject(responseText) } catch (_: Exception) { JSONObject() }
+                val task = json.optJSONObject("task")
+                if (code !in 200..299 || task == null) {
+                    callback(Result(State.ERROR, detail = "Worker execution failed: HTTP $code $responseText"))
+                    return@execute
+                }
+                val status = task.optString("status", "unknown")
+                val worker = task.optString("worker", "unknown")
+                val result = task.optString("result", "")
+                val error = task.optString("error", "")
+                val text = buildString {
+                    append("SYSTEM CHECK\n")
+                    append("Status: ").append(status).append("\n")
+                    append("Worker: ").append(worker).append("\n")
+                    if (result.isNotBlank()) append("\nWorker result:\n").append(result)
+                    if (error.isNotBlank()) append("\nWorker error:\n").append(error)
+                }
+                callback(Result(State.CONNECTED, text = text))
+            } catch (e: Exception) {
+                callback(Result(State.ERROR, detail = e.message ?: e.javaClass.simpleName))
+            } finally { connection?.disconnect() }
         }
     }
 
