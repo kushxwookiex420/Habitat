@@ -22,6 +22,7 @@ class HabitatOverlay(ctx: Context) : View(ctx) {
         "Ready. Give me a command or delegate a task."
     )
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private var animTick = 0L
     private val axBrain: Bitmap? = try {
         BitmapFactory.decodeResource(resources, R.drawable.ax_brain)
     } catch (_: Exception) {
@@ -71,49 +72,126 @@ class HabitatOverlay(ctx: Context) : View(ctx) {
     override fun onDraw(c: Canvas) {
         super.onDraw(c)
         val s = min(width, height).toFloat()
-
-        text(c, "HABITAT", width / 2f, height * .062f, s * .052f, Color.WHITE)
-        text(c, "AX  /  NEURAL COMMAND CENTER", width / 2f, height * .098f, s * .021f, Color.rgb(105, 225, 255))
-        chip(c, width * .08f, height * .125f, width * .31f, "CORE  ONLINE")
-        chip(c, width * .69f, height * .125f, width * .92f, "MESH  READY")
-
+        drawGalaxy(c)
+        text(c, "HABITAT", width / 2f, height * .060f, s * .050f, Color.WHITE)
+        text(c, "AX  /  NEURAL COMMAND CENTER", width / 2f, height * .093f, s * .019f, Color.rgb(112, 236, 255))
+        chip(c, width * .055f, height * .118f, width * .315f, "● CORE ONLINE")
+        chip(c, width * .685f, height * .118f, width * .945f, "● MESH READY")
         drawAxBrain(c)
+        drawOrbitHud(c)
         if (panel) drawPanel(c)
 
         val y = height * .855f
         val cell = width / 4f
+        paint.style = Paint.Style.FILL
+        paint.color = Color.argb(190, 4, 13, 30)
+        c.drawRoundRect(8f, y - 10f, width - 8f, y + height * .078f, 30f, 30f, paint)
         for (i in 0..3) {
-            val l = cell * i + 7
-            val r = cell * (i + 1) - 7
+            val l = cell * i + 12
+            val r = cell * (i + 1) - 12
+            val active = i == selected
             paint.style = Paint.Style.FILL
-            paint.color = if (i == selected) Color.argb(225, 10, 100, 135) else Color.argb(215, 3, 15, 29)
-            c.drawRoundRect(l, y, r, y + height * .065f, 22f, 22f, paint)
+            paint.color = if (active) Color.argb(170, 10, 105, 138) else Color.argb(70, 25, 55, 78)
+            c.drawRoundRect(l, y, r, y + height * .060f, 20f, 20f, paint)
             paint.style = Paint.Style.STROKE
-            paint.strokeWidth = 2.5f
-            paint.color = if (i == selected) Color.rgb(80, 225, 255) else Color.rgb(30, 100, 130)
-            c.drawRoundRect(l, y, r, y + height * .065f, 22f, 22f, paint)
-            text(c, names[i], (l + r) / 2f, y + height * .041f, s * .021f, Color.WHITE)
+            paint.strokeWidth = if (active) 2.4f else 1.2f
+            paint.color = if (active) Color.rgb(90, 238, 255) else Color.argb(120, 80, 180, 210)
+            c.drawRoundRect(l, y, r, y + height * .060f, 20f, 20f, paint)
+            text(c, names[i], (l + r) / 2f, y + height * .038f, s * .019f, if (active) Color.WHITE else Color.rgb(150, 200, 215))
         }
+        animTick = System.currentTimeMillis()
+        postInvalidateDelayed(32L)
+    }
+
+    private fun drawGalaxy(c: Canvas) {
+        val w = width.toFloat()
+        val h = height.toFloat()
+        val bg = LinearGradient(0f, 0f, 0f, h, Color.rgb(1, 4, 18), Color.rgb(3, 18, 38), Shader.TileMode.CLAMP)
+        paint.shader = bg
+        paint.style = Paint.Style.FILL
+        c.drawRect(0f, 0f, w, h, paint)
+        paint.shader = null
+        val haze = RadialGradient(w * .52f, h * .36f, w * .65f,
+            intArrayOf(Color.argb(65, 0, 180, 220), Color.argb(20, 45, 75, 150), Color.TRANSPARENT),
+            floatArrayOf(0f, .48f, 1f), Shader.TileMode.CLAMP)
+        paint.shader = haze
+        c.drawCircle(w * .52f, h * .38f, w * .68f, paint)
+        paint.shader = null
+        paint.style = Paint.Style.FILL
+        for (i in 0 until 95) {
+            val x = ((i * 83 + 17) % 1000) / 1000f * w
+            val y = ((i * 137 + 41) % 1000) / 1000f * h
+            val pulse = 0.55f + 0.45f * kotlin.math.sin(animTick / 700.0 + i).toFloat()
+            paint.alpha = (45 + pulse * 130).toInt()
+            c.drawCircle(x, y, if (i % 9 == 0) 2.0f else 1.0f, paint)
+        }
+        paint.alpha = 255
+        paint.style = Paint.Style.STROKE
+        paint.strokeWidth = 1f
+        paint.color = Color.argb(55, 65, 220, 255)
+        c.drawOval(RectF(-w * .25f, h * .63f, w * 1.25f, h * 1.13f), paint)
+        c.drawOval(RectF(-w * .10f, h * .68f, w * 1.10f, h * 1.04f), paint)
     }
 
     private fun drawAxBrain(c: Canvas) {
-        val bitmap = axBrain ?: return
-        val brainW = width * .78f
-        val brainH = brainW * (bitmap.height.toFloat() / bitmap.width.toFloat())
         val cx = width / 2f
         val cy = height * .405f
+        val radius = width * .34f
+        val pulse = 1f + kotlin.math.sin(animTick / 520.0).toFloat() * .025f
+        paint.style = Paint.Style.FILL
+        paint.shader = RadialGradient(cx, cy, radius * 1.18f,
+            intArrayOf(Color.argb(110, 0, 220, 255), Color.argb(38, 0, 150, 220), Color.TRANSPARENT),
+            floatArrayOf(0f, .52f, 1f), Shader.TileMode.CLAMP)
+        c.drawCircle(cx, cy, radius * pulse * 1.18f, paint)
+        paint.shader = null
+        paint.style = Paint.Style.STROKE
+        paint.strokeWidth = 2.2f
+        paint.color = Color.argb(120, 75, 235, 255)
+        val orbit = radius * 1.02f
+        c.save()
+        c.rotate((animTick / 35L % 360L).toFloat(), cx, cy)
+        c.drawOval(RectF(cx - orbit, cy - orbit * .34f, cx + orbit, cy + orbit * .34f), paint)
+        c.restore()
+        c.save()
+        c.rotate((-animTick / 55L % 360L).toFloat(), cx, cy)
+        paint.color = Color.argb(75, 110, 170, 255)
+        c.drawOval(RectF(cx - orbit * .86f, cy - orbit * .22f, cx + orbit * .86f, cy + orbit * .22f), paint)
+        c.restore()
+        val bitmap = axBrain ?: return
+        val brainW = width * .70f
+        val brainH = brainW * (bitmap.height.toFloat() / bitmap.width.toFloat())
         val rect = RectF(cx - brainW / 2f, cy - brainH / 2f, cx + brainW / 2f, cy + brainH / 2f)
         paint.style = Paint.Style.FILL
-        paint.alpha = 150
-        paint.setShadowLayer(26f, 0f, 0f, Color.rgb(40, 220, 255))
+        paint.alpha = 205
+        paint.setShadowLayer(34f, 0f, 0f, Color.rgb(20, 225, 255))
         c.drawBitmap(bitmap, null, rect, paint)
         paint.clearShadowLayer()
         paint.alpha = 255
+        val scan = ((animTick / 7L) % (brainH.toLong().coerceAtLeast(1L))).toFloat()
+        paint.color = Color.argb(65, 100, 245, 255)
+        paint.strokeWidth = 2f
+        c.drawLine(rect.left + 12f, rect.top + scan, rect.right - 12f, rect.top + scan, paint)
+    }
+
+    private fun drawOrbitHud(c: Canvas) {
+        val cx = width / 2f
+        val cy = height * .405f
+        val r = width * .405f
+        paint.style = Paint.Style.STROKE
+        paint.strokeWidth = 1.3f
+        paint.color = Color.argb(70, 100, 230, 255)
+        c.drawCircle(cx, cy, r, paint)
+        c.drawCircle(cx, cy, r * .92f, paint)
+        val sweep = (animTick / 8L % 360L).toFloat()
+        paint.color = Color.argb(170, 70, 240, 255)
+        c.drawArc(RectF(cx-r, cy-r, cx+r, cy+r), sweep, 28f, false, paint)
+        text(c, "AX CORE", cx, cy + r + 25f, min(width, height) * .014f, Color.rgb(105, 225, 245))
+        text(c, "NEURAL LINK  //  STABLE", cx, cy + r + 45f, min(width, height) * .011f, Color.argb(180, 130, 205, 220))
     }
 
     private fun chip(c: Canvas, l: Float, top: Float, r: Float, label: String) {
         paint.style = Paint.Style.FILL
-        paint.color = Color.argb(130, 3, 25, 40)
+        paint.color = Color.argb(155, 4, 20, 38)
         c.drawRoundRect(l, top, r, top + height * .036f, 18f, 18f, paint)
         paint.style = Paint.Style.STROKE
         paint.strokeWidth = 1.5f
@@ -130,8 +208,10 @@ class HabitatOverlay(ctx: Context) : View(ctx) {
         val bottom = height * .70f
 
         paint.style = Paint.Style.FILL
-        paint.color = Color.argb(235, 2, 9, 23)
+        paint.color = Color.argb(220, 3, 10, 26)
+        paint.setShadowLayer(24f, 0f, 8f, Color.argb(100, 0, 190, 240))
         c.drawRoundRect(left, top, right, bottom, 34f, 34f, paint)
+        paint.clearShadowLayer()
         paint.style = Paint.Style.STROKE
         paint.strokeWidth = 2.5f
         paint.color = Color.argb(190, 75, 215, 255)
