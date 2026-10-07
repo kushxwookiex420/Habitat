@@ -290,6 +290,7 @@ app.get("/tasks/:id", (req, res) => {
 app.post("/tasks/:id/delegate", async (req, res) => {
   const task = taskStore.get(req.params.id);
   if (!task) return res.status(404).json({ ok: false, error: "task not found" });
+
   if (!apiKey) {
     task.status = "failed";
     task.error = "OPENROUTER_API_KEY is not configured.";
@@ -300,8 +301,28 @@ app.post("/tasks/:id/delegate", async (req, res) => {
   task.worker = "habitat-qa-worker";
   task.delegatedAt = nowIso();
   task.error = null;
+  task.result = null;
 
   try {
+    // Real backend checks first. These verify the service path itself rather
+    // than pretending the server has Android/device access.
+    const healthResponse = await fetch(`http://127.0.0.1:${port}/health`);
+    const health = await healthResponse.json();
+    const healthOk =
+      healthResponse.ok &&
+      health.habitat === "online" &&
+      health.backend === "ready" &&
+      health.brain === "ready";
+
+    if (!healthOk) {
+      task.status = "failed";
+      task.error = "Habitat backend health verification failed.";
+      task.result = JSON.stringify({ checks: { backendHealth: health } });
+      return res.status(502).json({ ok: false, task });
+    }
+
+    // A real model-backed QA worker receives the assignment. It is explicitly
+    // forbidden from claiming Android/device access it does not possess.
     const workerResponse = await client.chat.completions.create({
       model,
       messages: [
@@ -310,11 +331,15 @@ app.post("/tasks/:id/delegate", async (req, res) => {
           content:
             "You are Habitat QA Worker, a real model-backed worker reporting to Ax. " +
             "Execute the assigned task using only information available in this request. " +
-            "Return RESULT, CHECKS, and ISSUES. Never claim Android/device/tool access you do not have."
+            "Return RESULT, CHECKS, and ISSUES. Never claim Android/device/tool access you do not have. " +
+            "If the task requires device access, mark that portion UNVERIFIED rather than pretending it passed."
         },
         {
           role: "user",
-          content: "Execute this Habitat task:\n" + task.title + "\n\n" + task.description
+          content:
+            "Execute this Habitat task:\n" + task.title +
+            "\n\n" + task.description +
+            "\n\nServer health check already passed: " + JSON.stringify(health)
         }
       ]
     });
@@ -326,10 +351,19 @@ app.post("/tasks/:id/delegate", async (req, res) => {
       return res.status(502).json({ ok: false, task });
     }
 
-    task.status = "completed";
-    task.completedAt = nowIso();
-    task.result = result;
+    task.result = JSON.stringify({
+      verification: {
+        backendHealth: "PASS",
+        modelWorker: "PASS",
+        androidDeviceAccess: "UNVERIFIED"
+      },
+      workerReport: result
+    });
+
+    // Verified means the checks we actually performed passed. It does not
+    // mean Android/device access was magically available.
     task.status = "verified";
+    task.completedAt = nowIso();
     task.verifiedAt = nowIso();
 
     return res.json({ ok: true, task });
