@@ -120,7 +120,24 @@ class MainActivity : Activity() {
                 mission.startsWith("vicecity:")
 
 
+            // A complete System Check command must reach the live brain orchestrator.
+            // The backend owns the real check lifecycle: task creation, QA-worker delegation,
+            // execution, verification, and the PASS/FAIL report. Do this before the
+            // create-only shortcut so a command that contains the word "create" does not
+            // stop at "Status:".
+            val isFullSystemCheck =
+                mission.contains("system check") &&
+                (
+                    mission.contains("full") ||
+                    mission.contains("delegate") ||
+                    mission.contains("execute") ||
+                    mission.contains("verify") ||
+                    mission.contains("pass/fail") ||
+                    mission.contains("report")
+                )
+
             val isCreateSystemCheck =
+                !isFullSystemCheck &&
                 mission.contains("system check") &&
                 (
                     mission.contains("create") ||
@@ -129,10 +146,29 @@ class MainActivity : Activity() {
                     mission.contains("new task") ||
                     mission.contains("load")
                 )
-            val isDelegateSystemCheck = mission.contains("delegate") &&
+            val isDelegateSystemCheck = !isFullSystemCheck &&
+                mission.contains("delegate") &&
                 mission.contains("system check")
 
-            if (isCreateSystemCheck) {
+            if (isFullSystemCheck) {
+                brain.send(message) { result ->
+                    runOnUiThread {
+                        setBusy(false)
+                        when (result.state) {
+                            BrainAdapter.State.CONNECTED -> {
+                                ui.replaceLastAxMessage(result.text)
+                            }
+                            BrainAdapter.State.ERROR -> {
+                                ui.replaceLastAxMessage("System Check failed: " + result.detail)
+                            }
+                            BrainAdapter.State.DISCONNECTED -> {
+                                ui.replaceLastAxMessage("System Check brain disconnected.")
+                            }
+                            BrainAdapter.State.CONNECTING -> Unit
+                        }
+                    }
+                }
+            } else if (isCreateSystemCheck) {
                 brain.createTask(
                     "System Check",
                     "Verify Habitat backend connectivity and execute a real QA worker check. Do not claim Android device access unless confirmed."
