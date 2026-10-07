@@ -211,6 +211,42 @@ class BrainAdapter(private val context: Context) {
         }
     }
 
+    fun findLatestSystemCheck(callback: (Result) -> Unit) {
+        callback(Result(State.CONNECTING))
+        executor.execute {
+            var connection: HttpURLConnection? = null
+            try {
+                connection = URL(TASKS_ENDPOINT).openConnection() as HttpURLConnection
+                connection.requestMethod = "GET"
+                connection.connectTimeout = 10000
+                connection.readTimeout = 30000
+                connection.setRequestProperty("Accept", "application/json")
+                val code = connection.responseCode
+                val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+                val responseText = stream?.bufferedReader()?.use { it.readText() } ?: ""
+                if (code !in 200..299) {
+                    callback(Result(State.ERROR, detail = "HTTP $code: $responseText"))
+                    return@execute
+                }
+                val json = JSONObject(responseText)
+                val tasks = json.optJSONArray("tasks") ?: JSONArray()
+                var best: JSONObject? = null
+                for (i in 0 until tasks.length()) {
+                    val task = tasks.optJSONObject(i) ?: continue
+                    if (!task.optString("title").equals("System Check", ignoreCase = true)) continue
+                    if (best == null || task.optString("createdAt") > best!!.optString("createdAt")) best = task
+                }
+                if (best == null || best!!.optString("id").isBlank()) {
+                    callback(Result(State.ERROR, detail = "No System Check task exists on the live task service."))
+                } else {
+                    callback(Result(State.CONNECTED, text = best!!.toString()))
+                }
+            } catch (e: Exception) {
+                callback(Result(State.ERROR, detail = e.message ?: e.javaClass.simpleName))
+            } finally { connection?.disconnect() }
+        }
+    }
+
     fun delegateTask(taskId: String, callback: (Result) -> Unit) {
         callback(Result(State.CONNECTING))
         executor.execute {
