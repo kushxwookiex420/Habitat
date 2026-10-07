@@ -14,6 +14,7 @@ class BrainAdapter(private val context: Context) {
     companion object {
         private const val LIVE_ENDPOINT = "https://habitat-1-szzd.onrender.com/chat"
         private const val DROPPILOT_ENDPOINT = "https://habitat-1-szzd.onrender.com/orchestrate/dropilot"
+        private const val VICECITY_ENDPOINT = "https://habitat-1-szzd.onrender.com/orchestrate/vicecity"
         private const val PREFS = "habitat_brain"
         private const val HISTORY_KEY = "conversation_history"
         private const val MAX_HISTORY = 20
@@ -83,6 +84,45 @@ class BrainAdapter(private val context: Context) {
         }
     }
 
+
+    fun sendViceCity(mission: String, channelContext: JSONObject, callback: (Result) -> Unit) {
+        callback(Result(State.CONNECTING))
+        executor.execute {
+            var connection: HttpURLConnection? = null
+            try {
+                connection = URL(VICECITY_ENDPOINT).openConnection() as HttpURLConnection
+                connection.requestMethod = "POST"
+                connection.connectTimeout = 15000
+                connection.readTimeout = 120000
+                connection.doOutput = true
+                connection.setRequestProperty("Content-Type", "application/json")
+                connection.setRequestProperty("Accept", "application/json")
+                val body = JSONObject().apply {
+                    put("mission", mission)
+                    put("channelContext", channelContext)
+                }.toString()
+                connection.outputStream.use { it.write(body.toByteArray(StandardCharsets.UTF_8)) }
+                val code = connection.responseCode
+                val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+                val responseText = stream?.bufferedReader()?.use { it.readText() } ?: ""
+                if (code !in 200..299) {
+                    callback(Result(State.ERROR, detail = "HTTP $code: $responseText"))
+                    return@execute
+                }
+                val json = JSONObject(responseText)
+                val synthesis = json.optString("synthesis", "")
+                if (synthesis.isBlank()) {
+                    callback(Result(State.ERROR, detail = "Vice City operator returned no synthesis."))
+                    return@execute
+                }
+                callback(Result(State.CONNECTED, text = synthesis))
+            } catch (e: Exception) {
+                callback(Result(State.ERROR, detail = e.message ?: e.javaClass.simpleName))
+            } finally {
+                connection?.disconnect()
+            }
+        }
+    }
 
     fun send(message: String, callback: (Result) -> Unit) {
         callback(Result(State.CONNECTING))
