@@ -324,8 +324,31 @@ class MainActivity : Activity() {
                 brain.findLatestSystemCheck { recovered ->
                     runOnUiThread {
                         if (recovered.state != BrainAdapter.State.CONNECTED) {
-                            ui.setSystemCheckTaskStatus("ERROR  •  NO LIVE TASK")
-                            ui.addChatMessage("AX", "System Check could not find a live task.")
+                            ui.setSystemCheckTaskStatus("CREATING  •  FRESH TASK")
+                            ui.addChatMessage("AX", "No live System Check exists. Creating a fresh task now…")
+                            brain.createTask(
+                                "System Check",
+                                "Verify Habitat backend connectivity and execute a real QA worker check. Do not claim Android device access unless confirmed."
+                            ) { created ->
+                                runOnUiThread {
+                                    if (created.state != BrainAdapter.State.CONNECTED) {
+                                        ui.setSystemCheckTaskStatus("FAILED  •  TASK CREATE")
+                                        ui.addChatMessage("AX", "System Check task creation failed: " + created.detail)
+                                        return@runOnUiThread
+                                    }
+                                    try {
+                                        val task = JSONObject(created.text)
+                                        val freshId = task.optString("id", "")
+                                        if (freshId.isBlank()) throw IllegalStateException("fresh task has no ID")
+                                        lastTaskId = freshId
+                                        taskPrefs.edit().putString("live_system_check_task_id", freshId).apply()
+                                        runSystemCheck(freshId)
+                                    } catch (_: Exception) {
+                                        ui.setSystemCheckTaskStatus("FAILED  •  INVALID TASK")
+                                        ui.addChatMessage("AX", "Fresh System Check task was created but has no usable ID.")
+                                    }
+                                }
+                            }
                             return@runOnUiThread
                         }
                         try {
@@ -362,8 +385,31 @@ class MainActivity : Activity() {
                     brain.findLatestSystemCheck { recovered ->
                         runOnUiThread {
                             if (recovered.state != BrainAdapter.State.CONNECTED) {
-                                ui.setSystemCheckTaskStatus("FAILED  •  NO LIVE TASK")
-                                ui.addChatMessage("AX", "System Check task expired after a backend restart. No live replacement task was found.")
+                                ui.setSystemCheckTaskStatus("CREATING  •  FRESH TASK")
+                                ui.addChatMessage("AX", "The old System Check is gone. Creating a fresh live task and retrying…")
+                                brain.createTask(
+                                    "System Check",
+                                    "Verify Habitat backend connectivity and execute a real QA worker check. Do not claim Android device access unless confirmed."
+                                ) { created ->
+                                    runOnUiThread {
+                                        if (created.state != BrainAdapter.State.CONNECTED) {
+                                            ui.setSystemCheckTaskStatus("FAILED  •  TASK CREATE")
+                                            ui.addChatMessage("AX", "Fresh System Check task creation failed: " + created.detail)
+                                            return@runOnUiThread
+                                        }
+                                        try {
+                                            val task = JSONObject(created.text)
+                                            val freshId = task.optString("id", "")
+                                            if (freshId.isBlank()) throw IllegalStateException("fresh task has no ID")
+                                            lastTaskId = freshId
+                                            taskPrefs.edit().putString("live_system_check_task_id", freshId).apply()
+                                            runSystemCheck(freshId)
+                                        } catch (_: Exception) {
+                                            ui.setSystemCheckTaskStatus("FAILED  •  INVALID TASK")
+                                            ui.addChatMessage("AX", "Fresh System Check task was created but has no usable ID.")
+                                        }
+                                    }
+                                }
                                 return@runOnUiThread
                             }
                             try {
