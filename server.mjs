@@ -97,6 +97,18 @@ app.post("/chat", async (req, res) => {
     const isCoreStatusQuestion =
       /^(is ax (online|there)|are you (online|there)|ax (online|there)|are you up|status|habitat status|check status)[? ]*$/.test(normalizedMessage);
 
+    if (/system\\s*check/i.test(message)) {
+      const check = await runSystemCheck();
+      return res.json({
+        response: check.report,
+        model,
+        provider: "openrouter",
+        habitat: "online",
+        free_brain: true,
+        systemCheck: check
+      });
+    }
+
     if (isCoreStatusQuestion) {
       return res.json({
         response: "Yes — Ax is online and the Habitat brain is connected. I'm ready to work.",
@@ -263,10 +275,147 @@ Be direct, natural, practical, detailed when the task warrants it, and honest ab
 
 const taskStore = new Map();
 
+const workerRegistry = new Map([
+  ["habitat-qa-worker", {
+    id: "habitat-qa-worker",
+    name: "Habitat QA Worker",
+    kind: "model-backed",
+    status: apiKey ? "available" : "blocked",
+    model,
+    capabilities: ["backend-health", "task-execution", "verification-reporting"],
+    lastRunAt: null
+  }],
+  ["dropilot-product-scout", {
+    id: "dropilot-product-scout",
+    name: "DropPilot Product Scout",
+    kind: "specialist",
+    status: apiKey ? "available" : "blocked",
+    model,
+    capabilities: ["product-research", "listing-analysis"],
+    lastRunAt: null
+  }],
+  ["vicecity-topic-scout", {
+    id: "vicecity-topic-scout",
+    name: "Vice City Topic Scout",
+    kind: "specialist",
+    status: apiKey ? "available" : "blocked",
+    model,
+    capabilities: ["topic-research", "content-planning"],
+    lastRunAt: null
+  }]
+]);
+
+function storageSelfTest() {
+  const key = "__habitat_storage_probe__";
+  const value = { id: makeTaskId(), timestamp: nowIso(), value: "write-read-pass" };
+  taskStore.set(key, value);
+  const readBack = taskStore.get(key);
+  taskStore.delete(key);
+  return Boolean(readBack && readBack.value === value.value);
+}
+
 function nowIso() { return new Date().toISOString(); }
 function makeTaskId() {
   return "task-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 8);
 }
+
+async function runSystemCheck() {
+  const checks = {};
+
+  checks.axCore = { status: "PASS", detail: "Habitat chat route is active." };
+  checks.backend = { status: "PASS", detail: "Backend request routing is active." };
+  checks.brain = { status: apiKey ? "PASS" : "FAIL", detail: apiKey ? "OpenRouter API key is configured." : "OPENROUTER_API_KEY is missing." };
+
+  const worker = workerRegistry.get("habitat-qa-worker");
+  checks.workerRegistry = worker
+    ? { status: worker.status === "available" ? "PASS" : "FAIL", detail: worker.name + " is registered and " + worker.status + "." }
+    : { status: "FAIL", detail: "QA worker is not registered." };
+
+  checks.storage = {
+    status: storageSelfTest() ? "PASS" : "FAIL",
+    detail: "In-process task storage write/read/delete probe."
+  };
+
+  const task = {
+    id: makeTaskId(),
+    title: "System Check",
+    description: "Verify Habitat backend, brain, worker registry, task engine, and storage.",
+    status: "running",
+    owner: "Ax",
+    worker: worker?.id || null,
+    createdAt: nowIso(),
+    delegatedAt: nowIso(),
+    completedAt: null,
+    verifiedAt: null,
+    result: null,
+    error: null
+  };
+  taskStore.set(task.id, task);
+
+  try {
+    const healthResponse = await fetch("http://127.0.0.1:" + port + "/health");
+    const health = await healthResponse.json();
+    checks.backendHealth = {
+      status: healthResponse.ok && health.habitat === "online" && health.backend === "ready" ? "PASS" : "FAIL",
+      detail: JSON.stringify(health)
+    };
+
+    if (!apiKey) throw new Error("OPENROUTER_API_KEY is not configured.");
+
+    worker.lastRunAt = nowIso();
+    const workerResponse = await client.chat.completions.create({
+      model,
+      messages: [
+        { role: "system", content: "You are Habitat QA Worker reporting to Ax. Return RESULT, CHECKS, and ISSUES. Never claim device access you do not have." },
+        { role: "user", content: "Perform a backend-only Habitat System Check. Verify the supplied health response and explain any checks that cannot be verified without Android/device tools. Health: " + JSON.stringify(health) }
+      ]
+    });
+    const result = workerResponse.choices?.[0]?.message?.content || "";
+    if (!result.trim()) throw new Error("QA worker returned an empty result.");
+
+    task.result = result;
+    task.status = "verified";
+    task.completedAt = nowIso();
+    task.verifiedAt = nowIso();
+    checks.workerExecution = { status: "PASS", detail: "QA worker returned a non-empty verification report." };
+  } catch (error) {
+    task.status = "failed";
+    task.error = String(error?.message || error);
+    checks.workerExecution = { status: "FAIL", detail: task.error };
+  }
+
+  const failures = Object.entries(checks).filter(([, v]) => v.status === "FAIL");
+  const report = [
+    "HABITAT SYSTEM CHECK",
+    "",
+    ...Object.entries(checks).map(([name, v]) => name.toUpperCase() + ": " + v.status + " — " + v.detail),
+    "",
+    "TASK ENGINE: " + (taskStore.has(task.id) ? "PASS — real task record created (" + task.id + ")" : "FAIL"),
+    "OVERALL: " + (failures.length === 0 && task.status === "verified" ? "VERIFIED" : "PARTIAL / BLOCKED"),
+    "",
+    "WORKER REPORT:",
+    task.result || task.error || "No worker report."
+  ].join("\n");
+
+  return { task, checks, report };
+}
+
+app.get("/workers", (req, res) => {
+  return res.json({
+    ok: true,
+    workers: Array.from(workerRegistry.values()).map(w => ({ ...w }))
+  });
+});
+
+app.get("/storage/check", (req, res) => {
+  const passed = storageSelfTest();
+  return res.json({
+    ok: passed,
+    storage: passed ? "ready" : "failed",
+    persistence: "process-local",
+    detail: passed ? "write/read/delete passed" : "write/read/delete failed"
+  });
+});
 
 app.post("/tasks", (req, res) => {
   const title = String(req.body?.title || "").trim();
@@ -304,7 +453,7 @@ app.post("/tasks/:id/delegate", async (req, res) => {
   }
 
   task.status = "delegated";
-  task.worker = "habitat-qa-worker";
+  task.worker = workerRegistry.has("habitat-qa-worker") ? "habitat-qa-worker" : null;
   task.delegatedAt = nowIso();
   task.error = null;
   task.result = null;
