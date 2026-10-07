@@ -24,6 +24,13 @@ class HabitatOverlay(ctx: Context) : View(ctx) {
         null
     }
 
+    fun openChat() {
+        selected = 0
+        panel = true
+        onSectionChanged?.invoke(0)
+        invalidate()
+    }
+
     fun addChatMessage(who: String, msg: String) {
         messages.add("$who  •  $msg")
         if (messages.size > 12) messages.removeAt(0)
