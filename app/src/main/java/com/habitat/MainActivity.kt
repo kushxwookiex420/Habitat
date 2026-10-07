@@ -17,6 +17,7 @@ import java.util.Locale
 class MainActivity : Activity() {
     private lateinit var input: EditText
     private lateinit var ui: HabitatOverlay
+    private lateinit var brain: BrainAdapter
     private val voiceCode = 700
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -24,6 +25,7 @@ class MainActivity : Activity() {
         requestWindowFeature(Window.FEATURE_NO_TITLE)
         window.setFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN, WindowManager.LayoutParams.FLAG_FULLSCREEN)
         window.navigationBarColor = Color.BLACK
+        brain = BrainAdapter(this)
 
         val root = FrameLayout(this)
         val space = Habitat3DSurface(this)
@@ -84,12 +86,31 @@ class MainActivity : Activity() {
         root.post { positionComposer() }
         root.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> positionComposer() }
 
+        fun setBusy(busy: Boolean) {
+            input.isEnabled = !busy
+            send.isEnabled = !busy
+            voice.isEnabled = !busy
+            send.text = if (busy) "…" else "➤"
+        }
+
         fun submit() {
-            val s = input.text.toString().trim()
-            if (s.isNotEmpty()) {
-                input.setText("")
-                ui.addChatMessage("YOU", s)
-                ui.addChatMessage("AX", "Received. I’m routing that through Habitat.")
+            val message = input.text.toString().trim()
+            if (message.isEmpty() || !input.isEnabled) return
+            input.setText("")
+            ui.addChatMessage("YOU", message)
+            ui.addChatMessage("AX", "Thinking…")
+            setBusy(true)
+
+            brain.send(message) { result ->
+                runOnUiThread {
+                    setBusy(false)
+                    when (result.state) {
+                        BrainAdapter.State.CONNECTED -> ui.replaceLastAxMessage(result.text)
+                        BrainAdapter.State.ERROR -> ui.replaceLastAxMessage("I couldn't reach the Habitat brain. " + result.detail)
+                        BrainAdapter.State.DISCONNECTED -> ui.replaceLastAxMessage("Habitat brain disconnected.")
+                        BrainAdapter.State.CONNECTING -> Unit
+                    }
+                }
             }
         }
 
@@ -120,6 +141,11 @@ class MainActivity : Activity() {
         } catch (_: Exception) {
             Toast.makeText(this, "Voice input isn't available on this device.", Toast.LENGTH_SHORT).show()
         }
+    }
+
+    override fun onDestroy() {
+        brain.shutdown()
+        super.onDestroy()
     }
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
