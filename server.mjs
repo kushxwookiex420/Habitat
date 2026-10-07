@@ -281,6 +281,12 @@ app.post("/tasks", (req, res) => {
   return res.json({ ok: true, task });
 });
 
+app.get("/tasks", (req, res) => {
+  const tasks = Array.from(taskStore.values())
+    .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+  return res.json({ ok: true, tasks });
+});
+
 app.get("/tasks/:id", (req, res) => {
   const task = taskStore.get(req.params.id);
   if (!task) return res.status(404).json({ ok: false, error: "task not found" });
