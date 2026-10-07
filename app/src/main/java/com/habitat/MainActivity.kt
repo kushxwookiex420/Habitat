@@ -125,30 +125,22 @@ class MainActivity : Activity() {
             // execution, verification, and the PASS/FAIL report. Do this before the
             // create-only shortcut so a command that contains the word "create" does not
             // stop at "Status:".
+            // Route every compound System Check request to the live brain. The
+            // previous keyword gate was too permissive about which word combinations
+            // counted as "full", and runtime testing showed a full request could still
+            // fall through to the create-only task shortcut. A bare/simple create
+            // command is the only case that should use the task shortcut.
+            val simpleCreateSystemCheck = Regex(
+                """^(create|make|start|load)(\s+(a|the))?\s+system\s+check(\s+task)?$"""
+            ).matches(mission.trim())
+
             val isFullSystemCheck =
-                mission.contains("system check") &&
-                (
-                    mission.contains("full") ||
-                    mission.contains("delegate") ||
-                    mission.contains("execute") ||
-                    mission.contains("verify") ||
-                    mission.contains("pass/fail") ||
-                    mission.contains("report")
-                )
+                mission.contains("system check") && !simpleCreateSystemCheck
 
             val isCreateSystemCheck =
-                !isFullSystemCheck &&
-                mission.contains("system check") &&
-                (
-                    mission.contains("create") ||
-                    mission.contains("make") ||
-                    mission.contains("start") ||
-                    mission.contains("new task") ||
-                    mission.contains("load")
-                )
-            val isDelegateSystemCheck = !isFullSystemCheck &&
-                mission.contains("delegate") &&
-                mission.contains("system check")
+                simpleCreateSystemCheck
+
+            val isDelegateSystemCheck = false
 
             if (isFullSystemCheck) {
                 brain.send(message) { result ->
