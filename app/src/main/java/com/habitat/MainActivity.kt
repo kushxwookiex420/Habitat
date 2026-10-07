@@ -98,6 +98,7 @@ class MainActivity : Activity() {
             val message = input.text.toString().trim()
             if (message.isEmpty() || !input.isEnabled) return
             input.setText("")
+            ui.openChat()
             ui.addChatMessage("YOU", message)
             ui.addChatMessage("AX", "Thinking…")
             setBusy(true)
