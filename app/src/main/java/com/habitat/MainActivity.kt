@@ -112,8 +112,33 @@ class MainActivity : Activity() {
             val isDropPilotMission = mission.contains("run droppilot") ||
                 mission.contains("drop pilot mission") ||
                 mission.startsWith("droppilot:")
+            val isViceCityMission = mission.contains("run vice city") ||
+                mission.contains("vice city files") ||
+                mission.startsWith("vicecity:")
 
-            if (isDropPilotMission) {
+            if (isViceCityMission) {
+                ui.addChatMessage("AX", "Dispatching Topic Scout + Script Editor + Channel Operator…")
+                val channelContext = JSONObject().apply {
+                    put("channel", "Vice City Files")
+                    put("handle", "@ViceCityFilesYT")
+                    put("format", "16:9 photo/video")
+                    put("editing", "CapCut")
+                    put("voice", "calm, gentle, smooth TTS")
+                    put("introSeconds", 7)
+                    put("goal", "repeatable YouTube/TikTok content pipeline")
+                }
+                brain.sendViceCity(message, channelContext) { result ->
+                    runOnUiThread {
+                        setBusy(false)
+                        when (result.state) {
+                            BrainAdapter.State.CONNECTED -> ui.replaceLastAxMessage(result.text)
+                            BrainAdapter.State.ERROR -> ui.replaceLastAxMessage("Vice City mission failed: " + result.detail)
+                            BrainAdapter.State.DISCONNECTED -> ui.replaceLastAxMessage("Vice City operator disconnected.")
+                            BrainAdapter.State.CONNECTING -> Unit
+                        }
+                    }
+                }
+            } else if (isDropPilotMission) {
                 ui.setDropPilotMissionState(true)
                 ui.addChatMessage("AX", "Dispatching Product Scout + Listing Optimizer + Growth Operator…")
                 val storeContext = JSONObject().apply {
