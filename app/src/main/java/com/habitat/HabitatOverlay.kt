@@ -16,6 +16,7 @@ class HabitatOverlay(ctx: Context) : View(ctx) {
         "Ready. Give me a command or delegate a task."
     )
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val axBrain = BitmapFactory.decodeResource(resources, R.drawable.ax_brain)
 
     fun addChatMessage(who: String, msg: String) {
         messages.add("$who  •  $msg")
@@ -54,6 +55,7 @@ class HabitatOverlay(ctx: Context) : View(ctx) {
         chip(c, width * .08f, height * .125f, width * .31f, "CORE  ONLINE")
         chip(c, width * .69f, height * .125f, width * .92f, "MESH  READY")
 
+        drawAxBrain(c)
         if (panel) drawPanel(c)
 
         // Raised bottom command rail; the Ax composer sits above this rail.
@@ -71,6 +73,20 @@ class HabitatOverlay(ctx: Context) : View(ctx) {
             c.drawRoundRect(l, y, r, y + height * .065f, 22f, 22f, paint)
             text(c, names[i], (l + r) / 2f, y + height * .041f, s * .021f, Color.WHITE)
         }
+    }
+
+    private fun drawAxBrain(c: Canvas) {
+        val brainW = width * .78f
+        val brainH = brainW * (axBrain.height.toFloat() / axBrain.width.toFloat())
+        val cx = width / 2f
+        val cy = height * .405f
+        val rect = RectF(cx - brainW/2f, cy - brainH/2f, cx + brainW/2f, cy + brainH/2f)
+        paint.style = Paint.Style.FILL
+        paint.alpha = 150
+        paint.setShadowLayer(26f, 0f, 0f, Color.rgb(40, 220, 255))
+        c.drawBitmap(axBrain, null, rect, paint)
+        paint.clearShadowLayer()
+        paint.alpha = 255
     }
 
     private fun chip(c: Canvas, l: Float, top: Float, r: Float, label: String) {
