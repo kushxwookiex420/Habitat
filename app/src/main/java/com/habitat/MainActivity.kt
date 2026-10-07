@@ -11,6 +11,7 @@ import android.view.View
 import android.view.Window
 import android.view.WindowManager
 import android.widget.*
+import org.json.JSONObject
 import android.graphics.Color
 import java.util.Locale
 
@@ -101,14 +102,58 @@ class MainActivity : Activity() {
             ui.addChatMessage("AX", "Thinking…")
             setBusy(true)
 
-            brain.send(message) { result ->
-                runOnUiThread {
-                    setBusy(false)
-                    when (result.state) {
-                        BrainAdapter.State.CONNECTED -> ui.replaceLastAxMessage(result.text)
-                        BrainAdapter.State.ERROR -> ui.replaceLastAxMessage("I couldn't reach the Habitat brain. " + result.detail)
-                        BrainAdapter.State.DISCONNECTED -> ui.replaceLastAxMessage("Habitat brain disconnected.")
-                        BrainAdapter.State.CONNECTING -> Unit
+            val mission = message.lowercase(Locale.US)
+            val isDropPilotMission = mission.contains("run droppilot") ||
+                mission.contains("drop pilot mission") ||
+                mission.startsWith("droppilot:")
+
+            if (isDropPilotMission) {
+                ui.setDropPilotMissionState(true)
+                ui.addChatMessage("AX", "Dispatching Product Scout + Listing Optimizer + Growth Operator…")
+                val storeContext = JSONObject().apply {
+                    put("store", "Stevvex")
+                    put("platform", "Shopify Basic + TikTok Shop US")
+                    put("orders", 0)
+                    put("activeProducts", 1)
+                    put("currentProduct", "Car Seat Gap Organizer / Storage Pocket")
+                    put("currentPrice", 21.99)
+                    put("compareAtPrice", 45.00)
+                    put("supplierMarginPercent", 40)
+                    put("creatorCommissionPercent", 14.5)
+                    put("shipsFromUS", true)
+                    put("inventory", "high")
+                    put("goal", "first sale today, then repeatable daily sales")
+                }
+                brain.sendDropPilot(message, storeContext) { result ->
+                    runOnUiThread {
+                        setBusy(false)
+                        when (result.state) {
+                            BrainAdapter.State.CONNECTED -> {
+                                ui.setDropPilotMissionState(false, true)
+                                ui.replaceLastAxMessage(result.text)
+                            }
+                            BrainAdapter.State.ERROR -> {
+                                ui.setDropPilotMissionState(false, false)
+                                ui.replaceLastAxMessage("DropPilot mission failed: " + result.detail)
+                            }
+                            BrainAdapter.State.DISCONNECTED -> {
+                                ui.setDropPilotMissionState(false, false)
+                                ui.replaceLastAxMessage("DropPilot brain disconnected.")
+                            }
+                            BrainAdapter.State.CONNECTING -> Unit
+                        }
+                    }
+                }
+            } else {
+                brain.send(message) { result ->
+                    runOnUiThread {
+                        setBusy(false)
+                        when (result.state) {
+                            BrainAdapter.State.CONNECTED -> ui.replaceLastAxMessage(result.text)
+                            BrainAdapter.State.ERROR -> ui.replaceLastAxMessage("I couldn't reach the Habitat brain. " + result.detail)
+                            BrainAdapter.State.DISCONNECTED -> ui.replaceLastAxMessage("Habitat brain disconnected.")
+                            BrainAdapter.State.CONNECTING -> Unit
+                        }
                     }
                 }
             }

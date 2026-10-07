@@ -13,6 +13,7 @@ class BrainAdapter(private val context: Context) {
     data class Result(val state: State, val text: String = "", val detail: String = "")
     companion object {
         private const val LIVE_ENDPOINT = "https://habitat-1-szzd.onrender.com/chat"
+        private const val DROPPILOT_ENDPOINT = "https://habitat-1-szzd.onrender.com/orchestrate/dropilot"
         private const val PREFS = "habitat_brain"
         private const val HISTORY_KEY = "conversation_history"
         private const val MAX_HISTORY = 20
@@ -42,6 +43,46 @@ class BrainAdapter(private val context: Context) {
     }
 
     fun clearMemory() { prefs.edit().remove(HISTORY_KEY).apply() }
+
+    fun sendDropPilot(mission: String, storeContext: JSONObject, callback: (Result) -> Unit) {
+        callback(Result(State.CONNECTING))
+        executor.execute {
+            var connection: HttpURLConnection? = null
+            try {
+                connection = URL(DROPPILOT_ENDPOINT).openConnection() as HttpURLConnection
+                connection.requestMethod = "POST"
+                connection.connectTimeout = 15000
+                connection.readTimeout = 90000
+                connection.doOutput = true
+                connection.setRequestProperty("Content-Type", "application/json")
+                connection.setRequestProperty("Accept", "application/json")
+                val body = JSONObject().apply {
+                    put("mission", mission)
+                    put("storeContext", storeContext)
+                }.toString()
+                connection.outputStream.use { it.write(body.toByteArray(StandardCharsets.UTF_8)) }
+                val code = connection.responseCode
+                val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+                val responseText = stream?.bufferedReader()?.use { it.readText() } ?: ""
+                if (code !in 200..299) {
+                    callback(Result(State.ERROR, detail = "HTTP $code: $responseText"))
+                    return@execute
+                }
+                val json = JSONObject(responseText)
+                val synthesis = json.optString("synthesis", "")
+                if (synthesis.isBlank()) {
+                    callback(Result(State.ERROR, detail = "DropPilot returned no synthesis."))
+                    return@execute
+                }
+                callback(Result(State.CONNECTED, text = synthesis))
+            } catch (e: Exception) {
+                callback(Result(State.ERROR, detail = e.message ?: e.javaClass.simpleName))
+            } finally {
+                connection?.disconnect()
+            }
+        }
+    }
+
 
     fun send(message: String, callback: (Result) -> Unit) {
         callback(Result(State.CONNECTING))

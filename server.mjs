@@ -273,6 +273,115 @@ Mission:
   }
 });
 
+
+app.post("/orchestrate/dropilot", async (req, res) => {
+  try {
+    const mission = String(req.body?.mission || "").trim();
+    const storeContext = req.body?.storeContext || {};
+
+    if (!mission) {
+      return res.status(400).json({ ok: false, error: "mission required" });
+    }
+
+    if (!apiKey) {
+      return res.status(500).json({
+        ok: false,
+        error: "OPENROUTER_API_KEY is not configured on the Habitat server."
+      });
+    }
+
+    const contextText = JSON.stringify(storeContext, null, 2);
+
+    const roles = [
+      {
+        id: "scout",
+        name: "PRODUCT SCOUT",
+        mission:
+          "Find the strongest product opportunities for DropPilot. Judge demand signals, problem/benefit clarity, margin room, impulse-buy potential, competition risk, shipping simplicity, and TikTok-demo potential. Do not invent live sales data."
+      },
+      {
+        id: "listing",
+        name: "LISTING OPTIMIZER",
+        mission:
+          "Audit the current DropPilot listing and design a conversion-focused title, hook, benefit bullets, offer structure, and product-page changes. Prioritize clarity and mobile/TikTok buyer behavior."
+      },
+      {
+        id: "growth",
+        name: "GROWTH OPERATOR",
+        mission:
+          "Design the fastest realistic path from zero orders to the first sale using free/low-cost TikTok content, creator outreach, offer testing, and a simple daily execution loop. Avoid vague advice."
+      }
+    ];
+
+    const workerResults = await Promise.all(
+      roles.map(async (role) => {
+        const response = await client.chat.completions.create({
+          model,
+          messages: [
+            {
+              role: "system",
+              content:
+                "You are " + role.name + ", a specialist worker inside Habitat. " +
+                "Ax is the manager. " + role.mission +
+                " Return a concise report with: VERDICT, TOP 3 ACTIONS, RISKS, and ONE DATA POINT AX SHOULD VERIFY."
+            },
+            {
+              role: "user",
+              content:
+                "DropPilot mission:\n" + mission +
+                "\n\nCurrent store context:\n" + contextText
+            }
+          ]
+        });
+
+        return {
+          id: role.id,
+          name: role.name,
+          status: "complete",
+          response: response.choices?.[0]?.message?.content || ""
+        };
+      })
+    );
+
+    const synthesis = await client.chat.completions.create({
+      model,
+      messages: [
+        {
+          role: "system",
+          content:
+            "You are Ax, the DropPilot operator. Synthesize the worker reports into one execution order. " +
+            "The store currently has zero orders. Optimize for getting the first sale, not building a perfect store. " +
+            "Never claim an action was completed unless the context confirms it. " +
+            "Return exactly these sections: DECISION, DO TODAY, PRODUCT MOVE, CONTENT MOVE, CREATOR MOVE, METRICS."
+        },
+        {
+          role: "user",
+          content:
+            "MISSION:\n" + mission +
+            "\n\nSTORE:\n" + contextText +
+            "\n\nWORKER REPORTS:\n" +
+            workerResults.map(w => "\n[" + w.name + "]\n" + w.response).join("\n")
+        }
+      ]
+    });
+
+    return res.json({
+      ok: true,
+      habitat: "online",
+      project: "DropPilot AI",
+      workers: workerResults,
+      synthesis: synthesis.choices?.[0]?.message?.content || ""
+    });
+  } catch (error) {
+    console.error("DROPPILOT ORCHESTRATION ERROR:", error);
+    return res.status(500).json({
+      ok: false,
+      error: "DropPilot orchestration error",
+      details: String(error?.message || error)
+    });
+  }
+});
+
 app.listen(
   port,
   "0.0.0.0",
