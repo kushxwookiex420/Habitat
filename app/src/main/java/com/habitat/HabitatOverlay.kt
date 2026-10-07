@@ -8,6 +8,7 @@ import kotlin.math.min
 
 class HabitatOverlay(ctx: Context) : View(ctx) {
     var onSectionChanged: ((Int) -> Unit)? = null
+    var onSystemCheckRun: (() -> Unit)? = null
     private val names = arrayOf("CHAT", "WORKERS", "TASKS", "NOTIFY")
     private var selected = 0
     private var panel = false
@@ -268,10 +269,19 @@ class HabitatOverlay(ctx: Context) : View(ctx) {
             }
             2 -> {
                 row(c, "SYSTEM CHECK", systemCheckTaskStatus, top + height * .15f, systemCheckTaskStatus != "NOT LOADED")
-                row(c, "DROPPILOT", if (missionRunning) "MISSION  •  RUNNING" else if (missionComplete) "MISSION  •  COMPLETE" else "MISSION  •  READY", top + height * .245f, missionRunning || missionComplete)
-                row(c, "PRODUCT SCOUT", if (missionRunning) "ANALYZING" else "READY", top + height * .245f, missionRunning)
-                row(c, "LISTING OPT", if (missionRunning) "AUDITING" else "READY", top + height * .34f, missionRunning)
-                row(c, "GROWTH OPS", if (missionRunning) "PLANNING" else if (missionComplete) "DONE" else "STANDBY", top + height * .435f, missionComplete || missionRunning)
+                val runTop = top + height * .235f
+                paint.style = Paint.Style.FILL
+                paint.color = Color.argb(185, 8, 112, 145)
+                c.drawRoundRect(width * .22f, runTop, width * .78f, runTop + height * .065f, 20f, 20f, paint)
+                paint.style = Paint.Style.STROKE
+                paint.strokeWidth = 2f
+                paint.color = Color.rgb(90, 238, 255)
+                c.drawRoundRect(width * .22f, runTop, width * .78f, runTop + height * .065f, 20f, 20f, paint)
+                text(c, if (systemCheckTaskStatus.contains("RUNNING")) "SYSTEM CHECK  •  RUNNING" else "▶  RUN SYSTEM CHECK",
+                    width / 2f, runTop + height * .041f, s * .020f, Color.WHITE)
+                row(c, "DROPPILOT", if (missionRunning) "MISSION  •  RUNNING" else if (missionComplete) "MISSION  •  COMPLETE" else "MISSION  •  READY", top + height * .335f, missionRunning || missionComplete)
+                row(c, "PRODUCT SCOUT", if (missionRunning) "ANALYZING" else "READY", top + height * .43f, missionRunning)
+                row(c, "LISTING OPT", if (missionRunning) "AUDITING" else "READY", top + height * .525f, missionRunning)
             }
             3 -> {
                 row(c, "HABITAT CORE", "ONLINE", top + height * .15f, true)
@@ -351,6 +361,18 @@ class HabitatOverlay(ctx: Context) : View(ctx) {
             onSectionChanged?.invoke(selected)
             invalidate()
             return true
+        }
+        if (panel && selected == 2) {
+            val panelTop = height * .18f
+            val runTop = panelTop + height * .235f
+            val runBottom = runTop + height * .065f
+            if (e.y >= runTop && e.y <= runBottom && e.x >= width * .22f && e.x <= width * .78f) {
+                systemCheckTaskStatus = "RUNNING  •  LIVE"
+                invalidate()
+                onSystemCheckRun?.invoke()
+                return true
+            }
+            if (e.y >= panelTop && e.y < height * .70f) return true
         }
         if (panel && e.y < height * .70f) {
             panel = false
