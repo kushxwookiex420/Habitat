@@ -12,10 +12,10 @@ class BrainAdapter(private val context: Context) {
     enum class State { CONNECTED, DISCONNECTED, ERROR, CONNECTING }
     data class Result(val state: State, val text: String = "", val detail: String = "")
     companion object {
-        private const val LIVE_ENDPOINT = "https://habitat-cr46.onrender.com/chat"
-        private const val DROPPILOT_ENDPOINT = "https://habitat-cr46.onrender.com/orchestrate/dropilot"
-        private const val VICECITY_ENDPOINT = "https://habitat-cr46.onrender.com/orchestrate/vicecity"
-        private const val TASKS_ENDPOINT = "https://habitat-cr46.onrender.com/tasks"
+        private const val LIVE_ENDPOINT = "https://habitat-1-szzd.onrender.com/chat"
+        private const val DROPPILOT_ENDPOINT = "https://habitat-1-szzd.onrender.com/orchestrate/dropilot"
+        private const val VICECITY_ENDPOINT = "https://habitat-1-szzd.onrender.com/orchestrate/vicecity"
+        private const val TASKS_ENDPOINT = "https://habitat-1-szzd.onrender.com/tasks"
         private const val PREFS = "habitat_brain"
         private const val HISTORY_KEY = "conversation_history"
         private const val MAX_HISTORY = 20
