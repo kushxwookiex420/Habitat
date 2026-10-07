@@ -147,8 +147,8 @@ class HabitatOverlay(ctx: Context) : View(ctx) {
             }
             2 -> {
                 row(c, "DROPPILOT", if (missionRunning) "MISSION  •  RUNNING" else if (missionComplete) "MISSION  •  COMPLETE" else "MISSION  •  READY", top + height * .15f, missionRunning || missionComplete)
-                row(c, "PRODUCT SCOUT", if (missionRunning) "ANALYZING", top + height * .245f, missionRunning)
-                row(c, "LISTING OPT", if (missionRunning) "AUDITING", top + height * .34f, missionRunning)
+                row(c, "PRODUCT SCOUT", if (missionRunning) "ANALYZING" else "READY", top + height * .245f, missionRunning)
+                row(c, "LISTING OPT", if (missionRunning) "AUDITING" else "READY", top + height * .34f, missionRunning)
                 row(c, "GROWTH OPS", if (missionRunning) "PLANNING" else if (missionComplete) "DONE" else "STANDBY", top + height * .435f, missionComplete || missionRunning)
             }
             3 -> {
