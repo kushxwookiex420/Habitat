@@ -92,7 +92,7 @@ class BrainAdapter(private val context: Context) {
                 connection = URL(LIVE_ENDPOINT).openConnection() as HttpURLConnection
                 connection.requestMethod = "POST"
                 connection.connectTimeout = 15000
-                connection.readTimeout = 60000
+                connection.readTimeout = 120000
                 connection.doOutput = true
                 connection.setRequestProperty("Content-Type", "application/json")
                 connection.setRequestProperty("Accept", "application/json")
@@ -108,7 +108,10 @@ class BrainAdapter(private val context: Context) {
                     callback(Result(State.ERROR, detail = "HTTP $code: $responseText"))
                     return@execute
                 }
-                val reply = JSONObject(responseText).optString("response", "")
+                val parsed = JSONObject(responseText)
+                val reply = parsed.optString("response",
+                    parsed.optString("message",
+                        parsed.optString("content", "")))
                 if (reply.isBlank()) {
                     callback(Result(State.ERROR, detail = "Brain returned an empty response."))
                     return@execute
