@@ -18,14 +18,17 @@ class HabitatOverlay(ctx: Context) : View(ctx) {
         "Ready. Give me a command or delegate a task."
     )
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
-    private val axBrain: Bitmap? by lazy {\n        runCatching { BitmapFactory.decodeResource(resources, R.drawable.ax_brain) }.getOrNull()\n    }
+    private val axBrain: Bitmap? = try {
+        BitmapFactory.decodeResource(resources, R.drawable.ax_brain)
+    } catch (_: Exception) {
+        null
+    }
 
     fun addChatMessage(who: String, msg: String) {
         messages.add("$who  •  $msg")
         if (messages.size > 12) messages.removeAt(0)
         invalidate()
     }
-
 
     fun setDropPilotMissionState(running: Boolean, complete: Boolean = false) {
         missionRunning = running
@@ -59,15 +62,12 @@ class HabitatOverlay(ctx: Context) : View(ctx) {
 
         text(c, "HABITAT", width / 2f, height * .062f, s * .052f, Color.WHITE)
         text(c, "AX  /  NEURAL COMMAND CENTER", width / 2f, height * .098f, s * .021f, Color.rgb(105, 225, 255))
-
-        // Status chips make the interface feel like a command console without covering the brain.
         chip(c, width * .08f, height * .125f, width * .31f, "CORE  ONLINE")
         chip(c, width * .69f, height * .125f, width * .92f, "MESH  READY")
 
         drawAxBrain(c)
         if (panel) drawPanel(c)
 
-        // Raised bottom command rail; the Ax composer sits above this rail.
         val y = height * .855f
         val cell = width / 4f
         for (i in 0..3) {
@@ -85,11 +85,12 @@ class HabitatOverlay(ctx: Context) : View(ctx) {
     }
 
     private fun drawAxBrain(c: Canvas) {
+        val bitmap = axBrain ?: return
         val brainW = width * .78f
-        val brainH = brainW * (axBrain.height.toFloat() / axBrain.width.toFloat())
+        val brainH = brainW * (bitmap.height.toFloat() / bitmap.width.toFloat())
         val cx = width / 2f
         val cy = height * .405f
-        val rect = RectF(cx - brainW/2f, cy - brainH/2f, cx + brainW/2f, cy + brainH/2f)
+        val rect = RectF(cx - brainW / 2f, cy - brainH / 2f, cx + brainW / 2f, cy + brainH / 2f)
         paint.style = Paint.Style.FILL
         paint.alpha = 150
         paint.setShadowLayer(26f, 0f, 0f, Color.rgb(40, 220, 255))
@@ -176,7 +177,6 @@ class HabitatOverlay(ctx: Context) : View(ctx) {
 
     override fun onTouchEvent(e: MotionEvent): Boolean {
         if (e.actionMasked != MotionEvent.ACTION_UP) return true
-
         val navY = height * .855f
         if (e.y >= navY) {
             selected = ((e.x / (width / 4f)).toInt()).coerceIn(0, 3)
@@ -185,8 +185,6 @@ class HabitatOverlay(ctx: Context) : View(ctx) {
             invalidate()
             return true
         }
-
-        // Tapping the brain/empty space closes an open command panel.
         if (panel && e.y < height * .70f) {
             panel = false
             invalidate()
