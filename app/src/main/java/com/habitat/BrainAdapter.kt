@@ -286,5 +286,35 @@ class BrainAdapter(private val context: Context) {
         }
     }
 
+    fun runEndToEndTest(callback: (Result) -> Unit) {
+        callback(Result(State.CONNECTING))
+        executor.execute {
+            createTask("AX End-to-End Test",
+                "Verify backend health, model worker response, task creation, and return the combined verification result to Habitat.") { created ->
+                if (created.state != State.CONNECTED) {
+                    callback(Result(State.ERROR, detail = "Task creation failed: " + created.detail))
+                    return@createTask
+                }
+                try {
+                    val task = JSONObject(created.text)
+                    val id = task.optString("id", "")
+                    if (id.isBlank()) {
+                        callback(Result(State.ERROR, detail = "Task creation returned no task ID."))
+                        return@createTask
+                    }
+                    delegateTask(id) { delegated ->
+                        if (delegated.state != State.CONNECTED) {
+                            callback(Result(State.ERROR, detail = delegated.detail))
+                        } else {
+                            callback(Result(State.CONNECTED, text = "AX END-TO-END TEST\n\nTask created: PASS\nTask ID: " + id + "\n\n" + delegated.text))
+                        }
+                    }
+                } catch (e: Exception) {
+                    callback(Result(State.ERROR, detail = e.message ?: e.javaClass.simpleName))
+                }
+            }
+        }
+    }
+
     fun shutdown() { executor.shutdownNow() }
 }
