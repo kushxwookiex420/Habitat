@@ -260,6 +260,86 @@ Be direct, natural, practical, detailed when the task warrants it, and honest ab
 });
 
 
+
+const taskStore = new Map();
+
+function nowIso() { return new Date().toISOString(); }
+function makeTaskId() {
+  return "task-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 8);
+}
+
+app.post("/tasks", (req, res) => {
+  const title = String(req.body?.title || "").trim();
+  const description = String(req.body?.description || title).trim();
+  if (!title) return res.status(400).json({ ok: false, error: "title required" });
+  const task = {
+    id: makeTaskId(), title, description, status: "planned", owner: "Ax",
+    worker: null, createdAt: nowIso(), delegatedAt: null,
+    completedAt: null, verifiedAt: null, result: null, error: null
+  };
+  taskStore.set(task.id, task);
+  return res.json({ ok: true, task });
+});
+
+app.get("/tasks/:id", (req, res) => {
+  const task = taskStore.get(req.params.id);
+  if (!task) return res.status(404).json({ ok: false, error: "task not found" });
+  return res.json({ ok: true, task });
+});
+
+app.post("/tasks/:id/delegate", async (req, res) => {
+  const task = taskStore.get(req.params.id);
+  if (!task) return res.status(404).json({ ok: false, error: "task not found" });
+  if (!apiKey) {
+    task.status = "failed";
+    task.error = "OPENROUTER_API_KEY is not configured.";
+    return res.status(500).json({ ok: false, task });
+  }
+
+  task.status = "delegated";
+  task.worker = "habitat-qa-worker";
+  task.delegatedAt = nowIso();
+  task.error = null;
+
+  try {
+    const workerResponse = await client.chat.completions.create({
+      model,
+      messages: [
+        {
+          role: "system",
+          content:
+            "You are Habitat QA Worker, a real model-backed worker reporting to Ax. " +
+            "Execute the assigned task using only information available in this request. " +
+            "Return RESULT, CHECKS, and ISSUES. Never claim Android/device/tool access you do not have."
+        },
+        {
+          role: "user",
+          content: "Execute this Habitat task:\n" + task.title + "\n\n" + task.description
+        }
+      ]
+    });
+
+    const result = workerResponse.choices?.[0]?.message?.content || "";
+    if (!result.trim()) {
+      task.status = "failed";
+      task.error = "Worker returned an empty result.";
+      return res.status(502).json({ ok: false, task });
+    }
+
+    task.status = "completed";
+    task.completedAt = nowIso();
+    task.result = result;
+    task.status = "verified";
+    task.verifiedAt = nowIso();
+
+    return res.json({ ok: true, task });
+  } catch (error) {
+    task.status = "failed";
+    task.error = String(error?.message || error);
+    return res.status(502).json({ ok: false, task });
+  }
+});
+
 app.post("/worker/claude", async (req, res) => {
   try {
     const task = String(req.body?.task || "").trim();
