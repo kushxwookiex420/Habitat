@@ -2,7 +2,7 @@ name: Habitat v0.6 APK
 
 on:
   push:
-    branches: [ main, ax-v0.6-real-brain ]
+    branches: [ main, ax-v0.6-real-brain, ax-v0.6-brain-identity ]
   workflow_dispatch:
 
 permissions:
