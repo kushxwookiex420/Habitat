@@ -13,6 +13,10 @@ class HabitatOverlay(ctx: Context) : View(ctx) {
     private var panel = false
     private var missionRunning = false
     private var missionComplete = false
+    private var chatScroll = 0f
+    private var touchDownY = 0f
+    private var lastTouchY = 0f
+    private var draggingChat = false
     private val messages = mutableListOf(
         "AX  •  Neural core online.",
         "Ready. Give me a command or delegate a task."
@@ -33,7 +37,8 @@ class HabitatOverlay(ctx: Context) : View(ctx) {
 
     fun addChatMessage(who: String, msg: String) {
         messages.add("$who  •  $msg")
-        if (messages.size > 12) messages.removeAt(0)
+        while (messages.size > 100) messages.removeAt(0)
+        chatScroll = 0f
         invalidate()
     }
 
@@ -139,16 +144,32 @@ class HabitatOverlay(ctx: Context) : View(ctx) {
 
         when (selected) {
             0 -> {
-                var yy = top + height * .15f
-                for (m in messages.takeLast(4)) {
+                val contentLeft = left + 28f
+                val contentRight = right - 28f
+                val contentWidth = contentRight - contentLeft
+                val lineHeight = height * .032f
+                var yy = top + height * .15f - chatScroll
+
+                for (m in messages) {
                     val whoColor = if (m.startsWith("AX")) Color.rgb(130, 235, 255) else Color.WHITE
-                    val parts = m.chunked(42).take(3)
-                    for (part in parts) {
-                        text(c, part, left + 28, yy, s * .018f, whoColor, Paint.Align.LEFT)
-                        yy += height * .035f
+                    val wrapped = wrapText(m, contentWidth, s * .018f)
+                    for (line in wrapped) {
+                        if (yy >= top + height * .115f && yy <= bottom - height * .055f) {
+                            text(c, line, contentLeft, yy, s * .018f, whoColor, Paint.Align.LEFT)
+                        }
+                        yy += lineHeight
                     }
-                    yy += height * .012f
-                    if (yy > bottom - height * .075f) break
+                    yy += height * .010f
+                }
+
+                val totalContentHeight = yy - (top + height * .15f) + chatScroll
+                val viewportHeight = (bottom - top) - height * .19f
+                val maxScroll = maxOf(0f, totalContentHeight - viewportHeight)
+                chatScroll = chatScroll.coerceIn(0f, maxScroll)
+
+                if (maxScroll > 0f) {
+                    text(c, "SWIPE TO SCROLL", right - 28f, bottom - height * .025f,
+                        s * .012f, Color.rgb(70, 190, 220), Paint.Align.RIGHT)
                 }
                 text(c, if (missionRunning) "AX EXECUTION LOOP  •  WORKERS ACTIVE" else "TEXT / VOICE COMMANDS ACTIVE",
                     width / 2f, bottom - height * .025f, s * .015f, Color.rgb(70, 190, 220))
@@ -188,9 +209,55 @@ class HabitatOverlay(ctx: Context) : View(ctx) {
         text(c, status, r - 18, y + height * .031f, min(width, height) * .017f, Color.rgb(110, 225, 245), Paint.Align.RIGHT)
     }
 
+    private fun wrapText(value: String, maxWidth: Float, size: Float): List<String> {
+        paint.typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+        paint.textSize = size
+        val result = mutableListOf<String>()
+        for (paragraph in value.replace("\r", "").split("\n")) {
+            var line = ""
+            for (word in paragraph.split(" ")) {
+                val candidate = if (line.isEmpty()) word else "$line $word"
+                if (paint.measureText(candidate) <= maxWidth || line.isEmpty()) {
+                    line = candidate
+                } else {
+                    result.add(line)
+                    line = word
+                }
+            }
+            if (line.isNotEmpty()) result.add(line)
+        }
+        return if (result.isEmpty()) listOf("") else result
+    }
+
     override fun onTouchEvent(e: MotionEvent): Boolean {
-        if (e.actionMasked != MotionEvent.ACTION_UP) return true
         val navY = height * .855f
+        when (e.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                touchDownY = e.y
+                lastTouchY = e.y
+                draggingChat = false
+                return true
+            }
+            MotionEvent.ACTION_MOVE -> {
+                if (panel && selected == 0 && e.y < height * .70f) {
+                    val dy = lastTouchY - e.y
+                    if (kotlin.math.abs(e.y - touchDownY) > 8f) draggingChat = true
+                    chatScroll += dy
+                    lastTouchY = e.y
+                    invalidate()
+                    return true
+                }
+                return true
+            }
+            MotionEvent.ACTION_UP -> {
+                if (draggingChat) {
+                    draggingChat = false
+                    return true
+                }
+            }
+        }
+
+        if (e.actionMasked != MotionEvent.ACTION_UP) return true
         if (e.y >= navY) {
             selected = ((e.x / (width / 4f)).toInt()).coerceIn(0, 3)
             panel = true
