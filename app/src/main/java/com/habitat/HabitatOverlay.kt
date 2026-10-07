@@ -23,6 +23,17 @@ class HabitatOverlay(ctx: Context) : View(ctx) {
         invalidate()
     }
 
+    fun replaceLastAxMessage(msg: String) {
+        for (i in messages.indices.reversed()) {
+            if (messages[i].startsWith("AX  •")) {
+                messages[i] = "AX  •  $msg"
+                invalidate()
+                return
+            }
+        }
+        addChatMessage("AX", msg)
+    }
+
     private fun text(c: Canvas, value: String, x: Float, y: Float, size: Float, color: Int, align: Paint.Align = Paint.Align.CENTER) {
         paint.style = Paint.Style.FILL
         paint.typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
