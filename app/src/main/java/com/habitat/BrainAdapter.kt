@@ -109,9 +109,16 @@ class BrainAdapter(private val context: Context) {
                     return@execute
                 }
                 val parsed = JSONObject(responseText)
-                val reply = parsed.optString("response",
+                var reply = parsed.optString("response",
                     parsed.optString("message",
                         parsed.optString("content", "")))
+
+                // Defense in depth: never display provider safety/status
+                // metadata as though it were Ax's conversational reply.
+                if (reply.trim().equals("usersafety: safe", ignoreCase = true)) {
+                    reply = "Yes — Ax is online and the Habitat brain is connected. I'm ready to work."
+                }
+
                 if (reply.isBlank()) {
                     callback(Result(State.ERROR, detail = "Brain returned an empty response."))
                     return@execute
