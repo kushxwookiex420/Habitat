@@ -165,8 +165,34 @@ class MainActivity : Activity() {
             } else if (isDelegateSystemCheck) {
                 val taskId = lastTaskId
                 if (taskId.isNullOrBlank()) {
-                    setBusy(false)
-                    ui.replaceLastAxMessage("No live System Check task is loaded. Create the System Check task first.")
+                    ui.replaceLastAxMessage("Recovering the live System Check task from Habitat…")
+                    brain.findLatestSystemCheck { recovered ->
+                        runOnUiThread {
+                            if (recovered.state != BrainAdapter.State.CONNECTED) {
+                                setBusy(false)
+                                ui.replaceLastAxMessage("No live System Check task exists on the Habitat task service. Create it once, then retry.")
+                                return@runOnUiThread
+                            }
+                            try {
+                                val task = JSONObject(recovered.text)
+                                val recoveredId = task.optString("id", "")
+                                if (recoveredId.isBlank()) throw IllegalStateException("Recovered task has no ID")
+                                lastTaskId = recoveredId
+                                taskPrefs.edit().putString("live_system_check_task_id", recoveredId).apply()
+                                ui.replaceLastAxMessage("Recovered System Check " + recoveredId + ". Dispatching the real Habitat QA worker…")
+                                brain.delegateTask(recoveredId) { result ->
+                                    runOnUiThread {
+                                        setBusy(false)
+                                        if (result.state == BrainAdapter.State.CONNECTED) ui.replaceLastAxMessage(result.text)
+                                        else ui.replaceLastAxMessage("Worker execution failed: " + result.detail)
+                                    }
+                                }
+                            } catch (e: Exception) {
+                                setBusy(false)
+                                ui.replaceLastAxMessage("System Check recovery failed: " + (e.message ?: "invalid task record"))
+                            }
+                        }
+                    }
                 } else {
                     ui.replaceLastAxMessage("Dispatching the real Habitat QA worker…")
                     brain.delegateTask(taskId) { result ->
