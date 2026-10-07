@@ -5,6 +5,7 @@ on:
     branches: [ main, ax-v0.6-real-brain, ax-v0.6-brain-identity, ax-v0.7-droppilot-operator ]
   workflow_dispatch:
 
+# Ax build trigger verified: every main push packages a fresh debug APK.
 permissions:
   contents: read
 
