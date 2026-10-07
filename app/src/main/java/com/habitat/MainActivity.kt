@@ -44,14 +44,19 @@ class MainActivity : Activity() {
 
         input = EditText(this).apply {
             hint = "Message Ax…"
-            setSingleLine(true)
+            setSingleLine(false)
+            minLines = 1
+            maxLines = 5
+            gravity = Gravity.CENTER_VERTICAL
+            setHorizontallyScrolling(false)
+            filters = arrayOf(android.text.InputFilter.LengthFilter(12000))
             setTextColor(Color.WHITE)
             setHintTextColor(Color.rgb(110, 190, 215))
             textSize = 17f
             setPadding(18, 0, 12, 0)
             setBackgroundColor(Color.argb(225, 7, 29, 48))
         }
-        composer.addView(input, LinearLayout.LayoutParams(0, 58, 1f))
+        composer.addView(input, LinearLayout.LayoutParams(0, 82, 1f))
 
         val voice = Button(this).apply {
             text = "◉"
@@ -60,7 +65,7 @@ class MainActivity : Activity() {
             setBackgroundColor(Color.rgb(7, 79, 108))
             isAllCaps = false
         }
-        composer.addView(voice, LinearLayout.LayoutParams(64, 58).apply { leftMargin = 8 })
+        composer.addView(voice, LinearLayout.LayoutParams(64, 82).apply { leftMargin = 8 })
 
         val send = Button(this).apply {
             text = "➤"
@@ -69,11 +74,11 @@ class MainActivity : Activity() {
             setBackgroundColor(Color.rgb(8, 122, 154))
             isAllCaps = false
         }
-        composer.addView(send, LinearLayout.LayoutParams(70, 58).apply { leftMargin = 8 })
+        composer.addView(send, LinearLayout.LayoutParams(70, 82).apply { leftMargin = 8 })
 
         // The command composer lives above the Samsung navigation area and above
         // the bottom navigation rail instead of being pinned to the screen bottom.
-        val cp = FrameLayout.LayoutParams(-1, 78, Gravity.TOP)
+        val cp = FrameLayout.LayoutParams(-1, 104, Gravity.TOP)
         cp.setMargins(14, 0, 14, 0)
         root.addView(composer, cp)
 
@@ -81,7 +86,7 @@ class MainActivity : Activity() {
             val usable = root.height
             if (usable <= 0) return
             val lp = composer.layoutParams as FrameLayout.LayoutParams
-            lp.topMargin = (usable * 0.715f).toInt()
+            lp.topMargin = (usable * 0.695f).toInt()
             composer.layoutParams = lp
         }
         root.post { positionComposer() }
