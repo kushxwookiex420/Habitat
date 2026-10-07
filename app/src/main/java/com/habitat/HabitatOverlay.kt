@@ -18,7 +18,7 @@ class HabitatOverlay(ctx: Context) : View(ctx) {
         "Ready. Give me a command or delegate a task."
     )
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
-    private val axBrain = BitmapFactory.decodeResource(resources, R.drawable.ax_brain)
+    private val axBrain: Bitmap? by lazy {\n        runCatching { BitmapFactory.decodeResource(resources, R.drawable.ax_brain) }.getOrNull()\n    }
 
     fun addChatMessage(who: String, msg: String) {
         messages.add("$who  •  $msg")
@@ -93,7 +93,7 @@ class HabitatOverlay(ctx: Context) : View(ctx) {
         paint.style = Paint.Style.FILL
         paint.alpha = 150
         paint.setShadowLayer(26f, 0f, 0f, Color.rgb(40, 220, 255))
-        c.drawBitmap(axBrain, null, rect, paint)
+        c.drawBitmap(bitmap, null, rect, paint)
         paint.clearShadowLayer()
         paint.alpha = 255
     }
