@@ -318,6 +318,57 @@ class MainActivity : Activity() {
         }
 
         setContentView(root)
+        ensureSystemCheckTask()
+    }
+
+    private fun ensureSystemCheckTask() {
+        val existing = lastTaskId
+        if (!existing.isNullOrBlank()) {
+            ui.setSystemCheckTaskStatus("LOADED  •  LIVE")
+            return
+        }
+        ui.setSystemCheckTaskStatus("RECOVERING…")
+        brain.findLatestSystemCheck { recovered ->
+            runOnUiThread {
+                if (recovered.state == BrainAdapter.State.CONNECTED) {
+                    try {
+                        val task = JSONObject(recovered.text)
+                        val id = task.optString("id", "")
+                        if (id.isNotBlank()) {
+                            lastTaskId = id
+                            taskPrefs.edit().putString("live_system_check_task_id", id).apply()
+                            ui.setSystemCheckTaskStatus("LOADED  •  LIVE")
+                            return@runOnUiThread
+                        }
+                    } catch (_: Exception) {}
+                }
+                ui.setSystemCheckTaskStatus("CREATING…")
+                brain.createTask(
+                    "System Check",
+                    "Verify Habitat backend connectivity and execute a real QA worker check. Do not claim Android device access unless confirmed."
+                ) { created ->
+                    runOnUiThread {
+                        if (created.state == BrainAdapter.State.CONNECTED) {
+                            try {
+                                val task = JSONObject(created.text)
+                                val id = task.optString("id", "")
+                                if (id.isNotBlank()) {
+                                    lastTaskId = id
+                                    taskPrefs.edit().putString("live_system_check_task_id", id).apply()
+                                    ui.setSystemCheckTaskStatus("LOADED  •  LIVE")
+                                } else {
+                                    ui.setSystemCheckTaskStatus("ERROR  •  NO ID")
+                                }
+                            } catch (_: Exception) {
+                                ui.setSystemCheckTaskStatus("ERROR  •  INVALID TASK")
+                            }
+                        } else {
+                            ui.setSystemCheckTaskStatus("OFFLINE  •  RETRY")
+                        }
+                    }
+                }
+            }
+        }
     }
 
     private fun startVoice() {
