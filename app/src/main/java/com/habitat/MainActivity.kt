@@ -112,6 +112,24 @@ class MainActivity : Activity() {
             setBusy(true)
 
             val mission = message.lowercase(Locale.US)
+            val isEndToEndTest = mission.contains("ax end-to-end test") ||
+                (mission.contains("create a test task") && mission.contains("verify backend health") && mission.contains("model worker"))
+
+            if (isEndToEndTest) {
+                ui.addChatMessage("AX", "Running the live end-to-end Habitat test: task creation → backend health → model worker → result return…")
+                brain.runEndToEndTest { result ->
+                    runOnUiThread {
+                        setBusy(false)
+                        if (result.state == BrainAdapter.State.CONNECTED) {
+                            ui.replaceLastAxMessage(result.text)
+                        } else {
+                            ui.replaceLastAxMessage("End-to-end test failed: " + result.detail)
+                        }
+                    }
+                }
+                return
+            }
+
             val isDropPilotMission = mission.contains("run droppilot") ||
                 mission.contains("drop pilot mission") ||
                 mission.startsWith("droppilot:")
