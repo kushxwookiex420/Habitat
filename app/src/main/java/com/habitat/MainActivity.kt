@@ -314,11 +314,55 @@ class MainActivity : Activity() {
 
         ui.onSectionChanged = { section ->
             space.setMode(section)
-            composer.visibility = View.VISIBLE
+            composer.visibility = if (section == 0) View.VISIBLE else View.GONE
+        }
+
+        ui.onSystemCheckRun = {
+            val taskId = lastTaskId
+            if (taskId.isNullOrBlank()) {
+                ui.setSystemCheckTaskStatus("RECOVERING…")
+                brain.findLatestSystemCheck { recovered ->
+                    runOnUiThread {
+                        if (recovered.state != BrainAdapter.State.CONNECTED) {
+                            ui.setSystemCheckTaskStatus("ERROR  •  NO LIVE TASK")
+                            ui.addChatMessage("AX", "System Check could not find a live task.")
+                            return@runOnUiThread
+                        }
+                        try {
+                            val task = JSONObject(recovered.text)
+                            val recoveredId = task.optString("id", "")
+                            if (recoveredId.isBlank()) throw IllegalStateException("missing task id")
+                            lastTaskId = recoveredId
+                            taskPrefs.edit().putString("live_system_check_task_id", recoveredId).apply()
+                            runSystemCheck(recoveredId)
+                        } catch (e: Exception) {
+                            ui.setSystemCheckTaskStatus("ERROR  •  INVALID TASK")
+                            ui.addChatMessage("AX", "System Check recovery failed: " + (e.message ?: "invalid task"))
+                        }
+                    }
+                }
+            } else {
+                runSystemCheck(taskId)
+            }
         }
 
         setContentView(root)
         ensureSystemCheckTask()
+    }
+
+    private fun runSystemCheck(taskId: String) {
+        ui.setSystemCheckTaskStatus("RUNNING  •  LIVE")
+        brain.delegateTask(taskId) { result ->
+            runOnUiThread {
+                if (result.state == BrainAdapter.State.CONNECTED) {
+                    ui.setSystemCheckTaskStatus("COMPLETE  •  VERIFIED")
+                    ui.addChatMessage("AX", result.text)
+                } else {
+                    ui.setSystemCheckTaskStatus("FAILED  •  CHECK RESULT")
+                    ui.addChatMessage("AX", "System Check failed: " + result.detail)
+                }
+            }
+        }
     }
 
     private fun ensureSystemCheckTask() {
