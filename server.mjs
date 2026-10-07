@@ -97,7 +97,7 @@ app.post("/chat", async (req, res) => {
     const isCoreStatusQuestion =
       /^(is ax (online|there)|are you (online|there)|ax (online|there)|are you up|status|habitat status|check status)[? ]*$/.test(normalizedMessage);
 
-    if (/system\\s*check/i.test(message)) {
+    if (/system\s*check/i.test(message)) {
       const check = await runSystemCheck();
       return res.json({
         response: check.report,
