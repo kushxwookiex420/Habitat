@@ -357,6 +357,28 @@ class MainActivity : Activity() {
                 if (result.state == BrainAdapter.State.CONNECTED) {
                     ui.setSystemCheckTaskStatus("COMPLETE  •  VERIFIED")
                     ui.addChatMessage("AX", result.text)
+                } else if (result.detail.contains("HTTP 404") || result.detail.contains("task not found", ignoreCase = true)) {
+                    ui.setSystemCheckTaskStatus("RECOVERING  •  LIVE TASK")
+                    brain.findLatestSystemCheck { recovered ->
+                        runOnUiThread {
+                            if (recovered.state != BrainAdapter.State.CONNECTED) {
+                                ui.setSystemCheckTaskStatus("FAILED  •  NO LIVE TASK")
+                                ui.addChatMessage("AX", "System Check task expired after a backend restart. No live replacement task was found.")
+                                return@runOnUiThread
+                            }
+                            try {
+                                val task = JSONObject(recovered.text)
+                                val recoveredId = task.optString("id", "")
+                                if (recoveredId.isBlank()) throw IllegalStateException("missing task id")
+                                lastTaskId = recoveredId
+                                taskPrefs.edit().putString("live_system_check_task_id", recoveredId).apply()
+                                runSystemCheck(recoveredId)
+                            } catch (e: Exception) {
+                                ui.setSystemCheckTaskStatus("FAILED  •  INVALID TASK")
+                                ui.addChatMessage("AX", "System Check recovery failed: " + (e.message ?: "invalid task"))
+                            }
+                        }
+                    }
                 } else {
                     ui.setSystemCheckTaskStatus("FAILED  •  CHECK RESULT")
                     ui.addChatMessage("AX", "System Check failed: " + result.detail)
@@ -368,7 +390,27 @@ class MainActivity : Activity() {
     private fun ensureSystemCheckTask() {
         val existing = lastTaskId
         if (!existing.isNullOrBlank()) {
-            ui.setSystemCheckTaskStatus("LOADED  •  LIVE")
+            ui.setSystemCheckTaskStatus("VERIFYING  •  LIVE TASK")
+            brain.findLatestSystemCheck { recovered ->
+                runOnUiThread {
+                    if (recovered.state == BrainAdapter.State.CONNECTED) {
+                        try {
+                            val task = JSONObject(recovered.text)
+                            val id = task.optString("id", "")
+                            if (id.isNotBlank()) {
+                                lastTaskId = id
+                                taskPrefs.edit().putString("live_system_check_task_id", id).apply()
+                                ui.setSystemCheckTaskStatus("LOADED  •  LIVE")
+                                return@runOnUiThread
+                            }
+                        } catch (_: Exception) {}
+                    }
+                    lastTaskId = null
+                    taskPrefs.edit().remove("live_system_check_task_id").apply()
+                    ui.setSystemCheckTaskStatus("CREATING…")
+                    createFreshSystemCheck()
+                }
+            }
             return
         }
         ui.setSystemCheckTaskStatus("RECOVERING…")
@@ -411,6 +453,29 @@ class MainActivity : Activity() {
                         }
                     }
                 }
+            }
+        }
+    }
+
+    private fun createFreshSystemCheck() {
+        brain.createTask(
+            "System Check",
+            "Verify Habitat backend connectivity and execute a real QA worker check. Do not claim Android device access unless confirmed."
+        ) { created ->
+            runOnUiThread {
+                if (created.state == BrainAdapter.State.CONNECTED) {
+                    try {
+                        val task = JSONObject(created.text)
+                        val id = task.optString("id", "")
+                        if (id.isNotBlank()) {
+                            lastTaskId = id
+                            taskPrefs.edit().putString("live_system_check_task_id", id).apply()
+                            ui.setSystemCheckTaskStatus("LOADED  •  LIVE")
+                        } else ui.setSystemCheckTaskStatus("ERROR  •  NO ID")
+                    } catch (_: Exception) {
+                        ui.setSystemCheckTaskStatus("ERROR  •  INVALID TASK")
+                    }
+                } else ui.setSystemCheckTaskStatus("OFFLINE  •  RETRY")
             }
         }
     }
