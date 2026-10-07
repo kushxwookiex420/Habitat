@@ -21,6 +21,7 @@ class MainActivity : Activity() {
     private lateinit var brain: BrainAdapter
     private val voiceCode = 700
     private var lastTaskId: String? = null
+    private val taskPrefs by lazy { getSharedPreferences("habitat_tasks", MODE_PRIVATE) }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -28,6 +29,7 @@ class MainActivity : Activity() {
         window.setFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN, WindowManager.LayoutParams.FLAG_FULLSCREEN)
         window.navigationBarColor = Color.BLACK
         brain = BrainAdapter(this)
+        lastTaskId = taskPrefs.getString("live_system_check_task_id", null)
 
         val root = FrameLayout(this)
         val space = Habitat3DSurface(this)
@@ -118,8 +120,15 @@ class MainActivity : Activity() {
                 mission.startsWith("vicecity:")
 
 
-            val isCreateSystemCheck = mission.contains("create a test task") &&
-                mission.contains("system check")
+            val isCreateSystemCheck =
+                mission.contains("system check") &&
+                (
+                    mission.contains("create") ||
+                    mission.contains("make") ||
+                    mission.contains("start") ||
+                    mission.contains("new task") ||
+                    mission.contains("load")
+                )
             val isDelegateSystemCheck = mission.contains("delegate") &&
                 mission.contains("system check")
 
@@ -134,6 +143,11 @@ class MainActivity : Activity() {
                             try {
                                 val task = JSONObject(result.text)
                                 lastTaskId = task.optString("id", null)
+                                if (lastTaskId.isNullOrBlank()) {
+                                    ui.replaceLastAxMessage("System Check was created but no real task ID was returned. I will not treat it as loaded.")
+                                    return@runOnUiThread
+                                }
+                                taskPrefs.edit().putString("live_system_check_task_id", lastTaskId).apply()
                                 ui.replaceLastAxMessage(
                                     "System Check created in the real Habitat task service.\n" +
                                     "Status: " + task.optString("status", "planned") + "\n" +
