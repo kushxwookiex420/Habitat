@@ -13,6 +13,7 @@ class HabitatOverlay(ctx: Context) : View(ctx) {
     private var panel = false
     private var missionRunning = false
     private var missionComplete = false
+    private var systemCheckTaskStatus = "NOT LOADED"
     private var chatScroll = 0f
     private var touchDownY = 0f
     private var lastTouchY = 0f
@@ -40,6 +41,11 @@ class HabitatOverlay(ctx: Context) : View(ctx) {
         messages.add("$who  •  $msg")
         while (messages.size > 100) messages.removeAt(0)
         chatScroll = 0f
+        invalidate()
+    }
+
+    fun setSystemCheckTaskStatus(status: String) {
+        systemCheckTaskStatus = status
         invalidate()
     }
 
@@ -261,7 +267,8 @@ class HabitatOverlay(ctx: Context) : View(ctx) {
                 row(c, "GROWTH OPS", if (missionComplete) "WORKER  •  COMPLETE" else if (missionRunning) "WORKER  •  RUNNING" else "WORKER  •  READY", top + height * .435f, missionComplete || missionRunning)
             }
             2 -> {
-                row(c, "DROPPILOT", if (missionRunning) "MISSION  •  RUNNING" else if (missionComplete) "MISSION  •  COMPLETE" else "MISSION  •  READY", top + height * .15f, missionRunning || missionComplete)
+                row(c, "SYSTEM CHECK", systemCheckTaskStatus, top + height * .15f, systemCheckTaskStatus != "NOT LOADED")
+                row(c, "DROPPILOT", if (missionRunning) "MISSION  •  RUNNING" else if (missionComplete) "MISSION  •  COMPLETE" else "MISSION  •  READY", top + height * .245f, missionRunning || missionComplete)
                 row(c, "PRODUCT SCOUT", if (missionRunning) "ANALYZING" else "READY", top + height * .245f, missionRunning)
                 row(c, "LISTING OPT", if (missionRunning) "AUDITING" else "READY", top + height * .34f, missionRunning)
                 row(c, "GROWTH OPS", if (missionRunning) "PLANNING" else if (missionComplete) "DONE" else "STANDBY", top + height * .435f, missionComplete || missionRunning)
