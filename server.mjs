@@ -441,6 +441,48 @@ app.post("/orchestrate/dropilot", async (req, res) => {
   }
 });
 
+
+app.post("/orchestrate/vicecity", async (req, res) => {
+  try {
+    const mission = String(req.body?.mission || "").trim();
+    const channelContext = req.body?.channelContext || {};
+
+    if (!mission) return res.status(400).json({ ok: false, error: "mission required" });
+    if (!apiKey) return res.status(500).json({ ok: false, error: "OPENROUTER_API_KEY is not configured on the Habitat server." });
+
+    const contextText = JSON.stringify(channelContext, null, 2);
+    const roles = [
+      { id: "research", name: "TOPIC SCOUT", job: "Choose the strongest GTA/Vice City story topic using evergreen interest, curiosity, searchability, and visual potential. Never invent current facts." },
+      { id: "script", name: "SCRIPT EDITOR", job: "Create a tight 45-90 second narration structure with a strong first 7 seconds, calm delivery, and clear visual beats." },
+      { id: "growth", name: "CHANNEL OPERATOR", job: "Create a repeatable free/low-cost publishing loop for YouTube Shorts/TikTok, including title, description idea, and up to five TikTok hashtags." }
+    ];
+
+    const reports = await Promise.all(roles.map(async role => {
+      const out = await client.chat.completions.create({
+        model,
+        messages: [
+          { role: "system", content: "You are " + role.name + ", a worker reporting to Ax. " + role.job + " Return VERDICT, TOP 3 ACTIONS, RISKS, and ONE FACT TO VERIFY." },
+          { role: "user", content: "Mission:\n" + mission + "\n\nChannel context:\n" + contextText }
+        ]
+      });
+      return { id: role.id, name: role.name, status: "complete", response: out.choices?.[0]?.message?.content || "" };
+    }));
+
+    const synth = await client.chat.completions.create({
+      model,
+      messages: [
+        { role: "system", content: "You are Ax, manager of the Vice City Files content operation. Turn worker reports into an execution-ready content packet. Never claim a video was generated, uploaded, or published unless an actual connected tool confirms it. Return exactly: DECISION, VIDEO CONCEPT, 7-SECOND HOOK, SCRIPT, SHOT LIST, TITLE, DESCRIPTION, HASHTAGS, NEXT ACTION." },
+        { role: "user", content: "Mission:\n" + mission + "\n\nContext:\n" + contextText + "\n\nReports:\n" + reports.map(x => "[" + x.name + "]\n" + x.response).join("\n") }
+      ]
+    });
+
+    return res.json({ ok: true, habitat: "online", project: "Vice City Files", workers: reports, synthesis: synth.choices?.[0]?.message?.content || "", executionState: "planned" });
+  } catch (error) {
+    console.error("VICE CITY ORCHESTRATION ERROR:", error);
+    return res.status(500).json({ ok: false, error: "Vice City orchestration error", details: String(error?.message || error) });
+  }
+});
+
 app.listen(
   port,
   "0.0.0.0",
