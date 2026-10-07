@@ -71,41 +71,44 @@ class GalaxyHabitatView(context: Context) : View(context) {
         }
     }
 
+    private val axBrain = BitmapFactory.decodeResource(resources, R.drawable.ax_brain)
+
     private fun drawCore(c:Canvas,w:Float,h:Float) {
         val cx=w*.5f; val cy=h*.43f; val r=min(w,h)*.255f
         val pulse=1f+sin(time*2.2f)*.018f
-        c.save(); c.scale(pulse,pulse,cx,cy); c.rotate(rotation*.12f,cx,cy)
-        paint.style=Paint.Style.STROKE
-        paint.strokeWidth=2.2f
-        paint.setShadowLayer(30f,0f,0f,Color.rgb(70,190,255))
-        paint.color=Color.argb(150,105,225,255)
-        val brain=Path()
-        brain.moveTo(cx,cy-r*.72f)
-        brain.cubicTo(cx-r*.55f,cy-r*.95f,cx-r*.92f,cy-r*.48f,cx-r*.78f,cy)
-        brain.cubicTo(cx-r*.95f,cy+r*.52f,cx-r*.45f,cy+r*.78f,cx-r*.05f,cy+r*.68f)
-        brain.moveTo(cx,cy-r*.72f)
-        brain.cubicTo(cx+r*.55f,cy-r*.95f,cx+r*.92f,cy-r*.48f,cx+r*.78f,cy)
-        brain.cubicTo(cx+r*.95f,cy+r*.52f,cx+r*.45f,cy+r*.78f,cx+r*.05f,cy+r*.68f)
-        c.drawPath(brain,paint); paint.clearShadowLayer()
-        paint.strokeWidth=1.1f; paint.color=Color.argb(130,130,235,255)
-        for(i in 0..16){
-            val yy=cy-r*.62f+i*r*.078f
-            val bend=sin(time*1.3f+i*.65f)*r*.10f
-            val p=Path();p.moveTo(cx-r*.66f,yy);p.cubicTo(cx-r*.25f,yy-bend,cx+r*.25f,yy+bend,cx+r*.66f,yy);c.drawPath(p,paint)
-        }
-        paint.color=Color.argb(185,175,245,255)
-        c.drawLine(cx,cy-r*.65f,cx,cy+r*.62f,paint)
+        c.save()
+        c.scale(pulse,pulse,cx,cy)
+        c.rotate(rotation*.12f,cx,cy)
+
+        // Real anatomical silhouette: the artwork is an original Ax render
+        // informed by public human-brain anatomy references, then styled for Habitat.
+        val targetW = r*2.55f
+        val targetH = targetW * (axBrain.height.toFloat()/axBrain.width.toFloat())
+        val left = cx-targetW/2f
+        val top = cy-targetH/2f
+
         paint.style=Paint.Style.FILL
-        for(i in 0..34){
+        paint.alpha=225
+        paint.setShadowLayer(32f,0f,0f,Color.rgb(45,220,255))
+        c.drawBitmap(axBrain,null,RectF(left,top,left+targetW,top+targetH),paint)
+        paint.clearShadowLayer()
+        paint.alpha=255
+
+        // Subtle live neural activity layered over the anatomical brain.
+        paint.style=Paint.Style.FILL
+        for(i in 0..30){
             val a=i*1.71f+time*.35f
             val rr=r*(.18f+(i%7)*.075f)
-            val x=cx+cos(a)*rr; val y=cy+sin(a)*rr*.78f
-            paint.color=Color.argb(190,110,230,255)
-            c.drawCircle(x,y,1.6f+abs(sin(time*3f+i))*1.8f,paint)
+            val x=cx+cos(a)*rr
+            val y=cy+sin(a)*rr*.70f
+            paint.color=Color.argb(175,110,235,255)
+            c.drawCircle(x,y,1.4f+abs(sin(time*3f+i))*1.6f,paint)
         }
-        paint.style=Paint.Style.STROKE; paint.strokeWidth=1.0f; paint.color=Color.argb(75,120,220,255)
-        c.drawOval(cx-r*1.08f,cy-r*.36f,cx+r*1.08f,cy+r*.36f,paint)
-        c.drawOval(cx-r*.76f,cy-r*1.08f,cx+r*.76f,cy+r*1.08f,paint)
+
+        paint.style=Paint.Style.STROKE
+        paint.strokeWidth=1f
+        paint.color=Color.argb(70,120,220,255)
+        c.drawOval(cx-r*1.05f,cy-r*.36f,cx+r*1.05f,cy+r*.36f,paint)
         c.restore()
     }
 
