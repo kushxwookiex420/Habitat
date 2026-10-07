@@ -10,33 +10,32 @@ import kotlin.random.Random
 class GalaxyHabitatView(context: Context) : View(context) {
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val text = Paint(Paint.ANTI_ALIAS_FLAG)
-    private val stars = Array(260) { floatArrayOf(Random.nextFloat(), Random.nextFloat(), .35f + Random.nextFloat() * 1.65f) }
+    private val stars = Array(320) { floatArrayOf(Random.nextFloat(), Random.nextFloat(), .25f + Random.nextFloat() * 1.8f, Random.nextFloat()) }
     private var time = 0f
     private var rotation = 0f
     private var lastX = 0f
     private var drag = false
     private var tab = 0
-    private val tabs = arrayOf("CHAT", "MEMORY", "WORKERS", "AUTOMATIONS")
+    private val tabs = arrayOf("CHAT", "PROJECTS", "WORKERS", "TASKS")
+    private val axBrain = BitmapFactory.decodeResource(resources, R.drawable.ax_brain)
 
     init {
         isFocusable = true
         text.typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+        setLayerType(View.LAYER_TYPE_SOFTWARE, null)
     }
 
     override fun onTouchEvent(e: MotionEvent): Boolean {
         when (e.actionMasked) {
             MotionEvent.ACTION_DOWN -> { lastX = e.x; drag = true; return true }
             MotionEvent.ACTION_MOVE -> {
-                if (drag) { rotation += (e.x-lastX)*0.35f; lastX=e.x; invalidate() }
+                if (drag) { rotation += (e.x-lastX)*0.22f; lastX=e.x; invalidate() }
                 return true
             }
             MotionEvent.ACTION_UP -> {
                 drag = false
                 val h = height.toFloat()
-                if (e.y > h*.86f) {
-                    val idx = ((e.x / width.toFloat()) * tabs.size).toInt().coerceIn(0,tabs.lastIndex)
-                    tab = idx
-                }
+                if (e.y > h*.86f) tab = ((e.x / width.toFloat()) * tabs.size).toInt().coerceIn(0,tabs.lastIndex)
                 invalidate()
                 return true
             }
@@ -56,59 +55,73 @@ class GalaxyHabitatView(context: Context) : View(context) {
     }
 
     private fun drawSpace(c:Canvas,w:Float,h:Float) {
-        paint.shader = LinearGradient(0f,0f,w,h, intArrayOf(Color.rgb(1,2,14),Color.rgb(7,2,30),Color.rgb(1,7,20)), null, Shader.TileMode.CLAMP)
-        c.drawRect(0f,0f,w,h,paint); paint.shader=null
-        val neb=RadialGradient(w*.35f,h*.42f,w*.62f,intArrayOf(Color.argb(80,60,20,160),Color.argb(20,20,90,150),Color.TRANSPARENT),null,Shader.TileMode.CLAMP)
-        paint.shader=neb;c.drawCircle(w*.35f,h*.42f,w*.62f,paint);paint.shader=null
-        val neb2=RadialGradient(w*.72f,h*.70f,w*.55f,intArrayOf(Color.argb(55,20,110,170),Color.argb(12,80,30,150),Color.TRANSPARENT),null,Shader.TileMode.CLAMP)
-        paint.shader=neb2;c.drawCircle(w*.72f,h*.70f,w*.55f,paint);paint.shader=null
         paint.style=Paint.Style.FILL
+        paint.shader=LinearGradient(0f,0f,w,h,
+            intArrayOf(Color.rgb(1,2,13),Color.rgb(5,2,24),Color.rgb(1,8,20),Color.rgb(2,1,12)),
+            floatArrayOf(0f,.38f,.72f,1f),Shader.TileMode.CLAMP)
+        c.drawRect(0f,0f,w,h,paint); paint.shader=null
+
+        val milkyWay=RadialGradient(w*.50f,h*.46f,w*.72f,
+            intArrayOf(Color.argb(95,75,180,235),Color.argb(34,55,95,190),Color.TRANSPARENT),
+            floatArrayOf(0f,.42f,1f),Shader.TileMode.CLAMP)
+        paint.shader=milkyWay
+        c.save(); c.rotate(-18f,w*.5f,h*.48f); c.drawOval(w*.02f,h*.28f,w*.98f,h*.68f,paint); c.restore()
+        paint.shader=null
+
+        val violet=RadialGradient(w*.20f,h*.30f,w*.42f,
+            intArrayOf(Color.argb(55,100,45,205),Color.argb(12,55,30,150),Color.TRANSPARENT),
+            null,Shader.TileMode.CLAMP)
+        paint.shader=violet;c.drawCircle(w*.20f,h*.30f,w*.42f,paint);paint.shader=null
+
+        val cyan=RadialGradient(w*.80f,h*.66f,w*.45f,
+            intArrayOf(Color.argb(45,15,170,220),Color.argb(10,10,80,150),Color.TRANSPARENT),
+            null,Shader.TileMode.CLAMP)
+        paint.shader=cyan;c.drawCircle(w*.80f,h*.66f,w*.45f,paint);paint.shader=null
+
         for (s in stars) {
-            val x=(s[0]*w + sin(time*.10f+s[1]*12f)*8f + rotation*.15f)%w
+            val drift=sin(time*(.04f+s[3]*.05f)+s[1]*20f)*5f
+            var x=s[0]*w+drift+rotation*.08f
+            if(x<0)x+=w;if(x>w)x-=w
             val y=s[1]*h
-            paint.color=Color.argb((70+s[2]*85).toInt().coerceAtMost(220),180,220,255)
-            c.drawCircle(if(x<0)x+w else x,y,s[2],paint)
+            val twinkle=(sin(time*(1f+s[3]*2f)+s[0]*30f)+1f)*.5f
+            paint.color=Color.argb((70+s[2]*70+twinkle*55).toInt().coerceIn(40,220),185,225,255)
+            c.drawCircle(x,y,s[2]*(.8f+twinkle*.35f),paint)
         }
     }
 
-    private val axBrain = BitmapFactory.decodeResource(resources, R.drawable.ax_brain)
-
     private fun drawCore(c:Canvas,w:Float,h:Float) {
-        val cx=w*.5f; val cy=h*.43f; val r=min(w,h)*.255f
-        val pulse=1f+sin(time*2.2f)*.018f
+        val cx=w*.5f; val cy=h*.43f
+        val r=min(w,h)*.255f
+        val pulse=1f+sin(time*2.0f)*.012f
         c.save()
         c.scale(pulse,pulse,cx,cy)
-        c.rotate(rotation*.12f,cx,cy)
+        c.rotate(rotation*.05f,cx,cy)
 
-        // Real anatomical silhouette: the artwork is an original Ax render
-        // informed by public human-brain anatomy references, then styled for Habitat.
-        val targetW = r*2.55f
-        val targetH = targetW * (axBrain.height.toFloat()/axBrain.width.toFloat())
-        val left = cx-targetW/2f
-        val top = cy-targetH/2f
-
+        // The existing Ax brain artwork remains the identity centerpiece.
+        val targetW=r*2.55f
+        val targetH=targetW*(axBrain.height.toFloat()/axBrain.width.toFloat())
+        val rect=RectF(cx-targetW/2f,cy-targetH/2f,cx+targetW/2f,cy+targetH/2f)
         paint.style=Paint.Style.FILL
-        paint.alpha=225
-        paint.setShadowLayer(32f,0f,0f,Color.rgb(45,220,255))
-        c.drawBitmap(axBrain,null,RectF(left,top,left+targetW,top+targetH),paint)
-        paint.clearShadowLayer()
-        paint.alpha=255
+        paint.alpha=245
+        paint.setShadowLayer(38f,0f,0f,Color.rgb(30,210,255))
+        c.drawBitmap(axBrain,null,rect,paint)
+        paint.clearShadowLayer();paint.alpha=255
 
-        // Subtle live neural activity layered over the anatomical brain.
-        paint.style=Paint.Style.FILL
-        for(i in 0..30){
-            val a=i*1.71f+time*.35f
-            val rr=r*(.18f+(i%7)*.075f)
+        // Fine neural particles: restrained, crisp, and alive.
+        for(i in 0..42){
+            val a=i*1.53f+time*(.22f+(i%3)*.05f)
+            val rr=r*(.14f+(i%9)*.06f)
             val x=cx+cos(a)*rr
-            val y=cy+sin(a)*rr*.70f
-            paint.color=Color.argb(175,110,235,255)
-            c.drawCircle(x,y,1.4f+abs(sin(time*3f+i))*1.6f,paint)
+            val y=cy+sin(a)*rr*.67f
+            paint.color=Color.argb(150,125,235,255)
+            c.drawCircle(x,y,1.0f+abs(sin(time*2.4f+i))*1.3f,paint)
         }
 
+        // Minimal orbital trace — no flat rotating platforms.
         paint.style=Paint.Style.STROKE
-        paint.strokeWidth=1f
-        paint.color=Color.argb(70,120,220,255)
-        c.drawOval(cx-r*1.05f,cy-r*.36f,cx+r*1.05f,cy+r*.36f,paint)
+        paint.strokeWidth=1.2f
+        paint.color=Color.argb(55,120,220,255)
+        c.drawOval(cx-r*1.08f,cy-r*.38f,cx+r*1.08f,cy+r*.38f,paint)
         c.restore()
     }
 
@@ -116,22 +129,28 @@ class GalaxyHabitatView(context: Context) : View(context) {
         text.textAlign=Paint.Align.CENTER
         text.color=Color.WHITE;text.textSize=25f
         c.drawText("HABITAT",w/2f,42f,text)
-        text.textSize=11f;text.color=Color.rgb(135,215,255)
+        text.textSize=11f;text.color=Color.rgb(135,225,255)
         c.drawText("AX  •  NEURAL CORE ONLINE",w/2f,61f,text)
-        text.textSize=9f;text.color=Color.argb(150,210,230,255)
-        c.drawText(when(tab){0->"READY";1->"MEMORY LINK";2->"WORKER MESH";else->"AUTOMATION GRID"},w/2f,78f,text)
+        text.textSize=9f;text.color=Color.argb(160,210,230,255)
+        c.drawText(when(tab){0->"COMMAND";1->"PROJECT MESH";2->"WORKER MESH";else->"TASK FLOW"},w/2f,78f,text)
     }
 
     private fun drawBottomNav(c:Canvas,w:Float,h:Float) {
         val barY=h*.88f
-        paint.style=Paint.Style.STROKE;paint.strokeWidth=1f;paint.color=Color.argb(70,130,210,255)
+        paint.style=Paint.Style.FILL
+        paint.color=Color.argb(165,2,10,23)
+        c.drawRoundRect(w*.04f,barY,w*.96f,h*.98f,24f,24f,paint)
+        paint.style=Paint.Style.STROKE;paint.strokeWidth=1f;paint.color=Color.argb(75,130,210,255)
         c.drawRoundRect(w*.04f,barY,w*.96f,h*.98f,24f,24f,paint)
         val cell=w/tabs.size
         text.textSize=10f;text.textAlign=Paint.Align.CENTER
         for(i in tabs.indices){
             text.color=if(i==tab)Color.WHITE else Color.argb(150,180,215,235)
             c.drawText(tabs[i],cell*(i+.5f),barY+34f,text)
-            if(i==tab){paint.style=Paint.Style.FILL;paint.color=Color.argb(170,105,220,255);c.drawCircle(cell*(i+.5f),barY+13f,2.5f,paint)}
+            if(i==tab){
+                paint.style=Paint.Style.FILL;paint.color=Color.argb(190,105,225,255)
+                c.drawCircle(cell*(i+.5f),barY+13f,2.5f,paint)
+            }
         }
     }
 }
