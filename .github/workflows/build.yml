@@ -7,7 +7,7 @@ on:
 
 # Ax build trigger verified: every main push packages a fresh debug APK.
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
@@ -54,3 +54,16 @@ jobs:
         with:
           name: Habitat-v0.7-Ax-debug-apk
           path: artifact/Habitat-v0.7-Ax-debug.apk
+      - name: Publish APK release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          TAG="habitat-v0.7-latest"
+          TITLE="Habitat v0.7 Ax — Latest APK"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" artifact/Habitat-v0.7-Ax-debug.apk --clobber
+            gh release edit "$TAG" --title "$TITLE" --notes "Latest verified Habitat v0.7 Ax debug APK. Built from main commit $GITHUB_SHA."
+          else
+            gh release create "$TAG" artifact/Habitat-v0.7-Ax-debug.apk --title "$TITLE" --notes "Latest verified Habitat v0.7 Ax debug APK. Built from main commit $GITHUB_SHA."
+          fi
