@@ -8,6 +8,7 @@ on:
 
 # Ax build trigger verified: every main push packages a fresh debug APK.
 # Ax artifact verification: upload the APK and publish the latest release on every build.
+# Canonical System Check Android display patch build trigger.
 permissions:
   contents: write
 
