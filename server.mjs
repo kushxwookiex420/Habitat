@@ -846,5 +846,33 @@ app.listen(
     console.log(
       `Habitat Ax Core listening on port ${port}`
     );
+
+    // Safe startup verification: prove whether the Render runtime can
+    // actually authenticate to OpenRouter without ever logging the secret.
+    setTimeout(async () => {
+      if (!apiKey) {
+        console.error("PROVIDER_AUTH_CHECK: FAIL — runtime OPENROUTER_API_KEY is missing");
+        return;
+      }
+      try {
+        const response = await fetch("https://openrouter.ai/api/v1/models", {
+          headers: {
+            "Authorization": `Bearer ${apiKey}`,
+            "HTTP-Referer": "https://habitat-1-szzd.onrender.com",
+            "X-Title": "Habitat Ax Core"
+          }
+        });
+        if (response.ok) {
+          console.log("PROVIDER_AUTH_CHECK: PASS — OpenRouter accepted the runtime key");
+        } else {
+          const body = await response.text();
+          let message = body;
+          try { message = JSON.parse(body)?.error?.message || body; } catch {}
+          console.error(`PROVIDER_AUTH_CHECK: FAIL — OpenRouter HTTP ${response.status}: ${String(message).slice(0, 300)}`);
+        }
+      } catch (error) {
+        console.error("PROVIDER_AUTH_CHECK: FAIL — " + String(error?.message || error));
+      }
+    }, 1500);
   }
 );
