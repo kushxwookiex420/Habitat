@@ -13,15 +13,16 @@ function getApiKey() {
 const apiKey = getApiKey();
 const model = "openrouter/free";
 const fallbackModels = [
-  // Keep the free fallback pool current and diverse. Free providers can
-  // independently rate-limit or abort, so one provider failure must not
-  // become a Habitat outage.
+  // Current OpenRouter free catalog (October 2026).
+  // Keep explicit fallbacks valid so router/provider changes do not
+  // turn a free-brain request into a chain of obsolete model IDs.
   "nvidia/nemotron-3-ultra:free",
-  "liquid/lfm2.5-2.6b:free",
-  "openai/gpt-oss-120b:free",
-  "openai/gpt-oss-20b:free",
+  "poolside/laguna-s-2.1:free",
+  "nvidia/nemotron-3.5-lightning:free",
   "nvidia/nemotron-3-super:free",
-  "qwen/qwen3-coder:free"
+  "dots-studio/dots-3.1-Preview:free",
+  "google/gemma-4-31b-it:free",
+  "google/gemma-4-26b-a4b-it:free"
 ];
 const fallbackModel = fallbackModels[0];
 const providerTimeoutMs = 30000;
