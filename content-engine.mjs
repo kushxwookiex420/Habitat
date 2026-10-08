@@ -14,7 +14,112 @@ function cryptoRandomState() {
 export function registerContentEngine(app, deps) {
   const { nowIso, makeTaskId, taskStore, workerRegistry, brainChat } = deps;
   const contentJobs = new Map();
+  const tiktokOAuthStates = new Map();
   registerTikTokPublisher(app, (id) => contentJobs.get(id));
+
+  // TikTok Login Kit (Web) connection flow.
+  // Secrets and tokens remain server-side; the browser only follows redirects.
+  app.get("/auth/tiktok", (req, res) => {
+    const clientKey = String(process.env.TIKTOK_CLIENT_KEY || "").trim();
+    const clientSecret = String(process.env.TIKTOK_CLIENT_SECRET || "").trim();
+    if (!clientKey || !clientSecret) {
+      return res.status(503).send("<h1>Habitat TikTok connection is not configured</h1><p>Add TIKTOK_CLIENT_KEY and TIKTOK_CLIENT_SECRET to the Habitat-1 Render environment, then redeploy.</p>");
+    }
+
+    const state = cryptoRandomState();
+    tiktokOAuthStates.set(state, { createdAt: Date.now() });
+    // Bound in-memory state storage so abandoned login attempts cannot accumulate.
+    for (const [key, value] of tiktokOAuthStates) {
+      if (Date.now() - value.createdAt > 10 * 60 * 1000) tiktokOAuthStates.delete(key);
+    }
+
+    const redirectUri = String(
+      process.env.TIKTOK_REDIRECT_URI ||
+      "https://habitat-1-szzd.onrender.com/auth/tiktok/callback"
+    ).trim();
+
+    const params = new URLSearchParams({
+      client_key: clientKey,
+      response_type: "code",
+      scope: "user.info.basic,video.upload,video.publish",
+      redirect_uri: redirectUri,
+      state,
+      disable_auto_auth: "0"
+    });
+
+    return res.redirect("https://www.tiktok.com/v2/auth/authorize/?" + params.toString());
+  });
+
+  app.get("/auth/tiktok/callback", async (req, res) => {
+    const state = String(req.query?.state || "");
+    const stateRecord = tiktokOAuthStates.get(state);
+    tiktokOAuthStates.delete(state);
+
+    if (!stateRecord || Date.now() - stateRecord.createdAt > 10 * 60 * 1000) {
+      return res.status(400).send("<h1>TikTok connection failed</h1><p>Invalid or expired authorization state. Please start Connect TikTok again from Habitat.</p>");
+    }
+
+    if (req.query?.error) {
+      const message = String(req.query.error_description || req.query.error);
+      return res.status(400).send("<h1>TikTok connection cancelled</h1><p>" + message.replace(/[&<>]/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;" }[c])) + "</p>");
+    }
+
+    const code = String(req.query?.code || "").trim();
+    if (!code) return res.status(400).send("<h1>TikTok connection failed</h1><p>No authorization code was returned by TikTok.</p>");
+
+    const clientKey = String(process.env.TIKTOK_CLIENT_KEY || "").trim();
+    const clientSecret = String(process.env.TIKTOK_CLIENT_SECRET || "").trim();
+    const redirectUri = String(
+      process.env.TIKTOK_REDIRECT_URI ||
+      "https://habitat-1-szzd.onrender.com/auth/tiktok/callback"
+    ).trim();
+
+    try {
+      const tokenResponse = await fetch("https://open.tiktokapis.com/v2/oauth/token/", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          client_key: clientKey,
+          client_secret: clientSecret,
+          code,
+          grant_type: "authorization_code",
+          redirect_uri: redirectUri
+        })
+      });
+
+      const tokenText = await tokenResponse.text();
+      let tokenPayload = {};
+      try { tokenPayload = JSON.parse(tokenText); } catch {}
+
+      if (!tokenResponse.ok || !tokenPayload?.access_token) {
+        console.error("TIKTOK_OAUTH_TOKEN_EXCHANGE_FAILED", tokenResponse.status, tokenText.slice(0, 500));
+        return res.status(502).send("<h1>TikTok connection failed</h1><p>TikTok did not return an access token. Check the registered redirect URI and approved scopes in the TikTok Developer Portal.</p>");
+      }
+
+      // Initial testing keeps the token in the running Habitat process.
+      // Persistent encrypted token storage should be added before multi-user production.
+      process.env.TIKTOK_ACCESS_TOKEN = String(tokenPayload.access_token);
+      if (tokenPayload.refresh_token) process.env.TIKTOK_REFRESH_TOKEN = String(tokenPayload.refresh_token);
+      if (tokenPayload.expires_in) process.env.TIKTOK_ACCESS_TOKEN_EXPIRES_AT = String(Date.now() + Number(tokenPayload.expires_in) * 1000);
+
+      return res.status(200).send(`<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>Habitat — TikTok Connected</title><style>body{font-family:system-ui;background:#050914;color:#e9ffff;padding:32px;text-align:center}main{max-width:560px;margin:12vh auto;padding:28px;border:1px solid #164f5a;border-radius:20px;background:#08121c}a{display:inline-block;margin-top:20px;padding:13px 20px;border-radius:12px;background:#17d6c3;color:#041011;text-decoration:none;font-weight:700}</style></head><body><main><h1>✓ TikTok Connected</h1><p>Habitat is authorized to work with your TikTok account.</p><p>You can return to Habitat and continue the content workflow.</p><a href="https://kushxwookiex420.github.io/Habitat/">Return to Habitat</a></main></body></html>`);
+    } catch (error) {
+      console.error("TIKTOK_OAUTH_CALLBACK_ERROR", String(error?.message || error));
+      return res.status(502).send("<h1>TikTok connection failed</h1><p>Habitat could not complete the secure token exchange.</p>");
+    }
+  });
+
+  app.get("/auth/tiktok/status", (req, res) => {
+    const configured = Boolean(String(process.env.TIKTOK_CLIENT_KEY || "").trim() && String(process.env.TIKTOK_CLIENT_SECRET || "").trim());
+    const connected = Boolean(String(process.env.TIKTOK_ACCESS_TOKEN || "").trim());
+    res.json({
+      ok: true,
+      configured,
+      connected,
+      redirectUri: String(process.env.TIKTOK_REDIRECT_URI || "https://habitat-1-szzd.onrender.com/auth/tiktok/callback"),
+      scopes: ["user.info.basic", "video.upload", "video.publish"]
+    });
+  });
 
   const contentWorkers = [
     ["content-researcher", {
