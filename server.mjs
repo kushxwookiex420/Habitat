@@ -18,7 +18,7 @@ const fallbackModels = [
   "google/gemma-4-26b-a4b-it:free"
 ];
 const fallbackModel = fallbackModels[0];
-const providerTimeoutMs = 20000;
+const providerTimeoutMs = 35000;
 
 if (!getApiKey()) {
   console.warn(
