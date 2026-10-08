@@ -319,7 +319,7 @@ export function registerContentEngine(app, deps) {
       const inputs = [];
       const filters = [];
       sceneInputs.forEach((s, i) => {
-        inputs.push("-f","lavfi","-i","color=c="+s.bg+":s=540x960:r=15:d="+s.dur);
+        inputs.push("-f","lavfi","-i","color=c="+s.bg+":s=540x960:r=10:d="+s.dur);
         const title = esc(s.title);
         const sub = esc(s.sub);
         filters.push(
@@ -337,7 +337,7 @@ export function registerContentEngine(app, deps) {
         "-c:v","libx264","-preset","ultrafast","-crf","32","-pix_fmt","yuv420p",
         "-c:a","aac","-b:a","64k","-ar","48000","-t","45","-shortest",
         "-movflags","+faststart",outputPath
-      ],{timeout:60000});
+      ],{timeout:120000});
 
       const stat=await fs.stat(outputPath);
       if(!stat.size) throw new Error("ffmpeg produced an empty artifact");
