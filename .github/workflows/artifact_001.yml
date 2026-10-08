@@ -95,7 +95,7 @@ jobs:
           id=$(cat /tmp/job_id)
           curl -sS -f "https://habitat-1-szzd.onrender.com/content/jobs/$id/artifact" -o habitat-artifact-001.mp4
           test -s habitat-artifact-001.mp4
-          ffprobe -v error -show_entries format=duration,size -of json habitat-artifact-001.mp4
+          stat -c "Artifact bytes: %s" habitat-artifact-001.mp4
 
       - name: Upload Artifact 001 to GitHub Actions
         uses: actions/upload-artifact@v4
