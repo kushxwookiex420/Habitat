@@ -72,15 +72,18 @@ jobs:
           set -e
           python - <<'PY'
           import json, subprocess, os
-          p=json.loads(subprocess.check_output(["ffprobe","-v","error","-show_entries","format=duration,size:stream=codec_type,width,height,r_frame_rate","-of","json","habitat-artifact-002.mp4"]))
+          p=json.loads(subprocess.check_output(["ffprobe","-v","error","-show_entries","format=duration,size:stream=codec_type,width,height,r_frame_rate,codec_name,channels","-of","json","habitat-artifact-002.mp4"]))
           video=next(s for s in p["streams"] if s["codec_type"]=="video")
           duration=float(p["format"]["duration"])
           size=os.path.getsize("habitat-artifact-002.mp4")
           assert size > 0 and duration >= 44
           assert int(video["width"]) == 1080 and int(video["height"]) == 1920
           assert video["r_frame_rate"] == "15/1"
+          audio=next(s for s in p["streams"] if s["codec_type"]=="audio")
+          assert audio["codec_name"] == "aac"
+          assert int(audio.get("channels",0)) == 2
           print("CANONICAL ARTIFACT 002 VERIFIED")
-          print(json.dumps({"verified":True,"bytes":size,"durationSeconds":duration,"width":1080,"height":1920,"renderer":"github-actions-ffmpeg-cinematic-engine-v1","audio":"placeholder-silence","scenes":6,"motion":"animated-neon-city"}))
+          print(json.dumps({"verified":True,"bytes":size,"durationSeconds":duration,"width":1080,"height":1920,"renderer":"github-actions-ffmpeg-cinematic-engine-v2","audio":"real-local-espeak-ng-voiceover","audioCodec":audio["codec_name"],"scenes":6,"motion":"animated-neon-city"}))
           PY
 
       - name: Upload Artifact 002 to GitHub Actions
