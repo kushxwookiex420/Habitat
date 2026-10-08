@@ -11,9 +11,14 @@ function getApiKey() {
   return rawApiKey ? String(rawApiKey).trim().replace(/^["']|["']$/g, "") : "";
 }
 const apiKey = getApiKey();
-const model = "google/gemma-4-26b-a4b-it:free";
-const fallbackModel = "nvidia/nemotron-3.5-lightning:free";
-const providerTimeoutMs = 35000;
+const model = "openrouter/free";
+const fallbackModels = [
+  "nvidia/nemotron-3-ultra:free",
+  "nvidia/nemotron-3.5-lightning:free",
+  "google/gemma-4-26b-a4b-it:free"
+];
+const fallbackModel = fallbackModels[0];
+const providerTimeoutMs = 20000;
 
 if (!getApiKey()) {
   console.warn(
@@ -39,56 +44,74 @@ async function openRouterChat(payload) {
   }
 
   const requestedModel = payload?.model || model;
-  const modelsToTry = requestedModel === model ? [model, fallbackModel] : [requestedModel];
+  const modelsToTry = requestedModel === model ? [model, ...fallbackModels] : [requestedModel];
   let lastError = null;
 
   for (const selectedModel of modelsToTry) {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), providerTimeoutMs);
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), providerTimeoutMs);
 
-    try {
-      const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-        method: "POST",
-        headers: {
-          "Authorization": `Bearer ${runtimeApiKey}`,
-          "Content-Type": "application/json",
-          "HTTP-Referer": "https://habitat-1-szzd.onrender.com",
-          "X-Title": "Habitat Ax Core"
-        },
-        body: JSON.stringify({
-          ...payload,
-          model: selectedModel,
-          max_tokens: payload?.max_tokens || 512
-        }),
-        signal: controller.signal
-      });
-
-      const text = await response.text();
-      let data;
       try {
-        data = JSON.parse(text);
-      } catch {
-        data = { error: { message: text || "OpenRouter returned a non-JSON response." } };
-      }
+        const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${runtimeApiKey}`,
+            "Content-Type": "application/json",
+            "HTTP-Referer": "https://habitat-1-szzd.onrender.com",
+            "X-Title": "Habitat Ax Core"
+          },
+          body: JSON.stringify({
+            ...payload,
+            model: selectedModel,
+            max_tokens: payload?.max_tokens || 512
+          }),
+          signal: controller.signal
+        });
 
-      if (response.ok) {
-        return data;
-      }
+        const text = await response.text();
+        let data;
+        try { data = JSON.parse(text); }
+        catch { data = { error: { message: text || "OpenRouter returned a non-JSON response." } }; }
 
-      const providerMessage =
-        data?.error?.message ||
-        data?.error?.error?.message ||
-        text ||
-        `OpenRouter HTTP ${response.status}`;
-      const error = new Error(`OpenRouter HTTP ${response.status}: ${providerMessage}`);
-      error.status = response.status;
-      lastError = error;
-      console.warn("OPENROUTER_ATTEMPT_FAILED", selectedModel, String(error.message).slice(0, 300));
-    } catch (error) {
-      lastError = error;
-      console.warn("OPENROUTER_ATTEMPT_FAILED", selectedModel, String(error?.message || error).slice(0, 300));
-    } finally {
-      clearTimeout(timeout);
+        if (response.ok) return data;
+
+        const providerMessage =
+          data?.error?.message ||
+          data?.error?.error?.message ||
+          text ||
+          `OpenRouter HTTP ${response.status}`;
+
+        const error = new Error(`OpenRouter HTTP ${response.status}: ${providerMessage}`);
+        error.status = response.status;
+        error.retryAfter = Number(response.headers.get("retry-after") || 0);
+        lastError = error;
+
+        console.warn(
+          "OPENROUTER_ATTEMPT_FAILED",
+          selectedModel,
+          "attempt=" + (attempt + 1),
+          String(error.message).slice(0, 300)
+        );
+
+        if (response.status !== 429 && response.status !== 502 && response.status !== 503) break;
+
+        const waitMs = error.retryAfter > 0
+          ? Math.min(error.retryAfter * 1000, 8000)
+          : Math.min(1000 * (2 ** attempt), 4000);
+
+        await new Promise(resolve => setTimeout(resolve, waitMs));
+      } catch (error) {
+        lastError = error;
+        console.warn(
+          "OPENROUTER_ATTEMPT_FAILED",
+          selectedModel,
+          "attempt=" + (attempt + 1),
+          String(error?.message || error).slice(0, 300)
+        );
+      } finally {
+        clearTimeout(timeout);
+      }
     }
   }
 
