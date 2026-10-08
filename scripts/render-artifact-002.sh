@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -euxo pipefail
 OUT="${1:-habitat-artifact-002.mp4}"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
