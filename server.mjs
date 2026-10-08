@@ -6,18 +6,31 @@ app.use(express.json({ limit: "1mb" }));
 
 const port = process.env.PORT || 8080;
 
-const rawApiKey = process.env.OPENROUTER_API_KEY;
-const apiKey = rawApiKey ? String(rawApiKey).trim().replace(/^["']|["']$/g, "") : "";
+function getApiKey() {
+  const rawApiKey = process.env.OPENROUTER_API_KEY;
+  return rawApiKey ? String(rawApiKey).trim().replace(/^["']|["']$/g, "") : "";
+}
+const apiKey = getApiKey();
 const model = "openrouter/free";
 
-if (!apiKey) {
+if (!getApiKey()) {
   console.warn(
     "WARNING: OPENROUTER_API_KEY is not configured."
   );
 }
 
+app.use((req, res, next) => {
+  const requestId = "req-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 7);
+  req.habitatRequestId = requestId;
+  res.setHeader("X-Habitat-Request-Id", requestId);
+  res.setHeader("X-Habitat-Version", "2026-10-08-auth-path-v1");
+  console.log("HABITAT_REQUEST", requestId, req.method, req.path);
+  next();
+});
+
 async function openRouterChat(payload) {
-  if (!apiKey) {
+  const runtimeApiKey = getApiKey();
+  if (!runtimeApiKey) {
     const error = new Error("Habitat runtime is missing OPENROUTER_API_KEY before contacting OpenRouter.");
     error.status = 500;
     throw error;
@@ -26,7 +39,7 @@ async function openRouterChat(payload) {
   const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
     method: "POST",
     headers: {
-      "Authorization": `Bearer ${apiKey}`,
+      "Authorization": `Bearer ${runtimeApiKey}`,
       "Content-Type": "application/json",
       "HTTP-Referer": "https://habitat-1-szzd.onrender.com",
       "X-Title": "Habitat Ax Core"
@@ -76,9 +89,9 @@ async function openRouterChat(payload) {
 app.get("/", (req, res) => {
   res.json({
     habitat: "online",
-    brain: apiKey ? "ready" : "missing_api_key",
-    apiKeyPresent: Boolean(apiKey),
-    apiKeyPrefix: apiKey ? apiKey.slice(0, 8) + "..." : null,
+    brain: getApiKey() ? "ready" : "missing_api_key",
+    apiKeyPresent: Boolean(getApiKey()),
+    apiKeyPrefix: getApiKey() ? getApiKey().slice(0, 8) + "..." : null,
     backend: "ready",
     provider: "openrouter",
     model,
@@ -106,7 +119,7 @@ app.get("/diagnostics/provider", async (req, res) => {
     const response = await fetch("https://openrouter.ai/api/v1/models", {
       method: "GET",
       headers: {
-        "Authorization": `Bearer ${apiKey}`,
+        "Authorization": `Bearer ${getApiKey()}`,
         "HTTP-Referer": "https://habitat-1-szzd.onrender.com",
         "X-OpenRouter-Title": "Habitat Ax Core"
       }
@@ -119,8 +132,8 @@ app.get("/diagnostics/provider", async (req, res) => {
     return res.status(response.ok ? 200 : 502).json({
       ok: response.ok,
       runtimeKeyPresent: true,
-      runtimeKeyPrefix: apiKey.slice(0, 8) + "...",
-      runtimeKeyLength: apiKey.length,
+      runtimeKeyPrefix: getApiKey().slice(0, 8) + "...",
+      runtimeKeyLength: getApiKey().length,
       authorizationHeaderPrepared: true,
       provider: "openrouter",
       providerStatus: response.status,
