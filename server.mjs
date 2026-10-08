@@ -737,25 +737,38 @@ function makeTaskId() {
 
 async function runSystemCheck() {
   const checks = {};
+  const startedAt = Date.now();
+
+  const providerConfigured = Boolean(
+    String(process.env.GROQ_API_KEY || "").trim() ||
+    String(process.env.GEMINI_API_KEY || "").trim() ||
+    getApiKey()
+  );
 
   checks.axCore = { status: "PASS", detail: "Habitat chat route is active." };
   checks.backend = { status: "PASS", detail: "Backend request routing is active." };
-  checks.brain = { status: apiKey ? "PASS" : "FAIL", detail: apiKey ? "OpenRouter API key is configured." : "OPENROUTER_API_KEY is missing." };
+  checks.brain = {
+    status: providerConfigured ? "PASS" : "FAIL",
+    detail: providerConfigured
+      ? "At least one AI provider is configured (Groq, Gemini, or OpenRouter)."
+      : "No AI provider key is configured."
+  };
 
   const worker = workerRegistry.get("habitat-qa-worker");
   checks.workerRegistry = worker
     ? { status: worker.status === "available" ? "PASS" : "FAIL", detail: worker.name + " is registered and " + worker.status + "." }
     : { status: "FAIL", detail: "QA worker is not registered." };
 
+  const storagePassed = storageSelfTest();
   checks.storage = {
-    status: storageSelfTest() ? "PASS" : "FAIL",
+    status: storagePassed ? "PASS" : "FAIL",
     detail: "In-process task storage write/read/delete probe."
   };
 
   const task = {
     id: makeTaskId(),
     title: "System Check",
-    description: "Verify Habitat backend, brain, worker registry, task engine, and storage.",
+    description: "Machine-derived verification of Habitat backend, model worker, Android heartbeat, task engine, and storage.",
     status: "running",
     owner: "Ax",
     worker: worker?.id || null,
@@ -766,60 +779,118 @@ async function runSystemCheck() {
     result: null,
     error: null
   };
-  taskStore.set(task.id, task);
+
+  const taskWasCreated = taskStore.set(task.id, task);
+  checks.taskCreation = {
+    status: taskStore.has(task.id) ? "PASS" : "FAIL",
+    detail: "Real task record created: " + task.id
+  };
 
   try {
+    const healthStartedAt = Date.now();
     const healthResponse = await fetch("http://127.0.0.1:" + port + "/health");
     const health = await healthResponse.json();
+    const healthPassed =
+      healthResponse.ok &&
+      health.habitat === "online" &&
+      health.backend === "ready";
     checks.backendHealth = {
-      status: healthResponse.ok && health.habitat === "online" && health.backend === "ready" ? "PASS" : "FAIL",
-      detail: JSON.stringify(health)
+      status: healthPassed ? "PASS" : "FAIL",
+      detail: "HTTP " + healthResponse.status + " in " + (Date.now() - healthStartedAt) + "ms; " + JSON.stringify(health)
     };
 
     const androidAccess = androidAccessStatus();
+    const latestDevice = androidAccess.devices[0] || null;
+    const heartbeatAgeMs = latestDevice?.lastSeenAt
+      ? Math.max(0, Date.now() - new Date(latestDevice.lastSeenAt).getTime())
+      : null;
+    checks.androidHeartbeat = {
+      status: latestDevice && heartbeatAgeMs <= ANDROID_HEARTBEAT_TTL_MS ? "PASS" : "FAIL",
+      detail: latestDevice
+        ? "Last heartbeat " + latestDevice.lastSeenAt + " (" + heartbeatAgeMs + "ms ago)."
+        : "No Android heartbeat is currently registered."
+    };
     checks.androidDeviceAccess = {
       status: androidAccess.status,
       detail: androidAccess.detail
     };
 
-    if (!apiKey) throw new Error("OPENROUTER_API_KEY is not configured.");
+    if (!providerConfigured) throw new Error("No AI provider key is configured.");
 
     worker.lastRunAt = nowIso();
+    const modelStartedAt = Date.now();
     const workerResponse = await brainChat({
       model,
       messages: [
-        { role: "system", content: "You are Habitat QA Worker reporting to Ax. Return RESULT, CHECKS, and ISSUES. Never claim device access you do not have." },
-        { role: "user", content: "Perform a backend-only Habitat System Check. Verify the supplied health response and explain any checks that cannot be verified without Android/device tools. Health: " + JSON.stringify(health) }
+        {
+          role: "system",
+          content: "You are Habitat QA Worker reporting to Ax. Return a concise backend verification note. Never claim Android/device access or any check that was not supplied."
+        },
+        {
+          role: "user",
+          content: "Confirm that the Habitat model worker can answer this machine-generated test. Reply with RESULT: PASS and one short sentence. Do not assess Android access."
+        }
       ]
     });
     const result = workerResponse.choices?.[0]?.message?.content || "";
+    const latencyMs = Date.now() - modelStartedAt;
+    const modelName = workerResponse.model || model;
+    const providerName = workerResponse.provider || "unknown";
+
     if (!result.trim()) throw new Error("QA worker returned an empty result.");
 
-    task.result = result;
+    checks.modelWorker = {
+      status: "PASS",
+      detail: "Model worker returned a non-empty response in " + latencyMs + "ms via " + providerName + " (" + modelName + ")."
+    };
+    checks.workerExecution = {
+      status: "PASS",
+      detail: "Real model-backed QA execution completed without an error."
+    };
+
+    task.result = JSON.stringify({
+      verification: {
+        backendHealth: checks.backendHealth.status,
+        modelWorker: checks.modelWorker.status,
+        androidHeartbeat: checks.androidHeartbeat.status,
+        androidDeviceAccess: checks.androidDeviceAccess.status,
+        taskCreation: checks.taskCreation.status,
+        storage: checks.storage.status
+      },
+      model: modelName,
+      provider: providerName,
+      latencyMs,
+      workerReport: result
+    });
     task.status = "verified";
     task.completedAt = nowIso();
     task.verifiedAt = nowIso();
-    checks.workerExecution = { status: "PASS", detail: "QA worker returned a non-empty verification report." };
   } catch (error) {
     task.status = "failed";
     task.error = String(error?.message || error);
+    if (!checks.modelWorker) {
+      checks.modelWorker = { status: "FAIL", detail: task.error };
+    }
     checks.workerExecution = { status: "FAIL", detail: task.error };
   }
 
   const failures = Object.entries(checks).filter(([, v]) => v.status === "FAIL");
+  const overall = failures.length === 0 && task.status === "verified" ? "VERIFIED PASS" : "PARTIAL / BLOCKED";
+
   const report = [
     "HABITAT SYSTEM CHECK",
     "",
     ...Object.entries(checks).map(([name, v]) => name.toUpperCase() + ": " + v.status + " — " + v.detail),
     "",
     "TASK ENGINE: " + (taskStore.has(task.id) ? "PASS — real task record created (" + task.id + ")" : "FAIL"),
-    "OVERALL: " + (failures.length === 0 && task.status === "verified" ? "VERIFIED" : "PARTIAL / BLOCKED"),
+    "OVERALL: " + overall,
+    "DURATION: " + (Date.now() - startedAt) + "ms",
     "",
-    "WORKER REPORT:",
+    "WORKER REPORT (SUPPLEMENTAL — DOES NOT OVERRIDE MACHINE CHECKS):",
     task.result || task.error || "No worker report."
   ].join("\n");
 
-  return { task, checks, report };
+  return { task, checks, report, overall };
 }
 
 app.get("/workers", (req, res) => {
