@@ -354,6 +354,27 @@ app.post("/chat", async (req, res) => {
         deterministic: true
       });
     }
+    // Android connectivity is a deterministic backend/device check. Never send this to the LLM.
+    if (/^(?:ax[,:]?\\s*)?(?:check|verify|test)\\s+(?:android\\s+)?(?:device\\s+)?(?:connectivity|connection|heartbeat|device\\s+access)|^(?:ax[,:]?\\s*)?check\\s+android\\s+(?:device\\s+)?(?:connectivity|connection|heartbeat|access)/i.test(message)) {
+      try {
+        const statusResponse = await fetch("http://127.0.0.1:" + port + "/device/status");
+        const statusText = await statusResponse.text();
+        let status;
+        try { status = JSON.parse(statusText); } catch { status = { ok: false, error: statusText || "device status returned non-JSON" }; }
+        const access = status.androidDeviceAccess || "UNVERIFIED";
+        const latest = Array.isArray(status.devices) ? status.devices[0] : null;
+        return res.json({
+          response: "ANDROID DEVICE CHECK\\nStatus: " + access + "\\n" + (status.detail || "No device status detail.") + (latest?.lastSeenAt ? "\\nLast heartbeat: " + latest.lastSeenAt : ""),
+          androidDeviceAccess: access,
+          deviceStatus: status,
+          habitat: "online",
+          deterministic: true
+        });
+      } catch (error) {
+        return res.status(502).json({ error: "Android device status check failed.", details: String(error?.message || error) });
+      }
+    }
+
     // Broad operational commands: route requests that explicitly ask Ax to create/execute/
     // dispatch/verify a task through the real task engine instead of letting the LLM simulate it.
     // Do not intercept system-check requests; those retain their existing diagnostic behavior.
