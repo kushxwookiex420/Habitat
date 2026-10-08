@@ -215,7 +215,7 @@ export function registerContentEngine(app, deps) {
   });
 
   // Media editing is explicitly worker-backed. The API creates an edit manifest;
-  // a future Android/Render editor worker can consume it and return an artifact.
+  // the Render editor below turns that manifest into a real, verifiable MP4.
   app.post("/content/jobs/:id/edit", (req, res) => {
     const job = contentJobs.get(req.params.id);
     if (!job) return res.status(404).json({ ok:false, error:"content job not found" });
@@ -233,6 +233,110 @@ export function registerContentEngine(app, deps) {
     };
     update(job, "edit", "queued", manifest);
     res.json({ ok:true, job, editManifest:manifest });
+  });
+
+
+  // Deterministic Render Worker: creates a real 1080x1920 MP4 using ffmpeg.
+  // This is intentionally asset-light for the first Habitat artifact: it proves the
+  // complete media-render path without pretending copyrighted trailer footage exists.
+  app.post("/content/jobs/:id/render", async (req, res) => {
+    const job = contentJobs.get(req.params.id);
+    if (!job) return res.status(404).json({ ok:false, error:"content job not found" });
+    if (job.stages.script.status !== "completed")
+      return res.status(409).json({ ok:false, error:"script must be completed first", job });
+
+    const renderPlan = job.stages.edit?.result?.renderPlan;
+    if (!renderPlan) return res.status(409).json({ ok:false, error:"render plan required first", job });
+
+    const { execFile } = await import("node:child_process");
+    const { promisify } = await import("node:util");
+    const fs = await import("node:fs/promises");
+    const path = await import("node:path");
+    const execFileAsync = promisify(execFile);
+
+    const safeId = job.id.replace(/[^a-zA-Z0-9_-]/g, "_");
+    const outDir = path.join("/tmp", "habitat-artifacts", safeId);
+    const outputPath = path.join(outDir, "vice-city-6-next-big-leap.mp4");
+    const titlePath = path.join(outDir, "title.txt");
+    const hookPath = path.join(outDir, "hook.txt");
+    const footerPath = path.join(outDir, "footer.txt");
+
+    try {
+      update(job, "edit", "rendering", { ...job.stages.edit.result, renderPlan });
+
+      await fs.mkdir(outDir, { recursive:true });
+      const script = job.stages.script.result || {};
+      await fs.writeFile(titlePath, String(script.title || "Vice City 6: The Next Big Leap"));
+      await fs.writeFile(hookPath, String(script.hook || "GTA 6 is getting a lot more real."));
+      await fs.writeFile(footerPath, "HABITAT ARTIFACT 001  •  AX  •  FACTS, NOT RUMORS");
+
+      await execFileAsync("ffmpeg", [
+        "-hide_banner", "-loglevel", "error", "-y",
+        "-f", "lavfi", "-i", "color=c=0x10131a:s=1080x1920:r=30:d=45",
+        "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=48000",
+        "-vf",
+        [
+          "drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:textfile=" + titlePath + ":fontcolor=white:fontsize=72:x=(w-text_w)/2:y=560:line_spacing=12",
+          "drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:textfile=" + hookPath + ":fontcolor=white:fontsize=42:x=(w-text_w)/2:y=760:line_spacing=10",
+          "drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:textfile=" + footerPath + ":fontcolor=white:fontsize=28:x=(w-text_w)/2:y=1750"
+        ].join(","),
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
+        "-pix_fmt", "yuv420p",
+        "-c:a", "aac", "-b:a", "128k", "-ar", "48000",
+        "-t", "45",
+        "-movflags", "+faststart",
+        outputPath
+      ], { timeout: 120000 });
+
+      const stat = await fs.stat(outputPath);
+      if (!stat.size) throw new Error("ffmpeg produced an empty artifact");
+
+      const probe = await execFileAsync("ffprobe", [
+        "-v", "error", "-show_entries", "format=duration,size",
+        "-of", "json", outputPath
+      ]);
+      let probeData = {};
+      try { probeData = JSON.parse(probe.stdout); } catch {}
+      const durationSeconds = Number(probeData?.format?.duration || 0);
+      if (durationSeconds < 44) throw new Error("rendered artifact duration verification failed");
+
+      const artifact = {
+        type: "mp4",
+        status: "completed",
+        path: outputPath,
+        bytes: stat.size,
+        durationSeconds,
+        width: 1080,
+        height: 1920,
+        renderedAt: nowIso(),
+        verified: true,
+        renderer: "ffmpeg"
+      };
+
+      update(job, "edit", "completed", {
+        ...job.stages.edit.result,
+        renderPlan: { ...renderPlan, output: artifact },
+        artifact
+      });
+      res.json({ ok:true, job, artifact });
+    } catch (error) {
+      update(job, "edit", "failed", {
+        ...job.stages.edit.result,
+        error: String(error?.message || error),
+        failedAt: nowIso()
+      });
+      res.status(502).json({ ok:false, error:"media render failed", detail:String(error?.message || error), job });
+    }
+  });
+
+  app.get("/content/jobs/:id/artifact", async (req, res) => {
+    const job = contentJobs.get(req.params.id);
+    if (!job) return res.status(404).json({ ok:false, error:"content job not found" });
+    const artifact = job.stages.edit?.result?.artifact;
+    if (!artifact?.verified || !artifact?.path)
+      return res.status(404).json({ ok:false, error:"verified MP4 artifact not available", job });
+    res.type("video/mp4");
+    res.download(artifact.path, "habitat-artifact-001.mp4");
   });
 
 
