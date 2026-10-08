@@ -691,6 +691,55 @@ class BrainAdapter(private val context: Context) {
         }
     }
 
+    fun tiktokCreatorInfo(callback: (Result) -> Unit) {
+        callback(Result(State.CONNECTING))
+        executor.execute {
+            var connection: HttpURLConnection? = null
+            try {
+                connection = HabitatNetwork.openConnection("https://habitat-1-szzd.onrender.com/content/publisher/creator-info")
+                connection.requestMethod = "POST"; connection.connectTimeout = 10000; connection.readTimeout = 30000
+                connection.doOutput = true; connection.setRequestProperty("Content-Type", "application/json")
+                connection.outputStream.use { it.write("{}".toByteArray(StandardCharsets.UTF_8)) }
+                val code = connection.responseCode
+                val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+                val body = stream?.bufferedReader()?.use { it.readText() } ?: ""
+                if (code !in 200..299) callback(Result(State.ERROR, detail = "HTTP " + code + ": " + body))
+                else callback(Result(State.CONNECTED, text = body))
+            } catch (e: Exception) { callback(Result(State.ERROR, detail = e.message ?: e.javaClass.simpleName)) }
+            finally { connection?.disconnect() }
+        }
+    }
+
+    fun tiktokApproveAndPublish(jobId: String, title: String, privacyLevel: String, allowComment: Boolean, allowDuet: Boolean, allowStitch: Boolean, userConsent: Boolean, callback: (Result) -> Unit) {
+        callback(Result(State.CONNECTING))
+        executor.execute {
+            try {
+                val payload = JSONObject().apply {
+                    put("privacyLevel", privacyLevel); put("userConsent", userConsent)
+                    put("allowComment", allowComment); put("allowDuet", allowDuet); put("allowStitch", allowStitch)
+                    if (title.isNotBlank()) put("title", title)
+                }
+                val approve = postJson("https://habitat-1-szzd.onrender.com/content/jobs/" + jobId + "/approve-publish", payload)
+                if (approve.first !in 200..299) { callback(Result(State.ERROR, detail = "Approval HTTP " + approve.first + ": " + approve.second)); return@execute }
+                val publish = postJson("https://habitat-1-szzd.onrender.com/content/jobs/" + jobId + "/publish", payload)
+                if (publish.first !in 200..299) { callback(Result(State.ERROR, detail = "Publish HTTP " + publish.first + ": " + publish.second)); return@execute }
+                callback(Result(State.CONNECTED, text = publish.second))
+            } catch (e: Exception) { callback(Result(State.ERROR, detail = e.message ?: e.javaClass.simpleName)) }
+        }
+    }
+
+    private fun postJson(url: String, body: JSONObject): Pair<Int, String> {
+        var connection: HttpURLConnection? = null
+        try {
+            connection = HabitatNetwork.openConnection(url)
+            connection.requestMethod = "POST"; connection.connectTimeout = 10000; connection.readTimeout = 120000
+            connection.doOutput = true; connection.setRequestProperty("Content-Type", "application/json"); connection.setRequestProperty("Accept", "application/json")
+            connection.outputStream.use { it.write(body.toString().toByteArray(StandardCharsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            return code to (stream?.bufferedReader()?.use { it.readText() } ?: "")
+        } finally { connection?.disconnect() }
+    }
     fun shutdown() {
         executor.shutdownNow()
     }
