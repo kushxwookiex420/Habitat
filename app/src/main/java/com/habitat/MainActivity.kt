@@ -5,6 +5,8 @@ import android.app.Activity
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.speech.RecognizerIntent
 import android.view.Gravity
 import android.view.View
@@ -22,6 +24,14 @@ class MainActivity : Activity() {
     private val voiceCode = 700
     private var lastTaskId: String? = null
     private val taskPrefs by lazy { getSharedPreferences("habitat_tasks", MODE_PRIVATE) }
+    private val heartbeatHandler = Handler(Looper.getMainLooper())
+    private val heartbeatIntervalMs = 60_000L
+    private val heartbeatRunnable = object : Runnable {
+        override fun run() {
+            brain.heartbeat()
+            heartbeatHandler.postDelayed(this, heartbeatIntervalMs)
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -388,13 +398,21 @@ class MainActivity : Activity() {
         }
 
         setContentView(root)
-        // Register this live Android client with Ax before the System Check runs.
+        // Register this live Android client with Ax before the System Check runs,
+        // then refresh the heartbeat every 60 seconds so the backend's 120-second
+        // liveness window never expires while Habitat is running.
         brain.heartbeat { ok, detail ->
             runOnUiThread {
                 if (ok) ui.addChatMessage("AX", "Android device heartbeat: VERIFIED")
             }
         }
+        heartbeatHandler.postDelayed(heartbeatRunnable, heartbeatIntervalMs)
         ensureSystemCheckTask()
+    }
+
+    override fun onDestroy() {
+        heartbeatHandler.removeCallbacks(heartbeatRunnable)
+        super.onDestroy()
     }
 
     private fun runSystemCheck(taskId: String) {
