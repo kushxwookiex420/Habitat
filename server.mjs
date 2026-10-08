@@ -1060,21 +1060,43 @@ app.post("/tasks/:id/delegate", async (req, res) => {
     }
 
     const androidAccess = androidAccessStatus();
+    const latestDevice = androidAccess.devices[0] || null;
+    const heartbeatAgeMs = latestDevice?.lastSeenAt
+      ? Math.max(0, Date.now() - new Date(latestDevice.lastSeenAt).getTime())
+      : null;
+    const androidHeartbeat = latestDevice && heartbeatAgeMs <= ANDROID_HEARTBEAT_TTL_MS ? "PASS" : "FAIL";
+    const taskCreation = taskStore.has(task.id) ? "PASS" : "FAIL";
+    const storage = storageSelfTest() ? "PASS" : "FAIL";
+
+    const verification = {
+      backendHealth: "PASS",
+      modelWorker: "PASS",
+      androidHeartbeat,
+      androidDeviceAccess: androidAccess.status,
+      taskCreation,
+      storage
+    };
+
+    const fullyVerified =
+      verification.backendHealth === "PASS" &&
+      verification.modelWorker === "PASS" &&
+      verification.androidHeartbeat === "PASS" &&
+      verification.androidDeviceAccess === "PASS" &&
+      verification.taskCreation === "PASS" &&
+      verification.storage === "PASS";
+
     task.result = JSON.stringify({
-      verification: {
-        backendHealth: "PASS",
-        modelWorker: "PASS",
-        androidDeviceAccess: androidAccess.status
-      },
-      androidDevice: androidAccess.devices[0] || null,
+      verification,
+      androidDevice: latestDevice,
+      heartbeatAgeMs,
       workerReport: result
     });
 
-    // Verified means the checks we actually performed passed. It does not
-    // mean Android/device access was magically available.
-    task.status = "verified";
+    // A task is only marked verified when every canonical machine check
+    // passes. Never report a partial execution as verified.
+    task.status = fullyVerified ? "verified" : "blocked";
     task.completedAt = nowIso();
-    task.verifiedAt = nowIso();
+    if (fullyVerified) task.verifiedAt = nowIso();
 
     return res.json({ ok: true, task });
   } catch (error) {
