@@ -20,7 +20,7 @@ jobs:
         run: |
           set -e
           sudo apt-get update
-          sudo apt-get install -y ffmpeg fonts-dejavu
+          sudo apt-get install -y ffmpeg fonts-dejavu espeak-ng
 
       - name: Wait for Habitat Render deployment
         run: |
