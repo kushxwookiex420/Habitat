@@ -31,11 +31,11 @@ scene(){
   ffmpeg -hide_banner -loglevel error -y     -f lavfi -i "color=c=$bg:s=540x960:r=15:d=$d"     -vf "drawgrid=width=50:height=50:thickness=1:color=${accent}@0.10,drawbox=x=0:y=610:w=540:h=350:color=0x03040a@0.84:t=fill,drawbox=x=45:y=500:w=80:h=460:color=${accent}@0.16:t=fill,drawbox=x=155:y=455:w=95:h=505:color=${accent}@0.12:t=fill,drawbox=x=285:y=535:w=85:h=425:color=${accent}@0.15:t=fill,drawbox=x=405:y=480:w=90:h=480:color=${accent}@0.12:t=fill,drawbox=x='mod(t*85,700)-100':y=0:w=100:h=960:color=${accent}@0.10:t=fill,drawbox=x=0:y='mod(t*70,960)':w=540:h=3:color=${accent}@0.40:t=fill,drawtext=fontfile=$B:text='AX / VICE CITY FILES':fontcolor=white@0.72:fontsize=16:x=39:y=105,drawtext=fontfile=$B:text='$title':fontcolor=white:fontsize=32:x=(w-text_w)/2:y=275,drawtext=fontfile=$R:text='$sub':fontcolor=white@0.88:fontsize=18:x=(w-text_w)/2:y=340,drawtext=fontfile=$R:text='FACT-CHECKED - NO RUMORS':fontcolor=white@0.62:fontsize=13:x=(w-text_w)/2:y=855,drawtext=fontfile=$R:text='VICE CITY FILES - AX':fontcolor=white@0.58:fontsize=13:x=39:y=905,format=yuv420p"     -c:v libx264 -preset ultrafast -crf 30 -an "$TMP/$n.mp4"
 }
 
-scene 01 5 101020 39d9ff "VICE CITY IS BACK" "GTA 6 - THE NEXT BIG LEAP"
+scene 01 4 101020 39d9ff "VICE CITY IS BACK" "GTA 6 - THE NEXT BIG LEAP"
 scene 02 7 15101f ff3aa7 "NOV. 19, 2026" "OFFICIAL RELEASE DATE"
 scene 03 8 0b1419 4cffd0 "JASON + LUCIA" "VICE CITY - LEONIDA"
 scene 04 8 160c18 ff4aa8 "VICE CITY - LEONIDA" "THE NEXT EVOLUTION"
-scene 05 8 0c1615 45ffb0 "PS5 + XBOX SERIES X/S" "OFFICIALLY ANNOUNCED PLATFORMS"
+scene 05 9 0c1615 45ffb0 "PS5 + XBOX SERIES X/S" "OFFICIALLY ANNOUNCED PLATFORMS"
 scene 06 9 130b18 ff4cf0 "FACTS, NOT RUMORS" "HABITAT - AX - VICECITYFILES"
 
 for f in "$TMP"/0*.mp4; do printf "file '%s'\n" "$f"; done > "$TMP/list.txt"
