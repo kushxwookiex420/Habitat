@@ -19,7 +19,7 @@ declare -a VO=(
 )
 
 for i in 0 1 2 3 4 5; do
-  espeak-ng -q -v en-us -s 145 -p 48 -a 100 --stdout "${VO[$i]}" > "$TMP/vo-$i.wav"
+  espeak-ng -q -v en-us -s 145 -p 48 -a 100 -w "$TMP/vo-$i.wav" "${VO[$i]}"
 test -s "$TMP/vo-$i.wav"
   # Fit each narration clip inside its scene without dropping the voice track.
   dur="${DURS[$i]}"
