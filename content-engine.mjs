@@ -671,4 +671,18 @@ export function registerContentEngine(app, deps) {
     }
   });
 
+
+  if (process.env.HABITAT_STARTUP_SMOKE_TEST === "1") {
+    setTimeout(async () => {
+      try {
+        const base = process.env.RENDER_EXTERNAL_URL || "http://127.0.0.1:" + (process.env.PORT || 10000);
+        const response = await fetch(base + "/content/smoke-test");
+        const payload = await response.json();
+        console.log("AX_SMOKE_TEST_RESULT", JSON.stringify({ status:response.status, ok:payload?.ok, jobId:payload?.jobId, renderLoop:payload?.renderLoop, axReview:payload?.axReview, qualityGate:payload?.qualityGate }));
+      } catch (error) {
+        console.error("AX_SMOKE_TEST_ERROR", String(error?.message || error));
+      }
+    }, 5000);
+  }
+
 }
