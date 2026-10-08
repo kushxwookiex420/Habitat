@@ -1,0 +1,12 @@
+{
+  "artifact":"003",
+  "project":"ViceCityFiles",
+  "title":"Only in Leonida — Jason & Lucia",
+  "approvalRequired":true,
+  "publishingStatus":"blocked_pending_approval",
+  "sourcePolicy":"official-Rockstar-only",
+  "sources":["https://www.rockstargames.com/VI","https://www.rockstargames.com/VI/only-in-leonida"],
+  "approvedClaims":["Grand Theft Auto VI is coming November 19, 2026.","The announced launch platforms are PlayStation 5 and Xbox Series X|S.","Jason and Lucia are central to the story.","An easy score goes wrong and a criminal conspiracy stretches across Leonida.","Vice City, USA is part of the Leonida setting."],
+  "renderer":"github-actions-ffmpeg-cinematic-engine-v3",
+  "verification":{"requiredDurationSeconds":44,"width":1080,"height":1920,"fps":"15/1","audioCodec":"aac","channels":2}
+}
