@@ -614,6 +614,52 @@ export function registerContentEngine(app, deps) {
     res.json({ ok:true, job });
   });
 
+  // Ax autonomous mission runner: executes every safe stage in order and stops only at the external publish approval boundary.
+  app.post("/content/autonomous-run", async (req, res) => {
+    const objective = String(req.body?.objective || "").trim();
+    if (!objective) return res.status(400).json({ ok:false, error:"objective required" });
+    const job = makeJob({
+      project: String(req.body?.project || "ViceCityFiles"),
+      objective,
+      platform: String(req.body?.platform || "tiktok"),
+      format: String(req.body?.format || "9:16")
+    });
+    const base = req.protocol + "://" + req.get("host");
+    const stages = [];
+    const call = async (path, body = {}) => {
+      const response = await fetch(base + path, {
+        method:"POST", headers:{"content-type":"application/json"}, body:JSON.stringify(body)
+      });
+      let payload = {};
+      try { payload = await response.json(); } catch {}
+      stages.push({ path, status:response.status, ok:response.ok });
+      if (!response.ok) {
+        const error = new Error(payload?.error || "autonomous stage failed");
+        error.payload = payload;
+        throw error;
+      }
+      return payload;
+    };
+    try {
+      await call("/content/jobs/" + job.id + "/research");
+      await call("/content/jobs/" + job.id + "/script");
+      await call("/content/jobs/" + job.id + "/render-plan");
+      const rendered = await call("/content/jobs/" + job.id + "/render-loop");
+      const review = await call("/content/jobs/" + job.id + "/ax-review");
+      const gate = await call("/content/jobs/" + job.id + "/quality-gate");
+      job.autonomousRun = {
+        status: gate?.gate?.status === "READY_TO_PUBLISH" ? "READY_TO_PUBLISH" : "BLOCKED",
+        owner:"Ax", stages, renderLoop:rendered?.renderLoop || null,
+        axReview:review?.review || null, qualityGate:gate?.gate || null,
+        completedAt:nowIso()
+      };
+      res.json({ ok:true, job, autonomousRun:job.autonomousRun });
+    } catch (error) {
+      job.autonomousRun = { status:"BLOCKED", owner:"Ax", stages, error:String(error?.message || error), failedAt:nowIso() };
+      res.status(502).json({ ok:false, error:"autonomous mission stopped", job, autonomousRun:job.autonomousRun, detail:error?.payload || null });
+    }
+  });
+
   app.post("/content/jobs/:id/run-next", async (req, res) => {
     const job = contentJobs.get(req.params.id);
     if (!job) return res.status(404).json({ ok:false, error:"content job not found" });
