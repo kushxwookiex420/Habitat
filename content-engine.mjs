@@ -272,7 +272,7 @@ export function registerContentEngine(app, deps) {
 
       await execFileAsync("ffmpeg", [
         "-hide_banner", "-loglevel", "error", "-y",
-        "-f", "lavfi", "-i", "color=c=0x10131a:s=1080x1920:r=24:d=45",
+        "-f", "lavfi", "-i", "color=c=0x10131a:s=1080x1920:r=6:d=45",
         "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=48000",
         "-vf",
         [
