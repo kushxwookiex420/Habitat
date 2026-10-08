@@ -596,8 +596,10 @@ export function registerContentEngine(app, deps) {
         const result = await publishTikTokDirect({
           artifactPath: artifact.path,
           bytes: artifact.bytes,
+          durationSeconds: artifact.durationSeconds,
           script: job.stages.script.result,
-          privacyLevel: req.body?.privacyLevel
+          privacyLevel: req.body?.privacyLevel,
+          userConsent: req.body?.userConsent === true
         });
         job.stages.publish.status = "processing";
         job.stages.publish.result = {
