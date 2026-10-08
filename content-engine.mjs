@@ -293,51 +293,43 @@ export function registerContentEngine(app, deps) {
     const esc = (s) => String(s ?? "")
       .replace(/\\/g, "\\\\")
       .replace(/:/g, "\\:")
-      .replace(/'/g, "\\'")
+      .replace(/\x27/g, "\\x27")
       .replace(/%/g, "\\%");
 
     try {
-      update(job, "edit", "rendering", { ...job.stages.edit.result, renderPlan, rendererVersion:"v2-scene-engine" });
+      update(job, "edit", "rendering", { ...job.stages.edit.result, renderPlan, rendererVersion:"v3-scene-engine" });
       await fs.mkdir(outDir, { recursive:true });
 
-      // Fast single-pass renderer: keep the six scene transitions but minimize
-      // per-frame filter work so the synchronous Render request stays below the
-      // platform proxy timeout. One encode, 24fps, ultrafast.
-      const enabled = (start, end) => `between(t\\,13916\\,16271.999)`;
-      const layers = [
-        "drawbox=x=0:y=0:w=iw:h=ih:color=0x10131a:t=fill:enable='between(t\\,0\\,3.999)'",
-        "drawbox=x=0:y=0:w=iw:h=ih:color=0x17151f:t=fill:enable='between(t\\,4\\,10.999)'",
-        "drawbox=x=0:y=0:w=iw:h=ih:color=0x121b20:t=fill:enable='between(t\\,11\\,18.999)'",
-        "drawbox=x=0:y=0:w=iw:h=ih:color=0x20161a:t=fill:enable='between(t\\,19\\,26.999)'",
-        "drawbox=x=0:y=0:w=iw:h=ih:color=0x151d18:t=fill:enable='between(t\\,27\\,35.999)'",
-        "drawbox=x=0:y=0:w=iw:h=ih:color=0x1b1622:t=fill:enable='between(t\\,36\\,44.999)'"
+      // v3: six short scene streams, each text-rendered once, then concatenated.
+      const sceneInputs = [
+        { dur:4, bg:"0x10131a", title:"VICE CITY IS BACK", sub:"GTA 6 • THE NEXT BIG LEAP" },
+        { dur:7, bg:"0x17151f", title:"NOV. 19, 2026", sub:"OFFICIAL RELEASE DATE" },
+        { dur:8, bg:"0x121b20", title:"JASON + LUCIA", sub:"VICE CITY • LEONIDA" },
+        { dur:8, bg:"0x20161a", title:"VICE CITY • LEONIDA", sub:"THE NEXT EVOLUTION" },
+        { dur:9, bg:"0x151d18", title:"PS5 • XBOX SERIES X|S", sub:"OFFICIALLY ANNOUNCED PLATFORMS" },
+        { dur:9, bg:"0x1b1622", title:"FACTS, NOT RUMORS", sub:"HABITAT • AX • VICECITYFILES" }
       ];
-      scenes.forEach((s, i) => {
+      const inputs = [];
+      const filters = [];
+      sceneInputs.forEach((s, i) => {
+        inputs.push("-f","lavfi","-i","color=c="+s.bg+":s=1080x1920:r=24:d="+s.dur);
         const title = esc(s.title);
         const sub = esc(s.sub);
-        const e = enabled(s.start, s.end);
-        layers.push(
-          `drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:text='AX / VICE CITY FILES':fontcolor=white@0.72:fontsize=26:x=78:y=300:enable='${e}'`,
-          `drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:text='${title}':fontcolor=white:fontsize=64:x=(w-text_w)/2:y=560:enable='${e}'`,
-          `drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='${sub}':fontcolor=white@0.88:fontsize=34:x=(w-text_w)/2:y=690:enable='${e}'`
+        filters.push(
+          "["+i+":v]drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:text=\x27AX / VICE CITY FILES\x27:fontcolor=white@0.72:fontsize=26:x=78:y=300,drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:text=\x27"+title+"\x27:fontcolor=white:fontsize=64:x=(w-text_w)/2:y=560,drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text=\x27"+sub+"\x27:fontcolor=white@0.88:fontsize=34:x=(w-text_w)/2:y=690,drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text=\x27FACT-CHECKED • NO RUMORS\x27:fontcolor=white@0.62:fontsize=24:x=(w-text_w)/2:y=1715,drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text=\x27VICE CITY FILES • AX\x27:fontcolor=white@0.58:fontsize=24:x=78:y=1810,setsar=1[v"+i+"]"
         );
       });
-      layers.push(
-        "drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='FACT-CHECKED • NO RUMORS':fontcolor=white@0.62:fontsize=24:x=(w-text_w)/2:y=1715",
-        "drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='VICE CITY FILES • AX':fontcolor=white@0.58:fontsize=24:x=78:y=1810"
-      );
-      const vf = layers.join(",");
+      filters.push(sceneInputs.map((_,i)=>"[v"+i+"]").join("")+"concat=n="+sceneInputs.length+":v=1:a=0,format=yuv420p[v]");
 
       await execFileAsync("ffmpeg", [
         "-hide_banner","-loglevel","error","-y",
-        "-f","lavfi","-i","color=c=black:s=1080x1920:r=24:d=45",
+        ...inputs,
+        "-filter_complex",filters.join(";"),
+        "-map","[v]",
         "-f","lavfi","-i","anullsrc=channel_layout=stereo:sample_rate=48000",
-        "-filter_complex",vf,
-        "-map","0:v:0","-map","1:a:0",
-        "-c:v","libx264","-preset","ultrafast","-crf","30","-pix_fmt","yuv420p",
-        "-c:a","aac","-b:a","64k","-ar","48000","-t","45","-shortest",
-        "-movflags","+faststart",outputPath
-      ],{timeout:9000});
+        "-map","6:a:0","-c:v","libx264","-preset","ultrafast","-crf","30","-pix_fmt","yuv420p",
+        "-c:a","aac","-b:a","64k","-ar","48000","-t","45","-shortest","-movflags","+faststart",outputPath
+      ],{timeout:15000});
 
       const stat=await fs.stat(outputPath);
       if(!stat.size) throw new Error("ffmpeg produced an empty artifact");
