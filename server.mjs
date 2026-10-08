@@ -1,3 +1,4 @@
+import { registerContentEngine } from "./content-engine.mjs";
 import express from "express";
 
 const app = express();
@@ -1351,6 +1352,9 @@ app.post("/orchestrate/vicecity", async (req, res) => {
   }
 });
 
+
+// AX CONTENT ENGINE: research -> script -> edit -> approval -> publish -> analytics.
+registerContentEngine(app, { nowIso, makeTaskId, taskStore, workerRegistry, brainChat });
 
 /*
  * AX DIRECT VERIFICATION ENDPOINT
