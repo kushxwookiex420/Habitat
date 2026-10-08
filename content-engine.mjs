@@ -210,13 +210,86 @@ export function registerContentEngine(app, deps) {
     res.json({ ok:true, job, editManifest:manifest });
   });
 
+
+  function qualityGate(job) {
+    const script = job?.stages?.script?.result || {};
+    const research = job?.stages?.research?.result || {};
+    const text = JSON.stringify(script);
+    const issues = [];
+
+    if (!script || typeof script !== "object") issues.push("script result missing");
+    for (const field of ["title","hook","voiceover","onScreenText","shotList","caption","hashtags"]) {
+      if (script[field] == null || (typeof script[field] === "string" && !script[field].trim())) {
+        issues.push("missing required field: " + field);
+      }
+    }
+
+    const voice = String(script.voiceover || "");
+    if (voice.length < 80) issues.push("voiceover is too short for a production package");
+    if (/\\b(sprawing|sprawlingg|Al-driven|E0 drop|latest updates\\.)\\b/i.test(text)) {
+      issues.push("generation/formatting corruption detected");
+    }
+    if (/\\b0:29|0:30|0:31|0:32|0:33|0:34|0:35\\b/.test(text) && !/0:36/.test(text)) {
+      issues.push("timing sequence appears incomplete");
+    }
+
+    const unsupportedClaimPatterns = [
+      /cross-platform launch/i,
+      /cloud-based streaming/i,
+      /dynamic weather system/i,
+      /AI-driven city/i,
+      /NPCs have their own agendas/i
+    ];
+    const claimText = text;
+    for (const pattern of unsupportedClaimPatterns) {
+      if (pattern.test(claimText) && !/speculat|unconfirmed|rumou?r|not officially confirmed|no official statement/i.test(claimText)) {
+        issues.push("unsupported claim requires source or explicit speculation label: " + pattern.source);
+      }
+    }
+
+    const hashtags = Array.isArray(script.hashtags) ? script.hashtags : [];
+    if (hashtags.length !== 5) issues.push("exactly 5 hashtags required");
+
+    const status = issues.length ? "BLOCKED" : "READY_TO_PUBLISH";
+    return {
+      status,
+      verifiedAt: nowIso(),
+      issues,
+      checks: {
+        requiredFields: !issues.some(i => i.startsWith("missing required field")),
+        corruption: !issues.some(i => i.includes("corruption")),
+        timing: !issues.some(i => i.includes("timing")),
+        claims: !issues.some(i => i.includes("unsupported claim")),
+        hashtags: hashtags.length === 5,
+        researchPresent: Boolean(research && Object.keys(research).length)
+      }
+    };
+  }
+
   // Publishing always stops at approval. A connected publisher may later consume
   // the approved manifest and report the actual upload ID.
+  app.post("/content/jobs/:id/quality-gate", (req, res) => {
+    const job = contentJobs.get(req.params.id);
+    if (!job) return res.status(404).json({ ok:false, error:"content job not found" });
+    const gate = qualityGate(job);
+    job.qualityGate = gate;
+    job.updatedAt = nowIso();
+    res.status(gate.status === "READY_TO_PUBLISH" ? 200 : 422).json({ ok: gate.status === "READY_TO_PUBLISH", gate, job });
+  });
+
   app.post("/content/jobs/:id/approve-publish", (req, res) => {
     const job = contentJobs.get(req.params.id);
     if (!job) return res.status(404).json({ ok:false, error:"content job not found" });
     if (job.stages.edit.status !== "completed")
       return res.status(409).json({ ok:false, error:"edited artifact must be completed first", job });
+
+    const gate = job.qualityGate || qualityGate(job);
+    job.qualityGate = gate;
+    if (gate.status !== "READY_TO_PUBLISH") {
+      job.stages.publish.status = "blocked";
+      job.stages.publish.result = { blockedAt: nowIso(), reason: "quality gate failed", gate };
+      return res.status(409).json({ ok:false, error:"publishing blocked by quality gate", gate, job });
+    }
 
     job.stages.publish.status = "approved";
     job.stages.publish.result = {
