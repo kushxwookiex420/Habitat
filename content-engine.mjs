@@ -1,5 +1,10 @@
+import crypto from "node:crypto";
 import { runVisualQA } from "./visual-qa.mjs";
 import { publishTikTokDirect, registerTikTokPublisher, tiktokConfig } from "./tiktok-publisher.mjs";
+
+function cryptoRandomState() {
+  return crypto.randomBytes(24).toString("hex");
+}
 
 // Habitat Content Engine
 // Ax-managed pipeline: research -> script -> edit -> approval -> publish -> analytics.
