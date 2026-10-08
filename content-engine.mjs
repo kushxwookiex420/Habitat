@@ -672,7 +672,7 @@ export function registerContentEngine(app, deps) {
     const runAutonomous = async () => {
       try {
         const job = makeJob({ project, objective, platform, format:"9:16" });
-        const base = "http://127.0.0.1:" + port;
+        const base = "http://127.0.0.1:" + String(process.env.PORT || 10000);
         const response = await fetch(base + "/content/jobs/" + job.id + "/research", {
           method:"POST", headers:{"content-type":"application/json"}, body:"{}"
         });
