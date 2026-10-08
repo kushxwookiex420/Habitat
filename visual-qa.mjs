@@ -85,7 +85,7 @@ export async function runVisualQA({ artifactPath, renderPlan = {}, expectedScene
     // sustained black interval is a defect.
     const black = await execFileAsync("ffmpeg", [
       "-hide_banner","-loglevel","info","-i",artifactPath,
-      "-vf","blackdetect=d=0.60:pix_th=0.10",
+      "-vf","blackdetect=d=0.60:pix_th=0.02",
       "-an","-f","null","-"
     ]).catch(e => ({ stdout:"", stderr:String(e?.stderr || e?.message || e) }));
     const blackMatches = String(black.stderr || "").match(/black_start:([0-9.]+).*?black_end:([0-9.]+).*?black_duration:([0-9.]+)/g) || [];
@@ -116,7 +116,7 @@ export async function runVisualQA({ artifactPath, renderPlan = {}, expectedScene
     // explicitly contains multiple scenes. This is independent of model judgment.
     const scene = await execFileAsync("ffmpeg", [
       "-hide_banner","-loglevel","info","-i",artifactPath,
-      "-vf","select='gt(scene,0.08)',showinfo",
+      "-vf","select='gt(scene,0.02)',showinfo",
       "-an","-f","null","-"
     ]).catch(e => ({ stdout:"", stderr:String(e?.stderr || e?.message || e) }));
     const sceneTimes = [...String(scene.stderr || "").matchAll(/pts_time:([0-9.]+)/g)].map(m => Number(m[1]));
@@ -151,7 +151,7 @@ export async function runVisualQA({ artifactPath, renderPlan = {}, expectedScene
       durationMs:Date.now()-startedAt,
       checks,
       issues,
-      artifact:{path:artifactPath,durationSeconds,width,height,bytes:stat.size},
+      artifact:{path:artifactPath,durationSeconds:duration,width,height,bytes:stat.size},
       machineDerived:true
     };
   } catch (error) {
