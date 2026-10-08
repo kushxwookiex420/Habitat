@@ -1,4 +1,5 @@
 import { runVisualQA } from "./visual-qa.mjs";
+import { publishTikTokDirect, registerTikTokPublisher, tiktokConfig } from "./tiktok-publisher.mjs";
 
 // Habitat Content Engine
 // Ax-managed pipeline: research -> script -> edit -> approval -> publish -> analytics.
@@ -8,6 +9,7 @@ import { runVisualQA } from "./visual-qa.mjs";
 export function registerContentEngine(app, deps) {
   const { nowIso, makeTaskId, taskStore, workerRegistry, brainChat } = deps;
   const contentJobs = new Map();
+  registerTikTokPublisher(app, (id) => contentJobs.get(id));
 
   const contentWorkers = [
     ["content-researcher", {
@@ -587,6 +589,38 @@ export function registerContentEngine(app, deps) {
     const artifact = job.stages.edit?.result?.artifact;
     if (!artifact?.verified || artifact.status !== "verified")
       return res.status(409).json({ ok:false, error:"verified artifact required", job });
+    // Native TikTok Content Posting API path. It remains behind the existing Ax/user approval gate.
+    // No upload is claimed unless TikTok returns a real publish_id.
+    if (job.platform === "tiktok" && tiktokConfig().configured) {
+      try {
+        const result = await publishTikTokDirect({
+          artifactPath: artifact.path,
+          bytes: artifact.bytes,
+          script: job.stages.script.result,
+          privacyLevel: req.body?.privacyLevel
+        });
+        job.stages.publish.status = "processing";
+        job.stages.publish.result = {
+          ...(job.stages.publish.result || {}),
+          ...result,
+          status: "processing",
+          confirmed: false,
+          startedAt: nowIso()
+        };
+        job.updatedAt = nowIso();
+        return res.status(202).json({ ok:true, status:"TIKTOK_PROCESSING", job, publishId:result.publishId, next:"POST /content/jobs/:id/publish-status" });
+      } catch (error) {
+        job.stages.publish.result = {
+          ...(job.stages.publish.result || {}),
+          status:"tiktok_publish_failed",
+          error:String(error?.message || error),
+          response:error?.payload || null,
+          failedAt:nowIso()
+        };
+        return res.status(Number(error?.status) >= 400 ? Number(error.status) : 502).json({ ok:false, error:"TikTok publisher failed", job });
+      }
+    }
+
     const bridgeUrl = String(process.env.HABITAT_PUBLISHER_WEBHOOK_URL || "").trim();
     if (!bridgeUrl) {
       job.stages.publish.result = {
