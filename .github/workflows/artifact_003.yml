@@ -26,7 +26,7 @@ jobs:
         continue-on-error: true
         run: |
           set -e
-          curl -sS -f -X POST https://habitat-1-szzd.onrender.com/content/jobs             -H 'content-type: application/json'             --data '{"project":"ViceCityFiles","objective":"Create Artifact 003: cinematic Vice City 6 news short","platform":"tiktok","format":"9:16"}' > /tmp/job.json
+          curl -sS -f -X POST https://habitat-1-szzd.onrender.com/content/jobs -H 'content-type: application/json' --data '{"project":"ViceCityFiles","objective":"Create Artifact 003: Only in Leonida — Jason & Lucia","platform":"tiktok","format":"9:16"}' > /tmp/job.json
           python - <<'PY'
           import json
           d=json.load(open('/tmp/job.json'))
@@ -79,8 +79,8 @@ jobs:
           audio=next(s for s in p["streams"] if s["codec_type"]=="audio")
           assert audio["codec_name"] == "aac"
           assert int(audio.get("channels",0)) == 2
-          print("CANONICAL ARTIFACT 002 VERIFIED")
-          print(json.dumps({"verified":True,"bytes":size,"durationSeconds":duration,"width":1080,"height":1920,"renderer":"github-actions-ffmpeg-cinematic-engine-v2","audio":"real-local-espeak-ng-voiceover","audioCodec":audio["codec_name"],"scenes":6,"motion":"animated-neon-city"}))
+          print("CANONICAL ARTIFACT 003 VERIFIED")
+          print(json.dumps({"verified":True,"bytes":size,"durationSeconds":duration,"width":1080,"height":1920,"fps":"15/1","renderer":"github-actions-ffmpeg-cinematic-engine-v3","audio":"real-local-espeak-ng-voiceover","audioCodec":audio["codec_name"],"channels":2,"scenes":6,"motion":"animated-neon-city"}))
           PY
 
       - name: Upload Artifact 003 to GitHub Actions
