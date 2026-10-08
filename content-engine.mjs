@@ -682,7 +682,7 @@ export function registerContentEngine(app, deps) {
       } catch (error) {
         console.error("AX_SMOKE_TEST_ERROR", String(error?.message || error));
       }
-    }, 5000);
+    }, 15000);
   }
 
 }
