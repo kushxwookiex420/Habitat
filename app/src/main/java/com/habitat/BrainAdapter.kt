@@ -1,6 +1,8 @@
 package com.habitat
 
 import android.content.Context
+import android.os.Build
+import java.util.UUID
 import org.json.JSONArray
 import org.json.JSONObject
 import java.net.HttpURLConnection
@@ -17,12 +19,43 @@ class BrainAdapter(private val context: Context) {
         private const val DROPPILOT_ENDPOINT = "https://habitat-1-szzd.onrender.com/orchestrate/dropilot"
         private const val VICECITY_ENDPOINT = "https://habitat-1-szzd.onrender.com/orchestrate/vicecity"
         private const val TASKS_ENDPOINT = "https://habitat-1-szzd.onrender.com/tasks"
+        private const val DEVICE_HEARTBEAT_ENDPOINT = "https://habitat-1-szzd.onrender.com/device/heartbeat"
+        private const val DEVICE_ID_KEY = "android_device_id"
         private const val PREFS = "habitat_brain"
         private const val HISTORY_KEY = "conversation_history"
         private const val MAX_HISTORY = 20
     }
 
     private val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+    private fun deviceId(): String = prefs.getString(DEVICE_ID_KEY, null) ?: UUID.randomUUID().toString().also { prefs.edit().putString(DEVICE_ID_KEY, it).apply() }
+
+    fun heartbeat(callback: ((Boolean, String) -> Unit)? = null) {
+        executor.execute {
+            var connection: HttpURLConnection? = null
+            try {
+                connection = HabitatNetwork.openConnection(DEVICE_HEARTBEAT_ENDPOINT)
+                connection.requestMethod = "POST"
+                connection.connectTimeout = 10000
+                connection.readTimeout = 10000
+                connection.doOutput = true
+                connection.setRequestProperty("Content-Type", "application/json")
+                connection.setRequestProperty("Accept", "application/json")
+                val body = JSONObject().apply {
+                    put("deviceId", deviceId())
+                    put("packageName", context.packageName)
+                    put("deviceModel", Build.MODEL ?: "Android")
+                    put("appVersion", try { context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "unknown" } catch (_: Exception) { "unknown" })
+                }.toString()
+                connection.outputStream.use { it.write(body.toByteArray(StandardCharsets.UTF_8)) }
+                val code = connection.responseCode
+                val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+                val text = stream?.bufferedReader()?.use { it.readText() } ?: ""
+                callback?.invoke(code in 200..299, text)
+            } catch (e: Exception) {
+                callback?.invoke(false, e.message ?: e.javaClass.simpleName)
+            } finally { connection?.disconnect() }
+        }
+    }
     private val executor = Executors.newSingleThreadExecutor()
 
     fun endpoint(): String = LIVE_ENDPOINT
