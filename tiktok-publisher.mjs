@@ -51,11 +51,11 @@ function captionFromScript(script = {}) {
   return [String(script.caption || script.title || "").trim(), hashtags].filter(Boolean).join(" ").slice(0, 2200);
 }
 
-export async function publishTikTokDirect({ artifactPath, bytes, script = {}, privacyLevel }) {
-  const creator = await queryCreatorInfo();
+export async function publishTikTokDirect({ artifactPath, bytes, durationSeconds, script = {}, privacyLevel, userConsent }) {
+  if (userConsent !== true) { const error = new Error("explicit user consent is required before sending media to TikTok"); error.status = 409; throw error; }\n  if (!privacyLevel) { const error = new Error("privacyLevel must be explicitly selected by the user"); error.status = 400; throw error; }\n  const creator = await queryCreatorInfo();
   const options = creator?.data?.privacy_level_options || [];
   const privacy = privacyLevel || String(process.env.TIKTOK_PRIVACY_LEVEL || "SELF_ONLY");
-  if (!options.includes(privacy)) {
+  const maxDuration = Number(creator?.data?.max_video_post_duration_sec || 0);\n  if (maxDuration && Number(durationSeconds || 0) > maxDuration) { const error = new Error("video exceeds TikTok creator max duration"); error.status = 400; error.payload = { durationSeconds, maxDuration }; throw error; }\n  if (creator?.data?.can_post === false) { const error = new Error("TikTok creator cannot post at this time"); error.status = 409; throw error; }\n  if (!options.includes(privacy)) {
     const error = new Error("TikTok privacy level is not allowed for this creator");
     error.status = 409;
     error.payload = { privacyRequested: privacy, privacyLevelOptions: options };
