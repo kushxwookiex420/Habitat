@@ -1,0 +1,18 @@
+{
+  "artifact":"004",
+  "project":"ViceCityFiles",
+  "title":"GTA 6: The Official Facts",
+  "approvalRequired":true,
+  "publishingStatus":"blocked_pending_approval",
+  "sourcePolicy":"official-Rockstar-only",
+  "sources":["https://www.rockstargames.com/VI","https://www.rockstargames.com/VI/only-in-leonida"],
+  "approvedClaims":[
+    "Grand Theft Auto VI is coming to Vice City and the wider state of Leonida.",
+    "Grand Theft Auto VI is scheduled for November 19, 2026.",
+    "Jason Duval and Lucia Caminos are central characters.",
+    "An easy score goes wrong and a criminal conspiracy stretches across Leonida.",
+    "The announced launch platforms are PlayStation 5 and Xbox Series X and S."
+  ],
+  "renderer":"github-actions-ffmpeg-cinematic-engine-v4",
+  "verification":{"requiredDurationSeconds":44,"width":1080,"height":1920,"fps":"15/1","audioCodec":"aac","channels":2}
+}
