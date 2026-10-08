@@ -2,6 +2,7 @@ package com.habitat
 
 import android.Manifest
 import android.app.Activity
+import android.app.AlertDialog
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Bundle
@@ -88,6 +89,8 @@ class MainActivity : Activity() {
             isAllCaps = false
         }
         composer.addView(send, LinearLayout.LayoutParams(70, 82).apply { leftMargin = 8 })
+        val tiktok = Button(this).apply { text = "TT"; textSize = 15f; setTextColor(Color.WHITE); setBackgroundColor(Color.rgb(28, 28, 36)); isAllCaps = false; setOnClickListener { showTikTokPublisherDialog() } }
+        composer.addView(tiktok, LinearLayout.LayoutParams(58, 82).apply { leftMargin = 8 })
 
         // The command composer lives above the Samsung navigation area and above
         // the bottom navigation rail instead of being pinned to the screen bottom.
@@ -563,6 +566,53 @@ class MainActivity : Activity() {
         }
     }
 
+    private fun showTikTokPublisherDialog() {
+        val panel = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(32, 24, 32, 8) }
+        val account = TextView(this).apply { text = "Loading TikTok creator…"; textSize = 17f; setTextColor(Color.DKGRAY) }
+        val job = EditText(this).apply { hint = "Ready-to-publish job ID"; textSize = 16f }
+        val title = EditText(this).apply { hint = "Caption / title"; textSize = 16f }
+        val privacy = Spinner(this)
+        val comment = CheckBox(this).apply { text = "Allow Comment" }
+        val duet = CheckBox(this).apply { text = "Allow Duet" }
+        val stitch = CheckBox(this).apply { text = "Allow Stitch" }
+        val consent = CheckBox(this).apply { text = "I explicitly consent to sending this video to TikTok." }
+        panel.addView(account); panel.addView(job); panel.addView(title); panel.addView(privacy)
+        panel.addView(comment); panel.addView(duet); panel.addView(stitch); panel.addView(consent)
+        val dialog = AlertDialog.Builder(this).setTitle("TikTok • Ax Publish Gate").setView(panel).setNegativeButton("Cancel", null).setPositiveButton("Publish", null).create()
+        brain.tiktokCreatorInfo { result ->
+            runOnUiThread {
+                if (result.state != BrainAdapter.State.CONNECTED) { account.text = "TikTok unavailable: " + result.detail; dialog.show(); return@runOnUiThread }
+                try {
+                    val j = JSONObject(result.text)
+                    account.text = "@" + j.optString("username","unknown") + " • " + j.optString("nickname","TikTok creator")
+                    val options = j.optJSONArray("privacyLevelOptions") ?: org.json.JSONArray()
+                    val labels = mutableListOf<String>()
+                    for (i in 0 until options.length()) labels.add(options.optString(i))
+                    privacy.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, labels)
+                    comment.isEnabled = !j.optBoolean("commentDisabled", false)
+                    duet.isEnabled = !j.optBoolean("duetDisabled", false)
+                    stitch.isEnabled = !j.optBoolean("stitchDisabled", false)
+                    comment.isChecked = false; duet.isChecked = false; stitch.isChecked = false
+                    if (!j.optBoolean("canPost", true)) account.append("\nPosting currently unavailable.")
+                    dialog.show()
+                    dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                        val selected = privacy.selectedItem?.toString().orEmpty()
+                        val jobId = job.text.toString().trim()
+                        if (jobId.isBlank() || selected.isBlank() || !consent.isChecked) {
+                            Toast.makeText(this, "Job ID, privacy selection, and explicit consent are required.", Toast.LENGTH_LONG).show(); return@setOnClickListener
+                        }
+                        dialog.getButton(AlertDialog.BUTTON_POSITIVE).isEnabled = false
+                        brain.tiktokApproveAndPublish(jobId, title.text.toString().trim(), selected, comment.isChecked, duet.isChecked, stitch.isChecked, true) { out ->
+                            runOnUiThread {
+                                dialog.getButton(AlertDialog.BUTTON_POSITIVE).isEnabled = true
+                                Toast.makeText(this, if (out.state == BrainAdapter.State.CONNECTED) "TikTok handoff accepted: " + out.text else out.detail, Toast.LENGTH_LONG).show()
+                            }
+                        }
+                    }
+                } catch (e: Exception) { account.text = "Invalid creator response: " + e.message; dialog.show() }
+            }
+        }
+    }
     private fun startVoice() {
         if (android.os.Build.VERSION.SDK_INT >= 23 &&
             checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
