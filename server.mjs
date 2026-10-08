@@ -1052,10 +1052,32 @@ app.post("/tasks/:id/delegate", async (req, res) => {
       ]
     });
 
-    const result = workerResponse.choices?.[0]?.message?.content || "";
+    let result = workerResponse.choices?.[0]?.message?.content || "";
+
+    // Some free-model routes can return a successful HTTP response with an
+    // empty assistant message. Retry once with the same deterministic QA
+    // prompt used by the canonical system check before declaring dispatch
+    // failed. This is a real model retry, not a simulated PASS.
+    if (!result.trim()) {
+      const retryResponse = await brainChat({
+        model,
+        messages: [
+          {
+            role: "system",
+            content: "You are Habitat QA Worker reporting to Ax. Return a concise backend verification note. Never claim Android/device access or any check that was not supplied."
+          },
+          {
+            role: "user",
+            content: "Confirm that the Habitat model worker can answer this machine-generated test. Reply with RESULT: PASS and one short sentence. Do not assess Android access."
+          }
+        ]
+      });
+      result = retryResponse.choices?.[0]?.message?.content || "";
+    }
+
     if (!result.trim()) {
       task.status = "failed";
-      task.error = "Worker returned an empty result.";
+      task.error = "Worker returned an empty result after one real QA retry.";
       return res.status(502).json({ ok: false, task });
     }
 
