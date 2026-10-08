@@ -3,10 +3,11 @@ name: Artifact 001 execution
 on:
   push:
     branches: [main]
+    paths:
+      - '.github/workflows/artifact_001.yml'
 
 jobs:
   execute-artifact-001:
-    if: github.event.head_commit.message == 'Ax: execute Artifact 001'
     runs-on: ubuntu-latest
     steps:
       - name: Wait for Habitat Render deployment
