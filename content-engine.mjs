@@ -280,6 +280,10 @@ export function registerContentEngine(app, deps) {
     const outDir = path.join("/tmp", "habitat-artifacts", safeId);
     const outputPath = path.join(outDir, "vice-city-6-next-big-leap.mp4");
     const script = job.stages.script.result || {};
+    const attempt = Math.max(1, Number(req.body?.attempt || 1));
+    const maxAttempts = Math.min(3, Math.max(1, Number(req.body?.maxAttempts || 3)));
+    const repairPlan = Array.isArray(req.body?.repairPlan) ? req.body.repairPlan : [];
+    const fontScale = repairPlan.some(x => x?.action === "resize_text") ? 0.82 : 1;
 
     // Artifact 001 has a canonical six-scene timing package. Keep these timings
     // aligned with the fact-checked script so the visual sequence follows the VO.
@@ -319,7 +323,7 @@ export function registerContentEngine(app, deps) {
         const title = esc(s.title);
         const sub = esc(s.sub);
         filters.push(
-          "["+i+":v]drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:text='AX / VICE CITY FILES':fontcolor=white@0.72:fontsize=16:x=39:y=150,drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:text='"+title+"':fontcolor=white:fontsize=32:x=(w-text_w)/2:y=280,drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='"+sub+"':fontcolor=white@0.88:fontsize=18:x=(w-text_w)/2:y=345,drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='FACT-CHECKED • NO RUMORS':fontcolor=white@0.62:fontsize=13:x=(w-text_w)/2:y=858,drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='VICE CITY FILES • AX':fontcolor=white@0.58:fontsize=13:x=39:y=905,setsar=1[v"+i+"]"
+          "["+i+":v]drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:text='AX / VICE CITY FILES':fontcolor=white@0.72:fontsize=16:x=39:y=150,drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:text='"+title+"':fontcolor=white:fontsize="+Math.round(32*fontScale)+":x=(w-text_w)/2:y=280,drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='"+sub+"':fontcolor=white@0.88:fontsize="+Math.round(18*fontScale)+":x=(w-text_w)/2:y=345,drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='FACT-CHECKED • NO RUMORS':fontcolor=white@0.62:fontsize=13:x=(w-text_w)/2:y=858,drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='VICE CITY FILES • AX':fontcolor=white@0.58:fontsize=13:x=39:y=905,setsar=1[v"+i+"]"
         );
       });
       filters.push(sceneInputs.map((_,i)=>"[v"+i+"]").join("")+"concat=n="+sceneInputs.length+":v=1:a=0,scale=1080:1920:flags=fast_bilinear,format=yuv420p[v]");
@@ -366,12 +370,12 @@ export function registerContentEngine(app, deps) {
           ...renderPlan,
           scenes: scenes.map(s=>({start:s.start,end:s.end,title:s.title})),
           onScreenText: [
-            { text:"VICE CITY IS BACK", fontSize:32, bold:true },
-            { text:"NOV. 19, 2026", fontSize:32, bold:true },
-            { text:"JASON + LUCIA", fontSize:32, bold:true },
-            { text:"VICE CITY • LEONIDA", fontSize:32, bold:true },
-            { text:"PS5 • XBOX SERIES X|S", fontSize:32, bold:true },
-            { text:"FACTS, NOT RUMORS", fontSize:32, bold:true }
+            { text:"VICE CITY IS BACK", fontSize:Math.round(32*fontScale), bold:true },
+            { text:"NOV. 19, 2026", fontSize:Math.round(32*fontScale), bold:true },
+            { text:"JASON + LUCIA", fontSize:Math.round(32*fontScale), bold:true },
+            { text:"VICE CITY • LEONIDA", fontSize:Math.round(32*fontScale), bold:true },
+            { text:"PS5 • XBOX SERIES X|S", fontSize:Math.round(32*fontScale), bold:true },
+            { text:"FACTS, NOT RUMORS", fontSize:Math.round(32*fontScale), bold:true }
           ]
         },
         expectedSceneCount: scenes.length
@@ -406,6 +410,34 @@ export function registerContentEngine(app, deps) {
       });
       res.status(502).json({ok:false,error:"media render failed",detail:String(error?.message||error),job});
     }
+  });
+
+  // Closed-loop render endpoint: failed visual QA feeds remediation back into the renderer.
+  app.post("/content/jobs/:id/render-loop", async (req, res) => {
+    const job = contentJobs.get(req.params.id);
+    if (!job) return res.status(404).json({ ok:false, error:"content job not found" });
+    if (job.stages.script.status !== "completed") return res.status(409).json({ ok:false, error:"script must be completed first", job });
+    const maxAttempts = 3;
+    const history = [];
+    let repairPlan = [];
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      const base = req.protocol + "://" + req.get("host");
+      const response = await fetch(base + "/content/jobs/" + job.id + "/render", {
+        method:"POST", headers:{"content-type":"application/json"},
+        body:JSON.stringify({ attempt, maxAttempts, repairPlan })
+      });
+      let payload = {};
+      try { payload = await response.json(); } catch {}
+      const qa = payload.visualQA || payload.artifact?.visualQA || null;
+      history.push({ attempt, status:response.status, qaStatus:qa?.status || null, issues:qa?.issues || [], remediation:qa?.remediation || [] });
+      if (response.ok && payload.artifact?.verified === true) {
+        job.renderLoop = { status:"VERIFIED", attempts:attempt, maxAttempts, history, completedAt:nowIso() };
+        return res.json({ ok:true, renderLoop:job.renderLoop, job, artifact:payload.artifact, visualQA:qa });
+      }
+      repairPlan = qa?.remediation || [];
+    }
+    job.renderLoop = { status:"BLOCKED", attempts:maxAttempts, maxAttempts, history, completedAt:nowIso(), reason:"visual QA did not pass within bounded correction loop" };
+    return res.status(422).json({ ok:false, error:"render correction loop exhausted", renderLoop:job.renderLoop, job });
   });
 
   // Ax final artifact review: workers and deterministic QA provide evidence; Ax owns the decision.
