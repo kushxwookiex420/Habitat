@@ -110,11 +110,16 @@ export function registerContentEngine(app, deps) {
   });
 
   app.get("/auth/tiktok/status", (req, res) => {
-    const configured = Boolean(String(process.env.TIKTOK_CLIENT_KEY || "").trim() && String(process.env.TIKTOK_CLIENT_SECRET || "").trim());
+    // Report presence only; never expose credential values or lengths.
+    const clientKeyPresent = Boolean(String(process.env.TIKTOK_CLIENT_KEY || "").trim());
+    const clientSecretPresent = Boolean(String(process.env.TIKTOK_CLIENT_SECRET || "").trim());
+    const configured = clientKeyPresent && clientSecretPresent;
     const connected = Boolean(String(process.env.TIKTOK_ACCESS_TOKEN || "").trim());
     res.json({
       ok: true,
       configured,
+      clientKeyPresent,
+      clientSecretPresent,
       connected,
       redirectUri: String(process.env.TIKTOK_REDIRECT_URI || "https://habitat-1-szzd.onrender.com/auth/tiktok/callback"),
       scopes: ["user.info.basic", "video.upload", "video.publish"]
