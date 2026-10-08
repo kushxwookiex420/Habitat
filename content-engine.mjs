@@ -189,6 +189,31 @@ export function registerContentEngine(app, deps) {
     }
   });
 
+  // Creates a deterministic render specification for the editor worker. This does NOT claim
+  // that an MP4 was rendered; only a connected media worker may mark the edit completed.
+  app.post("/content/jobs/:id/render-plan", (req, res) => {
+    const job = contentJobs.get(req.params.id);
+    if (!job) return res.status(404).json({ ok:false, error:"content job not found" });
+    if (job.stages.script.status !== "completed")
+      return res.status(409).json({ ok:false, error:"script must be completed first", job });
+    const script = job.stages.script.result || {};
+    const plan = {
+      version: "1.0",
+      jobId: job.id,
+      format: job.format,
+      platform: job.platform,
+      targetRuntimeSeconds: 45,
+      audio: { voiceover: true, captions: true },
+      scenes: Array.isArray(script.shotList) ? script.shotList : [],
+      onScreenText: script.onScreenText || [],
+      output: { type: "mp4", status: "pending", path: null },
+      approvalRequired: true,
+      generatedAt: nowIso()
+    };
+    update(job, "edit", "queued", { ...job.stages.edit.result, renderPlan: plan });
+    res.json({ ok:true, job, renderPlan:plan, message:"Render plan created; no MP4 is claimed until an editor worker returns a real output." });
+  });
+
   // Media editing is explicitly worker-backed. The API creates an edit manifest;
   // a future Android/Render editor worker can consume it and return an artifact.
   app.post("/content/jobs/:id/edit", (req, res) => {
