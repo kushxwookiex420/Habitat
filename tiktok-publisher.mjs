@@ -51,7 +51,7 @@ function captionFromScript(script = {}) {
   return [String(script.caption || script.title || "").trim(), hashtags].filter(Boolean).join(" ").slice(0, 2200);
 }
 
-export async function publishTikTokDirect({ artifactPath, bytes, durationSeconds, script = {}, privacyLevel, userConsent }) {
+export async function publishTikTokDirect({ artifactPath, bytes, durationSeconds, script = {}, privacyLevel, userConsent, allowComment, allowDuet, allowStitch }) {
   if (userConsent !== true) { const error = new Error("explicit user consent is required before sending media to TikTok"); error.status = 409; throw error; }
   if (!privacyLevel) { const error = new Error("privacyLevel must be explicitly selected by the user"); error.status = 400; throw error; }
   const creator = await queryCreatorInfo();
@@ -76,9 +76,9 @@ export async function publishTikTokDirect({ artifactPath, bytes, durationSeconds
     post_info: {
       title: captionFromScript(script),
       privacy_level: privacy,
-      disable_duet: false,
-      disable_comment: false,
-      disable_stitch: false,
+      disable_duet: allowDuet === true ? false : true,
+      disable_comment: allowComment === true ? false : true,
+      disable_stitch: allowStitch === true ? false : true,
       is_aigc: true
     },
     source_info: {
@@ -140,6 +140,31 @@ export async function publishTikTokDirect({ artifactPath, bytes, durationSeconds
 }
 
 export function registerTikTokPublisher(app, getJob) {
+  app.post("/content/publisher/creator-info", async (req, res) => {
+    try {
+      const payload = await queryCreatorInfo();
+      const data = payload?.data || {};
+      return res.json({
+        ok: true,
+        creator: {
+          username: data.creator_username || null,
+          nickname: data.creator_nickname || null,
+          avatarUrl: data.creator_avatar_url || null,
+          privacyLevelOptions: data.privacy_level_options || [],
+          commentDisabled: data.comment_disabled === true,
+          duetDisabled: data.duet_disabled === true,
+          stitchDisabled: data.stitch_disabled === true,
+          maxVideoPostDurationSec: Number(data.max_video_post_duration_sec || 0),
+          canPost: data.can_post !== false
+        }
+      });
+    } catch (error) {
+      return res.status(Number(error?.status) >= 400 ? Number(error.status) : 502).json({
+        ok:false, error:"TikTok creator info query failed", detail:String(error?.message || error)
+      });
+    }
+  });
+
   app.get("/content/publisher/status", (req, res) => {
     const config = tiktokConfig();
     res.json({
