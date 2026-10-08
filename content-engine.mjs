@@ -599,7 +599,10 @@ export function registerContentEngine(app, deps) {
           durationSeconds: artifact.durationSeconds,
           script: job.stages.script.result,
           privacyLevel: req.body?.privacyLevel,
-          userConsent: req.body?.userConsent === true
+          userConsent: req.body?.userConsent === true,
+          allowComment: req.body?.allowComment === true,
+          allowDuet: req.body?.allowDuet === true,
+          allowStitch: req.body?.allowStitch === true
         });
         job.stages.publish.status = "processing";
         job.stages.publish.result = {
