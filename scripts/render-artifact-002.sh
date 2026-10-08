@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -euxo pipefail
+set -euo pipefail
 OUT="${1:-habitat-artifact-002.mp4}"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
@@ -19,8 +19,10 @@ declare -a VO=(
 )
 
 for i in 0 1 2 3 4 5; do
-  espeak-ng -q -v en-us -s 145 -p 48 -a 100 -w "$TMP/vo-$i.wav" "${VO[$i]}"
-test -s "$TMP/vo-$i.wav"
+  if ! espeak-ng -v en-us -s 145 -p 48 -a 100 -w "$TMP/vo-$i.wav" -- "${VO[$i]}"; then
+    printf "%s\n" "${VO[$i]}" | espeak-ng -v en-us -s 145 -p 48 -a 100 --stdin --stdout > "$TMP/vo-$i.wav"
+  fi
+  test -s "$TMP/vo-$i.wav"
   # Fit each narration clip inside its scene without dropping the voice track.
   dur="${DURS[$i]}"
   ffmpeg -hide_banner -loglevel error -y -i "$TMP/vo-$i.wav"     -af "apad,atrim=0:$dur,asetpts=N/SR/TB" -ar 48000 -ac 2 "$TMP/vo-$i-fit.wav"
