@@ -254,9 +254,11 @@ export function registerContentEngine(app, deps) {
   });
 
 
-  // Deterministic Render Worker: creates a real 1080x1920 MP4 using ffmpeg.
-  // This is intentionally asset-light for the first Habitat artifact: it proves the
-  // complete media-render path without pretending copyrighted trailer footage exists.
+  // Deterministic Render Worker v2: real scene-based 1080x1920 MP4.
+  // v1 proved the MP4 path but intentionally used one static frame. v2 fixes the
+  // observed artifact problems: scene changes now occur at the planned timestamps,
+  // on-screen copy is constrained to a mobile-safe area, and every scene has its
+  // own visual treatment. No copyrighted footage is fabricated or claimed.
   app.post("/content/jobs/:id/render", async (req, res) => {
     const job = contentJobs.get(req.params.id);
     if (!job) return res.status(404).json({ ok:false, error:"content job not found" });
@@ -275,75 +277,108 @@ export function registerContentEngine(app, deps) {
     const safeId = job.id.replace(/[^a-zA-Z0-9_-]/g, "_");
     const outDir = path.join("/tmp", "habitat-artifacts", safeId);
     const outputPath = path.join(outDir, "vice-city-6-next-big-leap.mp4");
-    const titlePath = path.join(outDir, "title.txt");
-    const hookPath = path.join(outDir, "hook.txt");
-    const footerPath = path.join(outDir, "footer.txt");
+    const script = job.stages.script.result || {};
+
+    // Artifact 001 has a canonical six-scene timing package. Keep these timings
+    // aligned with the fact-checked script so the visual sequence follows the VO.
+    const scenes = [
+      { start:0,  end:4,  bg:"0x10131a", title:"VICE CITY IS BACK", sub:"GTA 6 • THE NEXT BIG LEAP" },
+      { start:4,  end:11, bg:"0x17151f", title:"NOV. 19, 2026", sub:"OFFICIAL RELEASE DATE" },
+      { start:11, end:19, bg:"0x121b20", title:"JASON + LUCIA", sub:"VICE CITY • LEONIDA" },
+      { start:19, end:27, bg:"0x20161a", title:"VICE CITY • LEONIDA", sub:"THE NEXT EVOLUTION" },
+      { start:27, end:36, bg:"0x151d18", title:"PS5 • XBOX SERIES X|S", sub:"OFFICIALLY ANNOUNCED PLATFORMS" },
+      { start:36, end:45, bg:"0x1b1622", title:"FACTS, NOT RUMORS", sub:"HABITAT • AX • VICECITYFILES" }
+    ];
+
+    const esc = (s) => String(s ?? "")
+      .replace(/\\/g, "\\\\")
+      .replace(/:/g, "\\:")
+      .replace(/'/g, "\\'")
+      .replace(/%/g, "\\%");
 
     try {
-      update(job, "edit", "rendering", { ...job.stages.edit.result, renderPlan });
-
+      update(job, "edit", "rendering", { ...job.stages.edit.result, renderPlan, rendererVersion:"v2-scene-engine" });
       await fs.mkdir(outDir, { recursive:true });
-      const script = job.stages.script.result || {};
-      await fs.writeFile(titlePath, String(script.title || "Vice City 6: The Next Big Leap"));
-      await fs.writeFile(hookPath, String(script.hook || "GTA 6 is getting a lot more real."));
-      await fs.writeFile(footerPath, "HABITAT ARTIFACT 001  •  AX  •  FACTS, NOT RUMORS");
 
-      await execFileAsync("ffmpeg", [
-        "-hide_banner", "-loglevel", "error", "-y",
-        "-f", "lavfi", "-i", "color=c=0x10131a:s=1080x1920:r=1:d=45",
-        "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=48000",
-        "-vf",
-        [
-          "drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:textfile=" + titlePath + ":fontcolor=white:fontsize=72:x=(w-text_w)/2:y=560:line_spacing=12",
-          "drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:textfile=" + hookPath + ":fontcolor=white:fontsize=42:x=(w-text_w)/2:y=760:line_spacing=10",
-          "drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:textfile=" + footerPath + ":fontcolor=white:fontsize=28:x=(w-text_w)/2:y=1750"
-        ].join(","),
-        "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
-        "-pix_fmt", "yuv420p",
-        "-c:a", "aac", "-b:a", "128k", "-ar", "48000",
-        "-t", "45",
-        "-movflags", "+faststart",
-        outputPath
-      ], { timeout: 120000 });
+      // Build six separate scene clips, then concatenate them. This makes scene
+      // boundaries deterministic and easy to verify with ffprobe/QA.
+      const sceneFiles = [];
+      for (let i=0; i<scenes.length; i++) {
+        const s=scenes[i];
+        const scenePath=path.join(outDir, `scene-${i+1}.mp4`);
+        const title=s.title;
+        const sub=s.sub;
+        const duration=s.end-s.start;
+        const vf=[
+          `drawbox=x=48:y=420:w=984:h=520:color=black@0.22:t=fill`,
+          `drawbox=x=78:y=456:w=924:h=448:color=white@0.06:t=4`,
+          `drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:text='AX / VICE CITY FILES':fontcolor=white@0.72:fontsize=26:x=78:y=300`,
+          `drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:text='${esc(title)}':fontcolor=white:fontsize=64:x=(w-text_w)/2:y=560:box=1:boxcolor=black@0.18:boxborderw=22`,
+          `drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='${esc(sub)}':fontcolor=white@0.88:fontsize=34:x=(w-text_w)/2:y=690`,
+          `drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='FACT-CHECKED • NO RUMORS':fontcolor=white@0.62:fontsize=24:x=(w-text_w)/2:y=1715`,
+          `drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='${String(i+1).padStart(2,"0")} / 06':fontcolor=white@0.58:fontsize=24:x=78:y=1810`
+        ].join(",");
+        await execFileAsync("ffmpeg", [
+          "-hide_banner","-loglevel","error","-y",
+          "-f","lavfi","-i",`color=c=${s.bg}:s=1080x1920:r=30:d=${duration}`,
+          "-vf",vf,
+          "-an","-c:v","libx264","-preset","veryfast","-crf","23","-pix_fmt","yuv420p",
+          "-movflags","+faststart",scenePath
+        ],{timeout:120000});
+        sceneFiles.push(scenePath);
+      }
 
-      const stat = await fs.stat(outputPath);
-      if (!stat.size) throw new Error("ffmpeg produced an empty artifact");
+      const concatList=path.join(outDir,"concat.txt");
+      await fs.writeFile(concatList,sceneFiles.map(f=>`file '${f.replace(/'/g,"'\\''")}'`).join("\n"));
 
-      const probe = await execFileAsync("ffprobe", [
-        "-v", "error", "-show_entries", "format=duration,size",
-        "-of", "json", outputPath
+      // Preserve a real audio track. The first artifact used silence; v2 keeps the
+      // pipeline honest by labeling it as a placeholder until a voice worker is connected.
+      const finalResult=await execFileAsync("ffmpeg",[
+        "-hide_banner","-loglevel","error","-y",
+        "-f","concat","-safe","0","-i",concatList,
+        "-f","lavfi","-i","anullsrc=channel_layout=stereo:sample_rate=48000",
+        "-map","0:v:0","-map","1:a:0",
+        "-c:v","libx264","-preset","veryfast","-crf","23","-pix_fmt","yuv420p",
+        "-c:a","aac","-b:a","128k","-ar","48000","-t","45","-shortest",
+        "-movflags","+faststart",outputPath
+      ],{timeout:120000});
+
+      const stat=await fs.stat(outputPath);
+      if(!stat.size) throw new Error("ffmpeg produced an empty artifact");
+
+      const probe=await execFileAsync("ffprobe",[
+        "-v","error",
+        "-show_entries","format=duration,size:stream=index,codec_type,width,height,r_frame_rate",
+        "-of","json",outputPath
       ]);
-      let probeData = {};
-      try { probeData = JSON.parse(probe.stdout); } catch {}
-      const durationSeconds = Number(probeData?.format?.duration || 0);
-      if (durationSeconds < 44) throw new Error("rendered artifact duration verification failed");
+      let probeData={};
+      try { probeData=JSON.parse(probe.stdout); } catch {}
+      const durationSeconds=Number(probeData?.format?.duration||0);
+      const videoStream=(probeData?.streams||[]).find(x=>x.codec_type==="video")||{};
+      if(durationSeconds<44) throw new Error("rendered artifact duration verification failed");
+      if(Number(videoStream.width)!==1080 || Number(videoStream.height)!==1920)
+        throw new Error("rendered artifact dimensions verification failed");
 
-      const artifact = {
-        type: "mp4",
-        status: "completed",
-        path: outputPath,
-        bytes: stat.size,
-        durationSeconds,
-        width: 1080,
-        height: 1920,
-        renderedAt: nowIso(),
-        verified: true,
-        renderer: "ffmpeg"
+      const artifact={
+        type:"mp4",status:"completed",path:outputPath,bytes:stat.size,
+        durationSeconds,width:1080,height:1920,renderedAt:nowIso(),
+        verified:true,renderer:"ffmpeg-scene-engine-v2",
+        audio:"placeholder-silence",
+        scenes:scenes.map(s=>({start:s.start,end:s.end,title:s.title}))
       };
 
-      update(job, "edit", "completed", {
+      update(job,"edit","completed",{
         ...job.stages.edit.result,
-        renderPlan: { ...renderPlan, output: artifact },
+        renderPlan:{...renderPlan,output:artifact},
         artifact
       });
-      res.json({ ok:true, job, artifact });
-    } catch (error) {
-      update(job, "edit", "failed", {
+      res.json({ok:true,job,artifact});
+    } catch(error) {
+      update(job,"edit","failed",{
         ...job.stages.edit.result,
-        error: String(error?.message || error),
-        failedAt: nowIso()
+        error:String(error?.message||error),failedAt:nowIso()
       });
-      res.status(502).json({ ok:false, error:"media render failed", detail:String(error?.message || error), job });
+      res.status(502).json({ok:false,error:"media render failed",detail:String(error?.message||error),job});
     }
   });
 
