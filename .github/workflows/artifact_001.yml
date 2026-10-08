@@ -78,7 +78,7 @@ jobs:
           assert a.get('width') == 1080 and a.get('height') == 1920
           assert float(a.get('durationSeconds',0)) >= 44
           assert int(a.get('bytes',0)) > 0
-          assert a.get('renderer') == 'ffmpeg-scene-engine-v2'
+          assert a.get('renderer') == 'v4-scene-engine'
           assert len(a.get('scenes',[])) == 6
           assert a.get('audio') == 'placeholder-silence'
           PY
