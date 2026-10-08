@@ -234,6 +234,11 @@ async function brainChat(payload) {
  *   POST /chat
  */
 
+// TikTok Developer domain verification: serve the exact verification file at the domain root path.
+app.get("/tiktokHneXL520kS7uOGdvMUO1qp4jZQmlfuiE.txt", (req, res) => {
+  res.type("text/plain").send("tiktok-developers-site-verification=HneXL520kS7uOGdvMUO1qp4jZQmlfuiE");
+});
+
 app.get("/", (req, res) => {
   res.json({
     habitat: "online",
