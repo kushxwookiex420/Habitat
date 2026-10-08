@@ -59,7 +59,7 @@ class BrainAdapter(private val context: Context) {
         executor.execute {
             var connection: HttpURLConnection? = null
             try {
-                connection = URL(DROPPILOT_ENDPOINT).openConnection() as HttpURLConnection
+                connection = HabitatNetwork.openConnection(DROPPILOT_ENDPOINT)
                 connection.requestMethod = "POST"
                 connection.connectTimeout = 15000
                 connection.readTimeout = 90000
@@ -130,7 +130,7 @@ class BrainAdapter(private val context: Context) {
         executor.execute {
             var connection: HttpURLConnection? = null
             try {
-                connection = URL(VICECITY_ENDPOINT).openConnection() as HttpURLConnection
+                connection = HabitatNetwork.openConnection(VICECITY_ENDPOINT)
                 connection.requestMethod = "POST"
                 connection.connectTimeout = 15000
                 connection.readTimeout = 120000
@@ -197,7 +197,7 @@ class BrainAdapter(private val context: Context) {
         executor.execute {
             var connection: HttpURLConnection? = null
             try {
-                connection = URL(LIVE_ENDPOINT).openConnection() as HttpURLConnection
+                connection = HabitatNetwork.openConnection(LIVE_ENDPOINT)
                 connection.requestMethod = "POST"
                 connection.connectTimeout = 15000
                 connection.readTimeout = 120000
@@ -285,7 +285,7 @@ class BrainAdapter(private val context: Context) {
         executor.execute {
             var connection: HttpURLConnection? = null
             try {
-                connection = URL(TASKS_ENDPOINT).openConnection() as HttpURLConnection
+                connection = HabitatNetwork.openConnection(TASKS_ENDPOINT)
                 connection.requestMethod = "POST"
                 connection.connectTimeout = 10000
                 connection.readTimeout = 30000
@@ -351,7 +351,7 @@ class BrainAdapter(private val context: Context) {
         executor.execute {
             var connection: HttpURLConnection? = null
             try {
-                connection = URL(TASKS_ENDPOINT).openConnection() as HttpURLConnection
+                connection = HabitatNetwork.openConnection(TASKS_ENDPOINT)
                 connection.requestMethod = "GET"
                 connection.connectTimeout = 10000
                 connection.readTimeout = 30000
