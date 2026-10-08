@@ -533,17 +533,60 @@ class BrainAdapter(private val context: Context) {
                 val error =
                     task.optString("error", "")
 
+                // The task result is authoritative machine data. Do not display
+                // the model's supplemental workerReport as if it were a failed
+                // device/QA check. Older builds did exactly that and produced
+                // contradictory "UNVERIFIED" text even when the machine checks
+                // were PASS.
+                val canonical = try {
+                    JSONObject(result).optJSONObject("verification")
+                } catch (_: Exception) {
+                    null
+                }
+
                 val text = buildString {
                     append("SYSTEM CHECK\n")
                     append("Status: ")
                     append(status)
                     append("\n")
-
                     append("Worker: ")
                     append(worker)
                     append("\n")
 
-                    if (result.isNotBlank()) {
+                    if (canonical != null) {
+                        append("\nCANONICAL MACHINE CHECKS:\n")
+                        append("Backend health: ")
+                        append(canonical.optString("backendHealth", "UNKNOWN"))
+                        append("\n")
+                        append("Model worker: ")
+                        append(canonical.optString("modelWorker", "UNKNOWN"))
+                        append("\n")
+                        append("Android heartbeat: ")
+                        append(canonical.optString("androidHeartbeat", "UNKNOWN"))
+                        append("\n")
+                        append("Android device access: ")
+                        append(canonical.optString("androidDeviceAccess", "UNKNOWN"))
+                        append("\n")
+                        append("Task creation: ")
+                        append(canonical.optString("taskCreation", "UNKNOWN"))
+                        append("\n")
+                        append("Storage: ")
+                        append(canonical.optString("storage", "UNKNOWN"))
+                        append("\n")
+                        append("\nCANONICAL RESULT: ")
+                        append(
+                            if (
+                                canonical.optString("backendHealth") == "PASS" &&
+                                canonical.optString("modelWorker") == "PASS" &&
+                                canonical.optString("androidHeartbeat") == "PASS" &&
+                                canonical.optString("androidDeviceAccess") == "PASS" &&
+                                canonical.optString("taskCreation") == "PASS" &&
+                                canonical.optString("storage") == "PASS" &&
+                                status.equals("verified", ignoreCase = true)
+                            ) "VERIFIED PASS" else "PARTIAL / BLOCKED"
+                        )
+                        append("\n")
+                    } else if (result.isNotBlank()) {
                         append("\nWorker result:\n")
                         append(result)
                     }
