@@ -297,10 +297,11 @@ export function registerContentEngine(app, deps) {
       .replace(/%/g, "\\%");
 
     try {
-      update(job, "edit", "rendering", { ...job.stages.edit.result, renderPlan, rendererVersion:"v3-scene-engine" });
+      update(job, "edit", "rendering", { ...job.stages.edit.result, renderPlan, rendererVersion:"v4-scene-engine" });
       await fs.mkdir(outDir, { recursive:true });
 
-      // v3: six short scene streams, each text-rendered once, then concatenated.
+      // v4: prioritize a guaranteed visible artifact. Render each scene at 540x960/15fps,
+      // concatenate, then upscale once to the required 1080x1920 output.
       const sceneInputs = [
         { dur:4, bg:"0x10131a", title:"VICE CITY IS BACK", sub:"GTA 6 • THE NEXT BIG LEAP" },
         { dur:7, bg:"0x17151f", title:"NOV. 19, 2026", sub:"OFFICIAL RELEASE DATE" },
@@ -312,23 +313,24 @@ export function registerContentEngine(app, deps) {
       const inputs = [];
       const filters = [];
       sceneInputs.forEach((s, i) => {
-        inputs.push("-f","lavfi","-i","color=c="+s.bg+":s=1080x1920:r=24:d="+s.dur);
+        inputs.push("-f","lavfi","-i","color=c="+s.bg+":s=540x960:r=15:d="+s.dur);
         const title = esc(s.title);
         const sub = esc(s.sub);
         filters.push(
-          "["+i+":v]drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:text=\x27AX / VICE CITY FILES\x27:fontcolor=white@0.72:fontsize=26:x=78:y=300,drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:text=\x27"+title+"\x27:fontcolor=white:fontsize=64:x=(w-text_w)/2:y=560,drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text=\x27"+sub+"\x27:fontcolor=white@0.88:fontsize=34:x=(w-text_w)/2:y=690,drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text=\x27FACT-CHECKED • NO RUMORS\x27:fontcolor=white@0.62:fontsize=24:x=(w-text_w)/2:y=1715,drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text=\x27VICE CITY FILES • AX\x27:fontcolor=white@0.58:fontsize=24:x=78:y=1810,setsar=1[v"+i+"]"
+          "["+i+":v]drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:text='AX / VICE CITY FILES':fontcolor=white@0.72:fontsize=16:x=39:y=150,drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:text='"+title+"':fontcolor=white:fontsize=32:x=(w-text_w)/2:y=280,drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='"+sub+"':fontcolor=white@0.88:fontsize=18:x=(w-text_w)/2:y=345,drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='FACT-CHECKED • NO RUMORS':fontcolor=white@0.62:fontsize=13:x=(w-text_w)/2:y=858,drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='VICE CITY FILES • AX':fontcolor=white@0.58:fontsize=13:x=39:y=905,setsar=1[v"+i+"]"
         );
       });
-      filters.push(sceneInputs.map((_,i)=>"[v"+i+"]").join("")+"concat=n="+sceneInputs.length+":v=1:a=0,format=yuv420p[v]");
+      filters.push(sceneInputs.map((_,i)=>"[v"+i+"]").join("")+"concat=n="+sceneInputs.length+":v=1:a=0,scale=1080:1920:flags=fast_bilinear,format=yuv420p[v]");
 
       await execFileAsync("ffmpeg", [
         "-hide_banner","-loglevel","error","-y",
         ...inputs,
-        "-filter_complex",filters.join(";"),
-        "-map","[v]",
         "-f","lavfi","-i","anullsrc=channel_layout=stereo:sample_rate=48000",
-        "-map","6:a:0","-c:v","libx264","-preset","ultrafast","-crf","30","-pix_fmt","yuv420p",
-        "-c:a","aac","-b:a","64k","-ar","48000","-t","45","-shortest","-movflags","+faststart",outputPath
+        "-filter_complex",filters.join(";"),
+        "-map","[v]","-map","6:a:0",
+        "-c:v","libx264","-preset","ultrafast","-crf","32","-pix_fmt","yuv420p",
+        "-c:a","aac","-b:a","64k","-ar","48000","-t","45","-shortest",
+        "-movflags","+faststart",outputPath
       ],{timeout:15000});
 
       const stat=await fs.stat(outputPath);
