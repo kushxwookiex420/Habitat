@@ -1,3 +1,5 @@
+import { runVisualQA } from "./visual-qa.mjs";
+
 // Habitat Content Engine
 // Ax-managed pipeline: research -> script -> edit -> approval -> publish -> analytics.
 // External publishing is approval-gated; this module never claims an upload happened
@@ -350,19 +352,53 @@ export function registerContentEngine(app, deps) {
         throw new Error("rendered artifact dimensions verification failed");
 
       const artifact={
-        type:"mp4",status:"completed",path:outputPath,bytes:stat.size,
+        type:"mp4",status:"rendered",path:outputPath,bytes:stat.size,
         durationSeconds,width:1080,height:1920,renderedAt:nowIso(),
-        verified:true,renderer:"ffmpeg-scene-engine-v2",
+        verified:false,renderer:"ffmpeg-scene-engine-v4",
         audio:"placeholder-silence",
         scenes:scenes.map(s=>({start:s.start,end:s.end,title:s.title}))
       };
 
-      update(job,"edit","completed",{
+      // Hard visual gate: file existence is not visual verification.
+      const visualQA = await runVisualQA({
+        artifactPath: outputPath,
+        renderPlan: {
+          ...renderPlan,
+          scenes: scenes.map(s=>({start:s.start,end:s.end,title:s.title})),
+          onScreenText: [
+            { text:"VICE CITY IS BACK", fontSize:32, bold:true },
+            { text:"NOV. 19, 2026", fontSize:32, bold:true },
+            { text:"JASON + LUCIA", fontSize:32, bold:true },
+            { text:"VICE CITY • LEONIDA", fontSize:32, bold:true },
+            { text:"PS5 • XBOX SERIES X|S", fontSize:32, bold:true },
+            { text:"FACTS, NOT RUMORS", fontSize:32, bold:true }
+          ]
+        },
+        expectedSceneCount: scenes.length
+      });
+
+      artifact.visualQA = visualQA;
+      artifact.verified = visualQA.status === "VISUAL_PASS";
+      artifact.status = artifact.verified ? "verified" : "blocked";
+
+      update(job,"edit",artifact.verified ? "completed" : "failed",{
         ...job.stages.edit.result,
         renderPlan:{...renderPlan,output:artifact},
-        artifact
+        artifact,
+        visualQA
       });
-      res.json({ok:true,job,artifact});
+
+      if (!artifact.verified) {
+        return res.status(422).json({
+          ok:false,
+          error:"visual QA blocked artifact",
+          artifact,
+          visualQA,
+          job
+        });
+      }
+
+      res.json({ok:true,job,artifact,visualQA});
     } catch(error) {
       update(job,"edit","failed",{
         ...job.stages.edit.result,
@@ -376,8 +412,8 @@ export function registerContentEngine(app, deps) {
     const job = contentJobs.get(req.params.id);
     if (!job) return res.status(404).json({ ok:false, error:"content job not found" });
     const artifact = job.stages.edit?.result?.artifact;
-    if (!artifact?.verified || !artifact?.path)
-      return res.status(404).json({ ok:false, error:"verified MP4 artifact not available", job });
+    if (!artifact?.verified || artifact?.status !== "verified" || !artifact?.path)
+      return res.status(404).json({ ok:false, error:"verified visual-QA-passed MP4 artifact not available", job });
     res.type("video/mp4");
     res.download(artifact.path, "habitat-artifact-001.mp4");
   });
