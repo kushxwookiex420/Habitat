@@ -408,6 +408,35 @@ export function registerContentEngine(app, deps) {
     }
   });
 
+  // Ax final artifact review: workers and deterministic QA provide evidence; Ax owns the decision.
+  function axReviewArtifact(job) {
+    const artifact = job?.stages?.edit?.result?.artifact;
+    const qa = artifact?.visualQA;
+    const issues = [];
+    if (!artifact) issues.push("artifact missing");
+    if (!qa || qa.status !== "VISUAL_PASS") issues.push("visual QA did not pass");
+    if (artifact && artifact.status !== "verified") issues.push("artifact is not verified");
+    if (artifact && artifact.verified !== true) issues.push("artifact verified flag is false");
+    if (artifact && (Number(artifact.width) !== 1080 || Number(artifact.height) !== 1920)) issues.push("unexpected output dimensions");
+    if (artifact && Number(artifact.durationSeconds) < 44) issues.push("artifact duration below production minimum");
+    if (qa?.issues?.length) issues.push("visual QA reported issues");
+    const status = issues.length ? "BLOCKED" : "AX_APPROVED";
+    return {
+      status, owner:"Ax", decisionAt:nowIso(), issues,
+      evidence:{ visualQA:qa?.status||null, artifactStatus:artifact?.status||null, verified:artifact?.verified===true, dimensions:artifact?[artifact.width,artifact.height]:null, durationSeconds:artifact?.durationSeconds||null },
+      rule:"Ax approves only a machine-verified artifact with zero visual-QA issues."
+    };
+  }
+
+  app.post("/content/jobs/:id/ax-review", (req, res) => {
+    const job = contentJobs.get(req.params.id);
+    if (!job) return res.status(404).json({ ok:false, error:"content job not found" });
+    const review = axReviewArtifact(job);
+    job.axReview = review;
+    job.updatedAt = nowIso();
+    res.status(review.status === "AX_APPROVED" ? 200 : 422).json({ ok:review.status === "AX_APPROVED", review, job });
+  });
+
   app.get("/content/jobs/:id/artifact", async (req, res) => {
     const job = contentJobs.get(req.params.id);
     if (!job) return res.status(404).json({ ok:false, error:"content job not found" });
@@ -493,6 +522,13 @@ export function registerContentEngine(app, deps) {
 
     const gate = job.qualityGate || qualityGate(job);
     job.qualityGate = gate;
+    const axReview = job.axReview || axReviewArtifact(job);
+    job.axReview = axReview;
+    if (axReview.status !== "AX_APPROVED") {
+      job.stages.publish.status = "blocked";
+      job.stages.publish.result = { blockedAt: nowIso(), reason: "Ax final review failed", axReview };
+      return res.status(409).json({ ok:false, error:"publishing blocked by Ax final review", axReview, gate, job });
+    }
     if (gate.status !== "READY_TO_PUBLISH") {
       job.stages.publish.status = "blocked";
       job.stages.publish.result = { blockedAt: nowIso(), reason: "quality gate failed", gate };
