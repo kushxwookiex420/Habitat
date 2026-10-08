@@ -5,6 +5,9 @@ on:
     branches: [main]
     paths:
       - '.github/workflows/artifact_001.yml'
+      - 'content-engine.mjs'
+      - 'artifacts/**'
+  workflow_dispatch:
 
 jobs:
   execute-artifact-001:
@@ -75,6 +78,9 @@ jobs:
           assert a.get('width') == 1080 and a.get('height') == 1920
           assert float(a.get('durationSeconds',0)) >= 44
           assert int(a.get('bytes',0)) > 0
+          assert a.get('renderer') == 'ffmpeg-scene-engine-v2'
+          assert len(a.get('scenes',[])) == 6
+          assert a.get('audio') == 'placeholder-silence'
           PY
 
       - name: Quality gate
