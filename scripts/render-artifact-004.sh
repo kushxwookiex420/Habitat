@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
-OUT="\${1:-habitat-artifact-004.mp4}"
+OUT="${1:-habitat-artifact-004.mp4}"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 B=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf
@@ -19,17 +19,17 @@ declare -a VO=(
 )
 
 for i in 0 1 2 3 4 5; do
-  if ! espeak-ng -v en-us -s 145 -p 48 -a 100 -w "$TMP/vo-$i.wav" -- "\${VO[$i]}"; then
-    printf "%s\n" "\${VO[$i]}" | espeak-ng -v en-us -s 145 -p 48 -a 100 --stdin --stdout > "$TMP/vo-$i.wav"
+  if ! espeak-ng -v en-us -s 145 -p 48 -a 100 -w "$TMP/vo-$i.wav" -- "${VO[$i]}"; then
+    printf "%s\n" "${VO[$i]}" | espeak-ng -v en-us -s 145 -p 48 -a 100 --stdin --stdout > "$TMP/vo-$i.wav"
   fi
   test -s "$TMP/vo-$i.wav"
-  dur="\${DURS[$i]}"
+  dur="${DURS[$i]}"
   ffmpeg -hide_banner -loglevel error -y -i "$TMP/vo-$i.wav" -af "apad,atrim=0:$dur,asetpts=N/SR/TB" -ar 48000 -ac 2 "$TMP/vo-$i-fit.wav"
 done
 
 scene(){
   local n=$1 d=$2 bg=$3 accent=$4 title=$5 sub=$6
-  ffmpeg -hide_banner -loglevel error -y -f lavfi -i "color=c=$bg:s=540x960:r=15:d=$d" -vf "drawgrid=width=50:height=50:thickness=1:color=\${accent}@0.10,drawbox=x=0:y=610:w=540:h=350:color=0x03040a@0.84:t=fill,drawbox=x=45:y=500:w=80:h=460:color=\${accent}@0.16:t=fill,drawbox=x=155:y=455:w=95:h=505:color=\${accent}@0.12:t=fill,drawbox=x=285:y=535:w=85:h=425:color=\${accent}@0.15:t=fill,drawbox=x=405:y=480:w=90:h=480:color=\${accent}@0.12:t=fill,drawbox=x='mod(t*85,700)-100':y=0:w=100:h=960:color=\${accent}@0.10:t=fill,drawbox=x=0:y='mod(t*70,960)':w=540:h=3:color=\${accent}@0.40:t=fill,drawtext=fontfile=$B:text='AX / VICE CITY FILES':fontcolor=white@0.72:fontsize=16:x=39:y=105,drawtext=fontfile=$B:text='$title':fontcolor=white:fontsize=32:x=(w-text_w)/2:y=275,drawtext=fontfile=$R:text='$sub':fontcolor=white@0.88:fontsize=18:x=(w-text_w)/2:y=340,drawtext=fontfile=$R:text='ROCKSTAR SOURCE LOCKED':fontcolor=white@0.62:fontsize=13:x=(w-text_w)/2:y=855,drawtext=fontfile=$R:text='VICE CITY FILES - AX':fontcolor=white@0.58:fontsize=13:x=39:y=905,format=yuv420p" -c:v libx264 -preset ultrafast -crf 30 -an "$TMP/$n.mp4"
+  ffmpeg -hide_banner -loglevel error -y -f lavfi -i "color=c=$bg:s=540x960:r=15:d=$d" -vf "drawgrid=width=50:height=50:thickness=1:color=${accent}@0.10,drawbox=x=0:y=610:w=540:h=350:color=0x03040a@0.84:t=fill,drawbox=x=45:y=500:w=80:h=460:color=${accent}@0.16:t=fill,drawbox=x=155:y=455:w=95:h=505:color=${accent}@0.12:t=fill,drawbox=x=285:y=535:w=85:h=425:color=${accent}@0.15:t=fill,drawbox=x=405:y=480:w=90:h=480:color=${accent}@0.12:t=fill,drawbox=x='mod(t*85,700)-100':y=0:w=100:h=960:color=${accent}@0.10:t=fill,drawbox=x=0:y='mod(t*70,960)':w=540:h=3:color=${accent}@0.40:t=fill,drawtext=fontfile=$B:text='AX / VICE CITY FILES':fontcolor=white@0.72:fontsize=16:x=39:y=105,drawtext=fontfile=$B:text='$title':fontcolor=white:fontsize=32:x=(w-text_w)/2:y=275,drawtext=fontfile=$R:text='$sub':fontcolor=white@0.88:fontsize=18:x=(w-text_w)/2:y=340,drawtext=fontfile=$R:text='ROCKSTAR SOURCE LOCKED':fontcolor=white@0.62:fontsize=13:x=(w-text_w)/2:y=855,drawtext=fontfile=$R:text='VICE CITY FILES - AX':fontcolor=white@0.58:fontsize=13:x=39:y=905,format=yuv420p" -c:v libx264 -preset ultrafast -crf 30 -an "$TMP/$n.mp4"
 }
 scene 01 5 101020 39d9ff "VICE CITY + LEONIDA" "THE OFFICIAL SETTING"
 scene 02 7 15101f ff3aa7 "NOV. 19, 2026" "OFFICIAL RELEASE DATE"
