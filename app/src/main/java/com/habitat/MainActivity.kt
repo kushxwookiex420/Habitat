@@ -188,7 +188,7 @@ class MainActivity : Activity() {
                         if (result.state == BrainAdapter.State.CONNECTED) {
                             try {
                                 val task = JSONObject(result.text)
-                                lastTaskId = task.optString("id", null)
+                                lastTaskId = task.optString("id", "")
                                 if (lastTaskId.isNullOrBlank()) {
                                     ui.replaceLastAxMessage("System Check was created but no real task ID was returned. I will not treat it as loaded.")
                                     return@runOnUiThread
