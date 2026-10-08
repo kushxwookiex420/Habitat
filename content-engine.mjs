@@ -662,6 +662,29 @@ export function registerContentEngine(app, deps) {
     res.json({ ok:true, job });
   });
 
+  // Scheduler hook: when enabled, Ax can start bounded autonomous missions on a cadence.
+  // The timer is opt-in so deployment alone never creates unexpected external activity.
+  const autonomousIntervalMinutes = Math.max(0, Number(process.env.HABITAT_AUTONOMOUS_INTERVAL_MINUTES || 0));
+  if (autonomousIntervalMinutes > 0) {
+    const objective = String(process.env.HABITAT_AUTONOMOUS_OBJECTIVE || "Create the next best ViceCityFiles short-form content mission.").trim();
+    const project = String(process.env.HABITAT_AUTONOMOUS_PROJECT || "ViceCityFiles").trim();
+    const platform = String(process.env.HABITAT_AUTONOMOUS_PLATFORM || "tiktok").trim().toLowerCase();
+    const runAutonomous = async () => {
+      try {
+        const job = makeJob({ project, objective, platform, format:"9:16" });
+        const base = "http://127.0.0.1:" + port;
+        const response = await fetch(base + "/content/jobs/" + job.id + "/research", {
+          method:"POST", headers:{"content-type":"application/json"}, body:"{}"
+        });
+        console.log("AX_AUTONOMOUS_TICK", JSON.stringify({jobId:job.id,status:response.status,startedAt:nowIso()}));
+      } catch (error) {
+        console.error("AX_AUTONOMOUS_TICK_FAILED", String(error?.message || error));
+      }
+    };
+    setTimeout(runAutonomous, 1500);
+    setInterval(runAutonomous, autonomousIntervalMinutes * 60 * 1000);
+  }
+
   // Ax autonomous mission runner: executes every safe stage in order and stops only at the external publish approval boundary.
   app.post("/content/autonomous-run", async (req, res) => {
     const objective = String(req.body?.objective || "").trim();
