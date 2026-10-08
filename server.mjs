@@ -13,12 +13,18 @@ function getApiKey() {
 const apiKey = getApiKey();
 const model = "openrouter/free";
 const fallbackModels = [
+  // Keep the free fallback pool current and diverse. Free providers can
+  // independently rate-limit or abort, so one provider failure must not
+  // become a Habitat outage.
   "nvidia/nemotron-3-ultra:free",
-  "nvidia/nemotron-3.5-lightning:free",
-  "google/gemma-4-26b-a4b-it:free"
+  "liquid/lfm2.5-2.6b:free",
+  "openai/gpt-oss-120b:free",
+  "openai/gpt-oss-20b:free",
+  "nvidia/nemotron-3-super:free",
+  "qwen/qwen3-coder:free"
 ];
 const fallbackModel = fallbackModels[0];
-const providerTimeoutMs = 35000;
+const providerTimeoutMs = 30000;
 
 if (!getApiKey()) {
   console.warn(
@@ -64,7 +70,11 @@ async function openRouterChat(payload) {
           body: JSON.stringify({
             ...payload,
             model: selectedModel,
-            max_tokens: payload?.max_tokens || 512
+            max_tokens: payload?.max_tokens || 512,
+            provider: payload?.provider || {
+              allow_fallbacks: true,
+              sort: "throughput"
+            }
           }),
           signal: controller.signal
         });
@@ -109,6 +119,9 @@ async function openRouterChat(payload) {
           "attempt=" + (attempt + 1),
           String(error?.message || error).slice(0, 300)
         );
+        // An AbortError is normally a provider timeout. Do not immediately
+        // hammer the same provider a second time; move to the next fallback.
+        if (error?.name === "AbortError") break;
       } finally {
         clearTimeout(timeout);
       }
