@@ -131,9 +131,22 @@ export async function runVisualQA({ artifactPath, renderPlan = {}, expectedScene
       issues.push({ type:"scene_progression_failed", plannedScenes:Number(plannedCount || 0), detectedTransitions:uniqueSceneTimes.length, transitionTimes:uniqueSceneTimes });
     }
 
+    const remediation = issues.map(issue => {
+      switch (issue.type) {
+        case "text_overflow_risk": return { action:"resize_text", text:issue.text, instruction:"Reduce font size or shorten the on-screen text until estimated width is within the safe area." };
+        case "sustained_black_frame": return { action:"repair_black_frames", instruction:"Replace the affected interval with a valid scene frame/background and re-render." };
+        case "frozen_visual": return { action:"repair_frozen_scene", instruction:"Ensure the affected scene changes visually or shorten the static interval below the freeze threshold." };
+        case "scene_progression_failed": return { action:"repair_scene_progression", instruction:"Ensure every planned scene produces a meaningful visual transition and re-render." };
+        case "aspect_ratio_plan_mismatch": return { action:"repair_aspect_ratio", instruction:"Render the requested 9:16 output at 1080x1920." };
+        case "scene_plan_missing": return { action:"repair_scene_plan", instruction:"Supply an explicit scene list before rendering." };
+        default: return { action:"inspect_and_repair", instruction:"Resolve the machine-reported defect and re-run Visual QA." };
+      }
+    });
     const overall = issues.length ? "BLOCKED" : "VISUAL_PASS";
     return {
       status:overall,
+      remediation,
+      repairRequired: issues.length > 0,
       verifiedAt:new Date().toISOString(),
       durationMs:Date.now()-startedAt,
       checks,
