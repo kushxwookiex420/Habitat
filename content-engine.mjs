@@ -159,6 +159,24 @@ export function registerContentEngine(app, deps) {
     try {
       update(job, "script", "running");
       const research = job.stages.research.result || {};
+
+      // Artifact 001 uses the canonical fact-checked package already committed to Habitat.
+      // Do not replace that approved package with an unconstrained model rewrite.
+      if (job.project === "ViceCityFiles" && /Artifact 001|Vice City 6: The Next Big Leap/i.test(job.objective)) {
+        const script = {
+          title: "Vice City 6: The Next Big Leap",
+          hook: "Vice City is coming back — and GTA 6 just got a lot more real.",
+          voiceover: "Vice City is coming back — and GTA 6 just got a lot more real. Rockstar has GTA 6 scheduled to launch November 19, 2026, and pre-orders are already open. The game follows Jason and Lucia after a score goes wrong, pulling them into a criminal conspiracy across Leonida. And yes, Vice City is back at the center of the story — with Rockstar promising its biggest evolution of the series yet. Right now, the officially announced launch platforms are PlayStation 5 and Xbox Series X and S. So forget the rumors for a second. These are the facts Rockstar has actually confirmed — and the next leap is almost here.",
+          onScreenText: ["VICE CITY 6", "THE NEXT BIG LEAP", "FACTS, NOT RUMORS"],
+          shotList: ["title card", "Jason and Lucia", "Vice City / Leonida", "official launch platforms", "end card"],
+          caption: "GTA 6 is getting closer. Here are the confirmed details — no rumors, no made-up features.",
+          hashtags: ["#GTA6", "#GTAVI", "#ViceCity", "#RockstarGames", "#GamingNews"]
+        };
+        update(job, "script", "completed", script);
+        update(job, "edit", "ready");
+        return res.json({ ok:true, job, source:"canonical-artifact-001" });
+      }
+
       const prompt = [
         "You are Ax Script Writer.",
         "Create one short-form production script from this research.",
