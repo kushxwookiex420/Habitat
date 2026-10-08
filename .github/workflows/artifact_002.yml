@@ -45,14 +45,16 @@ jobs:
       - name: Script (tracking only)
         continue-on-error: true
         run: |
-          id=$(cat /tmp/job_id)
+          id=$(cat /tmp/job_id 2>/dev/null || true)
+          test -n "$id" || exit 0
           curl -sS -f -X POST "https://habitat-1-szzd.onrender.com/content/jobs/$id/script" -H 'content-type: application/json' -d '{}' > /tmp/script.json
           cat /tmp/script.json
 
       - name: Render plan (tracking only)
         continue-on-error: true
         run: |
-          id=$(cat /tmp/job_id)
+          id=$(cat /tmp/job_id 2>/dev/null || true)
+          test -n "$id" || exit 0
           curl -sS -f -X POST "https://habitat-1-szzd.onrender.com/content/jobs/$id/render-plan" -H 'content-type: application/json' -d '{}' > /tmp/plan.json
           cat /tmp/plan.json
 
