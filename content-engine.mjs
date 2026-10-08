@@ -637,52 +637,5 @@ export function registerContentEngine(app, deps) {
     });
   });
 
-  // Ax operational smoke test: creates a deterministic Artifact 001 job and runs the
-  // real render-loop + Ax review + quality gate through the live server. Temporary test route.
-  app.get("/content/smoke-test", async (req, res) => {
-    try {
-      const job = makeJob({ project:"ViceCityFiles", objective:"Artifact 001 — Vice City 6: The Next Big Leap", platform:"tiktok", format:"9:16" });
-      job.stages.research.status = "completed";
-      job.stages.research.result = { source:"deterministic-smoke-fixture", keyClaims:["official package fixture"] };
-      job.stages.script.status = "completed";
-      job.stages.script.result = {
-        title:"Vice City 6: The Next Big Leap",
-        hook:"Vice City is coming back — and GTA 6 just got a lot more real.",
-        voiceover:"Vice City is coming back — and GTA 6 just got a lot more real. Rockstar has GTA 6 scheduled to launch November 19, 2026, and pre-orders are already open. The game follows Jason and Lucia after a score goes wrong, pulling them into a criminal conspiracy across Leonida. And yes, Vice City is back at the center of the story — with Rockstar promising its biggest evolution of the series yet. Right now, the officially announced launch platforms are PlayStation 5 and Xbox Series X and S. So forget the rumors for a second. These are the facts Rockstar has actually confirmed — and the next leap is almost here.",
-        onScreenText:["VICE CITY 6","THE NEXT BIG LEAP","FACTS, NOT RUMORS"],
-        shotList:["title card","Jason and Lucia","Vice City / Leonida","official launch platforms","end card"],
-        caption:"GTA 6 is getting closer. Here are the confirmed details — no rumors, no made-up features.",
-        hashtags:["#GTA6","#GTAVI","#ViceCity","#RockstarGames","#GamingNews"]
-      };
-      job.stages.edit.status = "ready";
-      const base = req.protocol + "://" + req.get("host");
-      const planResponse = await fetch(base + "/content/jobs/" + job.id + "/render-plan", {method:"POST",headers:{"content-type":"application/json"},body:"{}"});
-      const planPayload = await planResponse.json();
-      const loopResponse = await fetch(base + "/content/jobs/" + job.id + "/render-loop", {method:"POST",headers:{"content-type":"application/json"},body:"{}"});
-      const loopPayload = await loopResponse.json();
-      const reviewResponse = await fetch(base + "/content/jobs/" + job.id + "/ax-review", {method:"POST",headers:{"content-type":"application/json"},body:"{}"});
-      const reviewPayload = await reviewResponse.json();
-      const gateResponse = await fetch(base + "/content/jobs/" + job.id + "/quality-gate", {method:"POST",headers:{"content-type":"application/json"},body:"{}"});
-      const gatePayload = await gateResponse.json();
-      const pass = Boolean(loopPayload?.artifact?.verified) && reviewPayload?.review?.status === "AX_APPROVED" && gatePayload?.gate?.status === "READY_TO_PUBLISH";
-      res.status(pass ? 200 : 422).json({ok:pass, smokeTest:"AX_ARTIFACT_PIPELINE", jobId:job.id, renderPlan:{status:planResponse.status, ok:planPayload?.ok}, renderLoop:{status:loopResponse.status, payload:loopPayload?.renderLoop, visualQA:loopPayload?.visualQA?.status}, axReview:{status:reviewResponse.status, decision:reviewPayload?.review?.status}, qualityGate:{status:gateResponse.status, decision:gatePayload?.gate?.status}, artifact:loopPayload?.artifact || null});
-    } catch (error) {
-      res.status(500).json({ok:false, smokeTest:"AX_ARTIFACT_PIPELINE", error:String(error?.message || error)});
-    }
-  });
-
-
-  if (process.env.HABITAT_STARTUP_SMOKE_TEST === "1") {
-    setTimeout(async () => {
-      try {
-        const base = process.env.RENDER_EXTERNAL_URL || "http://127.0.0.1:" + (process.env.PORT || 10000);
-        const response = await fetch(base + "/content/smoke-test");
-        const payload = await response.json();
-        console.log("AX_SMOKE_TEST_RESULT", JSON.stringify({ status:response.status, ok:payload?.ok, jobId:payload?.jobId, renderLoop:payload?.renderLoop, axReview:payload?.axReview, qualityGate:payload?.qualityGate }));
-      } catch (error) {
-        console.error("AX_SMOKE_TEST_ERROR", String(error?.message || error));
-      }
-    }, 15000);
-  }
 
 }
