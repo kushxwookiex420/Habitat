@@ -1,5 +1,4 @@
 import express from "express";
-import OpenAI from "openai";
 
 const app = express();
 
@@ -17,15 +16,39 @@ if (!apiKey) {
   );
 }
 
-const client = new OpenAI({
-  apiKey,
-  baseURL: "https://openrouter.ai/api/v1",
-  defaultHeaders: {
-    "Authorization": `Bearer ${apiKey}`,
-    "HTTP-Referer": "https://habitat-1-szzd.onrender.com",
-    "X-OpenRouter-Title": "Habitat Ax Core"
+async function openRouterChat(payload) {
+  const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+      "HTTP-Referer": "https://habitat-1-szzd.onrender.com",
+      "X-Title": "Habitat Ax Core"
+    },
+    body: JSON.stringify(payload)
+  });
+
+  const text = await response.text();
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    data = { error: { message: text || "OpenRouter returned a non-JSON response." } };
   }
-});
+
+  if (!response.ok) {
+    const providerMessage =
+      data?.error?.message ||
+      data?.error?.error?.message ||
+      text ||
+      `OpenRouter HTTP ${response.status}`;
+    const error = new Error(`OpenRouter HTTP ${response.status}: ${providerMessage}`);
+    error.status = response.status;
+    throw error;
+  }
+
+  return data;
+}
 
 /*
  * HABITAT AX CORE
@@ -234,7 +257,7 @@ Be direct, natural, practical, detailed when the task warrants it, and honest ab
     });
 
     const response =
-      await client.chat.completions.create({
+      await openRouterChat({
         model,
         messages
       });
@@ -367,7 +390,7 @@ async function runSystemCheck() {
     if (!apiKey) throw new Error("OPENROUTER_API_KEY is not configured.");
 
     worker.lastRunAt = nowIso();
-    const workerResponse = await client.chat.completions.create({
+    const workerResponse = await openRouterChat({
       model,
       messages: [
         { role: "system", content: "You are Habitat QA Worker reporting to Ax. Return RESULT, CHECKS, and ISSUES. Never claim device access you do not have." },
@@ -482,7 +505,7 @@ app.post("/tasks/:id/delegate", async (req, res) => {
 
     // A real model-backed QA worker receives the assignment. It is explicitly
     // forbidden from claiming Android/device access it does not possess.
-    const workerResponse = await client.chat.completions.create({
+    const workerResponse = await openRouterChat({
       model,
       messages: [
         {
@@ -569,7 +592,7 @@ If information is missing, state exactly what is missing.
 Mission:
 `;
 
-    const response = await client.chat.completions.create({
+    const response = await openRouterChat({
       model: workerModel,
       messages: [
         {
@@ -647,7 +670,7 @@ app.post("/orchestrate/dropilot", async (req, res) => {
 
     const workerResults = await Promise.all(
       roles.map(async (role) => {
-        const response = await client.chat.completions.create({
+        const response = await openRouterChat({
           model,
           messages: [
             {
@@ -675,7 +698,7 @@ app.post("/orchestrate/dropilot", async (req, res) => {
       })
     );
 
-    const synthesis = await client.chat.completions.create({
+    const synthesis = await openRouterChat({
       model,
       messages: [
         {
@@ -731,7 +754,7 @@ app.post("/orchestrate/vicecity", async (req, res) => {
     ];
 
     const reports = await Promise.all(roles.map(async role => {
-      const out = await client.chat.completions.create({
+      const out = await openRouterChat({
         model,
         messages: [
           { role: "system", content: "You are " + role.name + ", a worker reporting to Ax. " + role.job + " Return VERDICT, TOP 3 ACTIONS, RISKS, and ONE FACT TO VERIFY." },
@@ -741,7 +764,7 @@ app.post("/orchestrate/vicecity", async (req, res) => {
       return { id: role.id, name: role.name, status: "complete", response: out.choices?.[0]?.message?.content || "" };
     }));
 
-    const synth = await client.chat.completions.create({
+    const synth = await openRouterChat({
       model,
       messages: [
         { role: "system", content: "You are Ax, manager of the Vice City Files content operation. Turn worker reports into an execution-ready content packet. Never claim a video was generated, uploaded, or published unless an actual connected tool confirms it. Return exactly: DECISION, VIDEO CONCEPT, 7-SECOND HOOK, SCRIPT, SHOT LIST, TITLE, DESCRIPTION, HASHTAGS, NEXT ACTION." },
