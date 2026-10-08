@@ -22,17 +22,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y ffmpeg fonts-dejavu espeak-ng
 
-      - name: Wait for Habitat Render deployment
-        run: |
-          set -e
-          for i in $(seq 1 60); do
-            code=$(curl -sS -o /tmp/health.json -w "%{http_code}" https://habitat-1-szzd.onrender.com/health || true)
-            if [ "$code" = "200" ]; then cat /tmp/health.json; exit 0; fi
-            sleep 10
-          done
-          exit 1
-
-      - name: Create content mission
+      - name: Create content mission (tracking only)
+        continue-on-error: true
         run: |
           set -e
           curl -sS -f -X POST https://habitat-1-szzd.onrender.com/content/jobs             -H 'content-type: application/json'             --data '{"project":"ViceCityFiles","objective":"Create Artifact 002: cinematic Vice City 6 news short","platform":"tiktok","format":"9:16"}' > /tmp/job.json
@@ -43,19 +34,23 @@ jobs:
           open('/tmp/job_id','w').write(d['job']['id'])
           PY
 
-      - name: Research
+      - name: Research (tracking only)
+        continue-on-error: true
         run: |
-          id=$(cat /tmp/job_id)
+          id=$(cat /tmp/job_id 2>/dev/null || true)
+          test -n "$id" || exit 0
           curl -sS -f -X POST "https://habitat-1-szzd.onrender.com/content/jobs/$id/research" -H 'content-type: application/json' -d '{}' > /tmp/research.json
           cat /tmp/research.json
 
-      - name: Script
+      - name: Script (tracking only)
+        continue-on-error: true
         run: |
           id=$(cat /tmp/job_id)
           curl -sS -f -X POST "https://habitat-1-szzd.onrender.com/content/jobs/$id/script" -H 'content-type: application/json' -d '{}' > /tmp/script.json
           cat /tmp/script.json
 
-      - name: Render plan
+      - name: Render plan (tracking only)
+        continue-on-error: true
         run: |
           id=$(cat /tmp/job_id)
           curl -sS -f -X POST "https://habitat-1-szzd.onrender.com/content/jobs/$id/render-plan" -H 'content-type: application/json' -d '{}' > /tmp/plan.json
