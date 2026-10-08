@@ -1,9 +1,9 @@
-name: Habitat v0.7 APK
+name: Habitat v0.8 APK
 run-name: Habitat APK Build — ${{ github.ref_name }} / ${{ github.sha }}
 
 on:
   push:
-    branches: [ main, ax-v0.6-real-brain, ax-v0.6-brain-identity, ax-v0.7-droppilot-operator ]
+    branches: [ main, ax-v0.6-real-brain, ax-v0.6-brain-identity, ax-v0.7-droppilot-operator, ax-task-orchestration-fix ]
   workflow_dispatch:
 
 # Ax build trigger verified: every main push packages a fresh debug APK.
@@ -50,19 +50,19 @@ jobs:
           set -e
           test -f app/build/outputs/apk/debug/app-debug.apk
           mkdir -p artifact
-          cp app/build/outputs/apk/debug/app-debug.apk artifact/Habitat-v0.7-Ax-debug.apk
+          cp app/build/outputs/apk/debug/app-debug.apk artifact/Habitat-v0.8-Ax-debug.apk
           ls -lh artifact/*
       - uses: actions/upload-artifact@v4
         with:
-          name: Habitat-v0.7-Ax-debug-apk
+          name: Habitat-v0.8-Ax-debug-apk
           path: artifact/Habitat-v0.7-Ax-debug.apk
       - name: Publish APK release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -e
-          TAG="habitat-v0.7-latest"
-          TITLE="Habitat v0.7 Ax — Latest APK"
+          TAG="habitat-v0.8-latest"
+          TITLE="Habitat v0.8 Ax — Latest APK"
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" artifact/Habitat-v0.7-Ax-debug.apk --clobber
             gh release edit "$TAG" --title "$TITLE" --notes "Latest verified Habitat v0.7 Ax debug APK. Built from main commit $GITHUB_SHA."
