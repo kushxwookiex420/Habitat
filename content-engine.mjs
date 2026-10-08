@@ -695,6 +695,7 @@ export function registerContentEngine(app, deps) {
       const rendered = await call("/content/jobs/" + job.id + "/render-loop");
       const review = await call("/content/jobs/" + job.id + "/ax-review");
       const gate = await call("/content/jobs/" + job.id + "/quality-gate");
+      // Never cross the external publishing boundary automatically unless a publisher bridge is configured.
       job.autonomousRun = {
         status: gate?.gate?.status === "READY_TO_PUBLISH" ? "READY_TO_PUBLISH" : "BLOCKED",
         owner:"Ax", stages, renderLoop:rendered?.renderLoop || null,
