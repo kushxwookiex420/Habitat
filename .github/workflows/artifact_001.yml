@@ -100,9 +100,3 @@ jobs:
           name: habitat-artifact-001
           path: habitat-artifact-001.mp4
           retention-days: 7
-
-        uses: actions/upload-artifact@v4
-        with:
-          name: habitat-artifact-001
-          path: habitat-artifact-001.mp4
-          retention-days: 7
