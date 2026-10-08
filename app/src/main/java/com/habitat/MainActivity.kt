@@ -388,6 +388,12 @@ class MainActivity : Activity() {
         }
 
         setContentView(root)
+        // Register this live Android client with Ax before the System Check runs.
+        brain.heartbeat { ok, detail ->
+            runOnUiThread {
+                if (ok) ui.addChatMessage("AX", "Android device heartbeat: VERIFIED")
+            }
+        }
         ensureSystemCheckTask()
     }
 
