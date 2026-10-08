@@ -662,26 +662,36 @@ export function registerContentEngine(app, deps) {
     res.json({ ok:true, job });
   });
 
-  // Scheduler hook: when enabled, Ax can start bounded autonomous missions on a cadence.
-  // The timer is opt-in so deployment alone never creates unexpected external activity.
+  // Scheduler hook: bounded autonomous missions on a cadence. The scheduler is
+  // deliberately observable: boot, dispatch, stage progress, completion, and
+  // failure are all logged. It uses the public Render URL so the same deployed
+  // instance handles the mission rather than relying on loopback routing.
   const autonomousIntervalMinutes = Math.max(0, Number(process.env.HABITAT_AUTONOMOUS_INTERVAL_MINUTES || 0));
   if (autonomousIntervalMinutes > 0) {
     const objective = String(process.env.HABITAT_AUTONOMOUS_OBJECTIVE || "Create the next best ViceCityFiles short-form content mission.").trim();
     const project = String(process.env.HABITAT_AUTONOMOUS_PROJECT || "ViceCityFiles").trim();
     const platform = String(process.env.HABITAT_AUTONOMOUS_PLATFORM || "tiktok").trim().toLowerCase();
+    const publicBase = String(process.env.HABITAT_PUBLIC_URL || "https://habitat-1-szzd.onrender.com").replace(/\/$/, "");
     let autonomousMissionRunning = false;
+    console.log("AX_AUTONOMOUS_BOOT", JSON.stringify({
+      enabled:true, intervalMinutes:autonomousIntervalMinutes, project, platform, publicBase, bootAt:nowIso()
+    }));
     const runAutonomous = async () => {
       if (autonomousMissionRunning) {
         console.log("AX_AUTONOMOUS_TICK_SKIPPED", JSON.stringify({reason:"mission already running",at:nowIso()}));
         return;
       }
       autonomousMissionRunning = true;
+      const startedAt = nowIso();
+      console.log("AX_AUTONOMOUS_DISPATCH", JSON.stringify({project, platform, objective, startedAt}));
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 10 * 60 * 1000);
       try {
-        const base = "http://127.0.0.1:" + String(process.env.PORT || 10000);
-        const response = await fetch(base + "/content/autonomous-run", {
+        const response = await fetch(publicBase + "/content/autonomous-run", {
           method:"POST",
           headers:{"content-type":"application/json"},
-          body:JSON.stringify({ project, objective, platform, format:"9:16" })
+          body:JSON.stringify({ project, objective, platform, format:"9:16" }),
+          signal:controller.signal
         });
         let payload = {};
         try { payload = await response.json(); } catch {}
@@ -690,15 +700,20 @@ export function registerContentEngine(app, deps) {
           status:response.status,
           ok:response.ok,
           missionStatus:payload?.autonomousRun?.status || null,
-          startedAt:nowIso()
+          stages:payload?.autonomousRun?.stages || [],
+          startedAt,
+          completedAt:nowIso()
         }));
       } catch (error) {
-        console.error("AX_AUTONOMOUS_TICK_FAILED", String(error?.message || error));
+        console.error("AX_AUTONOMOUS_TICK_FAILED", JSON.stringify({
+          message:String(error?.message || error), startedAt, failedAt:nowIso()
+        }));
       } finally {
+        clearTimeout(timeout);
         autonomousMissionRunning = false;
       }
     };
-    setTimeout(runAutonomous, 1500);
+    setTimeout(runAutonomous, 10000);
     setInterval(runAutonomous, autonomousIntervalMinutes * 60 * 1000);
   }
 
