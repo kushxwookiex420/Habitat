@@ -323,25 +323,15 @@ export function registerContentEngine(app, deps) {
         );
       });
 
-      try {
-        update(job, "edit", "rendering", { ...job.stages.edit.result, renderPlan, rendererVersion:"v2-scene-engine" });
-        await fs.mkdir(outDir, { recursive:true });
-
-        const vf = layers.join(",");
-        await execFileAsync("ffmpeg", [
-          "-hide_banner","-loglevel","error","-y",
-          "-f","lavfi","-i","color=c=black:s=1080x1920:r=30:d=45",
-          "-f","lavfi","-i","anullsrc=channel_layout=stereo:sample_rate=48000",
-          "-filter_complex",vf,
-          "-map","0:v:0","-map","1:a:0",
-          "-c:v","libx264","-preset","ultrafast","-crf","28","-pix_fmt","yuv420p",
-          "-c:a","aac","-b:a","96k","-ar","48000","-t","45","-shortest",
-          "-movflags","+faststart",outputPath
-        ],{timeout:120000});
-
-
-        "-c:v","libx264","-preset","veryfast","-crf","23","-pix_fmt","yuv420p",
-        "-c:a","aac","-b:a","128k","-ar","48000","-t","45","-shortest",
+      const vf = layers.join(",");
+      await execFileAsync("ffmpeg", [
+        "-hide_banner","-loglevel","error","-y",
+        "-f","lavfi","-i","color=c=black:s=1080x1920:r=30:d=45",
+        "-f","lavfi","-i","anullsrc=channel_layout=stereo:sample_rate=48000",
+        "-filter_complex",vf,
+        "-map","0:v:0","-map","1:a:0",
+        "-c:v","libx264","-preset","ultrafast","-crf","28","-pix_fmt","yuv420p",
+        "-c:a","aac","-b:a","96k","-ar","48000","-t","45","-shortest",
         "-movflags","+faststart",outputPath
       ],{timeout:120000});
 
