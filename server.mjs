@@ -43,17 +43,17 @@ async function openRouterChat(payload) {
   let lastError = null;
 
   for (const selectedModel of modelsToTry) {
-    try {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), providerTimeoutMs);
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), providerTimeoutMs);
 
+    try {
       const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
         method: "POST",
-    headers: {
-      "Authorization": `Bearer ${runtimeApiKey}`,
-      "Content-Type": "application/json",
-      "HTTP-Referer": "https://habitat-1-szzd.onrender.com",
-      "X-Title": "Habitat Ax Core"
+        headers: {
+          "Authorization": `Bearer ${runtimeApiKey}`,
+          "Content-Type": "application/json",
+          "HTTP-Referer": "https://habitat-1-szzd.onrender.com",
+          "X-Title": "Habitat Ax Core"
         },
         body: JSON.stringify({
           ...payload,
@@ -62,31 +62,33 @@ async function openRouterChat(payload) {
         }),
         signal: controller.signal
       });
-      clearTimeout(timeout);
 
       const text = await response.text();
-  let data;
-  try {
-    data = JSON.parse(text);
-  } catch {
-    data = { error: { message: text || "OpenRouter returned a non-JSON response." } };
-  }
+      let data;
+      try {
+        data = JSON.parse(text);
+      } catch {
+        data = { error: { message: text || "OpenRouter returned a non-JSON response." } };
+      }
 
-  if (!response.ok) {
-    const providerMessage =
-      data?.error?.message ||
-      data?.error?.error?.message ||
-      text ||
-      `OpenRouter HTTP ${response.status}`;
+      if (response.ok) {
+        return data;
+      }
+
+      const providerMessage =
+        data?.error?.message ||
+        data?.error?.error?.message ||
+        text ||
+        `OpenRouter HTTP ${response.status}`;
       const error = new Error(`OpenRouter HTTP ${response.status}: ${providerMessage}`);
       error.status = response.status;
       lastError = error;
       console.warn("OPENROUTER_ATTEMPT_FAILED", selectedModel, String(error.message).slice(0, 300));
-      continue;
     } catch (error) {
       lastError = error;
       console.warn("OPENROUTER_ATTEMPT_FAILED", selectedModel, String(error?.message || error).slice(0, 300));
-      continue;
+    } finally {
+      clearTimeout(timeout);
     }
   }
 
