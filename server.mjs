@@ -17,6 +17,12 @@ if (!apiKey) {
 }
 
 async function openRouterChat(payload) {
+  if (!apiKey) {
+    const error = new Error("Habitat runtime is missing OPENROUTER_API_KEY before contacting OpenRouter.");
+    error.status = 500;
+    throw error;
+  }
+
   const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
     method: "POST",
     headers: {
@@ -79,6 +85,60 @@ app.get("/", (req, res) => {
     free_brain: true,
     message: "Habitat Ax Core backend is running."
   });
+});
+
+app.get("/diagnostics/provider", async (req, res) => {
+  const startedAt = Date.now();
+
+  if (!apiKey) {
+    return res.status(500).json({
+      ok: false,
+      runtimeKeyPresent: false,
+      runtimeKeyPrefix: null,
+      runtimeKeyLength: 0,
+      authorizationHeaderPrepared: false,
+      provider: "openrouter",
+      error: "OPENROUTER_API_KEY is missing from the running Render process."
+    });
+  }
+
+  try {
+    const response = await fetch("https://openrouter.ai/api/v1/models", {
+      method: "GET",
+      headers: {
+        "Authorization": `Bearer ${apiKey}`,
+        "HTTP-Referer": "https://habitat-1-szzd.onrender.com",
+        "X-OpenRouter-Title": "Habitat Ax Core"
+      }
+    });
+
+    const bodyText = await response.text();
+    let body;
+    try { body = JSON.parse(bodyText); } catch { body = { raw: bodyText.slice(0, 500) }; }
+
+    return res.status(response.ok ? 200 : 502).json({
+      ok: response.ok,
+      runtimeKeyPresent: true,
+      runtimeKeyPrefix: apiKey.slice(0, 8) + "...",
+      runtimeKeyLength: apiKey.length,
+      authorizationHeaderPrepared: true,
+      provider: "openrouter",
+      providerStatus: response.status,
+      elapsedMs: Date.now() - startedAt,
+      providerError: response.ok ? null : (body?.error?.message || body?.error || body?.raw || "unknown provider response")
+    });
+  } catch (error) {
+    return res.status(502).json({
+      ok: false,
+      runtimeKeyPresent: true,
+      runtimeKeyPrefix: apiKey.slice(0, 8) + "...",
+      runtimeKeyLength: apiKey.length,
+      authorizationHeaderPrepared: true,
+      provider: "openrouter",
+      elapsedMs: Date.now() - startedAt,
+      error: String(error?.message || error)
+    });
+  }
 });
 
 app.get("/health", (req, res) => {
