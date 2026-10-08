@@ -363,11 +363,11 @@ app.post("/chat", async (req, res) => {
 
     if (operationalIntent) {
       const requestedTitle =
-        message.match(/\\b(?:task|operation|mission|job)\\s+(?:named|called|titled)\\s+["']?([^"'\\n]+)["']?/i)?.[1]?.trim() ||
-        message.match(/(?:create|make|start|add)\\s+(?:a\\s+)?(?:real\\s+)?(?:task|operation|mission|job)\\b(?:\\s+to)?\\s+(.+?)(?:\\.|$)/i)?.[1]?.trim() ||
+        message.match(/\b(?:task|operation|mission|job)\s+(?:named|called|titled)\s+["']?([^"'\n]+)["']?/i)?.[1]?.trim() ||
+        message.match(/(?:create|make|start|add)\s+(?:a\s+)?(?:real\s+)?(?:task|operation|mission|job)\b(?:\s+to)?\s+(.+?)(?:\.|$)/i)?.[1]?.trim() ||
         "Ax Operational Test";
-      const title = requestedTitle.replace(/\\s+(?:and\\s+)?(?:execute|run|perform|delegate|dispatch|verify).*$/i, "").replace(/[.]+$/, "").trim();
-      const wantsExecution = /\\b(?:execute|run|perform|delegate|dispatch|do|complete)\\b/i.test(message);
+      const title = requestedTitle.replace(/\s+(?:and\s+)?(?:execute|run|perform|delegate|dispatch|verify).*$/i, "").replace(/[.]+$/, "").trim();
+      const wantsExecution = /\b(?:execute|run|perform|delegate|dispatch|do|complete)\b/i.test(message);
 
       try {
         const createResponse = await fetch("http://127.0.0.1:" + port + "/tasks", {
