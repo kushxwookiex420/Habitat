@@ -1,0 +1,104 @@
+name: Artifact 001 execution
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  execute-artifact-001:
+    if: github.event.head_commit.message == 'Ax: execute Artifact 001'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Wait for Habitat Render deployment
+        run: |
+          set -e
+          for i in $(seq 1 60); do
+            code=$(curl -sS -o /tmp/health.json -w "%{http_code}" https://habitat-1-szzd.onrender.com/health || true)
+            if [ "$code" = "200" ]; then
+              echo "Habitat is healthy"
+              cat /tmp/health.json
+              exit 0
+            fi
+            echo "Waiting for Habitat... HTTP $code"
+            sleep 10
+          done
+          echo "Habitat did not become healthy"
+          exit 1
+
+      - name: Create content mission
+        run: |
+          set -e
+          curl -sS -f -X POST https://habitat-1-szzd.onrender.com/content/jobs             -H 'content-type: application/json'             --data '{"project":"ViceCityFiles","objective":"Create Artifact 001: Vice City 6: The Next Big Leap","platform":"tiktok","format":"9:16"}'             > /tmp/job.json
+          cat /tmp/job.json
+          python - <<'PY'
+          import json
+          d=json.load(open('/tmp/job.json'))
+          assert d.get('ok') and d.get('job',{}).get('id')
+          print(d['job']['id'])
+          open('/tmp/job_id','w').write(d['job']['id'])
+          PY
+
+      - name: Research
+        run: |
+          set -e
+          id=$(cat /tmp/job_id)
+          curl -sS -f -X POST "https://habitat-1-szzd.onrender.com/content/jobs/$id/research"             -H 'content-type: application/json' -d '{}' > /tmp/research.json
+          cat /tmp/research.json
+
+      - name: Script
+        run: |
+          set -e
+          id=$(cat /tmp/job_id)
+          curl -sS -f -X POST "https://habitat-1-szzd.onrender.com/content/jobs/$id/script"             -H 'content-type: application/json' -d '{}' > /tmp/script.json
+          cat /tmp/script.json
+
+      - name: Render plan
+        run: |
+          set -e
+          id=$(cat /tmp/job_id)
+          curl -sS -f -X POST "https://habitat-1-szzd.onrender.com/content/jobs/$id/render-plan"             -H 'content-type: application/json' -d '{}' > /tmp/plan.json
+          cat /tmp/plan.json
+
+      - name: Render real MP4
+        run: |
+          set -e
+          id=$(cat /tmp/job_id)
+          curl -sS -f -X POST "https://habitat-1-szzd.onrender.com/content/jobs/$id/render"             -H 'content-type: application/json' -d '{}' > /tmp/render.json
+          cat /tmp/render.json
+          python - <<'PY'
+          import json
+          d=json.load(open('/tmp/render.json'))
+          a=d.get('artifact',{})
+          assert d.get('ok') and a.get('verified') is True
+          assert a.get('type') == 'mp4'
+          assert a.get('width') == 1080 and a.get('height') == 1920
+          assert float(a.get('durationSeconds',0)) >= 44
+          assert int(a.get('bytes',0)) > 0
+          PY
+
+      - name: Quality gate
+        run: |
+          set -e
+          id=$(cat /tmp/job_id)
+          code=$(curl -sS -o /tmp/gate.json -w "%{http_code}" -X POST "https://habitat-1-szzd.onrender.com/content/jobs/$id/quality-gate"             -H 'content-type: application/json' -d '{}')
+          cat /tmp/gate.json
+          python - <<'PY'
+          import json
+          d=json.load(open('/tmp/gate.json'))
+          assert d.get('gate',{}).get('status') == 'READY_TO_PUBLISH', d
+          PY
+
+      - name: Download verified artifact
+        run: |
+          set -e
+          id=$(cat /tmp/job_id)
+          curl -sS -f "https://habitat-1-szzd.onrender.com/content/jobs/$id/artifact" -o habitat-artifact-001.mp4
+          test -s habitat-artifact-001.mp4
+          ffprobe -v error -show_entries format=duration,size -of json habitat-artifact-001.mp4
+
+      - name: Upload Artifact 001 to GitHub Actions
+        uses: actions/upload-artifact@v4
+        with:
+          name: habitat-artifact-001
+          path: habitat-artifact-001.mp4
+          retention-days: 7
