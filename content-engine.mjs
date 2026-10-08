@@ -669,16 +669,33 @@ export function registerContentEngine(app, deps) {
     const objective = String(process.env.HABITAT_AUTONOMOUS_OBJECTIVE || "Create the next best ViceCityFiles short-form content mission.").trim();
     const project = String(process.env.HABITAT_AUTONOMOUS_PROJECT || "ViceCityFiles").trim();
     const platform = String(process.env.HABITAT_AUTONOMOUS_PLATFORM || "tiktok").trim().toLowerCase();
+    let autonomousMissionRunning = false;
     const runAutonomous = async () => {
+      if (autonomousMissionRunning) {
+        console.log("AX_AUTONOMOUS_TICK_SKIPPED", JSON.stringify({reason:"mission already running",at:nowIso()}));
+        return;
+      }
+      autonomousMissionRunning = true;
       try {
-        const job = makeJob({ project, objective, platform, format:"9:16" });
         const base = "http://127.0.0.1:" + String(process.env.PORT || 10000);
-        const response = await fetch(base + "/content/jobs/" + job.id + "/research", {
-          method:"POST", headers:{"content-type":"application/json"}, body:"{}"
+        const response = await fetch(base + "/content/autonomous-run", {
+          method:"POST",
+          headers:{"content-type":"application/json"},
+          body:JSON.stringify({ project, objective, platform, format:"9:16" })
         });
-        console.log("AX_AUTONOMOUS_TICK", JSON.stringify({jobId:job.id,status:response.status,startedAt:nowIso()}));
+        let payload = {};
+        try { payload = await response.json(); } catch {}
+        console.log("AX_AUTONOMOUS_TICK", JSON.stringify({
+          jobId:payload?.job?.id || null,
+          status:response.status,
+          ok:response.ok,
+          missionStatus:payload?.autonomousRun?.status || null,
+          startedAt:nowIso()
+        }));
       } catch (error) {
         console.error("AX_AUTONOMOUS_TICK_FAILED", String(error?.message || error));
+      } finally {
+        autonomousMissionRunning = false;
       }
     };
     setTimeout(runAutonomous, 1500);
