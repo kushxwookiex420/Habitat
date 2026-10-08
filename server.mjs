@@ -7,7 +7,8 @@ app.use(express.json({ limit: "1mb" }));
 
 const port = process.env.PORT || 8080;
 
-const apiKey = process.env.OPENROUTER_API_KEY;
+const rawApiKey = process.env.OPENROUTER_API_KEY;
+const apiKey = rawApiKey ? String(rawApiKey).trim().replace(/^["']|["']$/g, "") : "";
 const model = "openrouter/free";
 
 if (!apiKey) {
@@ -20,8 +21,9 @@ const client = new OpenAI({
   apiKey,
   baseURL: "https://openrouter.ai/api/v1",
   defaultHeaders: {
+    "Authorization": `Bearer ${apiKey}`,
     "HTTP-Referer": "https://habitat-1-szzd.onrender.com",
-    "X-Title": "Habitat Ax Core"
+    "X-OpenRouter-Title": "Habitat Ax Core"
   }
 });
 
@@ -46,6 +48,8 @@ app.get("/", (req, res) => {
   res.json({
     habitat: "online",
     brain: apiKey ? "ready" : "missing_api_key",
+    apiKeyPresent: Boolean(apiKey),
+    apiKeyPrefix: apiKey ? apiKey.slice(0, 8) + "..." : null,
     backend: "ready",
     provider: "openrouter",
     model,
