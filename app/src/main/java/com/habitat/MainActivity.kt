@@ -410,11 +410,6 @@ class MainActivity : Activity() {
         ensureSystemCheckTask()
     }
 
-    override fun onDestroy() {
-        heartbeatHandler.removeCallbacks(heartbeatRunnable)
-        super.onDestroy()
-    }
-
     private fun runSystemCheck(taskId: String) {
         ui.setSystemCheckTaskStatus("RUNNING  •  LIVE")
         brain.delegateTask(taskId) { result ->
@@ -586,6 +581,7 @@ class MainActivity : Activity() {
     }
 
     override fun onDestroy() {
+        heartbeatHandler.removeCallbacks(heartbeatRunnable)
         brain.shutdown()
         super.onDestroy()
     }
