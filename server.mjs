@@ -217,6 +217,32 @@ app.get("/diagnostics/provider", async (req, res) => {
   }
 });
 
+app.post("/device/heartbeat", (req, res) => {
+  const packageName = String(req.body?.packageName || "").trim();
+  const deviceId = String(req.body?.deviceId || "").trim();
+  const deviceModel = String(req.body?.deviceModel || "").trim();
+  const appVersion = String(req.body?.appVersion || "").trim();
+
+  if (packageName !== "com.habitat" || !deviceId || !deviceModel) {
+    return res.status(400).json({ ok: false, error: "Valid Habitat Android identity required." });
+  }
+
+  const device = {
+    deviceId,
+    packageName,
+    deviceModel,
+    appVersion,
+    lastSeenAt: nowIso()
+  };
+  androidDevices.set(deviceId, device);
+  return res.json({ ok: true, androidDeviceAccess: "PASS", device });
+});
+
+app.get("/device/status", (req, res) => {
+  const access = androidAccessStatus();
+  return res.json({ ok: access.status === "PASS", androidDeviceAccess: access.status, detail: access.detail, devices: access.devices });
+});
+
 app.get("/health", (req, res) => {
   res.json({
     habitat: "online",
@@ -635,6 +661,30 @@ function storageSelfTest() {
 }
 
 function nowIso() { return new Date().toISOString(); }
+
+// Real Android app presence registry. A running Habitat APK posts a heartbeat;
+// system checks can verify that the Android client actually reached the backend.
+const androidDevices = new Map();
+const ANDROID_HEARTBEAT_TTL_MS = 120000;
+
+function pruneAndroidDevices() {
+  const cutoff = Date.now() - ANDROID_HEARTBEAT_TTL_MS;
+  for (const [id, device] of androidDevices.entries()) {
+    if (new Date(device.lastSeenAt).getTime() < cutoff) androidDevices.delete(id);
+  }
+}
+
+function androidAccessStatus() {
+  pruneAndroidDevices();
+  const devices = Array.from(androidDevices.values());
+  return {
+    status: devices.length > 0 ? "PASS" : "UNVERIFIED",
+    detail: devices.length > 0
+      ? "Live Habitat Android heartbeat received within the last 120 seconds."
+      : "No live Habitat Android heartbeat has been received within the last 120 seconds.",
+    devices
+  };
+}
 function makeTaskId() {
   return "task-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 8);
 }
@@ -678,6 +728,12 @@ async function runSystemCheck() {
     checks.backendHealth = {
       status: healthResponse.ok && health.habitat === "online" && health.backend === "ready" ? "PASS" : "FAIL",
       detail: JSON.stringify(health)
+    };
+
+    const androidAccess = androidAccessStatus();
+    checks.androidDeviceAccess = {
+      status: androidAccess.status,
+      detail: androidAccess.detail
     };
 
     if (!apiKey) throw new Error("OPENROUTER_API_KEY is not configured.");
@@ -826,12 +882,14 @@ app.post("/tasks/:id/delegate", async (req, res) => {
       return res.status(502).json({ ok: false, task });
     }
 
+    const androidAccess = androidAccessStatus();
     task.result = JSON.stringify({
       verification: {
         backendHealth: "PASS",
         modelWorker: "PASS",
-        androidDeviceAccess: "UNVERIFIED"
+        androidDeviceAccess: androidAccess.status
       },
+      androidDevice: androidAccess.devices[0] || null,
       workerReport: result
     });
 
