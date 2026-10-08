@@ -37,101 +37,146 @@ app.use((req, res, next) => {
   const requestId = "req-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 7);
   req.habitatRequestId = requestId;
   res.setHeader("X-Habitat-Request-Id", requestId);
-  res.setHeader("X-Habitat-Version", "2026-10-08-auth-path-v1");
+  res.setHeader("X-Habitat-Version", "2026-10-08-provider-router-v1");
   console.log("HABITAT_REQUEST", requestId, req.method, req.path);
   next();
 });
 
-async function openRouterChat(payload) {
-  const runtimeApiKey = getApiKey();
-  if (!runtimeApiKey) {
-    const error = new Error("Habitat runtime is missing OPENROUTER_API_KEY before contacting OpenRouter.");
+async function brainChat(payload) {
+  const groqKey = String(process.env.GROQ_API_KEY || "").trim().replace(/^[\"']|[\"']$/g, "");
+  const geminiKey = String(process.env.GEMINI_API_KEY || "").trim().replace(/^[\"']|[\"']$/g, "");
+  const openRouterKey = getApiKey();
+  const requestedModel = payload?.model || model;
+  const messages = Array.isArray(payload?.messages) ? payload.messages : [];
+  const maxTokens = payload?.max_tokens || 512;
+  let lastError = null;
+
+  // Provider order is intentional: free providers first, exhausted OpenRouter last.
+  // Missing keys are skipped without making a network request.
+  const providers = [];
+
+  if (groqKey) {
+    providers.push({
+      name: "groq",
+      model: requestedModel === model ? "openai/gpt-oss-20b" : requestedModel,
+      url: "https://api.groq.com/openai/v1/chat/completions",
+      headers: {
+        "Authorization": `Bearer ${groqKey}`,
+        "Content-Type": "application/json"
+      }
+    });
+  }
+
+  if (geminiKey) {
+    providers.push({
+      name: "gemini",
+      model: requestedModel === model ? "gemini-2.5-flash" : requestedModel,
+      url: `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(requestedModel === model ? "gemini-2.5-flash" : requestedModel)}:generateContent?key=${encodeURIComponent(geminiKey)}`,
+      headers: { "Content-Type": "application/json" }
+    });
+  }
+
+  if (openRouterKey) {
+    const openRouterModels = requestedModel === model ? [model, ...fallbackModels] : [requestedModel];
+    for (const selectedModel of openRouterModels) {
+      providers.push({
+        name: "openrouter",
+        model: selectedModel,
+        url: "https://openrouter.ai/api/v1/chat/completions",
+        headers: {
+          "Authorization": `Bearer ${openRouterKey}`,
+          "Content-Type": "application/json",
+          "HTTP-Referer": "https://habitat-1-szzd.onrender.com",
+          "X-Title": "Habitat Ax Core"
+        }
+      });
+    }
+  }
+
+  if (!providers.length) {
+    const error = new Error("No AI provider key is configured. Set GROQ_API_KEY or GEMINI_API_KEY; OpenRouter is also supported.");
     error.status = 500;
     throw error;
   }
 
-  const requestedModel = payload?.model || model;
-  const modelsToTry = requestedModel === model ? [model, ...fallbackModels] : [requestedModel];
-  let lastError = null;
+  for (const provider of providers) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), providerTimeoutMs);
+    try {
+      let body;
 
-  for (const selectedModel of modelsToTry) {
-    for (let attempt = 0; attempt < 2; attempt++) {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), providerTimeoutMs);
-
-      try {
-        const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-          method: "POST",
-          headers: {
-            "Authorization": `Bearer ${runtimeApiKey}`,
-            "Content-Type": "application/json",
-            "HTTP-Referer": "https://habitat-1-szzd.onrender.com",
-            "X-Title": "Habitat Ax Core"
-          },
-          body: JSON.stringify({
-            ...payload,
-            model: selectedModel,
-            max_tokens: payload?.max_tokens || 512,
-            provider: payload?.provider || {
-              allow_fallbacks: true,
-              sort: "throughput"
-            }
-          }),
-          signal: controller.signal
+      if (provider.name === "gemini") {
+        const systemParts = messages
+          .filter(m => m?.role === "system")
+          .map(m => String(m?.content || ""));
+        const contents = messages
+          .filter(m => m?.role !== "system")
+          .map(m => ({
+            role: m?.role === "assistant" ? "model" : "user",
+            parts: [{ text: String(m?.content || "") }]
+          }));
+        body = JSON.stringify({
+          systemInstruction: systemParts.length ? { parts: [{ text: systemParts.join("\n\n") }] } : undefined,
+          contents,
+          generationConfig: { maxOutputTokens: maxTokens }
         });
-
-        const text = await response.text();
-        let data;
-        try { data = JSON.parse(text); }
-        catch { data = { error: { message: text || "OpenRouter returned a non-JSON response." } }; }
-
-        if (response.ok) return data;
-
-        const providerMessage =
-          data?.error?.message ||
-          data?.error?.error?.message ||
-          text ||
-          `OpenRouter HTTP ${response.status}`;
-
-        const error = new Error(`OpenRouter HTTP ${response.status}: ${providerMessage}`);
-        error.status = response.status;
-        error.retryAfter = Number(response.headers.get("retry-after") || 0);
-        lastError = error;
-
-        console.warn(
-          "OPENROUTER_ATTEMPT_FAILED",
-          selectedModel,
-          "attempt=" + (attempt + 1),
-          String(error.message).slice(0, 300)
-        );
-
-        if (response.status !== 429 && response.status !== 502 && response.status !== 503) break;
-
-        const waitMs = error.retryAfter > 0
-          ? Math.min(error.retryAfter * 1000, 8000)
-          : Math.min(1000 * (2 ** attempt), 4000);
-
-        await new Promise(resolve => setTimeout(resolve, waitMs));
-      } catch (error) {
-        lastError = error;
-        console.warn(
-          "OPENROUTER_ATTEMPT_FAILED",
-          selectedModel,
-          "attempt=" + (attempt + 1),
-          String(error?.message || error).slice(0, 300)
-        );
-        // An AbortError is normally a provider timeout. Do not immediately
-        // hammer the same provider a second time; move to the next fallback.
-        if (error?.name === "AbortError") break;
-      } finally {
-        clearTimeout(timeout);
+      } else {
+        body = JSON.stringify({
+          ...payload,
+          model: provider.model,
+          max_tokens: maxTokens
+        });
       }
+
+      const response = await fetch(provider.url, {
+        method: "POST",
+        headers: provider.headers,
+        body,
+        signal: controller.signal
+      });
+
+      const text = await response.text();
+      let data;
+      try { data = JSON.parse(text); }
+      catch { data = { error: { message: text || provider.name + " returned a non-JSON response." } }; }
+
+      if (response.ok) {
+        if (provider.name === "gemini") {
+          const candidateText = data?.candidates?.[0]?.content?.parts?.map(p => p?.text || "").join("") || "";
+          if (!candidateText.trim()) throw new Error("Gemini returned no text candidate.");
+          return {
+            choices: [{ message: { role: "assistant", content: candidateText } }],
+            model: provider.model,
+            provider: "gemini"
+          };
+        }
+        return { ...data, provider: provider.name };
+      }
+
+      const providerMessage =
+        data?.error?.message ||
+        data?.error?.error?.message ||
+        text ||
+        provider.name + " HTTP " + response.status;
+      const error = new Error(provider.name + " HTTP " + response.status + ": " + providerMessage);
+      error.status = response.status;
+      lastError = error;
+
+      console.warn("BRAIN_PROVIDER_FAILED", provider.name, provider.model, String(error.message).slice(0, 300));
+
+      // Continue immediately for auth/model/quota errors. A provider failure must
+      // never prevent another configured provider from serving Ax.
+      continue;
+    } catch (error) {
+      lastError = error;
+      console.warn("BRAIN_PROVIDER_FAILED", provider.name, provider.model, String(error?.message || error).slice(0, 300));
+    } finally {
+      clearTimeout(timeout);
     }
   }
 
-  throw lastError || new Error("OpenRouter request failed.");
+  throw lastError || new Error("All configured AI providers failed.");
 }
-
 /*
  * HABITAT AX CORE
  *
@@ -577,7 +622,7 @@ Be direct, natural, practical, detailed when the task warrants it, and honest ab
     });
 
     const response =
-      await openRouterChat({
+      await brainChat({
         model,
         messages
       });
@@ -740,7 +785,7 @@ async function runSystemCheck() {
     if (!apiKey) throw new Error("OPENROUTER_API_KEY is not configured.");
 
     worker.lastRunAt = nowIso();
-    const workerResponse = await openRouterChat({
+    const workerResponse = await brainChat({
       model,
       messages: [
         { role: "system", content: "You are Habitat QA Worker reporting to Ax. Return RESULT, CHECKS, and ISSUES. Never claim device access you do not have." },
@@ -855,7 +900,7 @@ app.post("/tasks/:id/delegate", async (req, res) => {
 
     // A real model-backed QA worker receives the assignment. It is explicitly
     // forbidden from claiming Android/device access it does not possess.
-    const workerResponse = await openRouterChat({
+    const workerResponse = await brainChat({
       model,
       messages: [
         {
@@ -944,7 +989,7 @@ If information is missing, state exactly what is missing.
 Mission:
 `;
 
-    const response = await openRouterChat({
+    const response = await brainChat({
       model: workerModel,
       messages: [
         {
@@ -1022,7 +1067,7 @@ app.post("/orchestrate/dropilot", async (req, res) => {
 
     const workerResults = await Promise.all(
       roles.map(async (role) => {
-        const response = await openRouterChat({
+        const response = await brainChat({
           model,
           messages: [
             {
@@ -1050,7 +1095,7 @@ app.post("/orchestrate/dropilot", async (req, res) => {
       })
     );
 
-    const synthesis = await openRouterChat({
+    const synthesis = await brainChat({
       model,
       messages: [
         {
@@ -1106,7 +1151,7 @@ app.post("/orchestrate/vicecity", async (req, res) => {
     ];
 
     const reports = await Promise.all(roles.map(async role => {
-      const out = await openRouterChat({
+      const out = await brainChat({
         model,
         messages: [
           { role: "system", content: "You are " + role.name + ", a worker reporting to Ax. " + role.job + " Return VERDICT, TOP 3 ACTIONS, RISKS, and ONE FACT TO VERIFY." },
@@ -1116,7 +1161,7 @@ app.post("/orchestrate/vicecity", async (req, res) => {
       return { id: role.id, name: role.name, status: "complete", response: out.choices?.[0]?.message?.content || "" };
     }));
 
-    const synth = await openRouterChat({
+    const synth = await brainChat({
       model,
       messages: [
         { role: "system", content: "You are Ax, manager of the Vice City Files content operation. Turn worker reports into an execution-ready content packet. Never claim a video was generated, uploaded, or published unless an actual connected tool confirms it. Return exactly: DECISION, VIDEO CONCEPT, 7-SECOND HOOK, SCRIPT, SHOT LIST, TITLE, DESCRIPTION, HASHTAGS, NEXT ACTION." },
