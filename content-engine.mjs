@@ -577,6 +577,54 @@ export function registerContentEngine(app, deps) {
     res.json({ ok:true, job });
   });
 
+  // Publisher bridge: after Ax/user approval, Habitat can hand the verified artifact
+  // to a connected external publisher. No upload is claimed unless the bridge confirms it.
+  app.post("/content/jobs/:id/publish", async (req, res) => {
+    const job = contentJobs.get(req.params.id);
+    if (!job) return res.status(404).json({ ok:false, error:"content job not found" });
+    if (job.stages.publish.status !== "approved")
+      return res.status(409).json({ ok:false, error:"publish approval required", job });
+    const artifact = job.stages.edit?.result?.artifact;
+    if (!artifact?.verified || artifact.status !== "verified")
+      return res.status(409).json({ ok:false, error:"verified artifact required", job });
+    const bridgeUrl = String(process.env.HABITAT_PUBLISHER_WEBHOOK_URL || "").trim();
+    if (!bridgeUrl) {
+      job.stages.publish.result = {
+        ...(job.stages.publish.result || {}),
+        status:"awaiting_publisher_connection",
+        blockedAt:nowIso(),
+        reason:"HABITAT_PUBLISHER_WEBHOOK_URL is not configured"
+      };
+      return res.status(503).json({ ok:false, error:"publisher connection required", requiredEnv:"HABITAT_PUBLISHER_WEBHOOK_URL", job });
+    }
+    try {
+      const response = await fetch(bridgeUrl, {
+        method:"POST",
+        headers:{"content-type":"application/json"},
+        body:JSON.stringify({
+          jobId:job.id, project:job.project, platform:job.platform, objective:job.objective,
+          artifact:{ path:artifact.path, bytes:artifact.bytes, durationSeconds:artifact.durationSeconds, width:artifact.width, height:artifact.height },
+          script:job.stages.script.result,
+          axReview:job.axReview, qualityGate:job.qualityGate
+        })
+      });
+      const text = await response.text();
+      let payload={}; try { payload=JSON.parse(text); } catch {}
+      if (!response.ok || !payload.uploadId) {
+        job.stages.publish.result = { ...(job.stages.publish.result || {}), status:"publisher_failed", responseStatus:response.status, response:payload || text, failedAt:nowIso() };
+        return res.status(502).json({ ok:false, error:"publisher bridge did not confirm upload", job, response:payload || text });
+      }
+      job.stages.publish.status="completed";
+      job.stages.publish.result={ uploadId:String(payload.uploadId), platform:job.platform, completedAt:nowIso(), confirmed:true, publisher:payload.publisher||"external-bridge" };
+      job.stages.analytics.status="ready";
+      job.updatedAt=nowIso();
+      res.json({ ok:true, job });
+    } catch (error) {
+      job.stages.publish.result={ ...(job.stages.publish.result || {}), status:"publisher_unreachable", error:String(error?.message||error), failedAt:nowIso() };
+      res.status(502).json({ ok:false, error:"publisher bridge unreachable", job });
+    }
+  });
+
   app.post("/content/jobs/:id/publish-result", (req, res) => {
     const job = contentJobs.get(req.params.id);
     if (!job) return res.status(404).json({ ok:false, error:"content job not found" });
