@@ -42,6 +42,45 @@ app.use((req, res, next) => {
   next();
 });
 
+function canonicalTaskReport(task) {
+  const status = task?.status || "unknown";
+  const worker = task?.worker || "unknown";
+  const result = String(task?.result || "");
+  const error = String(task?.error || "");
+  let verification = null;
+  try { verification = JSON.parse(result)?.verification || null; } catch (_) {}
+
+  if (!verification) {
+    return "Status: " + status + "\nWorker: " + worker + (error ? "\nError: " + error : "\nResult: " + (result || "No worker result."));
+  }
+
+  const lines = [
+    "Status: " + status,
+    "Worker: " + worker,
+    "",
+    "CANONICAL MACHINE CHECKS:",
+    "Backend health: " + (verification.backendHealth || "UNKNOWN"),
+    "Model worker: " + (verification.modelWorker || "UNKNOWN"),
+    "Android heartbeat: " + (verification.androidHeartbeat || "UNKNOWN"),
+    "Android device access: " + (verification.androidDeviceAccess || "UNKNOWN"),
+    "Task creation: " + (verification.taskCreation || "UNKNOWN"),
+    "Storage: " + (verification.storage || "UNKNOWN")
+  ];
+
+  const verified =
+    status.toLowerCase() === "verified" &&
+    verification.backendHealth === "PASS" &&
+    verification.modelWorker === "PASS" &&
+    verification.androidHeartbeat === "PASS" &&
+    verification.androidDeviceAccess === "PASS" &&
+    verification.taskCreation === "PASS" &&
+    verification.storage === "PASS";
+
+  lines.push("", "CANONICAL RESULT: " + (verified ? "VERIFIED PASS" : "PARTIAL / BLOCKED"));
+  if (error) lines.push("Worker error: " + error);
+  return lines.join("\n");
+}
+
 async function brainChat(payload) {
   const groqKey = String(process.env.GROQ_API_KEY || "").trim().replace(/^[\"']|[\"']$/g, "");
   const geminiKey = String(process.env.GEMINI_API_KEY || "").trim().replace(/^[\"']|[\"']$/g, "");
@@ -421,7 +460,7 @@ app.post("/chat", async (req, res) => {
           }
           task = delegated.task;
           return res.json({
-            response: "TASK CREATED AND EXECUTED\\nTask ID: " + task.id + "\\nStatus: " + task.status + "\\nWorker: " + (task.worker || "unknown") + "\\nResult:\\n" + (task.result || task.error || "No worker result."),
+            response: "TASK CREATED AND EXECUTED\\nTask ID: " + task.id + "\\nStatus: " + task.status + "\\nWorker: " + (task.worker || "unknown") + "\\nResult:\\n" + canonicalTaskReport(task),
             task, taskEngine: "connected", model, provider: "openrouter", habitat: "online", free_brain: true, deterministic: true
           });
         }
@@ -501,7 +540,7 @@ app.post("/chat", async (req, res) => {
               "Task ID: " + finished.id + "\n" +
               "Status: " + finished.status + "\n" +
               "Worker: " + (finished.worker || "unknown") + "\n" +
-              "Result:\n" + (finished.result || finished.error || "No worker result."),
+              "Result:\n" + canonicalTaskReport(finished),
             task: finished,
             taskEngine: "connected",
             model,
