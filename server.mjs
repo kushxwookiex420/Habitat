@@ -357,9 +357,9 @@ app.post("/chat", async (req, res) => {
     // Broad operational commands: route requests that explicitly ask Ax to create/execute/
     // dispatch/verify a task through the real task engine instead of letting the LLM simulate it.
     // Do not intercept system-check requests; those retain their existing diagnostic behavior.
-    const operationalIntent = !/system\\s*check|habitat_check|check\\s+android\\s+connectivity/i.test(message) &&
-      /\\b(create|make|start|add|execute|run|perform|delegate|dispatch|complete|verify)\\b/i.test(message) &&
-      /\\b(task|operation|mission|job|worker)\\b/i.test(message);
+    const operationalIntent = !/system\s*check|habitat_check|check\s+android\s+connectivity/i.test(message) &&
+      /\b(create|make|start|add|execute|run|perform|delegate|dispatch|complete|verify)\b/i.test(message) &&
+      /\b(task|operation|mission|job|worker)\b/i.test(message);
 
     if (operationalIntent) {
       const requestedTitle =
