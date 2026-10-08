@@ -269,6 +269,103 @@ app.post("/chat", async (req, res) => {
         deterministic: true
       });
     }
+    // Explicit task commands are handled by the real Habitat task engine, not by
+    // the language model's memory. This prevents Ax from incorrectly saying the
+    // task-management backend is unavailable when /tasks is live.
+    const taskIntent = message.match(
+      /^(?:ax[,:]?\s*)?(?:please\s+)?(?:create|make|start|add)\s+(?:a\s+)?task\s+(?:named|called)\s+(.+?)(?:\s+and\s+(?:reply|respond|return)\b.*)?$/i
+    );
+
+    if (taskIntent) {
+      const title = String(taskIntent[1] || "").trim().replace(/[.]+$/, "");
+      if (!title) return res.status(400).json({ error: "task title required" });
+
+      try {
+        const createResponse = await fetch("http://127.0.0.1:" + port + "/tasks", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            title,
+            description: "Created by Ax from an explicit task command: " + message
+          })
+        });
+
+        const createText = await createResponse.text();
+        let created;
+        try { created = JSON.parse(createText); }
+        catch { created = { ok: false, error: createText || "task service returned non-JSON" }; }
+
+        if (!createResponse.ok || !created?.task?.id) {
+          return res.status(502).json({
+            error: "Habitat task service could not create the task.",
+            taskService: created
+          });
+        }
+
+        const task = created.task;
+        const wantsExecution = /\b(?:execute|run|perform|delegate|dispatch|do)\b/i.test(message);
+
+        if (wantsExecution) {
+          const delegateResponse = await fetch(
+            "http://127.0.0.1:" + port + "/tasks/" + encodeURIComponent(task.id) + "/delegate",
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: "{}"
+            }
+          );
+
+          const delegateText = await delegateResponse.text();
+          let delegated;
+          try { delegated = JSON.parse(delegateText); }
+          catch { delegated = { ok: false, error: delegateText || "task delegate returned non-JSON" }; }
+
+          if (!delegateResponse.ok || !delegated?.task) {
+            return res.status(502).json({
+              error: "Task was created but worker dispatch failed.",
+              task: created.task,
+              dispatch: delegated
+            });
+          }
+
+          const finished = delegated.task;
+          return res.json({
+            response:
+              "TASK CREATED AND EXECUTED\n" +
+              "Task ID: " + finished.id + "\n" +
+              "Status: " + finished.status + "\n" +
+              "Worker: " + (finished.worker || "unknown") + "\n" +
+              "Result:\n" + (finished.result || finished.error || "No worker result."),
+            task: finished,
+            taskEngine: "connected",
+            model,
+            provider: "openrouter",
+            habitat: "online",
+            free_brain: true
+          });
+        }
+
+        return res.json({
+          response:
+            "TASK CREATED\n" +
+            "Task ID: " + task.id + "\n" +
+            "Status: " + task.status,
+          task,
+          taskEngine: "connected",
+          model,
+          provider: "openrouter",
+          habitat: "online",
+          free_brain: true
+        });
+      } catch (error) {
+        console.error("AX TASK COMMAND ERROR:", error);
+        return res.status(502).json({
+          error: "Habitat task command failed.",
+          details: String(error?.message || error)
+        });
+      }
+    }
+
 
     const systemPrompt = `
 You are Ax, the central intelligence of Habitat.
