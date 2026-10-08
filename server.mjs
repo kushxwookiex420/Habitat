@@ -907,8 +907,8 @@ async function runSystemCheck() {
     "OVERALL: " + overall,
     "DURATION: " + (Date.now() - startedAt) + "ms",
     "",
-    "WORKER REPORT (SUPPLEMENTAL — DOES NOT OVERRIDE MACHINE CHECKS):",
-    task.result || task.error || "No worker report."
+    "CANONICAL RESULT: " + overall,
+    "NOTE: The PASS/FAIL lines above are the authoritative machine checks. The model worker response is stored in the task result and is not used to override these checks."
   ].join("\n");
 
   return { task, checks, report, overall };
