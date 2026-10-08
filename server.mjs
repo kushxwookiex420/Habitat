@@ -269,6 +269,66 @@ app.post("/chat", async (req, res) => {
         deterministic: true
       });
     }
+    // Broad operational commands: route requests that explicitly ask Ax to create/execute/
+    // dispatch/verify a task through the real task engine instead of letting the LLM simulate it.
+    // Do not intercept system-check requests; those retain their existing diagnostic behavior.
+    const operationalIntent = !/system\\s*check|habitat_check|check\\s+android\\s+connectivity/i.test(message) &&
+      /\\b(create|make|start|add|execute|run|perform|delegate|dispatch|complete|verify)\\b/i.test(message) &&
+      /\\b(task|operation|mission|job|worker)\\b/i.test(message);
+
+    if (operationalIntent) {
+      const requestedTitle =
+        message.match(/\\b(?:task|operation|mission|job)\\s+(?:named|called|titled)\\s+["']?([^"'\\n]+)["']?/i)?.[1]?.trim() ||
+        message.match(/(?:create|make|start|add)\\s+(?:a\\s+)?(?:real\\s+)?(?:task|operation|mission|job)\\b(?:\\s+to)?\\s+(.+?)(?:\\.|$)/i)?.[1]?.trim() ||
+        "Ax Operational Test";
+      const title = requestedTitle.replace(/\\s+(?:and\\s+)?(?:execute|run|perform|delegate|dispatch|verify).*$/i, "").replace(/[.]+$/, "").trim();
+      const wantsExecution = /\\b(?:execute|run|perform|delegate|dispatch|do|complete)\\b/i.test(message);
+
+      try {
+        const createResponse = await fetch("http://127.0.0.1:" + port + "/tasks", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            title: title || "Ax Operational Task",
+            description: "Created by Ax operational command: " + message
+          })
+        });
+        const createText = await createResponse.text();
+        let created;
+        try { created = JSON.parse(createText); }
+        catch { created = { ok: false, error: createText || "task service returned non-JSON" }; }
+        if (!createResponse.ok || !created?.task?.id) {
+          return res.status(502).json({ error: "Habitat task service could not create the operational task.", taskService: created });
+        }
+
+        let task = created.task;
+        if (wantsExecution) {
+          const delegateResponse = await fetch("http://127.0.0.1:" + port + "/tasks/" + encodeURIComponent(task.id) + "/delegate", {
+            method: "POST", headers: { "Content-Type": "application/json" }, body: "{}"
+          });
+          const delegateText = await delegateResponse.text();
+          let delegated;
+          try { delegated = JSON.parse(delegateText); }
+          catch { delegated = { ok: false, error: delegateText || "task delegate returned non-JSON" }; }
+          if (!delegateResponse.ok || !delegated?.task) {
+            return res.status(502).json({ error: "Operational task was created but worker dispatch failed.", task: task, dispatch: delegated });
+          }
+          task = delegated.task;
+          return res.json({
+            response: "TASK CREATED AND EXECUTED\\nTask ID: " + task.id + "\\nStatus: " + task.status + "\\nWorker: " + (task.worker || "unknown") + "\\nResult:\\n" + (task.result || task.error || "No worker result."),
+            task, taskEngine: "connected", model, provider: "openrouter", habitat: "online", free_brain: true, deterministic: true
+          });
+        }
+        return res.json({
+          response: "TASK CREATED\\nTask ID: " + task.id + "\\nStatus: " + task.status,
+          task, taskEngine: "connected", model, provider: "openrouter", habitat: "online", free_brain: true, deterministic: true
+        });
+      } catch (error) {
+        console.error("AX OPERATIONAL COMMAND ERROR:", error);
+        return res.status(502).json({ error: "Habitat operational task command failed.", details: String(error?.message || error) });
+      }
+    }
+
     // Explicit task commands are handled by the real Habitat task engine, not by
     // the language model's memory. This prevents Ax from incorrectly saying the
     // task-management backend is unavailable when /tasks is live.
