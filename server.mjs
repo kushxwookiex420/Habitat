@@ -11,20 +11,16 @@ function getApiKey() {
   return rawApiKey ? String(rawApiKey).trim().replace(/^["']|["']$/g, "") : "";
 }
 const apiKey = getApiKey();
-const model = "openrouter/free";
+const model = "poolside/laguna-s-2.1:free";
 const fallbackModels = [
-  // Keep the free fallback pool current and diverse. Free providers can
-  // independently rate-limit or abort, so one provider failure must not
-  // become a Habitat outage.
-  "nvidia/nemotron-3-ultra:free",
-  "liquid/lfm2.5-2.6b:free",
-  "openai/gpt-oss-120b:free",
-  "openai/gpt-oss-20b:free",
-  "nvidia/nemotron-3-super:free",
-  "qwen/qwen3-coder:free"
+  // Current OpenRouter free endpoints. Keep this list limited to
+  // model IDs confirmed by the live OpenRouter catalog.
+  "nvidia/nemotron-3.5-lightning:free",
+  "poolside/laguna-xs-2.1:free",
+  "nvidia/nemotron-3-nano-omni:free"
 ];
 const fallbackModel = fallbackModels[0];
-const providerTimeoutMs = 30000;
+const providerTimeoutMs = 12000;
 
 if (!getApiKey()) {
   console.warn(
@@ -465,7 +461,6 @@ app.post("/chat", async (req, res) => {
       }
     }
 
-
     const systemPrompt = `
 You are Ax, the central intelligence of Habitat.
 
@@ -616,8 +611,6 @@ Be direct, natural, practical, detailed when the task warrants it, and honest ab
     });
   }
 });
-
-
 
 const taskStore = new Map();
 
@@ -979,7 +972,6 @@ Mission:
   }
 });
 
-
 app.post("/orchestrate/dropilot", async (req, res) => {
   try {
     const mission = String(req.body?.mission || "").trim();
@@ -1078,92 +1070,3 @@ app.post("/orchestrate/dropilot", async (req, res) => {
       workers: workerResults,
       synthesis: synthesis.choices?.[0]?.message?.content || ""
     });
-  } catch (error) {
-    console.error("DROPPILOT ORCHESTRATION ERROR:", error);
-    return res.status(500).json({
-      ok: false,
-      error: "DropPilot orchestration error",
-      details: String(error?.message || error)
-    });
-  }
-});
-
-
-app.post("/orchestrate/vicecity", async (req, res) => {
-  try {
-    const mission = String(req.body?.mission || "").trim();
-    const channelContext = req.body?.channelContext || {};
-
-    if (!mission) return res.status(400).json({ ok: false, error: "mission required" });
-    if (!apiKey) return res.status(500).json({ ok: false, error: "OPENROUTER_API_KEY is not configured on the Habitat server." });
-
-    const contextText = JSON.stringify(channelContext, null, 2);
-    const roles = [
-      { id: "research", name: "TOPIC SCOUT", job: "Choose the strongest GTA/Vice City story topic using evergreen interest, curiosity, searchability, and visual potential. Never invent current facts." },
-      { id: "script", name: "SCRIPT EDITOR", job: "Create a tight 45-90 second narration structure with a strong first 7 seconds, calm delivery, and clear visual beats." },
-      { id: "growth", name: "CHANNEL OPERATOR", job: "Create a repeatable free/low-cost publishing loop for YouTube Shorts/TikTok, including title, description idea, and up to five TikTok hashtags." }
-    ];
-
-    const reports = await Promise.all(roles.map(async role => {
-      const out = await openRouterChat({
-        model,
-        messages: [
-          { role: "system", content: "You are " + role.name + ", a worker reporting to Ax. " + role.job + " Return VERDICT, TOP 3 ACTIONS, RISKS, and ONE FACT TO VERIFY." },
-          { role: "user", content: "Mission:\n" + mission + "\n\nChannel context:\n" + contextText }
-        ]
-      });
-      return { id: role.id, name: role.name, status: "complete", response: out.choices?.[0]?.message?.content || "" };
-    }));
-
-    const synth = await openRouterChat({
-      model,
-      messages: [
-        { role: "system", content: "You are Ax, manager of the Vice City Files content operation. Turn worker reports into an execution-ready content packet. Never claim a video was generated, uploaded, or published unless an actual connected tool confirms it. Return exactly: DECISION, VIDEO CONCEPT, 7-SECOND HOOK, SCRIPT, SHOT LIST, TITLE, DESCRIPTION, HASHTAGS, NEXT ACTION." },
-        { role: "user", content: "Mission:\n" + mission + "\n\nContext:\n" + contextText + "\n\nReports:\n" + reports.map(x => "[" + x.name + "]\n" + x.response).join("\n") }
-      ]
-    });
-
-    return res.json({ ok: true, habitat: "online", project: "Vice City Files", workers: reports, synthesis: synth.choices?.[0]?.message?.content || "", executionState: "planned" });
-  } catch (error) {
-    console.error("VICE CITY ORCHESTRATION ERROR:", error);
-    return res.status(500).json({ ok: false, error: "Vice City orchestration error", details: String(error?.message || error) });
-  }
-});
-
-app.listen(
-  port,
-  "0.0.0.0",
-  () => {
-    console.log(
-      `Habitat Ax Core listening on port ${port}`
-    );
-
-    // Safe startup verification: prove whether the Render runtime can
-    // actually authenticate to OpenRouter without ever logging the secret.
-    setTimeout(async () => {
-      if (!apiKey) {
-        console.error("PROVIDER_AUTH_CHECK: FAIL — runtime OPENROUTER_API_KEY is missing");
-        return;
-      }
-      try {
-        const response = await fetch("https://openrouter.ai/api/v1/models", {
-          headers: {
-            "Authorization": `Bearer ${apiKey}`,
-            "HTTP-Referer": "https://habitat-1-szzd.onrender.com",
-            "X-Title": "Habitat Ax Core"
-          }
-        });
-        if (response.ok) {
-          console.log("PROVIDER_AUTH_CHECK: PASS — OpenRouter accepted the runtime key");
-        } else {
-          const body = await response.text();
-          let message = body;
-          try { message = JSON.parse(body)?.error?.message || body; } catch {}
-          console.error(`PROVIDER_AUTH_CHECK: FAIL — OpenRouter HTTP ${response.status}: ${String(message).slice(0, 300)}`);
-        }
-      } catch (error) {
-        console.error("PROVIDER_AUTH_CHECK: FAIL — " + String(error?.message || error));
-      }
-    }, 1500);
-  }
-);
