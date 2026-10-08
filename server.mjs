@@ -11,7 +11,9 @@ function getApiKey() {
   return rawApiKey ? String(rawApiKey).trim().replace(/^["']|["']$/g, "") : "";
 }
 const apiKey = getApiKey();
-const model = "openrouter/free";
+const model = "google/gemma-4-26b-a4b-it:free";
+const fallbackModel = "nvidia/nemotron-3.5-lightning:free";
+const providerTimeoutMs = 35000;
 
 if (!getApiKey()) {
   console.warn(
@@ -36,18 +38,33 @@ async function openRouterChat(payload) {
     throw error;
   }
 
-  const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-    method: "POST",
+  const requestedModel = payload?.model || model;
+  const modelsToTry = requestedModel === model ? [model, fallbackModel] : [requestedModel];
+  let lastError = null;
+
+  for (const selectedModel of modelsToTry) {
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), providerTimeoutMs);
+
+      const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+        method: "POST",
     headers: {
       "Authorization": `Bearer ${runtimeApiKey}`,
       "Content-Type": "application/json",
       "HTTP-Referer": "https://habitat-1-szzd.onrender.com",
       "X-Title": "Habitat Ax Core"
-    },
-    body: JSON.stringify(payload)
-  });
+        },
+        body: JSON.stringify({
+          ...payload,
+          model: selectedModel,
+          max_tokens: payload?.max_tokens || 512
+        }),
+        signal: controller.signal
+      });
+      clearTimeout(timeout);
 
-  const text = await response.text();
+      const text = await response.text();
   let data;
   try {
     data = JSON.parse(text);
@@ -61,12 +78,19 @@ async function openRouterChat(payload) {
       data?.error?.error?.message ||
       text ||
       `OpenRouter HTTP ${response.status}`;
-    const error = new Error(`OpenRouter HTTP ${response.status}: ${providerMessage}`);
-    error.status = response.status;
-    throw error;
+      const error = new Error(`OpenRouter HTTP ${response.status}: ${providerMessage}`);
+      error.status = response.status;
+      lastError = error;
+      console.warn("OPENROUTER_ATTEMPT_FAILED", selectedModel, String(error.message).slice(0, 300));
+      continue;
+    } catch (error) {
+      lastError = error;
+      console.warn("OPENROUTER_ATTEMPT_FAILED", selectedModel, String(error?.message || error).slice(0, 300));
+      continue;
+    }
   }
 
-  return data;
+  throw lastError || new Error("OpenRouter request failed.");
 }
 
 /*
@@ -95,6 +119,7 @@ app.get("/", (req, res) => {
     backend: "ready",
     provider: "openrouter",
     model,
+    fallbackModel,
     free_brain: true,
     message: "Habitat Ax Core backend is running."
   });
