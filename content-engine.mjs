@@ -300,44 +300,46 @@ export function registerContentEngine(app, deps) {
       update(job, "edit", "rendering", { ...job.stages.edit.result, renderPlan, rendererVersion:"v2-scene-engine" });
       await fs.mkdir(outDir, { recursive:true });
 
-      // Build six separate scene clips, then concatenate them. This makes scene
-      // boundaries deterministic and easy to verify with ffprobe/QA.
-      const sceneFiles = [];
-      for (let i=0; i<scenes.length; i++) {
-        const s=scenes[i];
-        const scenePath=path.join(outDir, `scene-${i+1}.mp4`);
-        const title=s.title;
-        const sub=s.sub;
-        const duration=s.end-s.start;
-        const vf=[
-          `drawbox=x=48:y=420:w=984:h=520:color=black@0.22:t=fill`,
-          `drawbox=x=78:y=456:w=924:h=448:color=white@0.06:t=4`,
-          `drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:text='AX / VICE CITY FILES':fontcolor=white@0.72:fontsize=26:x=78:y=300`,
-          `drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:text='${esc(title)}':fontcolor=white:fontsize=64:x=(w-text_w)/2:y=560:box=1:boxcolor=black@0.18:boxborderw=22`,
-          `drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='${esc(sub)}':fontcolor=white@0.88:fontsize=34:x=(w-text_w)/2:y=690`,
-          `drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='FACT-CHECKED • NO RUMORS':fontcolor=white@0.62:fontsize=24:x=(w-text_w)/2:y=1715`,
-          `drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='${String(i+1).padStart(2,"0")} / 06':fontcolor=white@0.58:fontsize=24:x=78:y=1810`
-        ].join(",");
+      // Render all six scenes in ONE ffmpeg process. The prior implementation
+      // encoded six separate 1080x1920 clips and then encoded them again during
+      // concatenation; on the small Render instance that could exceed the request
+      // timeout and return HTTP 502. Time-gated layers keep the scene changes
+      // deterministic while requiring only one video encode.
+      const enabled = (start, end) => `gte(t\\,${start})*lt(t\\,${end})`;
+      const layers = [];
+      scenes.forEach((s, i) => {
+        const title = esc(s.title);
+        const sub = esc(s.sub);
+        const e = enabled(s.start, s.end);
+        layers.push(
+          `drawbox=x=0:y=0:w=iw:h=ih:color=${s.bg}:t=fill:enable='${e}'`,
+          `drawbox=x=48:y=420:w=984:h=520:color=black@0.22:t=fill:enable='${e}'`,
+          `drawbox=x=78:y=456:w=924:h=448:color=white@0.06:t=4:enable='${e}'`,
+          `drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:text='AX / VICE CITY FILES':fontcolor=white@0.72:fontsize=26:x=78:y=300:enable='${e}'`,
+          `drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:text='${title}':fontcolor=white:fontsize=64:x=(w-text_w)/2:y=560:box=1:boxcolor=black@0.18:boxborderw=22:enable='${e}'`,
+          `drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='${sub}':fontcolor=white@0.88:fontsize=34:x=(w-text_w)/2:y=690:enable='${e}'`,
+          `drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='FACT-CHECKED • NO RUMORS':fontcolor=white@0.62:fontsize=24:x=(w-text_w)/2:y=1715:enable='${e}'`,
+          `drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='${String(i+1).padStart(2,"0")} / 06':fontcolor=white@0.58:fontsize=24:x=78:y=1810:enable='${e}'`
+        );
+      });
+
+      try {
+        update(job, "edit", "rendering", { ...job.stages.edit.result, renderPlan, rendererVersion:"v2-scene-engine" });
+        await fs.mkdir(outDir, { recursive:true });
+
+        const vf = layers.join(",");
         await execFileAsync("ffmpeg", [
           "-hide_banner","-loglevel","error","-y",
-          "-f","lavfi","-i",`color=c=${s.bg}:s=1080x1920:r=30:d=${duration}`,
-          "-vf",vf,
-          "-an","-c:v","libx264","-preset","veryfast","-crf","23","-pix_fmt","yuv420p",
-          "-movflags","+faststart",scenePath
+          "-f","lavfi","-i","color=c=black:s=1080x1920:r=30:d=45",
+          "-f","lavfi","-i","anullsrc=channel_layout=stereo:sample_rate=48000",
+          "-filter_complex",vf,
+          "-map","0:v:0","-map","1:a:0",
+          "-c:v","libx264","-preset","ultrafast","-crf","28","-pix_fmt","yuv420p",
+          "-c:a","aac","-b:a","96k","-ar","48000","-t","45","-shortest",
+          "-movflags","+faststart",outputPath
         ],{timeout:120000});
-        sceneFiles.push(scenePath);
-      }
 
-      const concatList=path.join(outDir,"concat.txt");
-      await fs.writeFile(concatList,sceneFiles.map(f=>`file '${f.replace(/'/g,"'\\''")}'`).join("\n"));
 
-      // Preserve a real audio track. The first artifact used silence; v2 keeps the
-      // pipeline honest by labeling it as a placeholder until a voice worker is connected.
-      const finalResult=await execFileAsync("ffmpeg",[
-        "-hide_banner","-loglevel","error","-y",
-        "-f","concat","-safe","0","-i",concatList,
-        "-f","lavfi","-i","anullsrc=channel_layout=stereo:sample_rate=48000",
-        "-map","0:v:0","-map","1:a:0",
         "-c:v","libx264","-preset","veryfast","-crf","23","-pix_fmt","yuv420p",
         "-c:a","aac","-b:a","128k","-ar","48000","-t","45","-shortest",
         "-movflags","+faststart",outputPath
