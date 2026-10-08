@@ -1268,6 +1268,35 @@ app.post("/orchestrate/vicecity", async (req, res) => {
   }
 });
 
+
+/*
+ * AX DIRECT VERIFICATION ENDPOINT
+ *
+ * Runs the real machine-derived system check on demand. This gives Habitat
+ * and external diagnostics one canonical endpoint instead of relying on
+ * simulated task/verifier output.
+ */
+app.post("/system-check", async (req, res) => {
+  try {
+    const check = await runSystemCheck();
+    return res.status(check.overall === "VERIFIED PASS" ? 200 : 503).json({
+      ok: check.overall === "VERIFIED PASS",
+      overall: check.overall,
+      task: check.task,
+      checks: check.checks,
+      report: check.report,
+      requestId: req.habitatRequestId
+    });
+  } catch (error) {
+    console.error("SYSTEM CHECK ENDPOINT ERROR:", error);
+    return res.status(500).json({
+      ok: false,
+      overall: "ERROR",
+      error: String(error?.message || error)
+    });
+  }
+});
+
 app.listen(
   port,
   "0.0.0.0",
