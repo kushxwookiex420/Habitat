@@ -71,3 +71,16 @@ test("critical modules are present and non-empty", async () => {
     assert.ok(source.trim().length > 0, file);
   }
 });
+
+test("AI worker availability follows every configured provider, not OpenRouter alone", async () => {
+  const server = await fs.readFile(new URL("../server.mjs", import.meta.url), "utf8");
+  assert.ok(server.includes('status: hasAnyAiProviderKey() ? "available" : "blocked"'));
+  assert.ok(!server.includes('status: apiKey ? "available" : "blocked"'));
+});
+
+test("brain status reports provider presence without exposing credentials", async () => {
+  const server = await fs.readFile(new URL("../server.mjs", import.meta.url), "utf8");
+  assert.ok(server.includes('app.get("/brain/status"'));
+  assert.ok(server.includes('secretsExposed: false'));
+  assert.ok(server.includes('note: "Configuration is not proof of a successful inference; use the system check for a live model test."'));
+});
