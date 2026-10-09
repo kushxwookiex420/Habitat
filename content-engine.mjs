@@ -421,10 +421,35 @@ export function registerContentEngine(app, deps) {
       .replace(/%/g, "\\%");
 
     try {
-      update(job, "edit", "rendering", { ...job.stages.edit.result, renderPlan, rendererVersion:"v4-scene-engine" });
+      update(job, "edit", "rendering", { ...job.stages.edit.result, renderPlan, rendererVersion:"v6-official-visuals-narrated" });
       await fs.mkdir(outDir, { recursive:true });
 
-          // Produce real spoken narration before encoding. Use short Google Translate TTS
+          // Pull six real screenshots from Rockstar Games official GTA VI media page.
+      // Missing assets block the render instead of silently reverting to text cards.
+      const officialImageUrls = [
+        "https://www.rockstargames.com/VI/_next/static/media/Jason_and_Lucia_08.0.bq0bdrl6g5y.jpg?akim=1&imdensity=1&imwidth=1920",
+        "https://www.rockstargames.com/VI/_next/static/media/Vice_City_10.0f1q-xa_4q8r2.jpg?akim=1&imdensity=1&imwidth=1920",
+        "https://www.rockstargames.com/VI/_next/static/media/Jason_Duval_02.1486~7_v40cn..jpg?akim=1&imdensity=1&imwidth=1920",
+        "https://www.rockstargames.com/VI/_next/static/media/Lucia_Caminos_01.0a7yqvewctkfp.jpg?akim=1&imdensity=1&imwidth=1920",
+        "https://www.rockstargames.com/VI/_next/static/media/Vice_City_01.135x56yoeu.6t.jpg?akim=1&imdensity=1&imwidth=1920",
+        "https://www.rockstargames.com/VI/_next/static/media/Ambrosia_06.0j9c7-8nfb_xf.jpg?akim=1&imdensity=1&imwidth=1920"
+      ];
+      const imagePaths = [];
+      for (let i = 0; i < officialImageUrls.length; i++) {
+        const imageResponse = await fetch(officialImageUrls[i], {
+          headers: { "User-Agent": "Mozilla/5.0 HabitatAx/1.0", "Accept": "image/avif,image/webp,image/jpeg,*/*" },
+          signal: AbortSignal.timeout(20000)
+        });
+        const imageType = String(imageResponse.headers.get("content-type") || "");
+        if (!imageResponse.ok || !imageType.startsWith("image/")) throw new Error("official_visual_asset_unavailable_" + (i + 1) + "_http_" + imageResponse.status);
+        const imageBytes = Buffer.from(await imageResponse.arrayBuffer());
+        if (imageBytes.length < 10000) throw new Error("official_visual_asset_too_small_" + (i + 1));
+        const imagePath = path.join(outDir, "official-scene-" + String(i + 1).padStart(2, "0") + ".jpg");
+        await fs.writeFile(imagePath, imageBytes);
+        imagePaths.push(imagePath);
+      }
+
+      // Produce real spoken narration before encoding. Use short Google Translate TTS
           // chunks to avoid request-length limits; if speech generation fails, block the
           // render rather than substitute silence and falsely report a finished video.
           const voiceText = String(script.voiceover || "").replace(/\s+/g, " ").trim();
@@ -474,11 +499,11 @@ export function registerContentEngine(app, deps) {
       const inputs = [];
       const filters = [];
       sceneInputs.forEach((s, i) => {
-        inputs.push("-f","lavfi","-i","color=c="+s.bg+":s=540x960:r=10:d="+s.dur);
+        inputs.push("-loop","1","-t",String(s.dur),"-i",imagePaths[i]);
         const title = esc(s.title);
         const sub = esc(s.sub);
         filters.push(
-          "["+i+":v]drawbox=x=20+20*t:y=205:w=8:h=550:color=white@0.08:t=fill,drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:text='"+title+"':fontcolor=white:fontsize="+Math.round(32*fontScale)+":x=(w-text_w)/2:y=280,drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='"+sub+"':fontcolor=white@0.88:fontsize="+Math.round(18*fontScale)+":x=(w-text_w)/2:y=345,drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='FACT-CHECKED • NO RUMORS':fontcolor=white@0.62:fontsize=13:x=(w-text_w)/2:y=858,setsar=1[v"+i+"]"
+          "["+i+":v]scale=540:960:force_original_aspect_ratio=increase,crop=540:960,drawbox=x=0:y=0:w=iw:h=ih:color=black@0.34:t=fill,drawbox=x=20+20*t:y=205:w=8:h=550:color=white@0.16:t=fill,drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:text='"+title+"':fontcolor=white:fontsize="+Math.round(32*fontScale)+":x=(w-text_w)/2:y=280,drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='"+sub+"':fontcolor=white@0.88:fontsize="+Math.round(18*fontScale)+":x=(w-text_w)/2:y=345,drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='ROCKSTAR GAMES • FAN COMMENTARY':fontcolor=white@0.82:fontsize=13:x=(w-text_w)/2:y=858,setsar=1[v"+i+"]"
         );
       });
       filters.push(sceneInputs.map((_,i)=>"[v"+i+"]").join("")+"concat=n="+sceneInputs.length+":v=1:a=0,scale=1080:1920:flags=fast_bilinear,format=yuv420p[v]");
@@ -513,7 +538,7 @@ export function registerContentEngine(app, deps) {
       const artifact={
         type:"mp4",status:"rendered",path:outputPath,bytes:stat.size,
         durationSeconds,width:1080,height:1920,renderedAt:nowIso(),
-        verified:false,renderer:"ffmpeg-scene-engine-v5-narrated",
+        verified:false,renderer:"ffmpeg-scene-engine-v6-official-visuals-narrated",
         audio:"google-translate-tts-narration",
         scenes:scenes.map(s=>({start:s.start,end:s.end,title:s.title}))
       };
