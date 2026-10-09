@@ -165,7 +165,7 @@ export function registerProductDemoRenderer(app) {
       if(!stat.size) throw new Error("FFmpeg produced an empty output.");
       const qa=await runVisualQA({
         artifactPath:outputPath,
-        renderPlan:{format:"9:16",scenes:sourcePaths.map((s,i)=>({start:sourcePaths.slice(0,i).reduce((n,x)=>n+x.end-x.start,0),end:sourcePaths.slice(0,i+1).reduce((n,x)=>n+x.end-x.start,0),title:"Product demonstration "+(i+1)}),onScreenText:[{text:productName,fontSize:52,bold:true},{text:callToAction,fontSize:34,bold:false}]},
+        renderPlan:{format:"9:16",scenes:sourcePaths.map((s,i)=>({start:sourcePaths.slice(0,i).reduce((n,x)=>n+x.end-x.start,0),end:sourcePaths.slice(0,i+1).reduce((n,x)=>n+x.end-x.start,0),title:"Product demonstration "+(i+1)})),onScreenText:[{text:productName,fontSize:52,bold:true},{text:callToAction,fontSize:34,bold:false}]},
         expectedSceneCount:sourcePaths.length,requireAudio:true
       });
       const probe=await execFileAsync("ffprobe",["-v","error","-show_entries","format=duration,size:stream=codec_type,width,height","-of","json",outputPath]);
