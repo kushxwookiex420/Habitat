@@ -28,7 +28,15 @@ tts "$say4" work/v4.mp3
 printf "file '%s'\nfile '%s'\nfile '%s'\nfile '%s'\n" "$PWD/work/v1.mp3" "$PWD/work/v2.mp3" "$PWD/work/v3.mp3" "$PWD/work/v4.mp3" > work/voice.txt
 ffmpeg -hide_banner -loglevel error -y -f concat -safe 0 -i work/voice.txt -c:a libmp3lame -q:a 4 work/voice.mp3
 VOICE_DURATION=$(ffprobe -v error -show_entries format=duration -of csv=p=0 work/voice.mp3)
-DURATION=$(awk -v d="$VOICE_DURATION" 'BEGIN { v=d+1.8; if(v<22) v=22; if(v>30) v=30; printf "%.2f",v }')
+DURATION=$(awk -v d="$VOICE_DURATION" 'BEGIN { v=d+2.0; if(v<22) v=22; printf "%.2f",v }')
+# Scene boundaries are derived from the actual narration duration so no fixed 30-second cap can cut the closing line.
+S1=$(ffprobe -v error -show_entries format=duration -of csv=p=0 work/v1.mp3)
+S2=$(ffprobe -v error -show_entries format=duration -of csv=p=0 work/v2.mp3)
+S3=$(ffprobe -v error -show_entries format=duration -of csv=p=0 work/v3.mp3)
+T1=$(awk -v d="$S1" 'BEGIN{printf "%.2f",d+0.25}')
+T2=$(awk -v a="$S1" -v b="$S2" 'BEGIN{printf "%.2f",a+b+0.25}')
+T3=$(awk -v a="$S1" -v b="$S2" -v c="$S3" 'BEGIN{printf "%.2f",a+b+c+0.25}')
+T4=$(awk -v d="$VOICE_DURATION" 'BEGIN{printf "%.2f",d+1.99}')
 
 # Stable, legible layout: background is a softened, darkened fill; no promotional logo or brand watermark is burned into the video, and the actual product
 # image stays centered and unobstructed, with copy in a fixed safe area.
@@ -40,12 +48,12 @@ ffmpeg -hide_banner -loglevel error -y \
 [bg][product]overlay=(W-w)/2:360:shortest=1,
 drawbox=x=44:y=72:w=992:h=250:color=black@0.60:t=fill,
 drawbox=x=44:y=1470:w=992:h=340:color=black@0.68:t=fill,
-drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:text='CRUMBS IN HARD-TO-REACH SPOTS?':fontcolor=white:fontsize=48:line_spacing=8:x=(w-text_w)/2:y=116:enable='between(t,0,5)',
-drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:text='A CLOSER LOOK AT HOTO AUTOCARE':fontcolor=white:fontsize=43:x=(w-text_w)/2:y=166:enable='between(t,5,11)',
-drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:text='CHECK THE SPECS + ATTACHMENTS':fontcolor=white:fontsize=42:x=(w-text_w)/2:y=166:enable='between(t,11,18)',
-drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:text='CHECK PRICE + DETAILS':fontcolor=white:fontsize=48:x=(w-text_w)/2:y=1550:enable='between(t,18,30)',
-drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='Price and availability may change':fontcolor=white:fontsize=28:x=(w-text_w)/2:y=1630,
-drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='Tap the product link to learn more':fontcolor=white:fontsize=30:x=(w-text_w)/2:y=1690,
+drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:text='CRUMBS IN HARD-TO-REACH SPOTS?':fontcolor=white:fontsize=48:line_spacing=8:x=(w-text_w)/2:y=116:enable='between(t,0,${T1})',
+drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:text='A CLOSER LOOK AT HOTO AUTOCARE':fontcolor=white:fontsize=43:x=(w-text_w)/2:y=166:enable='between(t,${T1},${T2})',
+drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:text='CHECK THE SPECS + ATTACHMENTS':fontcolor=white:fontsize=42:x=(w-text_w)/2:y=166:enable='between(t,${T2},${T3})',
+drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:text='CHECK PRICE + DETAILS':fontcolor=white:fontsize=48:x=(w-text_w)/2:y=1550:enable='between(t,${T3},${T4})',
+drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='Price and availability may change':fontcolor=white:fontsize=28:x=(w-text_w)/2:y=1630:enable='between(t,${T3},${T4})',
+drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='Tap the product link to learn more':fontcolor=white:fontsize=30:x=(w-text_w)/2:y=1690:enable='between(t,${T3},${T4})',
 fps=30,format=yuv420p[v]" \
   -map '[v]' -map 1:a -af "apad,atrim=duration=$DURATION" -t "$DURATION" \
   -c:v libx264 -preset veryfast -crf 23 -c:a aac -b:a 128k -movflags +faststart "$OUT"
@@ -60,9 +68,10 @@ const p = JSON.parse(fs.readFileSync(probeFile,'utf8'));
 const v = p.streams.find(s=>s.codec_type==='video');
 const a = p.streams.find(s=>s.codec_type==='audio');
 const duration = Number(p.format.duration);
-if (!v || !a || Number(v.width)!==1080 || Number(v.height)!==1920 || duration<20 || duration>31 || Number(p.format.size)<100000) {
+const audioDuration = Number(p.streams.find(s=>s.codec_type==='audio')?.duration ?? 0);
+if (!v || !a || Number(v.width)!==1080 || Number(v.height)!==1920 || duration<20 || audioDuration<20 || duration+0.15<audioDuration || Number(p.format.size)<100000) {
   console.error('BLOCKED: product video failed media release gate', p);
   process.exit(1);
 }
-console.log(JSON.stringify({status:'MEDIA_PASS',file,width:v.width,height:v.height,durationSeconds:duration,bytes:p.format.size,audio:true}));
+console.log(JSON.stringify({status:'MEDIA_PASS',file,width:v.width,height:v.height,durationSeconds:duration,audioDurationSeconds:audioDuration,bytes:p.format.size,audio:true,completeAudio:true}));
 JS
