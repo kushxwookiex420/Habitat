@@ -17,18 +17,9 @@ function getApiKey() {
 }
 const apiKey = getApiKey();
 const model = "openrouter/free";
-const fallbackModels = [
-  // Current OpenRouter free catalog (October 2026).
-  // Keep explicit fallbacks valid so router/provider changes do not
-  // turn a free-brain request into a chain of obsolete model IDs.
-  "nvidia/nemotron-3-ultra:free",
-  "poolside/laguna-s-2.1:free",
-  "nvidia/nemotron-3.5-lightning:free",
-  "nvidia/nemotron-3-super:free",
-  "dots-studio/dots-3.1-Preview:free",
-  "google/gemma-4-31b-it:free",
-  "google/gemma-4-26b-a4b-it:free"
-];
+// Do not hard-code free-model IDs: providers retire and rename them frequently.
+// The runtime discovers currently listed text-capable free models from OpenRouter.
+const fallbackModels = [];
 const fallbackModel = fallbackModels[0];
 const providerTimeoutMs = 30000;
 
@@ -86,6 +77,44 @@ function canonicalTaskReport(task) {
   return lines.join("\n");
 }
 
+async function discoverOpenRouterFreeModels(openRouterKey, limit = 3) {
+  if (!openRouterKey) return [];
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), Math.min(providerTimeoutMs, 10000));
+  try {
+    const response = await fetch("https://openrouter.ai/api/v1/models", {
+      headers: { "Authorization": `Bearer ${openRouterKey}`, "HTTP-Referer": "https://habitat-1-szzd.onrender.com", "X-Title": "Habitat Ax Core" },
+      signal: controller.signal
+    });
+    if (!response.ok) {
+      console.warn("OPENROUTER_MODEL_CATALOG_UNAVAILABLE", response.status);
+      return [];
+    }
+    const data = await response.json();
+    const rows = Array.isArray(data?.data) ? data.data : [];
+    return rows
+      .filter(item => {
+        const id = String(item?.id || "");
+        const input = item?.architecture?.input_modalities;
+        const output = item?.architecture?.output_modalities;
+        const textCapable = !Array.isArray(input) || input.includes("text");
+        const textOutput = !Array.isArray(output) || output.includes("text");
+        const pricing = item?.pricing || {};
+        const isFree = id.endsWith(":free") ||
+          (Number(pricing.prompt) === 0 && Number(pricing.completion) === 0);
+        return id && id !== model && isFree && textCapable && textOutput;
+      })
+      .map(item => String(item.id))
+      .filter((id, index, all) => all.indexOf(id) === index)
+      .slice(0, Math.max(0, Math.min(5, Number(limit) || 3)));
+  } catch (error) {
+    console.warn("OPENROUTER_MODEL_CATALOG_FAILED", String(error?.message || error).slice(0, 180));
+    return [];
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 async function brainChat(payload) {
   const groqKey = String(process.env.GROQ_API_KEY || "").trim().replace(/^[\"']|[\"']$/g, "");
   const geminiKey = String(process.env.GEMINI_API_KEY || "").trim().replace(/^[\"']|[\"']$/g, "");
@@ -121,8 +150,12 @@ async function brainChat(payload) {
   }
 
   if (openRouterKey) {
-    const openRouterModels = requestedModel === model ? [model, ...fallbackModels] : [requestedModel];
-    for (const selectedModel of openRouterModels) {
+    let openRouterModels = [requestedModel];
+    if (requestedModel === model) {
+      const discovered = await discoverOpenRouterFreeModels(openRouterKey, 3);
+      openRouterModels = [model, ...discovered, ...fallbackModels];
+    }
+    for (const selectedModel of [...new Set(openRouterModels)]) {
       providers.push({
         name: "openrouter",
         model: selectedModel,
@@ -208,8 +241,14 @@ async function brainChat(payload) {
 
       console.warn("BRAIN_PROVIDER_FAILED", provider.name, provider.model, String(error.message).slice(0, 300));
 
-      // Continue immediately for auth/model/quota errors. A provider failure must
-      // never prevent another configured provider from serving Ax.
+      // OpenRouter's free-model daily cap is account-wide. Cycling through more
+      // model IDs cannot fix it and only adds latency/log noise, so fail fast.
+      if (provider.name === "openrouter" && /free-models-per-day|free model.*daily limit|daily.*free.*quota/i.test(providerMessage)) {
+        break;
+      }
+
+      // Continue for individual model/auth/quota errors when another configured
+      // provider or a different catalog-listed model may still be usable.
       continue;
     } catch (error) {
       lastError = error;
