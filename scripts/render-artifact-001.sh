@@ -79,9 +79,9 @@ for i in 0 1 2 3 4 5; do
   title=$(printf '%s' "$title" | sed 's/[\\:]/\\\\&/g')
   subtitle=$(printf '%s' "$subtitle" | sed 's/[\\:]/\\\\&/g')
   FILTER+="[$i:v]split=2[bg$i][fg$i];"
-  FILTER+="[bg$i]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,zoompan=z='min(1.02,1+on*0.00012)':d=1:s=1080x1920:fps=15,boxblur=24:12,eq=brightness=-0.18:saturation=0.72[base$i];"
+  FILTER+="[bg$i]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,zoompan=z='min(1.05,1+on*0.0004)':d=1:s=1080x1920:fps=15,boxblur=24:12,eq=brightness=-0.18:saturation=0.72[base$i];"
   FILTER+="[fg$i]scale=960:1050:force_original_aspect_ratio=decrease:flags=lanczos,format=rgba[photo$i];"
-  FILTER+="[base$i][photo$i]overlay=(W-w)/2:430:shortest=1,"
+  FILTER+="[base$i][photo$i]overlay=(W-w)/2:430+(1100-h)/2:shortest=1,"
   FILTER+="drawbox=x=40:y=125:w=1000:h=250:color=black@0.70:t=fill,"
   FILTER+="drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:text='$title':fontcolor=white:fontsize=48:x=(w-text_w)/2:y=185,"
   FILTER+="drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='$subtitle':fontcolor=white:fontsize=27:x=(w-text_w)/2:y=280,"
