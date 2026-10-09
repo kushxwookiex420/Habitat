@@ -11,6 +11,7 @@ on:
       - ".github/workflows/artifact_001.yml"
       - "scripts/render-artifact-001.sh"
       - "scripts/vice-city-release-gate.mjs"
+      - "visual-qa.mjs"
       - "scripts/assemble-vice-city-files.sh"
       - "assets/**"
       - "docs/VICE_CITY_FILES_VIDEO_QA.md"
