@@ -451,8 +451,6 @@ app.get("/diagnostics/provider", async (req, res) => {
     return res.status(500).json({
       ok: false,
       runtimeKeyPresent: false,
-      runtimeKeyPrefix: null,
-      runtimeKeyLength: 0,
       authorizationHeaderPrepared: false,
       provider: "openrouter",
       error: "OPENROUTER_API_KEY is missing from the running Render process."
