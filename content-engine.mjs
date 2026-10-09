@@ -12,10 +12,29 @@ function cryptoRandomState() {
 // unless a connected publisher worker explicitly reports it.
 
 export function registerContentEngine(app, deps) {
-  const { nowIso, makeTaskId, taskStore, workerRegistry, brainChat } = deps;
+  const { nowIso, makeTaskId, taskStore, workerRegistry, brainChat, contentJobRepository } = deps;
   const contentJobs = new Map();
   const tiktokOAuthStates = new Map();
   registerTikTokPublisher(app, (id) => contentJobs.get(id));
+
+  // Persist each returned content-job state before acknowledging the API response.
+  // This keeps all stage handlers behind the same awaited durability boundary.
+  app.use((req, res, next) => {
+    const originalJson = res.json.bind(res);
+    res.json = (body) => {
+      const job = body?.job;
+      if (!contentJobRepository || !job || typeof job.id !== "string") return originalJson(body);
+      contentJobRepository.upsert(job).then(() => originalJson(body)).catch(error => {
+        console.error("CONTENT_JOB_PERSIST_FAILED", String(error?.message || error));
+        if (!res.headersSent) {
+          res.status(503);
+          originalJson({ ok:false, error:"content job state could not be persisted" });
+        }
+      });
+      return res;
+    };
+    next();
+  });
 
   // TikTok Login Kit (Web) connection flow.
   // Secrets and tokens remain server-side; the browser only follows redirects.
@@ -1023,5 +1042,41 @@ export function registerContentEngine(app, deps) {
     });
   });
 
+
+  return {
+    async initialize() {
+      if (!contentJobRepository) {
+        console.warn("CONTENT_JOB_STORAGE: memory-only — D1 credentials are not configured");
+        return { ok: true, durable: false, restored: 0 };
+      }
+      await contentJobRepository.initialize();
+      const restoredJobs = await contentJobRepository.list({ limit: 500 });
+      let interrupted = 0;
+      for (const job of restoredJobs) {
+        if (!job || typeof job.id !== "string") continue;
+        let changed = false;
+        for (const stage of Object.values(job.stages || {})) {
+          if (stage?.status === "running") {
+            stage.status = "interrupted";
+            stage.result = {
+              ...(stage.result && typeof stage.result === "object" ? stage.result : {}),
+              interruptedAt: nowIso(),
+              reason: "server restarted while this stage was running"
+            };
+            changed = true;
+            interrupted += 1;
+          }
+        }
+        if (changed) {
+          job.status = "interrupted";
+          job.updatedAt = nowIso();
+          await contentJobRepository.upsert(job);
+        }
+        contentJobs.set(job.id, job);
+      }
+      console.log("CONTENT_JOB_STORAGE: D1 ready; restored " + restoredJobs.length + " jobs; marked " + interrupted + " running stages interrupted");
+      return { ok: true, durable: true, restored: restoredJobs.length, interrupted };
+    }
+  };
 
 }
