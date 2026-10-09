@@ -51,7 +51,7 @@ PY
 )
 BODY_ASSEMBLED_DURATION=$(python - "$BODY_DURATION" <<'PY'
 import sys
-print(float(sys.argv[1])+2.0)
+print(float(sys.argv[1])+1.0)
 PY
 )
 
@@ -72,7 +72,7 @@ render_brand_segment "$OUTRO" "$OUTRO_DURATION" "0" "$TMP/outro.mp4"
 # Keep the entire generated voice track, delay it until the intro has cleared,
 # and add a one-second audio tail rather than trimming to a guessed endpoint.
 ffmpeg -hide_banner -loglevel error -y -i "$BODY" \
-  -filter_complex "[0:v]tpad=stop_mode=clone:stop_duration=2,fps=30,setsar=1,format=yuv420p[v];[0:a]adelay=1000|1000,apad=pad_dur=1[a]" \
+  -filter_complex "[0:v]tpad=stop_mode=clone:stop_duration=1,fps=30,setsar=1,format=yuv420p[v];[0:a]adelay=1000|1000[a]" \
   -map "[v]" -map "[a]" -t "$BODY_ASSEMBLED_DURATION" \
   -c:v libx264 -preset ultrafast -crf 23 -c:a aac -b:a 160k -ar 48000 -ac 2 \
   -movflags +faststart "$TMP/body.mp4"
@@ -90,14 +90,14 @@ a=next((s for s in p["streams"] if s["codec_type"]=="audio"),None)
 duration=float(p["format"]["duration"])
 if not v or not a: raise SystemExit("Final assembly is missing video or audio.")
 if (int(v["width"]),int(v["height"])) != (1080,1920): raise SystemExit("Final assembly must be 1080x1920.")
-if abs(duration-(float(intro_timeline)+float(body_duration)+2+float(outro_duration))) > 0.75:
+if abs(duration-(float(intro_timeline)+float(body_duration)+1+float(outro_duration))) > 0.75:
     raise SystemExit(f"Unexpected final duration {duration:.2f}s.")
 record={
  "introPath":intro,
  "introSourceDurationSeconds":float(source_intro),
  "introTimelineSeconds":float(intro_timeline),
  "narrationStartSeconds":float(narration_start),
- "bodyAudioDurationSeconds":float(body_duration),
+ "bodyAudioDurationSeconds":max(0.0,float(body_duration)-1.0),
  "postNarrationTailSeconds":1.0,
  "outroPath":outro,
  "outroDurationSeconds":float(outro_duration),
