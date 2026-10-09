@@ -159,7 +159,7 @@ export function registerProductDemoRenderer(app) {
       await execFileAsync("ffmpeg",[
         "-hide_banner","-loglevel","error","-y",...inputArgs,"-i",voiceFile,
         "-filter_complex",filters.join(";"),"-map","[v]","-map",String(sourcePaths.length)+":a:0",
-        "-af","apad","-c:v","libx264","-preset","ultrafast","-crf","25","-c:a","aac","-b:a","128k","-ar","48000","-t",String(Math.max(duration,1)),"-shortest","-movflags","+faststart",outputPath
+        "-af","apad","-c:v","libx264","-preset","ultrafast","-crf","25","-c:a","aac","-b:a","128k","-ar","48000","-t",String(Math.max(duration,1)),"-movflags","+faststart",outputPath
       ],{timeout:120000});
       const stat=await fs.stat(outputPath);
       if(!stat.size) throw new Error("FFmpeg produced an empty output.");
