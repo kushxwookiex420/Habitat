@@ -190,13 +190,7 @@ export function registerTikTokPublisher(app, getJob) {
     res.json({
       ok: true,
       platform: "tiktok",
-      configured: config.configured,
-      mode: config.mode,
-      scopeRequired: config.scopeHint,
-      directPostReady: config.configured,
-      note: config.configured
-        ? "TikTok access token is configured; publishing still requires the job's existing Ax/user approval gate."
-        : "Set TIKTOK_ACCESS_TOKEN after authorizing Habitat with TikTok Content Posting API video.publish."
+      ...buildTikTokPublisherStatus({ tokenPresent: config.configured, mode: config.mode })
     });
   });
 
