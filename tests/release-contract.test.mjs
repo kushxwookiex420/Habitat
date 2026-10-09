@@ -25,6 +25,9 @@ test("render and publish paths stay approval gated", async () => {
   assert.ok(source.includes("payload.artifact?.verified === true"));
   assert.ok(source.includes("Ax final review failed"));
   assert.ok(source.includes("publish approval required"));
+  assert.ok(source.includes("Math.max(60, configuredAutonomousIntervalMinutes)"));
+  assert.ok(source.includes('firstRun:"after full interval (no boot-time dispatch)"'));
+  assert.ok(!source.includes("setTimeout(runAutonomous, 10000)"));
 });
 
 test("TikTok publisher validates consent and publish result", async () => {
