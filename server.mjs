@@ -183,7 +183,7 @@ async function brainChat(payload) {
   if (cloudflareToken && cloudflareAccountId) {
     providers.push({
       name: "cloudflare",
-      model: "@cf/meta/llama-3.1-8b-instruct",
+      model: "@cf/meta/llama-3.2-1b-instruct",
       url: `https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(cloudflareAccountId)}/ai/v1/chat/completions`,
       headers: {
         "Authorization": `Bearer ${cloudflareToken}`,
