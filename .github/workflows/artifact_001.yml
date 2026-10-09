@@ -28,6 +28,15 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y ffmpeg fonts-dejavu
 
+      - name: Restore packaged Vice City Files branding assets
+        run: |
+          if [ -f assets/vice-city-files-assets.zip ]; then
+            mkdir -p assets
+            unzip -o assets/vice-city-files-assets.zip -d assets
+          else
+            echo "Branding bundle is not in the repository yet; assembly will fail closed rather than omit the intro/outro."
+          fi
+
       - name: Validate renderer shell syntax
         run: bash -n scripts/render-artifact-001.sh
 
