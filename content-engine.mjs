@@ -574,6 +574,7 @@ export function registerContentEngine(app, deps) {
       });
 
       if (!artifact.verified) {
+        console.warn("MEDIA_RENDER_QA_BLOCKED", job.id, JSON.stringify(visualQA.issues).slice(0, 1200));
         return res.status(422).json({
           ok:false,
           error:"visual QA blocked artifact",
@@ -585,6 +586,7 @@ export function registerContentEngine(app, deps) {
 
       res.json({ok:true,job,artifact,visualQA});
     } catch(error) {
+      console.error("MEDIA_RENDER_FAILED", job.id, String(error?.message||error).slice(0, 1000));
       update(job,"edit","failed",{
         ...job.stages.edit.result,
         error:String(error?.message||error),failedAt:nowIso()
