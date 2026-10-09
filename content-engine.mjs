@@ -36,6 +36,27 @@ export function registerContentEngine(app, deps) {
     next();
   });
 
+  // Hydrate a content job from durable storage when a request lands on a fresh
+  // Render instance or after a process restart. Without this lookup, a successfully
+  // persisted job can still return a false 404 because contentJobs is process-local.
+  app.use(async (req, res, next) => {
+    const match = String(req.path || "").match(/^\\/content\\/jobs\\/([^/]+)(?:\\/|$)/);
+    if (!match) return next();
+    let id;
+    try { id = decodeURIComponent(match[1]); }
+    catch { return res.status(400).json({ ok:false, error:"invalid content job id" }); }
+    if (contentJobs.has(id)) return next();
+    if (!contentJobRepository) return next();
+    try {
+      const persisted = await contentJobRepository.get(id);
+      if (persisted && typeof persisted.id === "string") contentJobs.set(persisted.id, persisted);
+      return next();
+    } catch (error) {
+      console.error("CONTENT_JOB_RESTORE_FAILED", String(error?.message || error));
+      return res.status(503).json({ ok:false, error:"content job could not be restored from durable storage" });
+    }
+  });
+
   // TikTok Login Kit (Web) connection flow.
   // Secrets and tokens remain server-side; the browser only follows redirects.
   app.get("/auth/tiktok", async (req, res) => {
