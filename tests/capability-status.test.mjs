@@ -31,7 +31,7 @@ test("publishing remains approval-gated and media QA is not presumed", () => {
   const report = buildCapabilityStatus({ aiProviderConfigured: true });
   assert.equal(report.capabilities.externalPublishing.status, "approval_gated_unverified");
   assert.equal(report.capabilities.contentQualityGates.status, "unverified");
-  assert.equal(report.capabilities.contentJobPersistence.status, "memory_only");
+  assert.equal(report.capabilities.contentJobPersistence.status, "blocked");
   assert.equal(report.capabilities.contentJobPersistence.durable, false);
   assert.equal(report.secretsExposed, false);
 });
@@ -45,4 +45,17 @@ test("capability report marks task routes durable only after repository readines
   assert.equal(report.capabilities.taskPersistence.adapter, "cloudflare-d1");
   assert.equal(report.capabilities.taskPersistence.restartRecovery, true);
   assert.equal(report.capabilities.taskExecution.status, "available_durable_task_routes");
+});
+
+
+test("capability report reflects durable content-job storage only after D1 initialization", () => {
+  const report = buildCapabilityStatus({
+    taskRepositoryConfigured: true,
+    taskRepositoryReady: true,
+    contentJobRepositoryReady: true
+  });
+  assert.equal(report.capabilities.contentJobPersistence.status, "ready");
+  assert.equal(report.capabilities.contentJobPersistence.adapter, "cloudflare-d1");
+  assert.equal(report.capabilities.contentJobPersistence.durable, true);
+  assert.match(report.capabilities.contentJobPersistence.detail, /TikTok OAuth state\/tokens remain separate/);
 });
