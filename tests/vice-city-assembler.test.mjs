@@ -13,7 +13,7 @@ test("assembler uses source durations, a delayed narration start, and a real tai
   const source = fs.readFileSync("scripts/assemble-vice-city-files.sh","utf8");
   assert.match(source,/probe_duration/);
   assert.match(source,/adelay=1000\|1000/);
-  assert.match(source,/apad=pad_dur=1/);
+  assert.match(source,/postNarrationTailSeconds":1\.0/);
   assert.match(source,/fixedDurationTrim/);
   assert.doesNotMatch(source,/-t 45\b/);
 });
