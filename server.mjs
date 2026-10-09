@@ -392,7 +392,6 @@ app.get("/", (req, res) => {
     habitat: "online",
     brain: (getApiKey() || process.env.GROQ_API_KEY || process.env.GEMINI_API_KEY || (process.env.CLOUDFLARE_API_TOKEN && process.env.CLOUDFLARE_ACCOUNT_ID) || (process.env.CEREBRAS_API_KEY && process.env.HABITAT_ALLOW_PAID_PROVIDERS === "true")) ? "ready" : "missing_api_key",
     apiKeyPresent: Boolean(getApiKey()),
-    apiKeyPrefix: getApiKey() ? getApiKey().slice(0, 8) + "..." : null,
     backend: "ready",
     provider: "multi-provider",
     model,
@@ -452,8 +451,6 @@ app.get("/diagnostics/provider", async (req, res) => {
     return res.status(500).json({
       ok: false,
       runtimeKeyPresent: false,
-      runtimeKeyPrefix: null,
-      runtimeKeyLength: 0,
       authorizationHeaderPrepared: false,
       provider: "openrouter",
       error: "OPENROUTER_API_KEY is missing from the running Render process."
@@ -477,8 +474,7 @@ app.get("/diagnostics/provider", async (req, res) => {
     return res.status(response.ok ? 200 : 502).json({
       ok: response.ok,
       runtimeKeyPresent: true,
-      runtimeKeyPrefix: getApiKey().slice(0, 8) + "...",
-      runtimeKeyLength: getApiKey().length,
+      runtimeKeyPresent: true,
       authorizationHeaderPrepared: true,
       provider: "openrouter",
       providerStatus: response.status,
@@ -489,8 +485,7 @@ app.get("/diagnostics/provider", async (req, res) => {
     return res.status(502).json({
       ok: false,
       runtimeKeyPresent: true,
-      runtimeKeyPrefix: apiKey.slice(0, 8) + "...",
-      runtimeKeyLength: apiKey.length,
+      runtimeKeyPresent: true,
       authorizationHeaderPrepared: true,
       provider: "openrouter",
       elapsedMs: Date.now() - startedAt,
