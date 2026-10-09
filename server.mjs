@@ -154,7 +154,7 @@ async function brainChat(payload) {
     // short, ordered list so one unavailable/busy model does not block the mission.
     const configuredGeminiModel = String(process.env.GEMINI_MODEL || "").trim();
     const geminiModels = requestedModel === model
-      ? [...new Set([configuredGeminiModel, "gemini-3.8-flash", "gemini-3.5-flash-lite", "gemini-2.5-flash-lite"].filter(Boolean))]
+      ? [...new Set(["gemini-3.5-flash-lite", configuredGeminiModel, "gemini-3.8-flash", "gemini-2.5-flash-lite"].filter(Boolean))]
       : [requestedModel];
     for (const geminiModel of geminiModels) {
       providers.push({
