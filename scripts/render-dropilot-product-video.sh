@@ -60,7 +60,7 @@ fps=30,format=yuv420p[v]" \
 
 # Release gate: real MP4, vertical resolution, duration, audio track, and non-empty file.
 test -s "$OUT"
-ffprobe -v error -show_entries stream=codec_type,width,height -show_entries format=duration,size -of json "$OUT" > "${OUT%.mp4}-probe.json"
+ffprobe -v error -show_entries stream=codec_type,width,height,duration -show_entries format=duration,size -of json "$OUT" > "${OUT%.mp4}-probe.json"
 node --input-type=module - "$OUT" "${OUT%.mp4}-probe.json" <<'JS'
 import fs from 'node:fs';
 const [file, probeFile] = process.argv.slice(2);
