@@ -397,6 +397,43 @@ export function registerContentEngine(app, deps) {
     const outDir = path.join("/tmp", "habitat-artifacts", safeId);
     const outputPath = path.join(outDir, "vice-city-6-next-big-leap.mp4");
     const script = job.stages.script.result || {};
+
+    // Produce real spoken narration before encoding. Use short Google Translate TTS
+    // chunks to avoid request-length limits; if speech generation fails, block the
+    // render rather than substitute silence and falsely report a finished video.
+    const voiceText = String(script.voiceover || "").replace(/\s+/g, " ").trim();
+    if (voiceText.length < 80) throw new Error("voiceover_missing_or_too_short");
+    const voiceChunks = [];
+    let voiceChunk = "";
+    for (const word of voiceText.split(" ")) {
+      const candidate = voiceChunk ? voiceChunk + " " + word : word;
+      if (candidate.length > 175 && voiceChunk) {
+        voiceChunks.push(voiceChunk);
+        voiceChunk = word;
+      } else voiceChunk = candidate;
+    }
+    if (voiceChunk) voiceChunks.push(voiceChunk);
+    const voiceFiles = [];
+    for (let i = 0; i < voiceChunks.length; i++) {
+      const ttsUrl = "https://translate.google.com/translate_tts?ie=UTF-8&client=tw-ob&tl=en-US&q=" + encodeURIComponent(voiceChunks[i]);
+      const ttsResponse = await fetch(ttsUrl, {
+        headers: { "User-Agent": "Mozilla/5.0 HabitatAx/1.0", "Accept": "audio/mpeg" },
+        signal: AbortSignal.timeout(15000)
+      });
+      if (!ttsResponse.ok) throw new Error("voiceover_tts_http_" + ttsResponse.status);
+      const audioBytes = Buffer.from(await ttsResponse.arrayBuffer());
+      if (audioBytes.length < 1000) throw new Error("voiceover_tts_empty_audio");
+      const voiceFile = path.join(outDir, "voice-" + String(i).padStart(2, "0") + ".mp3");
+      await fs.writeFile(voiceFile, audioBytes);
+      voiceFiles.push(voiceFile);
+    }
+    const voiceList = path.join(outDir, "voiceover-concat.txt");
+    await fs.writeFile(voiceList, voiceFiles.map(file => "file '" + file.replace(/'/g, "'\\''") + "'").join("\n") + "\n");
+    const voicePath = path.join(outDir, "voiceover.mp3");
+    await execFileAsync("ffmpeg", [
+      "-hide_banner","-loglevel","error","-y","-f","concat","-safe","0","-i",voiceList,"-c","copy",voicePath
+    ], { timeout: 30000 });
+
     const attempt = Math.max(1, Number(req.body?.attempt || 1));
     const maxAttempts = Math.min(3, Math.max(1, Number(req.body?.maxAttempts || 3)));
     const repairPlan = Array.isArray(req.body?.repairPlan) ? req.body.repairPlan : [];
@@ -448,11 +485,11 @@ export function registerContentEngine(app, deps) {
       await execFileAsync("ffmpeg", [
         "-hide_banner","-loglevel","error","-y",
         ...inputs,
-        "-f","lavfi","-i","anullsrc=channel_layout=stereo:sample_rate=48000",
+        "-i",voicePath,
         "-filter_complex",filters.join(";"),
         "-map","[v]","-map","6:a:0",
         "-c:v","libx264","-preset","ultrafast","-crf","32","-pix_fmt","yuv420p",
-        "-c:a","aac","-b:a","64k","-ar","48000","-t","45","-shortest",
+        "-af","apad,atrim=duration=45","-c:a","aac","-b:a","128k","-ar","48000","-t","45","-shortest",
         "-movflags","+faststart",outputPath
       ],{timeout:120000});
 
@@ -475,8 +512,8 @@ export function registerContentEngine(app, deps) {
       const artifact={
         type:"mp4",status:"rendered",path:outputPath,bytes:stat.size,
         durationSeconds,width:1080,height:1920,renderedAt:nowIso(),
-        verified:false,renderer:"ffmpeg-scene-engine-v4",
-        audio:"placeholder-silence",
+        verified:false,renderer:"ffmpeg-scene-engine-v5-narrated",
+        audio:"google-translate-tts-narration",
         scenes:scenes.map(s=>({start:s.start,end:s.end,title:s.title}))
       };
 
