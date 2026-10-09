@@ -227,6 +227,11 @@ async function brainChat(payload) {
     }
   }
 
+  // Put Cloudflare first when configured: the user's requested fallback must be tried
+  // before providers that have already returned quota exhaustion. Other providers
+  // remain available as fallbacks if Cloudflare rejects the request.
+  providers.sort((a, b) => (a.name === "cloudflare" ? -1 : b.name === "cloudflare" ? 1 : 0));
+
   if (!providers.length) {
     const error = new Error("No AI provider key is configured. Set GEMINI_API_KEY, GROQ_API_KEY, CLOUDFLARE_ACCOUNT_ID plus CLOUDFLARE_API_TOKEN, or OPENROUTER_API_KEY.");
     error.status = 500;
@@ -275,6 +280,7 @@ async function brainChat(payload) {
       catch { data = { error: { message: text || provider.name + " returned a non-JSON response." } }; }
 
       if (response.ok) {
+        console.info("BRAIN_PROVIDER_SUCCESS", provider.name, provider.model);
         if (provider.name === "gemini") {
           const candidateText = data?.candidates?.[0]?.content?.parts?.map(p => p?.text || "").join("") || "";
           if (!candidateText.trim()) throw new Error("Gemini returned no text candidate.");
@@ -287,6 +293,7 @@ async function brainChat(payload) {
         return { ...data, provider: provider.name };
       }
 
+      console.warn("BRAIN_PROVIDER_FAILED", provider.name, provider.model, response.status, String(data?.error?.message || data?.message || "request failed").slice(0, 180));
       const providerMessage =
         data?.error?.message ||
         data?.error?.error?.message ||
