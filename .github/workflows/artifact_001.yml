@@ -1,9 +1,15 @@
 name: Artifact 001 execution
 
-# Deliberately manual: generating a full video must never be triggered by ordinary commits.
-# This avoids deployments interrupting the render job and avoids duplicate expensive missions.
+# Manual runs remain available. A narrow path-filtered main-branch trigger lets a
+# renderer/workflow change produce a QA-gated review artifact without triggering
+# on ordinary app commits. This workflow never publishes to TikTok.
 on:
   workflow_dispatch:
+  push:
+    branches: ["main"]
+    paths:
+      - ".github/workflows/artifact_001.yml"
+      - "scripts/render-artifact-001.sh"
 
 jobs:
   execute-artifact-001:
