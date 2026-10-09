@@ -61,3 +61,15 @@ Build Habitat into a dependable Android-first AI control center for DropPilot AI
 - Use GitHub's public repository as the durable human/agent handoff and source of truth. Avoid putting private business information or secrets into this public repository.
 - Prefer local SQLite for local-only memory where appropriate; it is not shared runtime storage when the server is hosted elsewhere.
 - Evaluate Cloudflare free allocations only after checking the current official limits. Do not treat them as unlimited or guaranteed forever.
+
+
+## Verified update — 2026-10-09 10:30 UTC
+
+- Latest main commit: `15bb5ced6d667f110cd9f8f7baf2fe1128645c20`.
+- GitHub Actions completed successfully for that exact SHA: Habitat CI, Habitat Build Test, Habitat release checks, and Habitat APK Build.
+- APK artifact `Habitat-v0.8-Ax-debug-apk` was produced by run [37902488725](https://github.com/kushxwookiex420/Habitat/actions/runs/37902488725); artifact ID `11603310544`, SHA-256 `75bba7e6c318fcfa73d8e6719a104191162da758f12194b11096ababb45236c9`, expires 2027-01-07.
+- Render confirms deployment `dep-db49uv8mifls73esf7cg` for the same SHA is `live`; startup logs confirm service listening and OpenRouter runtime key accepted.
+- Workspace inventory again confirms there is no configured Render Postgres or Key Value store. Durable task persistence remains unresolved; do not claim tasks survive a restart.
+- Direct endpoint verification for `/brain/status` and `/storage/check` was not available through the connected inspection tools; do not claim those endpoints were live-tested.
+- A small usability defect remains: the task delegation missing-provider error message omits Cloudflare Workers AI and does not explain the explicit Cerebras opt-in. Fix this with a regression test.
+- Next engineering priority: implement and test a genuinely durable task repository with restart hydration, awaited writes, safe error handling, and idempotent recovery. Only activate it when real storage credentials/IDs are configured; no paid resources without approval. Add a restart integration test before marking storage PASS.
