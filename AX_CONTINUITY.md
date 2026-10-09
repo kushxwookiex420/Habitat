@@ -1,6 +1,6 @@
 # Habitat Ax — Durable Continuity Checkpoint
 
-**Last checkpoint:** 2026-10-09 UTC  
+**Last checkpoint:** 2026-10-09 07:37 UTC  
 **Repository:** https://github.com/kushxwookiex420/Habitat  
 **Live backend:** https://habitat-1-szzd.onrender.com  
 **Current rule:** Never claim a feature works until the live service or produced artifact has been tested.
@@ -12,12 +12,14 @@ Build Habitat into a dependable Android-first AI control center for DropPilot AI
 ## Verified facts at this checkpoint
 
 - Cloudflare Workers AI inference succeeded in Render logs using `@cf/meta/llama-3.2-1b-instruct`.
-- GitHub release contract tests passed on commit `6c7c5f1f052799b8ae4a359f4fb33fd9f2add76b`.
-- GitHub CI syntax checks passed on the same commit.
+- GitHub release contract tests passed on commit `624c78f596a49cc92dbb764ec5e8d9fc7747cccc` (run: https://github.com/kushxwookiex420/Habitat/actions/runs/37900042526).
+- GitHub CI syntax checks passed on commit `624c78f596a49cc92dbb764ec5e8d9fc7747cccc` (run: https://github.com/kushxwookiex420/Habitat/actions/runs/37900042613; final run status should be rechecked).
 - The autonomous scheduler no longer launches a mission 10 seconds after each boot and clamps its configured interval to at least 60 minutes.
 - The standalone Artifact 001 workflow is manual-only; ordinary commits should not trigger expensive video rendering.
+- Added `GET /continuity` and `GET /continuity/status` endpoints, backed by the committed `AX_CONTINUITY.md` file; README points fresh sessions to the checkpoint.
+- Added `docs/FREE_RESOURCES.md` covering Cloudflare Workers AI's published daily free allocation, GitHub Actions public-repo policy, and local-first memory candidates (Engram, Alice Memory, CSM). These are candidates/references, not installed services.
 - Artifact 001 renderer was changed to fetch six official Rockstar GTA VI screenshot assets and create narration via a free TTS endpoint. This code change is committed, but actual output playback, narration naturalness, and full visual QA are **not yet verified**.
-- The Android APK workflow was still running when last checked: https://github.com/kushxwookiex420/Habitat/actions/runs/37899672570
+- The Android APK workflow for commit `624c78f596a49cc92dbb764ec5e8d9fc7747cccc` was still running when last checked: https://github.com/kushxwookiex420/Habitat/actions/runs/37900042669. Check its result and artifact list before offering a download.
 - Current release page: https://github.com/kushxwookiex420/Habitat/releases/tag/habitat-v0.8-latest
 - TikTok OAuth has previously reported `connected:false`. Do not claim publishing works; keep it approval-gated.
 - No Render Postgres or Render Key Value instances were found in the connected Render workspace at last check.
@@ -43,8 +45,8 @@ Build Habitat into a dependable Android-first AI control center for DropPilot AI
 
 ## Next actions, in priority order
 
-1. **Finish APK build verification.** Check run 37899672570, fetch its artifacts/release asset only if the build succeeded, and report the actual outcome.
-2. **Add durable runtime persistence.** Inspect options that are genuinely available at zero cost before selecting one. Prefer an existing service or a repo-backed checkpoint flow; do not provision a paid database or storage product without approval. Persist content job state, step results, retries, OAuth state, and token expiry securely.
+1. **Finish APK build verification.** Check run 37900042669 and any newer run triggered by the latest checkpoint commit, fetch its artifacts/release asset only if the build succeeded, and report the actual outcome.
+2. **Add durable runtime persistence.** No Render Postgres or Key Value instances were found in the connected workspace. Inspect options genuinely available at zero cost before selecting one. Do not provision a paid database or storage product without approval. Persist content job state, step results, retries, OAuth state, and token expiry securely.
 3. **Resume/recovery API.** Make jobs discoverable after process restart, with idempotent retries and a single-worker/lease guard so multiple instances cannot duplicate work.
 4. **Verify Artifact 001 end to end.** Run the manual render workflow, ensure narration exists and is intelligible, inspect scene changes/text safe areas, confirm audio/video streams and duration, and publish the artifact only as a downloadable test output.
 5. **Free provider resilience.** Check the actual configured provider keys by presence only, confirm a real inference test, and keep quota/rate-limit failures visible. Never assume a free provider's quota is unlimited.
