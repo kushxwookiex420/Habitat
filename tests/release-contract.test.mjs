@@ -36,6 +36,15 @@ test("TikTok publisher validates consent and publish result", async () => {
   assert.ok(source.includes("publish_id") || source.includes("publishId"));
 });
 
+test("Artifact 001 uses real official images and narration, never silent placeholder audio", async () => {
+  const source = await fs.readFile(new URL("../scripts/render-artifact-001.sh", import.meta.url), "utf8");
+  assert.ok(source.includes("rockstargames.com/VI/_next/static/media/"));
+  assert.ok(source.includes("translate.google.com/translate_tts"));
+  assert.ok(source.includes("narration-present"));
+  assert.ok(!source.includes("anullsrc"));
+  assert.ok(!source.includes("placeholder-silence"));
+});
+
 test("critical modules are present and non-empty", async () => {
   for (const file of ["server.mjs", "content-engine.mjs", "visual-qa.mjs", "tiktok-publisher.mjs"]) {
     const source = await fs.readFile(new URL("../" + file, import.meta.url), "utf8");
