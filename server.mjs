@@ -127,6 +127,8 @@ async function brainChat(payload) {
   const groqKey = String(process.env.GROQ_API_KEY || "").trim().replace(/^[\"']|[\"']$/g, "");
   const geminiKey = String(process.env.GEMINI_API_KEY || "").trim().replace(/^[\"']|[\"']$/g, "");
   const cerebrasKey = String(process.env.CEREBRAS_API_KEY || "").trim().replace(/^[\"']|[\"']$/g, "");
+  const cloudflareToken = String(process.env.CLOUDFLARE_API_TOKEN || "").trim().replace(/^[\"']|[\"']$/g, "");
+  const cloudflareAccountId = String(process.env.CLOUDFLARE_ACCOUNT_ID || "").trim().replace(/^[\"']|[\"']$/g, "");
   const openRouterKey = getApiKey();
   const requestedModel = payload?.model || model;
   const messages = Array.isArray(payload?.messages) ? payload.messages : [];
@@ -174,6 +176,22 @@ async function brainChat(payload) {
     }
   }
 
+  // Cloudflare Workers AI has a documented daily free allocation. Only use
+  // the known small Llama instruct model by default; never silently opt into
+  // models that require paid billing. Configure CLOUDFLARE_ACCOUNT_ID and
+  // CLOUDFLARE_API_TOKEN in Render to enable this provider.
+  if (cloudflareToken && cloudflareAccountId) {
+    providers.push({
+      name: "cloudflare",
+      model: "@cf/meta/llama-3.1-8b-instruct",
+      url: `https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(cloudflareAccountId)}/ai/v1/chat/completions`,
+      headers: {
+        "Authorization": `Bearer ${cloudflareToken}`,
+        "Content-Type": "application/json"
+      }
+    });
+  }
+
   // Cerebras is not enabled by default: Habitat's zero-dollar mode must not
   // call a provider that may require paid credits. Explicit opt-in is required.
   if (cerebrasKey && String(process.env.HABITAT_ALLOW_PAID_PROVIDERS || "").toLowerCase() === "true") {
@@ -210,7 +228,7 @@ async function brainChat(payload) {
   }
 
   if (!providers.length) {
-    const error = new Error("No AI provider key is configured. Set GEMINI_API_KEY, GROQ_API_KEY, CEREBRAS_API_KEY, or OPENROUTER_API_KEY.");
+    const error = new Error("No AI provider key is configured. Set GEMINI_API_KEY, GROQ_API_KEY, CLOUDFLARE_ACCOUNT_ID plus CLOUDFLARE_API_TOKEN, or OPENROUTER_API_KEY.");
     error.status = 500;
     throw error;
   }
@@ -324,7 +342,7 @@ app.get("/tiktokHneXL520kS7uOGdvMUO1qp4jZQmlfuiE.txt", (req, res) => {
 app.get("/", (req, res) => {
   res.json({
     habitat: "online",
-    brain: (getApiKey() || process.env.GROQ_API_KEY || process.env.GEMINI_API_KEY || process.env.CEREBRAS_API_KEY) ? "ready" : "missing_api_key",
+    brain: (getApiKey() || process.env.GROQ_API_KEY || process.env.GEMINI_API_KEY || (process.env.CLOUDFLARE_API_TOKEN && process.env.CLOUDFLARE_ACCOUNT_ID) || (process.env.CEREBRAS_API_KEY && process.env.HABITAT_ALLOW_PAID_PROVIDERS === "true")) ? "ready" : "missing_api_key",
     apiKeyPresent: Boolean(getApiKey()),
     apiKeyPrefix: getApiKey() ? getApiKey().slice(0, 8) + "..." : null,
     backend: "ready",
@@ -340,12 +358,14 @@ app.get("/diagnostics/providers", (req, res) => {
   const configured = {
     gemini: Boolean(String(process.env.GEMINI_API_KEY || "").trim()),
     groq: Boolean(String(process.env.GROQ_API_KEY || "").trim()),
+    cloudflare: Boolean(String(process.env.CLOUDFLARE_API_TOKEN || "").trim()) && Boolean(String(process.env.CLOUDFLARE_ACCOUNT_ID || "").trim()),
     cerebras: Boolean(String(process.env.CEREBRAS_API_KEY || "").trim()) && String(process.env.HABITAT_ALLOW_PAID_PROVIDERS || "").toLowerCase() === "true",
     openrouter: Boolean(getApiKey())
   };
   const models = {
-    gemini: process.env.GEMINI_MODEL || "gemini-3.8-flash",
+    gemini: process.env.GEMINI_MODEL || "gemini-2.5-flash-lite",
     groq: process.env.GROQ_MODEL || "openai/gpt-oss-20b",
+    cloudflare: "@cf/meta/llama-3.1-8b-instruct",
     cerebras: process.env.CEREBRAS_MODEL || "gpt-oss-120b",
     openrouter: model
   };
