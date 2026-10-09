@@ -1,4 +1,8 @@
 import crypto from "node:crypto";
+import ffmpegPath from "ffmpeg-static";
+import ffprobeStatic from "ffprobe-static";
+
+const ffprobePath = ffprobeStatic.path;
 import { runVisualQA } from "./visual-qa.mjs";
 import { publishTikTokDirect, registerTikTokPublisher, tiktokConfig } from "./tiktok-publisher.mjs";
 
@@ -555,7 +559,7 @@ export function registerContentEngine(app, deps) {
           const voiceList = path.join(outDir, "voiceover-concat.txt");
           await fs.writeFile(voiceList, voiceFiles.map(file => "file '" + file.replace(/'/g, "'\\''") + "'").join("\n") + "\n");
           const voicePath = path.join(outDir, "voiceover.mp3");
-          await execFileAsync("ffmpeg", [
+          await execFileAsync(ffmpegPath, [
             "-hide_banner","-loglevel","error","-y","-f","concat","-safe","0","-i",voiceList,"-c","copy",voicePath
           ], { timeout: 30000 });
       
@@ -582,7 +586,7 @@ export function registerContentEngine(app, deps) {
       });
       filters.push(sceneInputs.map((_,i)=>"[v"+i+"]").join("")+"concat=n="+sceneInputs.length+":v=1:a=0,scale=1080:1920:flags=fast_bilinear,format=yuv420p[v]");
 
-      await execFileAsync("ffmpeg", [
+      await execFileAsync(ffmpegPath, [
         "-hide_banner","-loglevel","error","-y",
         ...inputs,
         "-i",voicePath,
@@ -596,7 +600,7 @@ export function registerContentEngine(app, deps) {
       const stat=await fs.stat(outputPath);
       if(!stat.size) throw new Error("ffmpeg produced an empty artifact");
 
-      const probe=await execFileAsync("ffprobe",[
+      const probe=await execFileAsync(ffprobePath,[
         "-v","error",
         "-show_entries","format=duration,size:stream=index,codec_type,width,height,r_frame_rate",
         "-of","json",outputPath
