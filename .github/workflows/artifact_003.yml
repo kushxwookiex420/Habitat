@@ -89,7 +89,7 @@ jobs:
           # Require real audio energy so a silent placeholder cannot pass.
           audio_stats=$(ffmpeg -hide_banner -i habitat-artifact-003.mp4 -vn -af volumedetect -f null - 2>&1 || true)
           echo "$audio_stats" | grep -q 'mean_volume:'
-          mean_volume=$(echo "$audio_stats" | sed -n 's/.*mean_volume: \([-0-9.]*\) dB.*/\1/p' | tail -1)
+          mean_volume=$(echo "$audio_stats" | grep -oE 'mean_volume: -?[0-9.]+ dB' | awk '{print $2}' | tail -1)
           python - "$mean_volume" <<'PY'
           import sys
           v=float(sys.argv[1])
