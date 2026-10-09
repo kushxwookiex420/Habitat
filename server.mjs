@@ -1,4 +1,5 @@
 import { buildCapabilityStatus } from "./capability-status.mjs";
+import { claimTaskDispatch } from "./task-dispatch-guard.mjs";
 import { registerContentEngine } from "./content-engine.mjs";
 import { registerPublicPages } from "./public-pages.mjs";
 import { readFile } from "node:fs/promises";
@@ -1209,11 +1210,18 @@ app.post("/tasks/:id/delegate", async (req, res) => {
     return res.status(503).json({ ok: false, task });
   }
 
-  task.status = "delegated";
+  const dispatchClaim = claimTaskDispatch(task, { now: nowIso });
+  if (!dispatchClaim.claimed) {
+    // Replays must not launch another worker run. Return the existing record so
+    // clients can reconcile state; use 409 while the original dispatch is active.
+    return res.status(dispatchClaim.reason === "dispatch_already_in_progress" ? 409 : 200).json({
+      ok: dispatchClaim.reason !== "dispatch_already_in_progress",
+      duplicate: true,
+      dispatch: dispatchClaim.reason,
+      task
+    });
+  }
   task.worker = workerRegistry.has("habitat-qa-worker") ? "habitat-qa-worker" : null;
-  task.delegatedAt = nowIso();
-  task.error = null;
-  task.result = null;
 
   try {
     // Real backend checks first. These verify the service path itself rather
