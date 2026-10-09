@@ -3,6 +3,7 @@ import { claimTaskDispatch } from "./task-dispatch-guard.mjs";
 import { createD1TaskRepository } from "./d1-task-repository.mjs";
 import { markInterruptedTask, prepareTaskRetry } from "./task-recovery.mjs";
 import { registerContentEngine } from "./content-engine.mjs";
+import { createD1ContentJobRepository } from "./d1-content-job-repository.mjs";
 import { registerPublicPages } from "./public-pages.mjs";
 import { readFile } from "node:fs/promises";
 
@@ -1734,7 +1735,13 @@ app.post("/orchestrate/vicecity", async (req, res) => {
 
 
 // AX CONTENT ENGINE: research -> script -> edit -> approval -> publish -> analytics.
-registerContentEngine(app, { nowIso, makeTaskId, taskStore, workerRegistry, brainChat });
+const d1ContentConfigured = [process.env.CLOUDFLARE_ACCOUNT_ID, process.env.HABITAT_D1_DATABASE_ID, process.env.HABITAT_D1_API_TOKEN].every(value => String(value || "").trim());
+const contentJobRepository = d1ContentConfigured ? createD1ContentJobRepository({
+  accountId: process.env.CLOUDFLARE_ACCOUNT_ID,
+  databaseId: process.env.HABITAT_D1_DATABASE_ID,
+  apiToken: process.env.HABITAT_D1_API_TOKEN
+}) : null;
+const contentEngine = registerContentEngine(app, { nowIso, makeTaskId, taskStore, workerRegistry, brainChat, contentJobRepository });
 
 /*
  * AX DIRECT VERIFICATION ENDPOINT
@@ -1765,6 +1772,7 @@ app.post("/system-check", async (req, res) => {
 });
 
 await initializeTaskStorage();
+await contentEngine.initialize();
 
 app.listen(
   port,
