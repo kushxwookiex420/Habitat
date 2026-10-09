@@ -65,7 +65,7 @@ export async function runVisualQA({ artifactPath, renderPlan = {}, expectedScene
 
     const probe = await execFileAsync(ffprobePath, [
       "-v","error",
-      "-show_entries","format=duration,size:stream=index,codec_type,codec_name,width,height,r_frame_rate,nb_frames,sample_rate,channels",
+      "-show_entries","format=duration,size:stream=index,codec_type,codec_name,width,height,duration,r_frame_rate,nb_frames,sample_rate,channels",
       "-of","json",artifactPath
     ]);
     const data = parseJson(probe.stdout);
