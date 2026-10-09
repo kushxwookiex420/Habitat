@@ -3,9 +3,11 @@ export function buildCapabilityStatus({
   aiProviderConfigured = false,
   workerRegistered = false,
   androidStatus = "UNVERIFIED",
-  memoryProbePassed = false
+  memoryProbePassed = false,
+  taskRepositoryConfigured = false,
+  taskRepositoryReady = false
 } = {}) {
-  const d1CredentialsPresent = Boolean(
+  const d1CredentialsPresent = taskRepositoryConfigured || Boolean(
     String(env.CLOUDFLARE_ACCOUNT_ID || "").trim() &&
     String(env.HABITAT_D1_DATABASE_ID || "").trim() &&
     String(env.HABITAT_D1_API_TOKEN || "").trim()
@@ -25,17 +27,26 @@ export function buildCapabilityStatus({
         ? { status: "configured_unverified", detail: "At least one provider credential is configured; use /system-check to verify a live inference." }
         : { status: "blocked", detail: "No supported AI provider credential is configured." },
       aiWorker: worker,
-      taskExecution: { status: "available_memory_only", detail: "Task routes are available, but task records currently live in process memory and can be lost on restart." },
+      taskExecution: taskRepositoryReady
+        ? { status: "available_durable_task_routes", detail: "Task routes are wired to D1 and startup recovery loaded persisted task records. Content jobs and TikTok OAuth state still use separate in-memory stores." }
+        : { status: "available_memory_only", detail: "Task routes are available, but task records currently live in process memory and can be lost on restart." },
       taskPersistence: {
-        status: "blocked",
-        adapter: "in-memory",
-        durable: false,
+        status: taskRepositoryReady ? "ready" : "blocked",
+        adapter: taskRepositoryReady ? "cloudflare-d1" : "in-memory",
+        durable: taskRepositoryReady,
         d1CredentialsPresent: d1CredentialsPresent,
-        d1Integrated: false,
-        restartRecovery: false,
-        detail: d1CredentialsPresent
-          ? "D1 credentials are present, but production task routes are not yet wired to the D1 repository."
-          : "Durable storage is not configured or integrated. D1 requires account ID, database ID, and a least-privilege D1 API token."
+        d1Integrated: true,
+        restartRecovery: taskRepositoryReady,
+        detail: taskRepositoryReady
+          ? "D1 credentials, schema initialization, and startup task restoration succeeded."
+          : d1CredentialsPresent
+            ? "D1 repository is wired but not ready. If configured credentials fail, startup should fail closed rather than silently use memory."
+            : "D1 repository is wired, but durable task storage is not active. Configure account ID, database ID, and a least-privilege D1 API token." 
+      },
+      contentJobPersistence: {
+        status: "memory_only",
+        durable: false,
+        detail: "Content pipeline jobs, TikTok OAuth state, and OAuth tokens are separate in-memory stores and are not made durable by task-route D1 integration."
       },
       androidDevice: androidStatus === "PASS"
         ? { status: "verified_recent_heartbeat", detail: "A recent Android heartbeat is registered." }
