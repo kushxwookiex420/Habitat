@@ -74,12 +74,27 @@ function sendError(res, status, error) {
 }
 
 export function registerProductDemoRenderer(app) {
-  app.get("/product-demo/render/status", (_req,res) => res.json({
-    ok:true, feature:"product-demo-renderer", ffmpegWorker:true,
-    acceptsOnlyDirectHttpsMedia:true, requiresExplicitReusePermission:true,
-    maxClips:MAX_CLIPS, maxBytesPerClip:MAX_BYTES_PER_CLIP,
-    note:"Rendering runs only after permissionConfirmed=true for every source. Final output must pass machine Visual QA and still requires user approval to publish."
-  }));
+  app.get("/product-demo/render/status", async (_req,res) => {
+    const checks = {};
+    for (const [name,file] of [["ffmpeg",ffmpegPath],["ffprobe",ffprobePath],["fontRegular",DEJAVU_REGULAR],["fontBold",DEJAVU_BOLD]]) {
+      try { await fs.access(file); checks[name] = { ok:true }; }
+      catch { checks[name] = { ok:false }; }
+    }
+    try {
+      await execFileAsync(ffmpegPath,["-version"],{timeout:5000});
+      checks.ffmpegExecutable = { ok:true };
+    } catch (error) {
+      checks.ffmpegExecutable = { ok:false, detail:String(error?.message || error).slice(0,180) };
+    }
+    const ready = Object.values(checks).every(item => item.ok === true);
+    return res.status(ready ? 200 : 503).json({
+      ok:ready, ready, feature:"product-demo-renderer", checks,
+      acceptsOnlyDirectHttpsMedia:true, requiresExplicitReusePermission:true,
+      maxClips:MAX_CLIPS, maxBytesPerClip:MAX_BYTES_PER_CLIP,
+      outputPersistence:"temporary instance storage; durable artifact storage is not configured",
+      note:"Every source requires permissionConfirmed=true. Final output must pass machine Visual QA and still requires user approval to publish."
+    });
+  });
 
   app.post("/product-demo/render", async (req,res) => {
     const productName = safeText(req.body?.productName,120);
