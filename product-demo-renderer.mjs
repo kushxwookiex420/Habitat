@@ -168,13 +168,13 @@ export function registerProductDemoRenderer(app) {
         blowing:"BLOWER IN ACTION",
         "attachments-in-use":"ATTACHMENT IN USE"
       };
-      sourcePaths.forEach((s,i)=>{
+      for (const [i,s] of sourcePaths.entries()) {
         inputArgs.push("-ss",String(s.start),"-t",String(s.end-s.start),"-i",s.path);
         const actionLabelPath=path.join(dir,"action-label-"+i+".txt");
-        fs.writeFile(actionLabelPath,actionLabels[s.action],"utf8");
+        await fs.writeFile(actionLabelPath,actionLabels[s.action],"utf8");
         const segmentDuration=(s.end-s.start).toFixed(3);
         filters.push("["+i+":v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1,fps=25,format=yuv420p,setpts=PTS-STARTPTS,drawtext=fontfile="+DEJAVU_BOLD+":textfile="+actionLabelPath+":fontcolor=white:fontsize=40:box=1:boxcolor=black@0.62:boxborderw=16:x=(w-text_w)/2:y=280:enable='between(t,0,"+segmentDuration+")'[v"+i+"]");
-      });
+      }
       filters.push(sourcePaths.map((_,i)=>"[v"+i+"]").join("")+"concat=n="+sourcePaths.length+":v=1:a=0,drawbox=x=0:y=0:w=iw:h=ih:color=black@0.20:t=fill,drawtext=fontfile="+DEJAVU_BOLD+":textfile="+titleTextPath+":fontcolor=white:fontsize=52:line_spacing=8:box=1:boxcolor=black@0.45:boxborderw=24:x=(w-text_w)/2:y=140:enable='lt(t,3)',drawtext=fontfile="+DEJAVU_REGULAR+":textfile="+ctaTextPath+":fontcolor=white:fontsize=34:line_spacing=6:box=1:boxcolor=black@0.62:boxborderw=20:x=(w-text_w)/2:y=h-260:enable='gte(t,"+Math.max(0,clipDuration-3.5).toFixed(3)+")'[v]");
       const voiceFile=path.join(dir,"voiceover.mp3");
       const words=voiceover.split(/\s+/);
