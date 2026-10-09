@@ -4,6 +4,7 @@ import { createD1TaskRepository } from "./d1-task-repository.mjs";
 import { markInterruptedTask, prepareTaskRetry } from "./task-recovery.mjs";
 import { registerContentEngine } from "./content-engine.mjs";
 import { createD1ContentJobRepository } from "./d1-content-job-repository.mjs";
+import { createD1SecretVault } from "./d1-secret-vault.mjs";
 import { registerPublicPages } from "./public-pages.mjs";
 import { readFile } from "node:fs/promises";
 
@@ -1743,7 +1744,15 @@ const contentJobRepository = d1ContentConfigured ? createD1ContentJobRepository(
   databaseId: process.env.HABITAT_D1_DATABASE_ID,
   apiToken: process.env.HABITAT_D1_API_TOKEN
 }) : null;
-const contentEngine = registerContentEngine(app, { nowIso, makeTaskId, taskStore, workerRegistry, brainChat, contentJobRepository });
+const tokenEncryptionKey = String(process.env.HABITAT_TOKEN_ENCRYPTION_KEY || "").trim();
+const secretVaultConfigured = d1ContentConfigured && /^[a-f0-9]{64}$/i.test(tokenEncryptionKey);
+const secretVault = secretVaultConfigured ? createD1SecretVault({
+  accountId: process.env.CLOUDFLARE_ACCOUNT_ID,
+  databaseId: process.env.HABITAT_D1_DATABASE_ID,
+  apiToken: process.env.HABITAT_D1_API_TOKEN,
+  encryptionKey: tokenEncryptionKey
+}) : null;
+const contentEngine = registerContentEngine(app, { nowIso, makeTaskId, taskStore, workerRegistry, brainChat, contentJobRepository, secretVault });
 
 /*
  * AX DIRECT VERIFICATION ENDPOINT
@@ -1774,6 +1783,20 @@ app.post("/system-check", async (req, res) => {
 });
 
 await initializeTaskStorage();
+if (secretVault) {
+  await secretVault.initialize();
+  await secretVault.deleteExpired("tiktok_oauth_state:", new Date(Date.now() - 10 * 60 * 1000).toISOString());
+  const savedTokens = await secretVault.get("tiktok_tokens");
+  if (savedTokens?.access_token) {
+    process.env.TIKTOK_ACCESS_TOKEN = String(savedTokens.access_token);
+    if (savedTokens.refresh_token) process.env.TIKTOK_REFRESH_TOKEN = String(savedTokens.refresh_token);
+    if (savedTokens.access_token_expires_at) process.env.TIKTOK_ACCESS_TOKEN_EXPIRES_AT = String(savedTokens.access_token_expires_at);
+    if (savedTokens.refresh_token_expires_at) process.env.TIKTOK_REFRESH_TOKEN_EXPIRES_AT = String(savedTokens.refresh_token_expires_at);
+  }
+  console.log("TIKTOK_TOKEN_VAULT: D1 AES-256-GCM ready; token values are not logged");
+} else {
+  console.warn("TIKTOK_TOKEN_VAULT: unavailable — OAuth cannot be marked connected until D1 and HABITAT_TOKEN_ENCRYPTION_KEY are configured");
+}
 const contentStorageInit = await contentEngine.initialize();
 contentStorageReady = contentStorageInit?.durable === true;
 
