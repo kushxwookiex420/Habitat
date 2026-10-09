@@ -153,9 +153,17 @@ async function brainChat(payload) {
     // Free-tier model availability can vary by account and surge demand. Try a
     // short, ordered list so one unavailable/busy model does not block the mission.
     const configuredGeminiModel = String(process.env.GEMINI_MODEL || "").trim();
+    // Zero-budget guard: only attempt explicitly free-tier Flash-Lite models.
+    // A custom GEMINI_MODEL is accepted only when its name clearly identifies
+    // a Flash-Lite model, preventing an accidental paid-model call.
+    const freeGeminiModels = [
+      "gemini-2.5-flash-lite",
+      "gemini-3.5-flash-lite",
+      configuredGeminiModel.toLowerCase().includes("flash-lite") ? configuredGeminiModel : ""
+    ];
     const geminiModels = requestedModel === model
-      ? [...new Set(["gemini-3.5-flash-lite", configuredGeminiModel, "gemini-3.8-flash", "gemini-2.5-flash-lite"].filter(Boolean))]
-      : [requestedModel];
+      ? [...new Set(freeGeminiModels.filter(Boolean))]
+      : (String(requestedModel).toLowerCase().includes("flash-lite") ? [requestedModel] : ["gemini-2.5-flash-lite", "gemini-3.5-flash-lite"]);
     for (const geminiModel of geminiModels) {
       providers.push({
         name: "gemini",
@@ -166,7 +174,9 @@ async function brainChat(payload) {
     }
   }
 
-  if (cerebrasKey) {
+  // Cerebras is not enabled by default: Habitat's zero-dollar mode must not
+  // call a provider that may require paid credits. Explicit opt-in is required.
+  if (cerebrasKey && String(process.env.HABITAT_ALLOW_PAID_PROVIDERS || "").toLowerCase() === "true") {
     providers.push({
       name: "cerebras",
       model: requestedModel === model ? (process.env.CEREBRAS_MODEL || "gpt-oss-120b") : requestedModel,
@@ -330,7 +340,7 @@ app.get("/diagnostics/providers", (req, res) => {
   const configured = {
     gemini: Boolean(String(process.env.GEMINI_API_KEY || "").trim()),
     groq: Boolean(String(process.env.GROQ_API_KEY || "").trim()),
-    cerebras: Boolean(String(process.env.CEREBRAS_API_KEY || "").trim()),
+    cerebras: Boolean(String(process.env.CEREBRAS_API_KEY || "").trim()) && String(process.env.HABITAT_ALLOW_PAID_PROVIDERS || "").toLowerCase() === "true",
     openrouter: Boolean(getApiKey())
   };
   const models = {
