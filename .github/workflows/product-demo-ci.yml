@@ -1,0 +1,52 @@
+name: Product Demo Safety and Regression CI
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "product-demo-renderer.mjs"
+      - "product-demo-research.mjs"
+      - "visual-qa.mjs"
+      - "overlay-text.mjs"
+      - "font-paths.mjs"
+      - "tests/**"
+      - "package.json"
+      - ".github/workflows/product-demo-ci.yml"
+  push:
+    branches: ["fix/product-demo-action-footage-gate"]
+    paths:
+      - "product-demo-renderer.mjs"
+      - "product-demo-research.mjs"
+      - "visual-qa.mjs"
+      - "overlay-text.mjs"
+      - "font-paths.mjs"
+      - "tests/**"
+      - "package.json"
+      - ".github/workflows/product-demo-ci.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: product-demo-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend-regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          package-manager-cache: false
+      - name: Install dependencies without running project hooks
+        run: npm install --ignore-scripts --no-audit --no-fund
+      - name: Check JavaScript and shell syntax
+        run: npm run check
+      - name: Run backend regression tests
+        run: npm test
