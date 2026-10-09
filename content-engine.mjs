@@ -4,6 +4,7 @@ import ffprobeStatic from "ffprobe-static";
 
 const ffprobePath = ffprobeStatic.path;
 import { runVisualQA } from "./visual-qa.mjs";
+import { DEJAVU_REGULAR, DEJAVU_BOLD } from "./font-paths.mjs";
 import { publishTikTokDirect, registerTikTokPublisher, tiktokConfig } from "./tiktok-publisher.mjs";
 
 function cryptoRandomState() {
@@ -581,7 +582,7 @@ export function registerContentEngine(app, deps) {
         const title = esc(s.title);
         const sub = esc(s.sub);
         filters.push(
-          "["+i+":v]scale=540:960:force_original_aspect_ratio=increase,crop=540:960,tpad=stop_mode=clone:stop_duration="+s.dur+",fps=10,trim=duration="+s.dur+",setpts=PTS-STARTPTS,drawbox=x=0:y=0:w=iw:h=ih:color=black@0.34:t=fill,drawbox=x=20+20*t:y=205:w=8:h=550:color=white@0.16:t=fill,drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:text='"+title+"':fontcolor=white:fontsize="+Math.round(32*fontScale)+":x=(w-text_w)/2:y=280,drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='"+sub+"':fontcolor=white@0.88:fontsize="+Math.round(18*fontScale)+":x=(w-text_w)/2:y=345,drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='ROCKSTAR GAMES • FAN COMMENTARY':fontcolor=white@0.82:fontsize=13:x=(w-text_w)/2:y=858,setsar=1[v"+i+"]"
+          "["+i+":v]scale=540:960:force_original_aspect_ratio=increase,crop=540:960,tpad=stop_mode=clone:stop_duration="+s.dur+",fps=10,trim=duration="+s.dur+",setpts=PTS-STARTPTS,drawbox=x=0:y=0:w=iw:h=ih:color=black@0.34:t=fill,drawbox=x=20+20*t:y=205:w=8:h=550:color=white@0.16:t=fill,drawtext=fontfile="+DEJAVU_BOLD+":text='"+title+"':fontcolor=white:fontsize="+Math.round(32*fontScale)+":x=(w-text_w)/2:y=280,drawtext=fontfile="+DEJAVU_REGULAR+":text='"+sub+"':fontcolor=white@0.88:fontsize="+Math.round(18*fontScale)+":x=(w-text_w)/2:y=345,drawtext=fontfile="+DEJAVU_REGULAR+":text='ROCKSTAR GAMES • FAN COMMENTARY':fontcolor=white@0.82:fontsize=13:x=(w-text_w)/2:y=858,setsar=1[v"+i+"]"
         );
       });
       filters.push(sceneInputs.map((_,i)=>"[v"+i+"]").join("")+"concat=n="+sceneInputs.length+":v=1:a=0,scale=1080:1920:flags=fast_bilinear,format=yuv420p[v]");
