@@ -16,6 +16,7 @@ import fs from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { runVisualQA } from "./visual-qa.mjs";
+import { DEJAVU_REGULAR, DEJAVU_BOLD } from "./font-paths.mjs";
 
 const execFileAsync = promisify(execFile);
 const outputs = new Map();
@@ -135,7 +136,7 @@ export function registerProductDemoRenderer(app) {
         inputArgs.push("-ss",String(s.start),"-t",String(s.end-s.start),"-i",s.path);
         filters.push("["+i+":v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1,fps=25,format=yuv420p,setpts=PTS-STARTPTS[v"+i+"]");
       });
-      filters.push(sourcePaths.map((_,i)=>"[v"+i+"]").join("")+"concat=n="+sourcePaths.length+":v=1:a=0,drawbox=x=0:y=0:w=iw:h=ih:color=black@0.28:t=fill,drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:text='"+escDrawText(productName)+"':fontcolor=white:fontsize=52:box=1:boxcolor=black@0.45:boxborderw=24:x=(w-text_w)/2:y=140,drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='"+escDrawText(callToAction)+"':fontcolor=white:fontsize=34:box=1:boxcolor=black@0.55:boxborderw=20:x=(w-text_w)/2:y=h-240[v]");
+      filters.push(sourcePaths.map((_,i)=>"[v"+i+"]").join("")+"concat=n="+sourcePaths.length+":v=1:a=0,drawbox=x=0:y=0:w=iw:h=ih:color=black@0.28:t=fill,drawtext=fontfile="+DEJAVU_BOLD+":text='"+escDrawText(productName)+"':fontcolor=white:fontsize=52:box=1:boxcolor=black@0.45:boxborderw=24:x=(w-text_w)/2:y=140,drawtext=fontfile="+DEJAVU_REGULAR+":text='"+escDrawText(callToAction)+"':fontcolor=white:fontsize=34:box=1:boxcolor=black@0.55:boxborderw=20:x=(w-text_w)/2:y=h-240[v]");
       const voiceFile=path.join(dir,"voiceover.mp3");
       const words=voiceover.split(/\s+/);
       const chunks=[];let current="";
