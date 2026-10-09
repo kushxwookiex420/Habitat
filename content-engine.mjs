@@ -40,7 +40,7 @@ export function registerContentEngine(app, deps) {
   // Render instance or after a process restart. Without this lookup, a successfully
   // persisted job can still return a false 404 because contentJobs is process-local.
   app.use(async (req, res, next) => {
-    const match = String(req.path || "").match(/^\\/content\\/jobs\\/([^/]+)(?:\\/|$)/);
+    const match = String(req.path || "").match(/^\/content\/jobs\/([^/]+)(?:\/|$)/);
     if (!match) return next();
     let id;
     try { id = decodeURIComponent(match[1]); }
