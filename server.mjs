@@ -1,6 +1,7 @@
 import { buildCapabilityStatus } from "./capability-status.mjs";
 import { claimTaskDispatch } from "./task-dispatch-guard.mjs";
 import { createD1TaskRepository } from "./d1-task-repository.mjs";
+import { markInterruptedTask, prepareTaskRetry } from "./task-recovery.mjs";
 import { registerContentEngine } from "./content-engine.mjs";
 import { registerPublicPages } from "./public-pages.mjs";
 import { readFile } from "node:fs/promises";
@@ -946,9 +947,17 @@ async function initializeTaskStorage() {
   });
   await taskRepository.initialize();
   const restored = await taskRepository.list({ limit: 500 });
-  for (const task of restored) taskStore.set(task.id, task);
   taskStorageReady = true;
-  console.log("TASK_STORAGE: D1 ready; restored " + restored.length + " task records");
+  let interruptedCount = 0;
+  for (const task of restored) {
+    const recovery = markInterruptedTask(task, { now: nowIso });
+    taskStore.set(task.id, task);
+    if (recovery.changed) {
+      await taskRepository.update(task.id, task);
+      interruptedCount += 1;
+    }
+  }
+  console.log("TASK_STORAGE: D1 ready; restored " + restored.length + " task records; marked " + interruptedCount + " interrupted for review");
 }
 
 async function persistTask(task) {
@@ -1291,18 +1300,55 @@ app.get("/tasks", async (_req, res) => {
 
 app.get("/tasks/:id", async (req, res) => {
   try {
-    const task = taskRepository && taskStorageReady
+    let task = taskRepository && taskStorageReady
       ? await taskRepository.get(req.params.id)
       : taskStore.get(req.params.id);
     if (!task) return res.status(404).json({ ok: false, error: "task not found" });
+    taskStore.set(task.id, task);
     return res.json({ ok: true, task });
   } catch {
     return res.status(503).json({ ok: false, error: "task storage read failed" });
   }
 });
 
+app.post("/tasks/:id/retry", async (req, res) => {
+  const existing = taskStore.get(req.params.id);
+  if (!existing) {
+    if (taskRepository && taskStorageReady) {
+      try {
+        const stored = await taskRepository.get(req.params.id);
+        if (stored) taskStore.set(stored.id, stored);
+      } catch {
+        return res.status(503).json({ ok: false, error: "task storage read failed" });
+      }
+    }
+  }
+  const current = taskStore.get(req.params.id);
+  if (!current) return res.status(404).json({ ok: false, error: "task not found" });
+  const task = structuredClone(current);
+  const retry = prepareTaskRetry(task, { now: nowIso });
+  if (!retry.allowed) {
+    return res.status(409).json({ ok: false, error: "only interrupted or failed tasks can be retried", task: current });
+  }
+  try {
+    await persistTask(task);
+    taskStore.set(task.id, task);
+    return res.json({ ok: true, task, nextAction: "Call POST /tasks/:id/delegate to execute this explicitly retried task." });
+  } catch {
+    return res.status(503).json({ ok: false, error: "task retry state could not be persisted" });
+  }
+});
+
 app.post("/tasks/:id/delegate", async (req, res) => {
-  const task = taskStore.get(req.params.id);
+  let task = taskStore.get(req.params.id);
+  if (!task && taskRepository && taskStorageReady) {
+    try {
+      task = await taskRepository.get(req.params.id);
+      if (task) taskStore.set(task.id, task);
+    } catch {
+      return res.status(503).json({ ok: false, error: "task storage read failed" });
+    }
+  }
   if (!task) return res.status(404).json({ ok: false, error: "task not found" });
 
   if (!hasAnyAiProviderKey()) {
