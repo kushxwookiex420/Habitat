@@ -128,7 +128,7 @@ export function registerProductDemoRenderer(app) {
       const inputArgs=[];
       const filters=[];
       sourcePaths.forEach((s,i)=>{
-        inputArgs.push("-ss",String(s.start),"-i",s.path,"-t",String(s.end-s.start));
+        inputArgs.push("-ss",String(s.start),"-t",String(s.end-s.start),"-i",s.path);
         filters.push("["+i+":v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1,fps=25,format=yuv420p,setpts=PTS-STARTPTS[v"+i+"]");
       });
       filters.push(sourcePaths.map((_,i)=>"[v"+i+"]").join("")+"concat=n="+sourcePaths.length+":v=1:a=0,drawbox=x=0:y=0:w=iw:h=ih:color=black@0.28:t=fill,drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:text='"+escDrawText(productName)+"':fontcolor=white:fontsize=52:box=1:boxcolor=black@0.45:boxborderw=24:x=(w-text_w)/2:y=140,drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='"+escDrawText(callToAction)+"':fontcolor=white:fontsize=34:box=1:boxcolor=black@0.55:boxborderw=20:x=(w-text_w)/2:y=h-240[v]");
@@ -148,6 +148,10 @@ export function registerProductDemoRenderer(app) {
       const list=path.join(dir,"voice-list.txt");
       await fs.writeFile(list,voiceFiles.map(p=>"file '"+p.replace(/'/g,"'\\''")+"'").join("\n")+"\n");
       await execFileAsync("ffmpeg",["-hide_banner","-loglevel","error","-y","-f","concat","-safe","0","-i",list,"-c","copy",voiceFile],{timeout:30000});
+      const voiceProbe=await execFileAsync("ffprobe",["-v","error","-show_entries","format=duration","-of","default=noprint_wrappers=1:nokey=1",voiceFile],{timeout:15000});
+      const voiceDuration=Number(String(voiceProbe.stdout||"").trim());
+      const clipDuration=sourcePaths.reduce((sum,s)=>sum+s.end-s.start,0);
+      if(!Number.isFinite(voiceDuration)||voiceDuration>clipDuration+0.2) throw new Error("Voiceover is longer than the selected demonstration footage. Add longer authorized clips or shorten the narration before rendering.");
 
       const id=crypto.randomUUID();
       const outputPath=path.join(dir,"droppilot-product-demo.mp4");
