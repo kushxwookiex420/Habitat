@@ -12,6 +12,7 @@
     "express": "^5.1.0",
     "openai": "^5.20.0",
     "ffmpeg-static": "^5.2.0",
-    "ffprobe-static": "^3.1.0"
+    "ffprobe-static": "^3.1.0",
+    "dejavu-fonts-ttf": "^2.37.3"
   }
 }
