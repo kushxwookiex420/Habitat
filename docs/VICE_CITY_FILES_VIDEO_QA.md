@@ -33,8 +33,8 @@ Before an artifact can be marked ready, check:
 5. Captions and title bounds remain inside safe margins; no title overlaps key imagery.
 6. There are multiple intentional scenes when the script calls for them.
 7. A contact sheet of sampled frames (opening, scene transitions, final 10 seconds) is generated for visual inspection.
-9. The edit manifest proves the original intro is first, narration begins at/after 8 seconds, the final spoken word has a 1-second tail, the branded outro is last, and no fixed-duration trim was used.
 8. A QA report records PASS/FAIL for every check and the artifact's duration, dimensions, frame rate, audio duration, and output filename.
+9. The edit manifest proves the original intro is first, narration begins at/after 8 seconds, the final spoken word has a 1-second tail, the branded outro is last, and no fixed-duration trim was used.
 
 Automated checks cannot fully judge whether visuals are tasteful or the narration sounds natural. Those items require actual playback and visual review.
 
