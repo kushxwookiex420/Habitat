@@ -57,6 +57,14 @@ test("cross-session continuity checkpoint is durable and exposed by the backend"
   assert.ok(resources.includes("free forever"));
 });
 
+test("runtime storage never claims durable persistence from an in-memory probe", async () => {
+  const server = await fs.readFile(new URL("../server.mjs", import.meta.url), "utf8");
+  assert.ok(server.includes('status: storagePassed ? "UNKNOWN" : "FAIL"'));
+  assert.ok(server.includes('durable: false'));
+  assert.ok(server.includes('persistence: "process-local"'));
+  assert.ok(server.includes('nonPassingChecks = Object.entries(checks).filter(([, v]) => v.status !== "PASS")'));
+});
+
 test("critical modules are present and non-empty", async () => {
   for (const file of ["server.mjs", "content-engine.mjs", "visual-qa.mjs", "tiktok-publisher.mjs"]) {
     const source = await fs.readFile(new URL("../" + file, import.meta.url), "utf8");
