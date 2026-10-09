@@ -550,7 +550,7 @@ app.post("/chat", async (req, res) => {
 
     if (!hasAnyAiProviderKey()) {
       return res.status(503).json({
-        error: "No AI provider key is configured. Set GEMINI_API_KEY, GROQ_API_KEY, CEREBRAS_API_KEY, or OPENROUTER_API_KEY."
+        error: "No AI provider key is configured. Set CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID, GEMINI_API_KEY, GROQ_API_KEY, or OPENROUTER_API_KEY. Cerebras requires CEREBRAS_API_KEY and HABITAT_ALLOW_PAID_PROVIDERS=true."
       });
     }
 
@@ -1200,7 +1200,7 @@ app.post("/tasks/:id/delegate", async (req, res) => {
 
   if (!hasAnyAiProviderKey()) {
     task.status = "failed";
-    task.error = "No AI provider key is configured. Set GEMINI_API_KEY, GROQ_API_KEY, CEREBRAS_API_KEY, or OPENROUTER_API_KEY.";
+    task.error = "No AI provider key is configured. Set CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID, GEMINI_API_KEY, GROQ_API_KEY, or OPENROUTER_API_KEY. Cerebras requires CEREBRAS_API_KEY and HABITAT_ALLOW_PAID_PROVIDERS=true.";
     return res.status(503).json({ ok: false, task });
   }
 
@@ -1412,7 +1412,7 @@ app.post("/orchestrate/dropilot", async (req, res) => {
     if (!hasAnyAiProviderKey()) {
       return res.status(503).json({
         ok: false,
-        error: "No AI provider key is configured. Set GEMINI_API_KEY, GROQ_API_KEY, CEREBRAS_API_KEY, or OPENROUTER_API_KEY."
+        error: "No AI provider key is configured. Set CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID, GEMINI_API_KEY, GROQ_API_KEY, or OPENROUTER_API_KEY. Cerebras requires CEREBRAS_API_KEY and HABITAT_ALLOW_PAID_PROVIDERS=true."
       });
     }
 
@@ -1515,7 +1515,7 @@ app.post("/orchestrate/vicecity", async (req, res) => {
     const channelContext = req.body?.channelContext || {};
 
     if (!mission) return res.status(400).json({ ok: false, error: "mission required" });
-    if (!hasAnyAiProviderKey()) return res.status(503).json({ ok: false, error: "No AI provider key is configured. Set GEMINI_API_KEY, GROQ_API_KEY, CEREBRAS_API_KEY, or OPENROUTER_API_KEY." });
+    if (!hasAnyAiProviderKey()) return res.status(503).json({ ok: false, error: "No AI provider key is configured. Set CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID, GEMINI_API_KEY, GROQ_API_KEY, or OPENROUTER_API_KEY. Cerebras requires CEREBRAS_API_KEY and HABITAT_ALLOW_PAID_PROVIDERS=true." });
 
     const contextText = JSON.stringify(channelContext, null, 2);
     const roles = [

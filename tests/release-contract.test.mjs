@@ -101,3 +101,9 @@ test("Cerebras is not counted unless the paid-provider opt-in is explicit", asyn
   const helper = server.match(/function hasAnyAiProviderKey\(\) \{[\s\S]*?\n\}/)?.[0] || "";
   assert.ok(helper.includes('process.env.HABITAT_ALLOW_PAID_PROVIDERS || "").toLowerCase() === "true"'));
 });
+
+test("provider setup errors include Cloudflare Workers AI and paid Cerebras opt-in", async () => {
+  const server = await fs.readFile(new URL("../server.mjs", import.meta.url), "utf8");
+  assert.ok(server.includes("Set CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID"));
+  assert.ok(server.includes("Cerebras requires CEREBRAS_API_KEY and HABITAT_ALLOW_PAID_PROVIDERS=true"));
+});
