@@ -378,7 +378,8 @@ export function registerContentEngine(app, deps) {
   // observed artifact problems: scene changes now occur at the planned timestamps,
   // on-screen copy is constrained to a mobile-safe area, and every scene has its
   // own visual treatment. No copyrighted footage is fabricated or claimed.
-  app.post("/content/jobs/:id/render", async (req, res) => {
+  let renderJobHandler;
+  renderJobHandler = async (req, res) => {
     const job = contentJobs.get(req.params.id);
     if (!job) return res.status(404).json({ ok:false, error:"content job not found" });
     if (job.stages.script.status !== "completed")
@@ -590,7 +591,8 @@ export function registerContentEngine(app, deps) {
       });
       res.status(502).json({ok:false,error:"media render failed",detail:String(error?.message||error),job});
     }
-  });
+  };
+  app.post("/content/jobs/:id/render", renderJobHandler);
 
   // Closed-loop render endpoint: failed visual QA feeds remediation back into the renderer.
   app.post("/content/jobs/:id/render-loop", async (req, res) => {
@@ -601,16 +603,19 @@ export function registerContentEngine(app, deps) {
     const history = [];
     let repairPlan = [];
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-      const base = req.protocol + "://" + req.get("host");
-      const response = await fetch(base + "/content/jobs/" + job.id + "/render", {
-        method:"POST", headers:{"content-type":"application/json"},
-        body:JSON.stringify({ attempt, maxAttempts, repairPlan })
-      });
-      let payload = {};
-      try { payload = await response.json(); } catch {}
+      // Invoke the renderer in-process. A self-HTTP fetch can hit another Render
+      // instance whose in-memory contentJobs Map does not contain this job.
+      const renderResponse = {
+        statusCode:200,
+        payload:null,
+        status(code) { this.statusCode = code; return this; },
+        json(body) { this.payload = body; return body; }
+      };
+      await renderJobHandler({ params:{ id:job.id }, body:{ attempt, maxAttempts, repairPlan } }, renderResponse);
+      const payload = renderResponse.payload || {};
       const qa = payload.visualQA || payload.artifact?.visualQA || null;
-      history.push({ attempt, status:response.status, qaStatus:qa?.status || null, issues:qa?.issues || [], remediation:qa?.remediation || [] });
-      if (response.ok && payload.artifact?.verified === true) {
+      history.push({ attempt, status:renderResponse.statusCode, qaStatus:qa?.status || null, issues:qa?.issues || [], remediation:qa?.remediation || [] });
+      if (renderResponse.statusCode < 400 && payload.artifact?.verified === true) {
         job.renderLoop = { status:"VERIFIED", attempts:attempt, maxAttempts, history, completedAt:nowIso() };
         return res.json({ ok:true, renderLoop:job.renderLoop, job, artifact:payload.artifact, visualQA:qa });
       }
