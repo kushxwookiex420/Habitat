@@ -17,6 +17,9 @@ test("Visual QA requires audio and checks silent tracks", async () => {
   assert.ok(source.includes("requireAudio = true"));
   assert.ok(source.includes("missing_audio_track"));
   assert.ok(source.includes("silent_audio_track"));
+  assert.ok(source.includes("audio_longer_than_video"));
+  assert.ok(source.includes("streamSync"));
+  assert.ok(source.includes("toleranceSeconds: 0.12"));
 });
 
 test("render and publish paths stay approval gated", async () => {
