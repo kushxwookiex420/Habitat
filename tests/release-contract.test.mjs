@@ -22,7 +22,7 @@ test("Visual QA requires audio and checks silent tracks", async () => {
 test("render and publish paths stay approval gated", async () => {
   const source = await fs.readFile(new URL("../content-engine.mjs", import.meta.url), "utf8");
   assert.ok(source.includes("const maxAttempts = 3"));
-  assert.ok(source.includes("artifact.verified === true"));
+  assert.ok(source.includes("payload.artifact?.verified === true"));
   assert.ok(source.includes("Ax final review failed"));
   assert.ok(source.includes("publish approval required"));
 });
