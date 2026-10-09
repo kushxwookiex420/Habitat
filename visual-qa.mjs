@@ -93,6 +93,29 @@ export async function runVisualQA({ artifactPath, renderPlan = {}, expectedScene
       issues.push({ type:"missing_audio_track", detail:"No audio stream was found; add the intended voiceover/music or explicitly set requireAudio=false for a silent deliverable." });
     }
 
+    // A container can have an audio track that contains only digital silence.
+    // Detect that separately so a silent placeholder cannot pass as narrated content.
+    if (audio && requireAudio) {
+      const volume = await execFileAsync("ffmpeg", [
+        "-hide_banner","-nostats","-i",artifactPath,
+        "-vn","-af","volumedetect","-f","null","-"
+      ]).catch(e => ({ stdout:"", stderr:String(e?.stderr || e?.message || e) }));
+      const volumeText = String(volume.stderr || "");
+      const meanMatch = volumeText.match(/mean_volume:\s*(-?inf|-?[0-9.]+)\s*dB/i);
+      const meanVolumeDb = meanMatch ? (meanMatch[1].toLowerCase() === "-inf" ? -Infinity : Number(meanMatch[1])) : null;
+      const silent = meanVolumeDb === -Infinity || (Number.isFinite(meanVolumeDb) && meanVolumeDb <= -55);
+      checks.audioLevel = {
+        status: meanVolumeDb === null ? "UNKNOWN" : silent ? "FAIL" : "PASS",
+        meanVolumeDb: meanVolumeDb === -Infinity ? "-Infinity" : meanVolumeDb,
+        thresholdDb: -55
+      };
+      if (silent) {
+        issues.push({ type:"silent_audio_track", meanVolumeDb:meanVolumeDb === -Infinity ? "-Infinity" : meanVolumeDb, detail:"The audio stream is effectively silent; a voiceover/music track is required for this content workflow." });
+      } else if (meanVolumeDb === null) {
+        issues.push({ type:"audio_level_unmeasurable", detail:"Could not measure audio level; verify the audio stream before publishing." });
+      }
+    }
+
     const preflight = safeAreaPreflight(renderPlan, width, height);
     checks.safeArea = { status: preflight.issues.length ? "FAIL" : "PASS", ...preflight };
     issues.push(...preflight.issues);
@@ -151,6 +174,8 @@ export async function runVisualQA({ artifactPath, renderPlan = {}, expectedScene
       switch (issue.type) {
         case "text_overflow_risk": return { action:"resize_text", text:issue.text, instruction:"Reduce font size or shorten the on-screen text until estimated width is within the safe area." };
         case "missing_audio_track": return { action:"add_or_restore_audio", instruction:"Add the intended voiceover or licensed audio track, re-render, and re-run Visual QA." };
+        case "silent_audio_track": return { action:"replace_silent_audio", instruction:"Replace placeholder silence with the intended recorded/generated voiceover and properly licensed background audio, then re-render and re-run Visual QA." };
+        case "audio_level_unmeasurable": return { action:"verify_audio", instruction:"Inspect the audio stream and ensure it contains audible speech/music before publishing." };
         case "sustained_black_frame": return { action:"repair_black_frames", instruction:"Replace the affected interval with a valid scene frame/background and re-render." };
         case "frozen_visual": return { action:"repair_frozen_scene", instruction:"Ensure the affected scene changes visually or shorten the static interval below the freeze threshold." };
         case "scene_progression_failed": return { action:"repair_scene_progression", instruction:"Ensure every planned scene produces a meaningful visual transition and re-render." };
