@@ -4,6 +4,7 @@ import { createD1TaskRepository } from "./d1-task-repository.mjs";
 import { markInterruptedTask, prepareTaskRetry } from "./task-recovery.mjs";
 import { registerContentEngine } from "./content-engine.mjs";
 import { registerProductDemoResearch } from "./product-demo-research.mjs";
+import { registerProductDemoRenderer } from "./product-demo-renderer.mjs";
 import { createD1ContentJobRepository } from "./d1-content-job-repository.mjs";
 import { createD1SecretVault } from "./d1-secret-vault.mjs";
 import { registerPublicPages } from "./public-pages.mjs";
@@ -17,6 +18,7 @@ app.use(express.json({ limit: "1mb" }));
 
 registerPublicPages(app);
 registerProductDemoResearch(app);
+registerProductDemoRenderer(app);
 
 // Durable cross-session handoff: the checkpoint is committed with the source code,
 // not written to Render's ephemeral filesystem. Keep secrets out of AX_CONTINUITY.md.
