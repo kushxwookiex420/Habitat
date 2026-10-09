@@ -102,7 +102,7 @@ for i in 0 1 2 3 4 5; do
   FILTER+="drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='VICE CITY FILES  •  FACT-CHECKED GAMING UPDATES':fontcolor=white:fontsize=23:x=(w-text_w)/2:y=1580,"
   FILTER+="fps=15,setsar=1,format=yuv420p[v$i];"
 done
-FILTER+="[v0][v1][v2][v3][v4][v5]concat=n=6:v=1:a=0,tpad=stop_mode=clone:stop_duration=1,trim=duration=$BODY_DURATION,setpts=PTS-STARTPTS[v]"
+FILTER+="[v0][v1][v2][v3][v4][v5]concat=n=6:v=1:a=0,tpad=stop_mode=clone:stop_duration=2,trim=duration=$BODY_DURATION,setpts=PTS-STARTPTS[v]"
 
 ffmpeg -hide_banner -loglevel error -y \
   -loop 1 -framerate 15 -t "$SCENE_DURATION" -i "$TMP/scene1.jpg" \
