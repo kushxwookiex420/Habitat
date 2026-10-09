@@ -438,14 +438,15 @@ export function registerContentEngine(app, deps) {
       const imagePaths = [];
       for (let i = 0; i < officialImageUrls.length; i++) {
         const imageResponse = await fetch(officialImageUrls[i], {
-          headers: { "User-Agent": "Mozilla/5.0 HabitatAx/1.0", "Accept": "image/avif,image/webp,image/jpeg,*/*" },
+          headers: { "User-Agent": "Mozilla/5.0 HabitatAx/1.0", "Accept": "image/jpeg,*/*;q=0.1" },
           signal: AbortSignal.timeout(20000)
         });
         const imageType = String(imageResponse.headers.get("content-type") || "");
         if (!imageResponse.ok || !imageType.startsWith("image/")) throw new Error("official_visual_asset_unavailable_" + (i + 1) + "_http_" + imageResponse.status);
         const imageBytes = Buffer.from(await imageResponse.arrayBuffer());
         if (imageBytes.length < 10000) throw new Error("official_visual_asset_too_small_" + (i + 1));
-        const imagePath = path.join(outDir, "official-scene-" + String(i + 1).padStart(2, "0") + ".jpg");
+        const imageExt = imageType.includes("webp") ? ".webp" : imageType.includes("avif") ? ".avif" : imageType.includes("png") ? ".png" : ".jpg";
+        const imagePath = path.join(outDir, "official-scene-" + String(i + 1).padStart(2, "0") + imageExt);
         await fs.writeFile(imagePath, imageBytes);
         imagePaths.push(imagePath);
       }
@@ -500,7 +501,7 @@ export function registerContentEngine(app, deps) {
       const inputs = [];
       const filters = [];
       sceneInputs.forEach((s, i) => {
-        inputs.push("-f","image2","-loop","1","-framerate","10","-t",String(s.dur),"-i",imagePaths[i]);
+        inputs.push("-stream_loop","-1","-t",String(s.dur),"-i",imagePaths[i]);
         const title = esc(s.title);
         const sub = esc(s.sub);
         filters.push(
