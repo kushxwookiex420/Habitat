@@ -19,5 +19,26 @@ jobs:
           node --check content-engine.mjs
           node --check visual-qa.mjs
           node --check tiktok-publisher.mjs
+          node --check scripts/vice-city-release-gate.mjs
       - name: Run release contract tests
         run: npm test
+      - name: Confirm video release gate fails closed
+        run: |
+          node --input-type=module <<'JS'
+          import { spawnSync } from 'node:child_process';
+          import fs from 'node:fs';
+          const report = '/tmp/vice-city-release-gate-report.json';
+          const result = spawnSync(process.execPath, [
+            'scripts/vice-city-release-gate.mjs',
+            '/tmp/missing-final.mp4',
+            '/tmp/missing-approved-intro.mp4',
+            '/tmp/missing-branded-outro.mp4',
+            report
+          ], { encoding: 'utf8' });
+          if (result.status === 0) throw new Error('Gate incorrectly accepted missing media.');
+          const data = JSON.parse(fs.readFileSync(report, 'utf8'));
+          if (data.status !== 'BLOCKED' || data.publishAllowed !== false) {
+            throw new Error('Gate did not block missing intro/outro media.');
+          }
+          console.log('PASS: missing media is blocked; publishing is never authorized by automated QA.');
+          JS
