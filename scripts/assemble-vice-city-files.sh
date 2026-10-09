@@ -57,13 +57,23 @@ PY
 
 render_brand_segment() {
   local source="$1" duration="$2" hold="$3" output="$4"
-  ffmpeg -hide_banner -loglevel error -y \
-    -i "$source" \
-    -f lavfi -t "$duration" -i "anullsrc=channel_layout=stereo:sample_rate=48000" \
-    -filter_complex "[0:v]split=2[bg][fg];[bg]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=28:14,eq=brightness=-0.22:saturation=0.78[back];[fg]scale=1080:608:force_original_aspect_ratio=decrease:flags=lanczos[front];[back][front]overlay=(W-w)/2:(H-h)/2,tpad=stop_mode=clone:stop_duration=${hold},fps=30,setsar=1,format=yuv420p[v]" \
-    -map "[v]" -map 1:a:0 -t "$duration" \
-    -c:v libx264 -preset ultrafast -crf 23 -c:a aac -b:a 96k -ar 48000 -ac 2 \
-    -movflags +faststart "$output"
+  local video_filter
+  video_filter="[0:v]split=2[bg][fg];[bg]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=28:14,eq=brightness=-0.22:saturation=0.78[back];[fg]scale=1080:608:force_original_aspect_ratio=decrease:flags=lanczos[front];[back][front]overlay=(W-w)/2:(H-h)/2,tpad=stop_mode=clone:stop_duration=${hold},fps=30,setsar=1,format=yuv420p[v]"
+  if ffprobe -v error -select_streams a:0 -show_entries stream=index -of csv=p=0 "$source" | grep -q .; then
+    # Preserve source audio when present, padding only the added logo hold.
+    ffmpeg -hide_banner -loglevel error -y -i "$source" \
+      -filter_complex "$video_filter" -map "[v]" -map 0:a:0 \
+      -af "apad=pad_dur=$hold,aresample=48000,aformat=channel_layouts=stereo" \
+      -t "$duration" -c:v libx264 -preset ultrafast -crf 23 \
+      -c:a aac -b:a 96k -ar 48000 -ac 2 -movflags +faststart "$output"
+  else
+    # The current approved intro is silent; provide a synchronized silent track.
+    ffmpeg -hide_banner -loglevel error -y -i "$source" \
+      -f lavfi -t "$duration" -i "anullsrc=channel_layout=stereo:sample_rate=48000" \
+      -filter_complex "$video_filter" -map "[v]" -map 1:a:0 -t "$duration" \
+      -c:v libx264 -preset ultrafast -crf 23 -c:a aac -b:a 96k -ar 48000 -ac 2 \
+      -movflags +faststart "$output"
+  fi
 }
 
 render_brand_segment "$INTRO" "$TARGET_INTRO" "$INTRO_HOLD" "$TMP/intro.mp4"
