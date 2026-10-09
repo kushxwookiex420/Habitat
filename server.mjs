@@ -1,5 +1,6 @@
 import { registerContentEngine } from "./content-engine.mjs";
 import { registerPublicPages } from "./public-pages.mjs";
+import { registerTikTokOAuth } from "./tiktok-oauth.mjs";
 
 import express from "express";
 
@@ -8,6 +9,7 @@ const app = express();
 app.use(express.json({ limit: "1mb" }));
 
 registerPublicPages(app);
+registerTikTokOAuth(app);
 
 const port = process.env.PORT || 8080;
 
