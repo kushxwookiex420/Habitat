@@ -31,9 +31,9 @@ const fallbackModels = [];
 const fallbackModel = fallbackModels[0];
 const providerTimeoutMs = 30000;
 
-if (!getApiKey()) {
+if (!hasAnyAiProviderKey()) {
   console.warn(
-    "WARNING: OPENROUTER_API_KEY is not configured."
+    "WARNING: No AI provider key is configured. Set GEMINI_API_KEY, GROQ_API_KEY, CEREBRAS_API_KEY, or OPENROUTER_API_KEY."
   );
 }
 
@@ -890,11 +890,7 @@ async function runSystemCheck() {
   const checks = {};
   const startedAt = Date.now();
 
-  const providerConfigured = Boolean(
-    String(process.env.GROQ_API_KEY || "").trim() ||
-    String(process.env.GEMINI_API_KEY || "").trim() ||
-    getApiKey()
-  );
+  const providerConfigured = hasAnyAiProviderKey();
 
   checks.axCore = { status: "PASS", detail: "Habitat chat route is active." };
   checks.backend = { status: "PASS", detail: "Backend request routing is active." };
