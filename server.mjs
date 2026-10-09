@@ -152,8 +152,8 @@ async function brainChat(payload) {
   if (geminiKey) {
     providers.push({
       name: "gemini",
-      model: requestedModel === model ? (process.env.GEMINI_MODEL || "gemini-2.5-flash") : requestedModel,
-      url: `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(requestedModel === model ? (process.env.GEMINI_MODEL || "gemini-2.5-flash") : requestedModel)}:generateContent?key=${encodeURIComponent(geminiKey)}`,
+      model: requestedModel === model ? (process.env.GEMINI_MODEL || "gemini-3.8-flash") : requestedModel,
+      url: `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(requestedModel === model ? (process.env.GEMINI_MODEL || "gemini-3.8-flash") : requestedModel)}:generateContent?key=${encodeURIComponent(geminiKey)}`,
       headers: { "Content-Type": "application/json" }
     });
   }
@@ -326,7 +326,7 @@ app.get("/diagnostics/providers", (req, res) => {
     openrouter: Boolean(getApiKey())
   };
   const models = {
-    gemini: process.env.GEMINI_MODEL || "gemini-2.5-flash",
+    gemini: process.env.GEMINI_MODEL || "gemini-3.8-flash",
     groq: process.env.GROQ_MODEL || "openai/gpt-oss-20b",
     cerebras: process.env.CEREBRAS_MODEL || "gpt-oss-120b",
     openrouter: model
