@@ -1196,10 +1196,10 @@ async function runSystemCheck() {
   } catch (error) {
     task.status = "failed";
     task.updatedAt = nowIso();
+    task.error = String(error?.message || error);
     if (taskRepository && taskStorageReady) {
       try { await persistTask(task); } catch {}
     }
-    task.error = String(error?.message || error);
     if (!checks.modelWorker) {
       checks.modelWorker = { status: "FAIL", detail: task.error };
     }
