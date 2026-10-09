@@ -98,3 +98,16 @@ Build Habitat into a dependable Android-first AI control center for DropPilot AI
 - D1 repository unit tests and production startup/schema initialization are verified. A direct HTTP POST/GET content-job round trip and process-restart round trip have **not** yet been externally exercised through the available inspection tools; do not overstate end-to-end verification.
 - Remaining gaps: TikTok OAuth state/access/refresh tokens still live in process memory; OAuth authorization still needs to be fixed and verified; rendered video files are still on ephemeral disk; TikTok publishing remains approval-gated. Do not claim publishing or video artifact durability works until tested.
 - Next priority: design encrypted persistence for TikTok OAuth state/tokens using a dedicated encryption key in Render, with expiry/refresh handling and tests. Then evaluate free durable binary storage for rendered MP4s; never put secrets or large media bytes in the public continuity file.
+
+
+## Verified update — 2026-10-09 19:34 UTC
+
+- Cloudflare D1 is configured in Render. Live startup logs confirm task storage and content-job storage both initialize as D1 ready.
+- PR #20 merged as `6ef7fedc7913f24fbe8d6f2bd574c8950986b770`; capability reporting now reflects D1 content-job readiness instead of falsely saying memory-only.
+- PR #21 merged as `d8284f5becbdd5f67a5aa2d2f9aea926a449eadf`. New `d1-secret-vault.mjs` stores OAuth state and TikTok token bundles encrypted using AES-256-GCM in D1. Render environment variable `HABITAT_TOKEN_ENCRYPTION_KEY` is set directly in Render; never print or commit its value.
+- Render startup log confirms `TIKTOK_TOKEN_VAULT: D1 AES-256-GCM ready; token values are not logged`, followed by content-job D1 ready and OpenRouter auth PASS.
+- PR #22 merged as `f3479e8a939d4fa8d0658ef3985c52030c93070f`; `/storage/check` now checks task repository, content-job repository, and encrypted vault together and reports component readiness without revealing secrets. Deployment was in progress at checkpoint; verify it is live before claiming the combined endpoint is deployed.
+- CI, release checks, and D1 repository tests passed for PR #21. PR #22 release checks and CI passed before merge.
+- TikTok OAuth still has not been proven successful; the developer portal previously returned a client_key error. The new vault is ready but no valid TikTok token is yet confirmed. Token refresh logic is still a follow-up, and external publishing remains approval-gated.
+- Render video bytes still reside on ephemeral disk; durable MP4 storage (e.g. object storage) is a separate unresolved item.
+- Next actions: verify PR #22 deployment and combined `/storage/check`; test content-job create/get persistence; implement token refresh using the encrypted vault; then fix TikTok Developer app authorization and verify a real OAuth round trip without publishing.
