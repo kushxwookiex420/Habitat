@@ -118,8 +118,8 @@ jobs:
             format: '9:16',
             scenes: titles.map(([title, subtitle]) => ({ title, subtitle })),
             onScreenText: [
-              ...titles.map(([title]) => ({ text: title, fontSize: 48, bold: true })),
-              ...titles.map(([, subtitle]) => ({ text: subtitle, fontSize: 27, bold: false })),
+              ...titles.map(([title]) => ({ text: title, fontSize: 44, bold: true })),
+              ...titles.map(([, subtitle]) => ({ text: subtitle, fontSize: 24, bold: false })),
               { text: footer, fontSize: 23, bold: false }
             ]
           };
