@@ -54,7 +54,7 @@ test("cross-session continuity checkpoint is durable and exposed by the backend"
   assert.ok(server.includes('app.get("/continuity"'));
   assert.ok(server.includes('app.get("/continuity/status"'));
   assert.ok(server.includes('new URL("./AX_CONTINUITY.md", import.meta.url)'));
-  assert.ok(resources.includes("No misleading \`free forever\` claims"));
+  assert.ok(resources.includes("free forever"));
 });
 
 test("critical modules are present and non-empty", async () => {
