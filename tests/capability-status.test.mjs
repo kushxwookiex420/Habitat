@@ -31,6 +31,8 @@ test("publishing remains approval-gated and media QA is not presumed", () => {
   const report = buildCapabilityStatus({ aiProviderConfigured: true });
   assert.equal(report.capabilities.externalPublishing.status, "approval_gated_unverified");
   assert.equal(report.capabilities.contentQualityGates.status, "unverified");
+  assert.equal(report.capabilities.contentJobPersistence.status, "memory_only");
+  assert.equal(report.capabilities.contentJobPersistence.durable, false);
   assert.equal(report.secretsExposed, false);
 });
 
