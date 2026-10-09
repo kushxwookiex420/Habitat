@@ -986,9 +986,13 @@ async function runSystemCheck() {
     : { status: "FAIL", detail: "QA worker is not registered." };
 
   const storagePassed = storageSelfTest();
+  // This probe only tests the process-local Map. It must never be presented
+  // as durable persistence: Render's free web service filesystem is ephemeral.
   checks.storage = {
-    status: storagePassed ? "PASS" : "FAIL",
-    detail: "In-process task storage write/read/delete probe."
+    status: storagePassed ? "UNKNOWN" : "FAIL",
+    detail: storagePassed
+      ? "In-process memory probe passed, but durable task persistence is not configured; records may be lost on restart."
+      : "In-process task storage probe failed."
   };
 
   const task = {
@@ -1100,8 +1104,8 @@ async function runSystemCheck() {
     checks.workerExecution = { status: "FAIL", detail: task.error };
   }
 
-  const failures = Object.entries(checks).filter(([, v]) => v.status === "FAIL");
-  const overall = failures.length === 0 && task.status === "verified" ? "VERIFIED PASS" : "PARTIAL / BLOCKED";
+  const nonPassingChecks = Object.entries(checks).filter(([, v]) => v.status !== "PASS");
+  const overall = nonPassingChecks.length === 0 && task.status === "verified" ? "VERIFIED PASS" : "PARTIAL / BLOCKED";
 
   const report = [
     "HABITAT SYSTEM CHECK",
@@ -1127,12 +1131,15 @@ app.get("/workers", (req, res) => {
 });
 
 app.get("/storage/check", (req, res) => {
-  const passed = storageSelfTest();
-  return res.json({
-    ok: passed,
-    storage: passed ? "ready" : "failed",
+  const probePassed = storageSelfTest();
+  return res.status(probePassed ? 200 : 503).json({
+    ok: false,
+    storage: probePassed ? "memory-only" : "failed",
+    durable: false,
     persistence: "process-local",
-    detail: passed ? "write/read/delete passed" : "write/read/delete failed"
+    detail: probePassed
+      ? "Memory write/read/delete passed, but this is not durable storage. Task history can be lost on restart."
+      : "In-process write/read/delete probe failed."
   });
 });
 
