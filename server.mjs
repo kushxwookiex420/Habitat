@@ -1,5 +1,6 @@
 import { registerContentEngine } from "./content-engine.mjs";
 import { registerPublicPages } from "./public-pages.mjs";
+import { readFile } from "node:fs/promises";
 
 import express from "express";
 
@@ -8,6 +9,39 @@ const app = express();
 app.use(express.json({ limit: "1mb" }));
 
 registerPublicPages(app);
+
+// Durable cross-session handoff: the checkpoint is committed with the source code,
+// not written to Render's ephemeral filesystem. Keep secrets out of AX_CONTINUITY.md.
+app.get("/continuity", async (_req, res) => {
+  try {
+    const checkpoint = await readFile(new URL("./AX_CONTINUITY.md", import.meta.url), "utf8");
+    res.type("text/markdown; charset=utf-8");
+    res.setHeader("Cache-Control", "public, max-age=60");
+    return res.status(200).send(checkpoint);
+  } catch (error) {
+    console.error("AX_CONTINUITY_READ_FAILED", String(error?.message || error));
+    return res.status(503).json({ ok:false, error:"continuity checkpoint unavailable" });
+  }
+});
+
+app.get("/continuity/status", async (_req, res) => {
+  try {
+    const checkpoint = await readFile(new URL("./AX_CONTINUITY.md", import.meta.url), "utf8");
+    const lines = checkpoint.split("\n");
+    const checkpointDate = lines.find(line => line.startsWith("**Last checkpoint:**"))?.replace("**Last checkpoint:**", "").trim() || "unknown";
+    return res.json({
+      ok:true,
+      source:"committed repository checkpoint",
+      checkpointDate,
+      durableAcrossConversations:true,
+      runtimeJobPersistence:"not yet implemented",
+      sourceUrl:"https://github.com/kushxwookiex420/Habitat/blob/main/AX_CONTINUITY.md"
+    });
+  } catch (error) {
+    console.error("AX_CONTINUITY_STATUS_FAILED", String(error?.message || error));
+    return res.status(503).json({ ok:false, error:"continuity checkpoint unavailable" });
+  }
+});
 
 const port = process.env.PORT || 8080;
 
