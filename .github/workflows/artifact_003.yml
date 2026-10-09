@@ -83,6 +83,33 @@ jobs:
           print(json.dumps({"verified":True,"bytes":size,"durationSeconds":duration,"width":1080,"height":1920,"fps":"15/1","renderer":"github-actions-ffmpeg-cinematic-engine-v3","audio":"real-local-espeak-ng-voiceover","audioCodec":audio["codec_name"],"channels":2,"scenes":6,"motion":"animated-neon-city"}))
           PY
 
+      - name: Visual QA — scene progression, blank frames, and narration
+        run: |
+          set -euo pipefail
+          # Require real audio energy so a silent placeholder cannot pass.
+          audio_stats=$(ffmpeg -hide_banner -i habitat-artifact-003.mp4 -vn -af volumedetect -f null - 2>&1 || true)
+          echo "$audio_stats" | grep -q 'mean_volume:'
+          mean_volume=$(echo "$audio_stats" | sed -n 's/.*mean_volume: \\([-0-9.]*\\) dB.*/\\1/p' | tail -1)
+          python - "$mean_volume" <<'PY'
+          import sys
+          v=float(sys.argv[1])
+          assert v > -45, f"Audio too quiet or silent: mean_volume={v} dB"
+          print(f"Narration audio energy PASS: mean_volume={v} dB")
+          PY
+          # Distinct scene changes must be detectable; a static/frozen export is blocked.
+          ffmpeg -hide_banner -loglevel info -i habitat-artifact-003.mp4 -vf "select='gt(scene,0.02)',showinfo" -an -f null - 2> /tmp/scene-qa.log
+          transitions=$(grep -c 'showinfo.*pts_time:' /tmp/scene-qa.log || true)
+          echo "Detected visual transitions: $transitions"
+          test "$transitions" -ge 5
+          # Reject sustained full-black frames (brief fades are acceptable).
+          ffmpeg -hide_banner -loglevel info -i habitat-artifact-003.mp4 -vf 'blackdetect=d=0.60:pix_th=0.02' -an -f null - 2> /tmp/black-qa.log
+          if grep -q 'black_duration:' /tmp/black-qa.log; then
+            echo 'Visual QA FAILED: sustained black frames detected'
+            cat /tmp/black-qa.log
+            exit 1
+          fi
+          echo 'VISUAL QA PASS: scene progression, non-black visuals, narration energy'
+
       - name: Upload Artifact 003 to GitHub Actions
         uses: actions/upload-artifact@v4
         with:
