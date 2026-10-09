@@ -73,3 +73,16 @@ Build Habitat into a dependable Android-first AI control center for DropPilot AI
 - Direct endpoint verification for `/brain/status` and `/storage/check` was not available through the connected inspection tools; do not claim those endpoints were live-tested.
 - A small usability defect remains: the task delegation missing-provider error message omits Cloudflare Workers AI and does not explain the explicit Cerebras opt-in. Fix this with a regression test.
 - Next engineering priority: implement and test a genuinely durable task repository with restart hydration, awaited writes, safe error handling, and idempotent recovery. Only activate it when real storage credentials/IDs are configured; no paid resources without approval. Add a restart integration test before marking storage PASS.
+
+
+## Verified update — 2026-10-09 18:16 UTC
+
+- Latest merged task dispatch guard: commit `24194147f58e9637548c3bd4534e6572673f5020`, PR [#17](https://github.com/kushxwookiex420/Habitat/pull/17). It blocks duplicate dispatch attempts within one running process.
+- Latest durable task route integration: commit `b7eaec32e51a4bef78269a0bdcd8f3ceb37044a5`, PR [#18](https://github.com/kushxwookiex420/Habitat/pull/18). All three PR checks passed: CI, release checks, and D1 repository tests.
+- Render deployment for `b7eaec32e51a4bef78269a0bdcd8f3ceb37044a5` is confirmed live. Startup logs confirm the backend started and OpenRouter accepted its runtime key.
+- Render startup logs explicitly report `TASK_STORAGE: memory-only — D1 credentials are not configured`. Therefore **durable runtime storage is not active yet**. A Workers AI token does not substitute for `HABITAT_D1_API_TOKEN`; the account ID, D1 database ID, and correctly permissioned token are all required.
+- Production task routes now use D1 when configured, await writes, restore up to 500 recent records before listening, and mark persisted `delegated`/`running` tasks as `interrupted` rather than automatically rerunning them. `POST /tasks/:id/retry` permits an explicit retry for `failed`/`interrupted` tasks while retaining bounded attempt history. This is not a distributed atomic lock.
+- `/capabilities`, `/storage/check`, and `/system-check` now distinguish a ready D1 repository from the in-memory fallback. Content pipeline jobs, TikTok OAuth state, and TikTok tokens remain separate in-memory stores; the status report explicitly discloses this gap.
+- Direct HTTP inspection of the live `/capabilities` and `/storage/check` endpoints was not available through the current inspection tools. Do not claim those responses were live-tested; deployment and startup were verified from Render.
+- Next actions: (1) activate D1 only after a D1 database ID and scoped D1 API token are available; (2) persist content jobs and OAuth state/tokens securely; (3) run the manual Artifact 001 workflow and inspect actual video/audio output and QA report; (4) continue TikTok authorization troubleshooting without claiming connected/publishing until verified; (5) inspect the APK build/artifact for the latest backend release if one is produced.
+
