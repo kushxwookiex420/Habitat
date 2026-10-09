@@ -17,6 +17,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { runVisualQA } from "./visual-qa.mjs";
 import { DEJAVU_REGULAR, DEJAVU_BOLD } from "./font-paths.mjs";
+import { wrapOverlayText } from "./overlay-text.mjs";
 
 const execFileAsync = promisify(execFile);
 const outputs = new Map();
@@ -69,19 +70,6 @@ function safeText(v, max = 160) {
 function escDrawText(v) {
   return String(v ?? "").replace(/\\/g,"\\\\").replace(/:/g,"\\:").replace(/'/g,"\\'").replace(/%/g,"\\%").replace(/,/g,"\\,").replace(/\[/g,"\\[").replace(/\]/g,"\\]");
 }
-function wrapOverlayText(value, maxChars) {
-  const words = safeText(value, 180).split(/\\s+/).filter(Boolean);
-  const lines = [];
-  let line = "";
-  for (const word of words) {
-    if (!line) line = word;
-    else if ((line + " " + word).length <= maxChars) line += " " + word;
-    else { lines.push(line); line = word; }
-  }
-  if (line) lines.push(line);
-  return lines.join("\\n");
-}
-
 function sendError(res, status, error) {
   return res.status(status).json({ ok:false, error:String(error?.message || error).slice(0,500) });
 }
