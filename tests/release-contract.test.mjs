@@ -84,3 +84,20 @@ test("brain status reports provider presence without exposing credentials", asyn
   assert.ok(server.includes('secretsExposed: false'));
   assert.ok(server.includes('note: "Configuration is not proof of a successful inference; use the system check for a live model test."'));
 });
+
+
+test("Cloudflare Workers AI credentials count as a usable configured brain", async () => {
+  const server = await fs.readFile(new URL("../server.mjs", import.meta.url), "utf8");
+  const helper = server.match(/function hasAnyAiProviderKey\(\) \{[\s\S]*?\n\}/)?.[0] || "";
+  assert.ok(helper.includes("CLOUDFLARE_API_TOKEN"));
+  assert.ok(helper.includes("CLOUDFLARE_ACCOUNT_ID"));
+  assert.ok(helper.includes("cloudflareReady"));
+  assert.ok(server.includes('brain: hasAnyAiProviderKey() ? "ready" : "missing_api_key"'));
+  assert.ok(server.includes("Cloudflare Workers AI, Groq, Gemini, OpenRouter"));
+});
+
+test("Cerebras is not counted unless the paid-provider opt-in is explicit", async () => {
+  const server = await fs.readFile(new URL("../server.mjs", import.meta.url), "utf8");
+  const helper = server.match(/function hasAnyAiProviderKey\(\) \{[\s\S]*?\n\}/)?.[0] || "";
+  assert.ok(helper.includes('process.env.HABITAT_ALLOW_PAID_PROVIDERS || "").toLowerCase() === "true"'));
+});
