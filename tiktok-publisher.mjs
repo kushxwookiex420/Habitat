@@ -4,6 +4,26 @@ function tokenFromEnv() {
   return String(process.env.TIKTOK_ACCESS_TOKEN || "").trim();
 }
 
+export function buildTikTokPublisherStatus({ tokenPresent = false, mode = "direct", creatorPreflightPassed = false } = {}) {
+  const readiness = creatorPreflightPassed
+    ? "preflight_passed"
+    : tokenPresent
+      ? "token_present_unverified"
+      : "blocked";
+  return {
+    configured: Boolean(tokenPresent),
+    mode: String(mode || "direct").trim().toLowerCase(),
+    readiness,
+    directPostReady: creatorPreflightPassed === true,
+    scopeRequired: "video.publish",
+    note: creatorPreflightPassed
+      ? "Creator preflight passed, but each post still requires explicit user approval and a confirming platform response."
+      : tokenPresent
+        ? "An access token is present, but live creator permissions have not been verified. Run the creator-info preflight and require explicit user approval before posting."
+        : "TikTok access token is not configured. Authorize Habitat and then run the creator-info preflight."
+  };
+}
+
 export function tiktokConfig() {
   return {
     configured: Boolean(tokenFromEnv()),
