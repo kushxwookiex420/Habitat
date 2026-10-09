@@ -95,7 +95,8 @@ export function registerProductDemoRenderer(app) {
       acceptsOnlyDirectHttpsMedia:true, requiresExplicitReusePermission:true,
       maxClips:MAX_CLIPS, maxBytesPerClip:MAX_BYTES_PER_CLIP,
       outputPersistence:"temporary instance storage; durable artifact storage is not configured",
-      note:"Every source requires permissionConfirmed=true and an action label. At least two distinct product-in-action types are mandatory. Final output must pass machine Visual QA and still requires user approval to publish.", requiredProductActions:[...REQUIRED_PRODUCT_ACTIONS], minimumDistinctProductActions:MIN_DISTINCT_PRODUCT_ACTIONS
+      note:"Every source requires permissionConfirmed=true and an action label. At least two distinct product-in-action types are mandatory. Final output must pass machine Visual QA and still requires user approval to publish.", requiredProductActions:[...REQUIRED_PRODUCT_ACTIONS], minimumDistinctProductActions:MIN_DISTINCT_PRODUCT_ACTIONS,
+      humanActionReviewRequired:true, actionLabelsAreNotVisualProof:true
     });
   });
 
@@ -215,6 +216,8 @@ export function registerProductDemoRenderer(app) {
         artifact:{type:"mp4",durationSeconds,width:Number(v.width),height:Number(v.height),bytes:stat.size},
         visualQA:qa,
         productActionCoverage:[...distinctActions],
+        actionReviewStatus:"pending-human-review",
+        humanActionReviewRequired:true,
         sourceManifest:sourcePaths.map(s=>({action:s.action,sourceTitle:s.sourceTitle,sourceUrl:s.sourceUrl,permissionConfirmed:true,startSeconds:s.start,endSeconds:s.end})),
         publishStatus:"not_published",
         note:verified?"Rendered and machine-checked. Human approval is still required before publishing.":"QA blocked this output; resolve reported issues before approval."
