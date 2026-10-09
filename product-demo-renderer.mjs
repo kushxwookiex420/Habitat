@@ -4,6 +4,10 @@
  * Search results are never downloaded implicitly. Output is QA-gated and approval-gated.
  */
 import crypto from "node:crypto";
+import ffmpegPath from "ffmpeg-static";
+import ffprobeStatic from "ffprobe-static";
+
+const ffprobePath = ffprobeStatic.path;
 import dns from "node:dns/promises";
 import net from "node:net";
 import path from "node:path";
@@ -121,7 +125,7 @@ export function registerProductDemoRenderer(app) {
         if (bytes < 4096) throw new Error("Source "+(i+1)+" is too small to be a usable video.");
         const file = path.join(dir,"source-"+i+".mp4");
         await fs.writeFile(file,Buffer.concat(chunks));
-        await execFileAsync("ffprobe",["-v","error","-select_streams","v:0","-show_entries","stream=codec_type","-of","csv=p=0",file],{timeout:15000});
+        await execFileAsync(ffprobePath,["-v","error","-select_streams","v:0","-show_entries","stream=codec_type","-of","csv=p=0",file],{timeout:15000});
         sourcePaths.push({path:file,start:source.start,end:source.end});
       }
 
@@ -147,8 +151,8 @@ export function registerProductDemoRenderer(app) {
       }
       const list=path.join(dir,"voice-list.txt");
       await fs.writeFile(list,voiceFiles.map(p=>"file '"+p.replace(/'/g,"'\\''")+"'").join("\n")+"\n");
-      await execFileAsync("ffmpeg",["-hide_banner","-loglevel","error","-y","-f","concat","-safe","0","-i",list,"-c","copy",voiceFile],{timeout:30000});
-      const voiceProbe=await execFileAsync("ffprobe",["-v","error","-show_entries","format=duration","-of","default=noprint_wrappers=1:nokey=1",voiceFile],{timeout:15000});
+      await execFileAsync(ffmpegPath,["-hide_banner","-loglevel","error","-y","-f","concat","-safe","0","-i",list,"-c","copy",voiceFile],{timeout:30000});
+      const voiceProbe=await execFileAsync(ffprobePath,["-v","error","-show_entries","format=duration","-of","default=noprint_wrappers=1:nokey=1",voiceFile],{timeout:15000});
       const voiceDuration=Number(String(voiceProbe.stdout||"").trim());
       const clipDuration=sourcePaths.reduce((sum,s)=>sum+s.end-s.start,0);
       if(!Number.isFinite(voiceDuration)||voiceDuration>clipDuration+0.2) throw new Error("Voiceover is longer than the selected demonstration footage. Add longer authorized clips or shorten the narration before rendering.");
@@ -156,7 +160,7 @@ export function registerProductDemoRenderer(app) {
       const id=crypto.randomUUID();
       const outputPath=path.join(dir,"droppilot-product-demo.mp4");
       const duration=sourcePaths.reduce((sum,s)=>sum+s.end-s.start,0);
-      await execFileAsync("ffmpeg",[
+      await execFileAsync(ffmpegPath,[
         "-hide_banner","-loglevel","error","-y",...inputArgs,"-i",voiceFile,
         "-filter_complex",filters.join(";"),"-map","[v]","-map",String(sourcePaths.length)+":a:0",
         "-af","apad","-c:v","libx264","-preset","ultrafast","-crf","25","-c:a","aac","-b:a","128k","-ar","48000","-t",String(Math.max(duration,1)),"-movflags","+faststart",outputPath
@@ -168,7 +172,7 @@ export function registerProductDemoRenderer(app) {
         renderPlan:{format:"9:16",scenes:sourcePaths.map((s,i)=>({start:sourcePaths.slice(0,i).reduce((n,x)=>n+x.end-x.start,0),end:sourcePaths.slice(0,i+1).reduce((n,x)=>n+x.end-x.start,0),title:"Product demonstration "+(i+1)})),onScreenText:[{text:productName,fontSize:52,bold:true},{text:callToAction,fontSize:34,bold:false}]},
         expectedSceneCount:sourcePaths.length,requireAudio:true
       });
-      const probe=await execFileAsync("ffprobe",["-v","error","-show_entries","format=duration,size:stream=codec_type,width,height","-of","json",outputPath]);
+      const probe=await execFileAsync(ffprobePath,["-v","error","-show_entries","format=duration,size:stream=codec_type,width,height","-of","json",outputPath]);
       const meta=JSON.parse(probe.stdout);
       const v=(meta.streams||[]).find(s=>s.codec_type==="video")||{};
       const a=(meta.streams||[]).find(s=>s.codec_type==="audio");
