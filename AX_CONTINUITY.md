@@ -86,3 +86,15 @@ Build Habitat into a dependable Android-first AI control center for DropPilot AI
 - Direct HTTP inspection of the live `/capabilities` and `/storage/check` endpoints was not available through the current inspection tools. Do not claim those responses were live-tested; deployment and startup were verified from Render.
 - Next actions: (1) activate D1 only after a D1 database ID and scoped D1 API token are available; (2) persist content jobs and OAuth state/tokens securely; (3) run the manual Artifact 001 workflow and inspect actual video/audio output and QA report; (4) continue TikTok authorization troubleshooting without claiming connected/publishing until verified; (5) inspect the APK build/artifact for the latest backend release if one is produced.
 
+
+
+## Verified update — 2026-10-09 19:21 UTC
+
+- User configured `CLOUDFLARE_ACCOUNT_ID`, `HABITAT_D1_DATABASE_ID`, and `HABITAT_D1_API_TOKEN` in Render. Never copy the token into chat or source control.
+- PR [#19](https://github.com/kushxwookiex420/Habitat/pull/19) was merged as commit `4811857fdf39df5f2835f310e7399ec2075e959f`. CI, release checks, and D1 repository tests passed for the final PR head `365877f076604f085087dfb916531698e7d139b2`.
+- Render deployment `dep-db4jsqeq1p3s73fe7l9g` for the merge commit is `live`. Startup logs confirm both `TASK_STORAGE: D1 ready; restored 0 task records` and `CONTENT_JOB_STORAGE: D1 ready; restored 0 jobs`. OpenRouter runtime auth check passed.
+- Content jobs now have a D1 repository, startup restoration (up to 500 jobs), awaited persistence before JSON responses, and running stages are marked interrupted on restart instead of being silently rerun.
+- When a persisted verified artifact references a missing Render `/tmp` file, the job is downgraded to interrupted and the artifact is marked `missing_after_restart`/unverified. D1 preserves job metadata, not MP4 bytes.
+- D1 repository unit tests and production startup/schema initialization are verified. A direct HTTP POST/GET content-job round trip and process-restart round trip have **not** yet been externally exercised through the available inspection tools; do not overstate end-to-end verification.
+- Remaining gaps: TikTok OAuth state/access/refresh tokens still live in process memory; OAuth authorization still needs to be fixed and verified; rendered video files are still on ephemeral disk; TikTok publishing remains approval-gated. Do not claim publishing or video artifact durability works until tested.
+- Next priority: design encrypted persistence for TikTok OAuth state/tokens using a dedicated encryption key in Render, with expiry/refresh handling and tests. Then evaluate free durable binary storage for rendered MP4s; never put secrets or large media bytes in the public continuity file.
