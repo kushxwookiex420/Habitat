@@ -501,11 +501,12 @@ export function registerContentEngine(app, deps) {
       const inputs = [];
       const filters = [];
       sceneInputs.forEach((s, i) => {
+        inputs.push("-f","lavfi","-i","color=c="+s.bg+":s=540x960:r=10:d="+s.dur);
         inputs.push("-i",imagePaths[i]);
         const title = esc(s.title);
         const sub = esc(s.sub);
         filters.push(
-          "["+i+":v]loop=loop=-1:size=1:start=0,setpts=N/(10*TB),fps=10,trim=duration="+s.dur+",setpts=PTS-STARTPTS,scale=540:960:force_original_aspect_ratio=increase,crop=540:960,drawbox=x=0:y=0:w=iw:h=ih:color=black@0.34:t=fill,drawbox=x=20+20*t:y=205:w=8:h=550:color=white@0.16:t=fill,drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:text='"+title+"':fontcolor=white:fontsize="+Math.round(32*fontScale)+":x=(w-text_w)/2:y=280,drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='"+sub+"':fontcolor=white@0.88:fontsize="+Math.round(18*fontScale)+":x=(w-text_w)/2:y=345,drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='ROCKSTAR GAMES • FAN COMMENTARY':fontcolor=white@0.82:fontsize=13:x=(w-text_w)/2:y=858,setsar=1[v"+i+"]"
+          "["+(i*2+1)+":v]scale=540:960:force_original_aspect_ratio=increase,crop=540:960[img"+i+"];["+(i*2)+":v][img"+i+"]overlay=0:0:eof_action=repeat:shortest=0,drawbox=x=0:y=0:w=iw:h=ih:color=black@0.34:t=fill,drawbox=x=20+20*t:y=205:w=8:h=550:color=white@0.16:t=fill,drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:text='"+title+"':fontcolor=white:fontsize="+Math.round(32*fontScale)+":x=(w-text_w)/2:y=280,drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='"+sub+"':fontcolor=white@0.88:fontsize="+Math.round(18*fontScale)+":x=(w-text_w)/2:y=345,drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='ROCKSTAR GAMES • FAN COMMENTARY':fontcolor=white@0.82:fontsize=13:x=(w-text_w)/2:y=858,setsar=1[v"+i+"]"
         );
       });
       filters.push(sceneInputs.map((_,i)=>"[v"+i+"]").join("")+"concat=n="+sceneInputs.length+":v=1:a=0,scale=1080:1920:flags=fast_bilinear,format=yuv420p[v]");
@@ -515,7 +516,7 @@ export function registerContentEngine(app, deps) {
         ...inputs,
         "-i",voicePath,
         "-filter_complex",filters.join(";"),
-        "-map","[v]","-map","6:a:0",
+        "-map","[v]","-map","12:a:0",
         "-c:v","libx264","-preset","ultrafast","-crf","32","-pix_fmt","yuv420p",
         "-af","apad,atrim=duration=45","-c:a","aac","-b:a","128k","-ar","48000","-t","45","-shortest",
         "-movflags","+faststart",outputPath
