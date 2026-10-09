@@ -10,6 +10,8 @@ on:
     paths:
       - ".github/workflows/artifact_001.yml"
       - "scripts/render-artifact-001.sh"
+      - "scripts/vice-city-release-gate.mjs"
+      - "docs/VICE_CITY_FILES_VIDEO_QA.md"
 
 jobs:
   execute-artifact-001:
@@ -138,6 +140,17 @@ jobs:
           if (result.status !== 'VISUAL_PASS') process.exit(1);
           JS
 
+      - name: Enforce Vice City Files release gate
+        if: always()
+        env:
+          VICE_CITY_EDIT_MANIFEST: assets/vice-city-edit-manifest.json
+        run: |
+          set -e
+          INTRO="\${VICE_CITY_FILES_INTRO_PATH:-assets/vice-city-files-intro.mp4}"
+          OUTRO="\${VICE_CITY_FILES_OUTRO_PATH:-assets/vice-city-files-outro.mp4}"
+          node scripts/vice-city-release-gate.mjs \
+            habitat-artifact-001.mp4 "$INTRO" "$OUTRO" vice-city-release-gate-report.json
+
       - name: Upload Artifact 001 and QA report to GitHub Actions
         if: always()
         uses: actions/upload-artifact@v4
@@ -146,5 +159,6 @@ jobs:
           path: |
             habitat-artifact-001.mp4
             visual-qa-report.json
+            vice-city-release-gate-report.json
           if-no-files-found: warn
           retention-days: 7
