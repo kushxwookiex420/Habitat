@@ -40,6 +40,7 @@ try {
     path.resolve(manifest.introPath||"") === path.resolve(intro) &&
     Number(manifest.introTimelineSeconds) >= 7 &&
     Number(manifest.narrationStartSeconds) >= 8 &&
+    Number(manifest.postNarrationTailSeconds) >= 1 &&
     Number(manifest.outroDurationSeconds) >= 2 &&
     manifest.finalSegment === "branded_outro" &&
     manifest.narrationComplete === true &&
