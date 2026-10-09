@@ -69,6 +69,19 @@ function safeText(v, max = 160) {
 function escDrawText(v) {
   return String(v ?? "").replace(/\\/g,"\\\\").replace(/:/g,"\\:").replace(/'/g,"\\'").replace(/%/g,"\\%").replace(/,/g,"\\,").replace(/\[/g,"\\[").replace(/\]/g,"\\]");
 }
+function wrapOverlayText(value, maxChars) {
+  const words = safeText(value, 180).split(/\\s+/).filter(Boolean);
+  const lines = [];
+  let line = "";
+  for (const word of words) {
+    if (!line) line = word;
+    else if ((line + " " + word).length <= maxChars) line += " " + word;
+    else { lines.push(line); line = word; }
+  }
+  if (line) lines.push(line);
+  return lines.join("\\n");
+}
+
 function sendError(res, status, error) {
   return res.status(status).json({ ok:false, error:String(error?.message || error).slice(0,500) });
 }
@@ -151,7 +164,7 @@ export function registerProductDemoRenderer(app) {
         inputArgs.push("-ss",String(s.start),"-t",String(s.end-s.start),"-i",s.path);
         filters.push("["+i+":v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1,fps=25,format=yuv420p,setpts=PTS-STARTPTS[v"+i+"]");
       });
-      filters.push(sourcePaths.map((_,i)=>"[v"+i+"]").join("")+"concat=n="+sourcePaths.length+":v=1:a=0,drawbox=x=0:y=0:w=iw:h=ih:color=black@0.28:t=fill,drawtext=fontfile="+DEJAVU_BOLD+":text='"+escDrawText(productName)+"':fontcolor=white:fontsize=52:box=1:boxcolor=black@0.45:boxborderw=24:x=(w-text_w)/2:y=140,drawtext=fontfile="+DEJAVU_REGULAR+":text='"+escDrawText(callToAction)+"':fontcolor=white:fontsize=34:box=1:boxcolor=black@0.55:boxborderw=20:x=(w-text_w)/2:y=h-240[v]");
+      filters.push(sourcePaths.map((_,i)=>"[v"+i+"]").join("")+"concat=n="+sourcePaths.length+":v=1:a=0,drawbox=x=0:y=0:w=iw:h=ih:color=black@0.28:t=fill,drawtext=fontfile="+DEJAVU_BOLD+":textfile="+titleTextPath+":fontcolor=white:fontsize=52:line_spacing=8:box=1:boxcolor=black@0.45:boxborderw=24:x=(w-text_w)/2:y=140,drawtext=fontfile="+DEJAVU_REGULAR+":textfile="+ctaTextPath+":fontcolor=white:fontsize=34:line_spacing=6:box=1:boxcolor=black@0.55:boxborderw=20:x=(w-text_w)/2:y=h-260[v]");
       const voiceFile=path.join(dir,"voiceover.mp3");
       const words=voiceover.split(/\s+/);
       const chunks=[];let current="";
@@ -173,6 +186,11 @@ export function registerProductDemoRenderer(app) {
       const clipDuration=sourcePaths.reduce((sum,s)=>sum+s.end-s.start,0);
       if(!Number.isFinite(voiceDuration)||voiceDuration>clipDuration+0.2) throw new Error("Voiceover is longer than the selected demonstration footage. Add longer authorized clips or shorten the narration before rendering.");
 
+      // Wrap overlays before rendering so long product names and CTAs stay in the mobile safe area.
+      const titleTextPath=path.join(dir,"product-title.txt");
+      const ctaTextPath=path.join(dir,"call-to-action.txt");
+      await fs.writeFile(titleTextPath,wrapOverlayText(productName,22),"utf8");
+      await fs.writeFile(ctaTextPath,wrapOverlayText(callToAction,40),"utf8");
       const id=crypto.randomUUID();
       const outputPath=path.join(dir,"droppilot-product-demo.mp4");
       const duration=sourcePaths.reduce((sum,s)=>sum+s.end-s.start,0);
