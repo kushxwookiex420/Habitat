@@ -23,3 +23,14 @@ test("handles empty copy and invalid width safely", () => {
   assert.equal(wrapOverlayText("", 20), "");
   assert.equal(wrapOverlayText("abcdef", 0), "a\nb\nc\nd\ne\nf");
 });
+
+test("renderer initializes overlay files before using them in the FFmpeg filter graph", async () => {
+  const fs = await import("node:fs/promises");
+  const renderer = await fs.readFile(new URL("../product-demo-renderer.mjs", import.meta.url), "utf8");
+  const titlePath = renderer.indexOf('const titleTextPath=path.join(dir,"product-title.txt")');
+  const ctaPath = renderer.indexOf('const ctaTextPath=path.join(dir,"call-to-action.txt")');
+  const filterGraph = renderer.indexOf('filters.push(sourcePaths.map');
+  assert.ok(titlePath >= 0 && ctaPath >= 0, "overlay text paths must be declared");
+  assert.ok(titlePath < filterGraph && ctaPath < filterGraph,
+    "overlay paths must be initialized before FFmpeg filter graph references them");
+});
