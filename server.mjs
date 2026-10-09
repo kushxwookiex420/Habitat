@@ -1,9 +1,13 @@
 import { registerContentEngine } from "./content-engine.mjs";
+import { registerPublicPages } from "./public-pages.mjs";
+
 import express from "express";
 
 const app = express();
 
 app.use(express.json({ limit: "1mb" }));
+
+registerPublicPages(app);
 
 const port = process.env.PORT || 8080;
 
