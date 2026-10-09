@@ -4,12 +4,12 @@ This standard is mandatory for every generated video for @ViceCityFilesYT. A ren
 
 ## 1. Preserve the channel identity
 - Reuse the existing approved Vice City Files intro asset/project. Do not recreate, replace, trim, or redesign it as part of an ordinary episode render.
-- Keep the intro's first 7 seconds and its original audio intact. The episode narration and episode subtitles begin at 00:08.
-- Add a deliberate, branded outro/end card to every episode. Do not treat a fade to black, an abruptly ending image, or the end of narration as an outro.
+- Preserve the entire approved intro source clip and its original audio (when present); never trim it to fit a fixed slot. The intro timeline must occupy at least 7 seconds. If the source clip is shorter, hold its final approved branded frame to reach 7 seconds. Episode narration/subtitles begin no earlier than 00:08.
+- Add a deliberate, branded outro/end card of at least 2 seconds to every episode. The outro may reuse the approved Vice City Files end-card asset, but must be the final visual segment. Do not treat a fade to black, an abruptly ending image, or the end of narration as an outro.
 - If the original intro source asset is unavailable, stop and report the missing asset. Never silently substitute a storyboard, screenshot, or newly generated intro.
 
 ## 2. Timeline and narration integrity
-- Build the final timeline from the actual audio duration, not an estimated script duration.
+- Build the final timeline from the actual assembled audio duration, not an estimated script duration. Use the source-aware assembler in `scripts/assemble-vice-city-files.sh`; do not render the body directly to the final filename.
 - Use speech-to-text or the narration text to verify that the final spoken sentence is complete. Leave at least 1.0 second of visual/audio tail after the final spoken word, then show the outro/end card for at least 2.0 seconds.
 - Reject any render that ends during a word or sentence, cuts off the audio waveform, has narration extending past the video, or has a silent/black gap that was not intentional.
 - Do not hard-code a 44-second endpoint or any other fixed duration. The end time must be computed from the assembled media and final narration.
@@ -33,6 +33,7 @@ Before an artifact can be marked ready, check:
 5. Captions and title bounds remain inside safe margins; no title overlaps key imagery.
 6. There are multiple intentional scenes when the script calls for them.
 7. A contact sheet of sampled frames (opening, scene transitions, final 10 seconds) is generated for visual inspection.
+9. The edit manifest proves the original intro is first, narration begins at/after 8 seconds, the final spoken word has a 1-second tail, the branded outro is last, and no fixed-duration trim was used.
 8. A QA report records PASS/FAIL for every check and the artifact's duration, dimensions, frame rate, audio duration, and output filename.
 
 Automated checks cannot fully judge whether visuals are tasteful or the narration sounds natural. Those items require actual playback and visual review.
