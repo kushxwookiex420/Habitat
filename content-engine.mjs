@@ -586,7 +586,7 @@ export function registerContentEngine(app, deps) {
 
       res.json({ok:true,job,artifact,visualQA});
     } catch(error) {
-      console.error("MEDIA_RENDER_FAILED", job.id, String(error?.message||error).slice(0, 1000));
+      console.error("MEDIA_RENDER_FAILED", job.id, "code="+String(error?.code||""), "stderr="+String(error?.stderr||"").slice(0, 1600), "message="+String(error?.message||error).slice(-500));
       update(job,"edit","failed",{
         ...job.stages.edit.result,
         error:String(error?.message||error),failedAt:nowIso()
