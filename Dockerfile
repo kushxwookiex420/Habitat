@@ -11,4 +11,4 @@ COPY . .
 
 ENV NODE_ENV=production
 EXPOSE 8080
-CMD ["node", "server.mjs"]
+CMD ["sh", "-c", "npm run check && exec node server.mjs"]
