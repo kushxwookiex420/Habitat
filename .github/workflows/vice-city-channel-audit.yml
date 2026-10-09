@@ -1,0 +1,87 @@
+name: Vice City Files channel style audit
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/vice-city-channel-audit.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit-public-channel:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install video inspection tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg python3-pil
+          python -m pip install --break-system-packages --upgrade yt-dlp
+
+      - name: Download recent public YouTube videos for intro/outro comparison
+        continue-on-error: true
+        run: |
+          mkdir -p audit/videos audit/frames
+          yt-dlp --ignore-errors --no-warnings --playlist-end 8 \
+            --write-info-json --write-auto-subs --sub-langs "en.*,en" \
+            --format "best[height<=720][ext=mp4]/best[height<=720]/best" \
+            --merge-output-format mp4 \
+            --output "audit/videos/%(playlist_index)02d-%(id)s.%(ext)s" \
+            "https://www.youtube.com/@ViceCityFilesYT/videos" || true
+          find audit/videos -maxdepth 1 -type f -printf '%f\n' | sort > audit/file-list.txt
+
+      - name: Build opening and ending contact sheets with durations
+        run: |
+          python - <<'PY'
+          import glob, json, os, subprocess
+          from PIL import Image, ImageDraw
+          os.makedirs("audit/frames", exist_ok=True)
+          videos=sorted(glob.glob("audit/videos/*.mp4"))
+          report=["# Vice City Files — public channel style audit","",
+                  "Purpose: compare the repeated opening and ending patterns of recent public channel videos.",
+                  "This is an inspection artifact only; it does not publish or modify channel content.",""]
+          for idx, video in enumerate(videos,1):
+              base=os.path.splitext(os.path.basename(video))[0]
+              raw=subprocess.check_output(["ffprobe","-v","error","-show_entries","format=duration:format_tags=title","-of","json",video],text=True)
+              info=json.loads(raw); duration=float(info["format"]["duration"])
+              title=info.get("format",{}).get("tags",{}).get("title",base)
+              report += [f"## {idx}. {title}",f"- File: {os.path.basename(video)}",f"- Duration: {duration:.2f} seconds",""]
+              stamps=sorted(set([0,2,4,6,8,max(0,duration-10),max(0,duration-8),max(0,duration-6),max(0,duration-4),max(0,duration-2)]))
+              thumbs=[]
+              for j, stamp in enumerate(stamps):
+                  out=f"audit/frames/{base}-{j:02d}.jpg"
+                  p=subprocess.run(["ffmpeg","-hide_banner","-loglevel","error","-ss",str(stamp),"-i",video,"-frames:v","1","-vf","scale=320:180:force_original_aspect_ratio=decrease,pad=320:180:(ow-iw)/2:(oh-ih)/2",out,"-y"],capture_output=True)
+                  if p.returncode==0 and os.path.exists(out):
+                      im=Image.open(out).convert("RGB")
+                      ImageDraw.Draw(im).text((8,8),f"{stamp:.1f}s",fill="yellow",stroke_width=2,stroke_fill="black")
+                      thumbs.append(im)
+              if thumbs:
+                  sheet=Image.new("RGB",(320*2,200*((len(thumbs)+1)//2)),(16,18,24))
+                  d=ImageDraw.Draw(sheet)
+                  for j, im in enumerate(thumbs):
+                      x=(j%2)*320; y=(j//2)*200
+                      sheet.paste(im,(x,y+20)); d.text((x+8,y+2),f"Frame {j+1}",fill="white")
+                  out=f"audit/{idx:02d}-{base}-contact-sheet.jpg"
+                  sheet.save(out,quality=88)
+                  report.append(f"![Opening and ending contact sheet]({os.path.basename(out)})")
+                  report.append("")
+          if not videos:
+              report += ["**NO VIDEOS DOWNLOADED.** The channel may be unavailable to the runner, have no public videos, or YouTube may be blocking automated access. No intro/outro comparison can be claimed from this run."]
+          report += ["## Interpretation limits","","Contact sheets let us compare visual identity, intro timing, outro cards, and repeated compositions. They do not by themselves prove audio continuity or identify a canonical original intro. Any asset selected for reuse must be verified against repeated videos and retained without redesign."]
+          open("audit/channel-style-audit.md","w").write("\n".join(report)+"\n")
+          print(f"Inspected {len(videos)} public video(s).")
+          PY
+
+      - name: Upload channel audit evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vice-city-files-channel-style-audit
+          path: audit/
+          if-no-files-found: warn
+          retention-days: 7
