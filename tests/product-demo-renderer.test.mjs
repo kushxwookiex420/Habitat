@@ -54,3 +54,31 @@ test("product demo rejects footage without confirmed commercial reuse permission
   assert.equal(response.statusCode, 403);
   assert.match(response.payload.error, /confirmed commercial reuse permission/i);
 });
+
+
+test("product demo rejects a missing product name before downloading media", async () => {
+  const { handler, response } = makeHarness();
+  const body = structuredClone(baseBody);
+  body.productName = "   ";
+  await handler({ body }, response);
+  assert.equal(response.statusCode, 400);
+  assert.match(response.payload.error, /productName is required/i);
+});
+
+test("product demo rejects narration too short to support a complete sales message", async () => {
+  const { handler, response } = makeHarness();
+  const body = structuredClone(baseBody);
+  body.voiceover = "Buy it now.";
+  await handler({ body }, response);
+  assert.equal(response.statusCode, 400);
+  assert.match(response.payload.error, /fact-checked voiceover of at least 40 characters/i);
+});
+
+test("product demo rejects more clips than the renderer's safety limit", async () => {
+  const { handler, response } = makeHarness();
+  const body = structuredClone(baseBody);
+  body.clips = [...body.clips, ...body.clips, ...body.clips];
+  await handler({ body }, response);
+  assert.equal(response.statusCode, 400);
+  assert.match(response.payload.error, /supply 1 to 4 direct video clips/i);
+});
