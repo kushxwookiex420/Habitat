@@ -6,6 +6,10 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import fs from "node:fs/promises";
+import ffmpegPath from "ffmpeg-static";
+import ffprobeStatic from "ffprobe-static";
+
+const ffprobePath = ffprobeStatic.path;
 
 const execFileAsync = promisify(execFile);
 
@@ -59,7 +63,7 @@ export async function runVisualQA({ artifactPath, renderPlan = {}, expectedScene
     checks.file = { status: stat.size > 0 ? "PASS" : "FAIL", bytes: stat.size };
     if (!stat.size) issues.push({ type:"empty_artifact", detail:"MP4 file is empty." });
 
-    const probe = await execFileAsync("ffprobe", [
+    const probe = await execFileAsync(ffprobePath, [
       "-v","error",
       "-show_entries","format=duration,size:stream=index,codec_type,codec_name,width,height,r_frame_rate,nb_frames,sample_rate,channels",
       "-of","json",artifactPath
@@ -118,7 +122,7 @@ export async function runVisualQA({ artifactPath, renderPlan = {}, expectedScene
     // A container can have an audio track that contains only digital silence.
     // Detect that separately so a silent placeholder cannot pass as narrated content.
     if (audio && requireAudio) {
-      const volume = await execFileAsync("ffmpeg", [
+      const volume = await execFileAsync(ffmpegPath, [
         "-hide_banner","-nostats","-i",artifactPath,
         "-vn","-af","volumedetect","-f","null","-"
       ]).catch(e => ({ stdout:"", stderr:String(e?.stderr || e?.message || e) }));
@@ -144,7 +148,7 @@ export async function runVisualQA({ artifactPath, renderPlan = {}, expectedScene
 
     // Black-frame detector. A few frames may legitimately be dark, so only a
     // sustained black interval is a defect.
-    const black = await execFileAsync("ffmpeg", [
+    const black = await execFileAsync(ffmpegPath, [
       "-hide_banner","-loglevel","info","-i",artifactPath,
       "-vf","blackdetect=d=0.60:pix_th=0.02",
       "-an","-f","null","-"
@@ -160,7 +164,7 @@ export async function runVisualQA({ artifactPath, renderPlan = {}, expectedScene
 
     // Freeze detector catches the exact class of failure where a video plays but
     // the visual scene never changes. A short static title card is allowed.
-    const freeze = await execFileAsync("ffmpeg", [
+    const freeze = await execFileAsync(ffmpegPath, [
       "-hide_banner","-loglevel","info","-i",artifactPath,
       "-vf","freezedetect=n=0.003:d=2",
       "-an","-f","null","-"
@@ -177,7 +181,7 @@ export async function runVisualQA({ artifactPath, renderPlan = {}, expectedScene
 
     // Scene-change detector: require meaningful visual transitions when the plan
     // explicitly contains multiple scenes. This is independent of model judgment.
-    const scene = await execFileAsync("ffmpeg", [
+    const scene = await execFileAsync(ffmpegPath, [
       "-hide_banner","-loglevel","info","-i",artifactPath,
       "-vf","select='gt(scene,0.02)',showinfo",
       "-an","-f","null","-"
