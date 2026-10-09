@@ -146,6 +146,13 @@ export function registerProductDemoRenderer(app) {
         sourcePaths.push({path:file,start:source.start,end:source.end});
       }
 
+      // Prepare wrapped overlay files before constructing the FFmpeg filter graph.
+      // Defining these paths first prevents a temporal-dead-zone crash during filter setup.
+      const titleTextPath=path.join(dir,"product-title.txt");
+      const ctaTextPath=path.join(dir,"call-to-action.txt");
+      await fs.writeFile(titleTextPath,wrapOverlayText(productName,22),"utf8");
+      await fs.writeFile(ctaTextPath,wrapOverlayText(callToAction,40),"utf8");
+
       const inputArgs=[];
       const filters=[];
       sourcePaths.forEach((s,i)=>{
@@ -174,11 +181,6 @@ export function registerProductDemoRenderer(app) {
       const clipDuration=sourcePaths.reduce((sum,s)=>sum+s.end-s.start,0);
       if(!Number.isFinite(voiceDuration)||voiceDuration>clipDuration+0.2) throw new Error("Voiceover is longer than the selected demonstration footage. Add longer authorized clips or shorten the narration before rendering.");
 
-      // Wrap overlays before rendering so long product names and CTAs stay in the mobile safe area.
-      const titleTextPath=path.join(dir,"product-title.txt");
-      const ctaTextPath=path.join(dir,"call-to-action.txt");
-      await fs.writeFile(titleTextPath,wrapOverlayText(productName,22),"utf8");
-      await fs.writeFile(ctaTextPath,wrapOverlayText(callToAction,40),"utf8");
       const id=crypto.randomUUID();
       const outputPath=path.join(dir,"droppilot-product-demo.mp4");
       const duration=sourcePaths.reduce((sum,s)=>sum+s.end-s.start,0);
