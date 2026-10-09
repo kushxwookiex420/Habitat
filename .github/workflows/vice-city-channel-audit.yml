@@ -23,16 +23,37 @@ jobs:
           sudo apt-get install -y ffmpeg python3-pil
           python -m pip install --break-system-packages --upgrade yt-dlp
 
-      - name: Download recent public YouTube videos for intro/outro comparison
+      - name: Enumerate public channel videos
         continue-on-error: true
         run: |
           mkdir -p audit/videos audit/frames
-          yt-dlp --ignore-errors --no-warnings --playlist-end 8 \
-            --write-info-json --write-auto-subs --sub-langs "en.*,en" \
-            --format "best[height<=720][ext=mp4]/best[height<=720]/best" \
-            --merge-output-format mp4 \
-            --output "audit/videos/%(playlist_index)02d-%(id)s.%(ext)s" \
-            "https://www.youtube.com/@ViceCityFilesYT/videos" || true
+          yt-dlp --flat-playlist --dump-single-json --playlist-end 8 \
+            "https://www.youtube.com/channel/UCrE74pNbtOkK08fmOEEK1Qg/videos" > audit/playlist.json || true
+          python - <<'PY'
+          import json
+          p='audit/playlist.json'
+          try:
+              d=json.load(open(p))
+              entries=d.get('entries') or []
+              with open('audit/video-urls.txt','w') as f:
+                  for e in entries:
+                      u=e.get('webpage_url') or (('https://www.youtube.com/watch?v='+e['id']) if e.get('id') else None)
+                      if u: f.write(u+'\n')
+              print('Enumerated',len(entries),'channel video entries')
+          except Exception as e:
+              print('Could not enumerate channel videos:',e)
+              open('audit/video-urls.txt','w').close()
+          PY
+          if [ -s audit/video-urls.txt ]; then
+            while IFS= read -r url; do
+              [ -n "$url" ] || continue
+              yt-dlp --ignore-errors --no-warnings --no-playlist \
+                --write-info-json --write-auto-subs --sub-langs "en.*,en" \
+                --format "best[height<=720][ext=mp4]/best[height<=720]/best" \
+                --merge-output-format mp4 \
+                --output "audit/videos/%(id)s.%(ext)s" "$url" || true
+            done < audit/video-urls.txt
+          fi
           find audit/videos -maxdepth 1 -type f -printf '%f\n' | sort > audit/file-list.txt
 
       - name: Build opening and ending contact sheets with durations
