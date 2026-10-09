@@ -35,10 +35,10 @@ Configure the Android app's backend URL to your deployed Habitat API. Do not put
 
 Provider fallbacks improve resilience only when another configured provider has usable quota and access. They cannot bypass exhausted account quotas, revoked keys, provider outages, or model access restrictions. Check `/diagnostics/providers` first, then review server logs for the actual provider error. A configured key is not proof of successful inference.
 
-
 ## Ax continuity and free-first operation
 
 - [Durable Ax continuity checkpoint](AX_CONTINUITY.md) — read this first when resuming Habitat work in a new AI conversation.
 - [Free-first resources and persistent-memory options](docs/FREE_RESOURCES.md) — current options, official quota links, and limits.
+- [Mandatory Vice City Files video QA/release gate](docs/VICE_CITY_FILES_VIDEO_QA.md) — preserve the approved intro/outro, validate complete narration, inspect safe margins and scene changes, and reject failed renders before user review.
 - `GET /continuity` serves the committed checkpoint; `GET /continuity/status` reports the checkpoint source and explicitly distinguishes it from runtime job persistence.
-- These checkpoints preserve project context across AI conversations, but runtime content jobs and TikTok OAuth tokens are still in-memory until a durable storage backend is implemented and restart-tested.
+- These checkpoints preserve project context across AI conversations, but runtime persistence must be verified separately from the existence of a checkpoint.
