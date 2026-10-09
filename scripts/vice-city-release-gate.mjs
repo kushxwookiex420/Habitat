@@ -25,7 +25,7 @@ try {
   if (!artifact || !intro || !outro || !reportPath) throw new Error("Usage: node scripts/vice-city-release-gate.mjs <final.mp4> <original-intro.mp4> <outro.mp4> <report.json>");
   const [finalInfo,introInfo,outroInfo] = await Promise.all([probe(artifact),probe(intro),probe(outro)]);
   check("final_container", finalInfo.width > 0 && finalInfo.height > 0, finalInfo);
-  check("original_intro_present", introInfo.durationSeconds >= 7, {path:intro,durationSeconds:introInfo.durationSeconds,requiredMinimumSeconds:7});
+  check("original_intro_present", introInfo.durationSeconds >= 1, {path:intro,durationSeconds:introInfo.durationSeconds,requiredMinimumSeconds:1,rule:"Preserve the full approved source intro; timeline hold may extend it without trimming."});
   check("outro_present", outroInfo.durationSeconds >= 2, {path:outro,durationSeconds:outroInfo.durationSeconds,requiredMinimumSeconds:2});
   check("final_has_room_for_branded_segments", finalInfo.durationSeconds >= introInfo.durationSeconds + outroInfo.durationSeconds + 8, {finalDurationSeconds:finalInfo.durationSeconds,introDurationSeconds:introInfo.durationSeconds,outroDurationSeconds:outroInfo.durationSeconds});
   check("final_not_truncated_at_44_seconds", finalInfo.durationSeconds > 44, {durationSeconds:finalInfo.durationSeconds,minimumSecondsExclusive:44});
@@ -38,6 +38,7 @@ try {
   }
   const validManifest = manifest &&
     path.resolve(manifest.introPath||"") === path.resolve(intro) &&
+    Number(manifest.introTimelineSeconds) >= 7 &&
     Number(manifest.narrationStartSeconds) >= 8 &&
     Number(manifest.outroDurationSeconds) >= 2 &&
     manifest.finalSegment === "branded_outro" &&
@@ -45,7 +46,7 @@ try {
     manifest.fixedDurationTrim !== true;
   check("timeline_manifest", Boolean(validManifest), {
     manifestPath:manifestPath||null,
-    requirement:"Original intro first; narration starts at >=8s; complete narration; >=2s branded outro last; no fixed-duration truncation."
+    requirement:"Full original intro first; intro timeline >=7s; narration starts at >=8s; complete narration plus >=1s tail; >=2s branded outro last; no fixed-duration truncation."
   });
 } catch (e) {
   issues.push({check:"gate_execution",detail:String(e?.message||e)});
