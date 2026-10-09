@@ -1250,16 +1250,28 @@ app.get("/workers", (req, res) => {
 app.get("/storage/check", async (_req, res) => {
   if (taskRepository && taskStorageReady) {
     try {
-      const check = await taskRepository.healthCheck();
-      return res.status(check.ok ? 200 : 503).json({
-        ok: check.ok, storage: "cloudflare-d1", durable: true,
-        persistence: "cloudflare-d1", restoredTaskCount: taskStore.size,
-        detail: "D1 health check passed. This verifies the configured task repository, not the separate in-memory content-job or TikTok OAuth stores."
+      const [taskCheck, contentCheck, vaultCheck] = await Promise.all([
+        taskRepository.healthCheck(),
+        contentJobRepository ? contentJobRepository.healthCheck() : Promise.resolve({ ok: false, durable: false }),
+        secretVault ? secretVault.healthCheck() : Promise.resolve({ ok: false, durable: false })
+      ]);
+      const ok = taskCheck.ok === true && contentCheck.ok === true && vaultCheck.ok === true;
+      return res.status(ok ? 200 : 503).json({
+        ok,
+        storage: "cloudflare-d1",
+        durable: taskCheck.ok === true,
+        persistence: "cloudflare-d1",
+        restoredTaskCount: taskStore.size,
+        contentJobPersistence: { ready: contentCheck.ok === true, durable: contentCheck.durable === true },
+        encryptedTikTokVault: { ready: vaultCheck.ok === true, encryptedAtRest: true, keyValueExposed: false },
+        detail: ok
+          ? "Task storage, content-job storage, and encrypted TikTok vault health checks all passed. This does not prove TikTok authorization or posting is approved."
+          : "One or more durable storage health checks failed; inspect the per-component readiness fields."
       });
     } catch {
       return res.status(503).json({
         ok: false, storage: "cloudflare-d1", durable: false,
-        persistence: "cloudflare-d1", detail: "Configured D1 repository health check failed."
+        persistence: "cloudflare-d1", detail: "Configured D1 storage health check failed."
       });
     }
   }
