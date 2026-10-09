@@ -33,7 +33,7 @@ app.use((req, res, next) => {
   const requestId = "req-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 7);
   req.habitatRequestId = requestId;
   res.setHeader("X-Habitat-Request-Id", requestId);
-  res.setHeader("X-Habitat-Version", "2026-10-08-provider-router-v1");
+  res.setHeader("X-Habitat-Version", "2026-10-09-multi-provider-v2");
   console.log("HABITAT_REQUEST", requestId, req.method, req.path);
   next();
 });
@@ -118,6 +118,7 @@ async function discoverOpenRouterFreeModels(openRouterKey, limit = 3) {
 async function brainChat(payload) {
   const groqKey = String(process.env.GROQ_API_KEY || "").trim().replace(/^[\"']|[\"']$/g, "");
   const geminiKey = String(process.env.GEMINI_API_KEY || "").trim().replace(/^[\"']|[\"']$/g, "");
+  const cerebrasKey = String(process.env.CEREBRAS_API_KEY || "").trim().replace(/^[\"']|[\"']$/g, "");
   const openRouterKey = getApiKey();
   const requestedModel = payload?.model || model;
   const messages = Array.isArray(payload?.messages) ? payload.messages : [];
@@ -131,7 +132,7 @@ async function brainChat(payload) {
   if (groqKey) {
     providers.push({
       name: "groq",
-      model: requestedModel === model ? "openai/gpt-oss-20b" : requestedModel,
+      model: requestedModel === model ? (process.env.GROQ_MODEL || "openai/gpt-oss-20b") : requestedModel,
       url: "https://api.groq.com/openai/v1/chat/completions",
       headers: {
         "Authorization": `Bearer ${groqKey}`,
@@ -143,9 +144,21 @@ async function brainChat(payload) {
   if (geminiKey) {
     providers.push({
       name: "gemini",
-      model: requestedModel === model ? "gemini-2.5-flash" : requestedModel,
-      url: `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(requestedModel === model ? "gemini-2.5-flash" : requestedModel)}:generateContent?key=${encodeURIComponent(geminiKey)}`,
+      model: requestedModel === model ? (process.env.GEMINI_MODEL || "gemini-2.5-flash") : requestedModel,
+      url: `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(requestedModel === model ? (process.env.GEMINI_MODEL || "gemini-2.5-flash") : requestedModel)}:generateContent?key=${encodeURIComponent(geminiKey)}`,
       headers: { "Content-Type": "application/json" }
+    });
+  }
+
+  if (cerebrasKey) {
+    providers.push({
+      name: "cerebras",
+      model: requestedModel === model ? (process.env.CEREBRAS_MODEL || "gpt-oss-120b") : requestedModel,
+      url: "https://api.cerebras.ai/v1/chat/completions",
+      headers: {
+        "Authorization": `Bearer ${cerebrasKey}`,
+        "Content-Type": "application/json"
+      }
     });
   }
 
@@ -171,7 +184,7 @@ async function brainChat(payload) {
   }
 
   if (!providers.length) {
-    const error = new Error("No AI provider key is configured. Set GROQ_API_KEY or GEMINI_API_KEY; OpenRouter is also supported.");
+    const error = new Error("No AI provider key is configured. Set GEMINI_API_KEY, GROQ_API_KEY, CEREBRAS_API_KEY, or OPENROUTER_API_KEY.");
     error.status = 500;
     throw error;
   }
@@ -285,15 +298,37 @@ app.get("/tiktokHneXL520kS7uOGdvMUO1qp4jZQmlfuiE.txt", (req, res) => {
 app.get("/", (req, res) => {
   res.json({
     habitat: "online",
-    brain: getApiKey() ? "ready" : "missing_api_key",
+    brain: (getApiKey() || process.env.GROQ_API_KEY || process.env.GEMINI_API_KEY || process.env.CEREBRAS_API_KEY) ? "ready" : "missing_api_key",
     apiKeyPresent: Boolean(getApiKey()),
     apiKeyPrefix: getApiKey() ? getApiKey().slice(0, 8) + "..." : null,
     backend: "ready",
-    provider: "openrouter",
+    provider: "multi-provider",
     model,
     fallbackModel,
     free_brain: true,
     message: "Habitat Ax Core backend is running."
+  });
+});
+
+app.get("/diagnostics/providers", (req, res) => {
+  const configured = {
+    gemini: Boolean(String(process.env.GEMINI_API_KEY || "").trim()),
+    groq: Boolean(String(process.env.GROQ_API_KEY || "").trim()),
+    cerebras: Boolean(String(process.env.CEREBRAS_API_KEY || "").trim()),
+    openrouter: Boolean(getApiKey())
+  };
+  const models = {
+    gemini: process.env.GEMINI_MODEL || "gemini-2.5-flash",
+    groq: process.env.GROQ_MODEL || "openai/gpt-oss-20b",
+    cerebras: process.env.CEREBRAS_MODEL || "gpt-oss-120b",
+    openrouter: model
+  };
+  return res.json({
+    ok: Object.values(configured).some(Boolean),
+    providerCount: Object.values(configured).filter(Boolean).length,
+    configured,
+    models,
+    note: "Key presence only; this endpoint does not expose secrets or consume model quota."
   });
 });
 
@@ -380,9 +415,9 @@ app.get("/device/status", (req, res) => {
 app.get("/health", (req, res) => {
   res.json({
     habitat: "online",
-    brain: apiKey ? "ready" : "missing_api_key",
+    brain: (getApiKey() || process.env.GROQ_API_KEY || process.env.GEMINI_API_KEY || process.env.CEREBRAS_API_KEY) ? "ready" : "missing_api_key",
     backend: "ready",
-    provider: "openrouter",
+    provider: "multi-provider",
     model,
     free_brain: true
   });
