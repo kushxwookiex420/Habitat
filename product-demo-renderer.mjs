@@ -162,11 +162,20 @@ export function registerProductDemoRenderer(app) {
 
       const inputArgs=[];
       const filters=[];
+      const clipDuration=sourcePaths.reduce((sum,s)=>sum+s.end-s.start,0);
+      const actionLabels={
+        vacuuming:"VACUUM IN ACTION",
+        blowing:"BLOWER IN ACTION",
+        "attachments-in-use":"ATTACHMENT IN USE"
+      };
       sourcePaths.forEach((s,i)=>{
         inputArgs.push("-ss",String(s.start),"-t",String(s.end-s.start),"-i",s.path);
-        filters.push("["+i+":v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1,fps=25,format=yuv420p,setpts=PTS-STARTPTS[v"+i+"]");
+        const actionLabelPath=path.join(dir,"action-label-"+i+".txt");
+        fs.writeFile(actionLabelPath,actionLabels[s.action],"utf8");
+        const segmentDuration=(s.end-s.start).toFixed(3);
+        filters.push("["+i+":v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1,fps=25,format=yuv420p,setpts=PTS-STARTPTS,drawtext=fontfile="+DEJAVU_BOLD+":textfile="+actionLabelPath+":fontcolor=white:fontsize=40:box=1:boxcolor=black@0.62:boxborderw=16:x=(w-text_w)/2:y=280:enable='between(t,0,"+segmentDuration+")'[v"+i+"]");
       });
-      filters.push(sourcePaths.map((_,i)=>"[v"+i+"]").join("")+"concat=n="+sourcePaths.length+":v=1:a=0,drawbox=x=0:y=0:w=iw:h=ih:color=black@0.28:t=fill,drawtext=fontfile="+DEJAVU_BOLD+":textfile="+titleTextPath+":fontcolor=white:fontsize=52:line_spacing=8:box=1:boxcolor=black@0.45:boxborderw=24:x=(w-text_w)/2:y=140,drawtext=fontfile="+DEJAVU_REGULAR+":textfile="+ctaTextPath+":fontcolor=white:fontsize=34:line_spacing=6:box=1:boxcolor=black@0.55:boxborderw=20:x=(w-text_w)/2:y=h-260[v]");
+      filters.push(sourcePaths.map((_,i)=>"[v"+i+"]").join("")+"concat=n="+sourcePaths.length+":v=1:a=0,drawbox=x=0:y=0:w=iw:h=ih:color=black@0.20:t=fill,drawtext=fontfile="+DEJAVU_BOLD+":textfile="+titleTextPath+":fontcolor=white:fontsize=52:line_spacing=8:box=1:boxcolor=black@0.45:boxborderw=24:x=(w-text_w)/2:y=140:enable='lt(t,3)',drawtext=fontfile="+DEJAVU_REGULAR+":textfile="+ctaTextPath+":fontcolor=white:fontsize=34:line_spacing=6:box=1:boxcolor=black@0.62:boxborderw=20:x=(w-text_w)/2:y=h-260:enable='gte(t,"+Math.max(0,clipDuration-3.5).toFixed(3)+")'[v]");
       const voiceFile=path.join(dir,"voiceover.mp3");
       const words=voiceover.split(/\s+/);
       const chunks=[];let current="";
@@ -185,7 +194,6 @@ export function registerProductDemoRenderer(app) {
       await execFileAsync(ffmpegPath,["-hide_banner","-loglevel","error","-y","-f","concat","-safe","0","-i",list,"-c","copy",voiceFile],{timeout:30000});
       const voiceProbe=await execFileAsync(ffprobePath,["-v","error","-show_entries","format=duration","-of","default=noprint_wrappers=1:nokey=1",voiceFile],{timeout:15000});
       const voiceDuration=Number(String(voiceProbe.stdout||"").trim());
-      const clipDuration=sourcePaths.reduce((sum,s)=>sum+s.end-s.start,0);
       if(!Number.isFinite(voiceDuration)||voiceDuration>clipDuration+0.2) throw new Error("Voiceover is longer than the selected demonstration footage. Add longer authorized clips or shorten the narration before rendering.");
 
       const id=crypto.randomUUID();
