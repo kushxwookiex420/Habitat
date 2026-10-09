@@ -21,7 +21,8 @@ function estimateTextWidth(text, fontSize, bold = false) {
   // Conservative proportional estimate for DejaVu Sans used by the renderer.
   // It intentionally overestimates so overflow becomes a block rather than a miss.
   const factor = bold ? 0.64 : 0.58;
-  return String(text ?? "").length * Number(fontSize || 16) * factor;
+  const longestLine = String(text ?? "").split(/\\r?\\n/).reduce((longest,line) => Math.max(longest,line.length),0);
+  return longestLine * Number(fontSize || 16) * factor;
 }
 
 function safeAreaPreflight(renderPlan, width, height) {
