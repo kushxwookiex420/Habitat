@@ -395,6 +395,25 @@ app.get("/", (req, res) => {
   });
 });
 
+app.get("/brain/status", (_req, res) => {
+  const configured = {
+    cloudflare: Boolean(String(process.env.CLOUDFLARE_API_TOKEN || "").trim() && String(process.env.CLOUDFLARE_ACCOUNT_ID || "").trim()),
+    groq: Boolean(String(process.env.GROQ_API_KEY || "").trim()),
+    gemini: Boolean(String(process.env.GEMINI_API_KEY || "").trim()),
+    openrouter: Boolean(getApiKey()),
+    cerebras: Boolean(String(process.env.CEREBRAS_API_KEY || "").trim() && String(process.env.HABITAT_ALLOW_PAID_PROVIDERS || "").toLowerCase() === "true")
+  };
+  return res.json({
+    ok: true,
+    configured: Object.values(configured).some(Boolean),
+    mode: "free-first",
+    providers: configured,
+    preferredProvider: configured.cloudflare ? "cloudflare" : configured.groq ? "groq" : configured.gemini ? "gemini" : configured.openrouter ? "openrouter" : configured.cerebras ? "cerebras" : null,
+    secretsExposed: false,
+    note: "Configuration is not proof of a successful inference; use the system check for a live model test."
+  });
+});
+
 app.get("/diagnostics/providers", (req, res) => {
   const configured = {
     gemini: Boolean(String(process.env.GEMINI_API_KEY || "").trim()),
@@ -902,7 +921,7 @@ const workerRegistry = new Map([
     id: "habitat-qa-worker",
     name: "Habitat QA Worker",
     kind: "model-backed",
-    status: apiKey ? "available" : "blocked",
+    status: hasAnyAiProviderKey() ? "available" : "blocked",
     model,
     capabilities: ["backend-health", "task-execution", "verification-reporting"],
     lastRunAt: null
@@ -911,7 +930,7 @@ const workerRegistry = new Map([
     id: "dropilot-product-scout",
     name: "DropPilot Product Scout",
     kind: "specialist",
-    status: apiKey ? "available" : "blocked",
+    status: hasAnyAiProviderKey() ? "available" : "blocked",
     model,
     capabilities: ["product-research", "listing-analysis"],
     lastRunAt: null
@@ -920,7 +939,7 @@ const workerRegistry = new Map([
     id: "vicecity-topic-scout",
     name: "Vice City Topic Scout",
     kind: "specialist",
-    status: apiKey ? "available" : "blocked",
+    status: hasAnyAiProviderKey() ? "available" : "blocked",
     model,
     capabilities: ["topic-research", "content-planning"],
     lastRunAt: null
