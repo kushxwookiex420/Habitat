@@ -1,0 +1,47 @@
+name: Habitat Live Smoke Test
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "visual-qa.mjs"
+      - "product-demo-renderer.mjs"
+      - "server.mjs"
+      - ".github/workflows/habitat-live-smoke.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Verify deployed backend and renderer
+        shell: bash
+        run: |
+          set -euo pipefail
+          BASE="https://habitat-1-szzd.onrender.com"
+          wait_json() {
+            local path="$1"
+            local output="/tmp/response.json"
+            local code=""
+            for attempt in $(seq 1 18); do
+              code="$(curl --silent --show-error --max-time 20 -o "$output" -w '%{http_code}' "$BASE$path" || true)"
+              if [[ "$code" == "200" ]]; then
+                echo "PASS $path HTTP $code"
+                cat "$output"
+                echo
+                return 0
+              fi
+              echo "WAIT $path attempt=$attempt http=${code:-network_error}"
+              sleep 10
+            done
+            echo "FAIL $path final HTTP ${code:-network_error}"
+            cat "$output" 2>/dev/null || true
+            return 1
+          }
+          wait_json "/health"
+          wait_json "/product-demo/render/status"
+          wait_json "/content/publisher/status"
