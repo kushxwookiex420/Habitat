@@ -60,6 +60,19 @@ PY
 ffmpeg -hide_banner -loglevel error -y -f concat -safe 0 -i "$TMP/voice.txt" -ac 2 -ar 48000 "$TMP/voice.mp3"
 test -s "$TMP/voice.mp3"
 
+VOICE_DURATION=$(ffprobe -v error -show_entries format=duration -of default=nw=1:nk=1 "$TMP/voice.mp3")
+SCENE_DURATION=$(python - "$VOICE_DURATION" <<'PY'
+import sys
+print(float(sys.argv[1])/6.0)
+PY
+)
+BODY_DURATION=$(python - "$VOICE_DURATION" <<'PY'
+import sys
+print(float(sys.argv[1])+1.0)
+PY
+)
+echo "Narration source duration: ${VOICE_DURATION}s; body timeline with one-second ending tail: ${BODY_DURATION}s"
+
 # Each scene gets a dedicated title band above the full, uncropped image and a
 # separate footer below it. Only the blurred background gets a barely perceptible drift.
 TITLES=(
@@ -89,32 +102,33 @@ for i in 0 1 2 3 4 5; do
   FILTER+="drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='VICE CITY FILES  •  FACT-CHECKED GAMING UPDATES':fontcolor=white:fontsize=23:x=(w-text_w)/2:y=1580,"
   FILTER+="fps=15,setsar=1,format=yuv420p[v$i];"
 done
-FILTER+="[v0][v1][v2][v3][v4][v5]concat=n=6:v=1:a=0,trim=duration=45,setpts=PTS-STARTPTS[v]"
+FILTER+="[v0][v1][v2][v3][v4][v5]concat=n=6:v=1:a=0,tpad=stop_mode=clone:stop_duration=1,trim=duration=$BODY_DURATION,setpts=PTS-STARTPTS[v]"
 
 ffmpeg -hide_banner -loglevel error -y \
-  -loop 1 -framerate 15 -t 7.5 -i "$TMP/scene1.jpg" \
-  -loop 1 -framerate 15 -t 7.5 -i "$TMP/scene2.jpg" \
-  -loop 1 -framerate 15 -t 7.5 -i "$TMP/scene3.jpg" \
-  -loop 1 -framerate 15 -t 7.5 -i "$TMP/scene4.jpg" \
-  -loop 1 -framerate 15 -t 7.5 -i "$TMP/scene5.jpg" \
-  -loop 1 -framerate 15 -t 7.5 -i "$TMP/scene6.jpg" \
+  -loop 1 -framerate 15 -t "$SCENE_DURATION" -i "$TMP/scene1.jpg" \
+  -loop 1 -framerate 15 -t "$SCENE_DURATION" -i "$TMP/scene2.jpg" \
+  -loop 1 -framerate 15 -t "$SCENE_DURATION" -i "$TMP/scene3.jpg" \
+  -loop 1 -framerate 15 -t "$SCENE_DURATION" -i "$TMP/scene4.jpg" \
+  -loop 1 -framerate 15 -t "$SCENE_DURATION" -i "$TMP/scene5.jpg" \
+  -loop 1 -framerate 15 -t "$SCENE_DURATION" -i "$TMP/scene6.jpg" \
   -i "$TMP/voice.mp3" \
   -filter_complex "$FILTER" -map "[v]" -map 6:a:0 \
   -c:v libx264 -preset medium -crf 21 -pix_fmt yuv420p \
-  -c:a aac -b:a 160k -ar 48000 -af "loudnorm=I=-16:TP=-1.5:LRA=11" \
-  -t 45 -shortest -movflags +faststart "$OUT"
+  -c:a aac -b:a 160k -ar 48000 -af "loudnorm=I=-16:TP=-1.5:LRA=11,apad=pad_dur=1" \
+  -t "$BODY_DURATION" -movflags +faststart "$OUT"
 
 test -s "$OUT"
 ffprobe -v error -show_entries format=duration,size:stream=codec_type,width,height,r_frame_rate -of json "$OUT" > "$TMP/probe.json"
-python - "$TMP/probe.json" "$OUT" <<'PY'
+python - "$TMP/probe.json" "$OUT" "$BODY_DURATION" <<'PY'
 import json, os, sys
 p=json.load(open(sys.argv[1])); size=os.path.getsize(sys.argv[2]); duration=float(p["format"]["duration"])
 streams=p["streams"]; video=next(s for s in streams if s["codec_type"]=="video")
 audio=next(s for s in streams if s["codec_type"]=="audio")
 assert size>100000, f"Artifact unexpectedly small: {size}"
-assert duration>=44, f"Artifact too short: {duration}"
+expected=float(sys.argv[3])
+assert duration>=expected-0.2, f"Artifact shorter than measured narration plus tail: {duration} < {expected}"
 assert int(video["width"])==1080 and int(video["height"])==1920
 assert video["r_frame_rate"]=="15/1"
 assert audio.get("codec_type")=="audio"
-print(json.dumps({"verified":True,"bytes":size,"durationSeconds":duration,"width":1080,"height":1920,"renderer":"uncropped-images-neural-narration-v3","audio":"neural-narration-present","scenes":6}))
+print(json.dumps({"verified":True,"bytes":size,"durationSeconds":duration,"width":1080,"height":1920,"renderer":"source-duration-neural-narration-v4","audio":"complete-narration-plus-one-second-tail","scenes":6,"expectedBodyDurationSeconds":expected}))
 PY
