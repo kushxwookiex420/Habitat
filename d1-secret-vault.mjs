@@ -72,6 +72,11 @@ export function createD1SecretVault({ accountId, databaseId, apiToken, encryptio
       await query("DELETE FROM habitat_secret_vault WHERE key_name = ?", [String(name || "")]);
       return { ok: true };
     },
+    async deleteExpired(prefix, cutoffIso) {
+      const safePrefix = String(prefix || "");
+      await query("DELETE FROM habitat_secret_vault WHERE key_name LIKE ? AND updated_at < ?", [safePrefix + "%", String(cutoffIso)]);
+      return { ok: true };
+    },
     async healthCheck() {
       await query("SELECT 1 AS ok");
       return { ok: true, adapter: "cloudflare-d1-aes-256-gcm", durable: true };
