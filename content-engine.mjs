@@ -890,7 +890,13 @@ export function registerContentEngine(app, deps) {
   // deliberately observable: boot, dispatch, stage progress, completion, and
   // failure are all logged. It uses the public Render URL so the same deployed
   // instance handles the mission rather than relying on loopback routing.
-  const autonomousIntervalMinutes = Math.max(0, Number(process.env.HABITAT_AUTONOMOUS_INTERVAL_MINUTES || 0));
+  // A rolling deploy must not immediately launch another expensive, long-running render.
+  // Clamp configured cadence to at least one hour and wait for the first full interval after boot.
+  // The in-process guard below prevents overlap within this instance; publication remains approval-gated.
+  const configuredAutonomousIntervalMinutes = Math.max(0, Number(process.env.HABITAT_AUTONOMOUS_INTERVAL_MINUTES || 0));
+  const autonomousIntervalMinutes = configuredAutonomousIntervalMinutes > 0
+    ? Math.max(60, configuredAutonomousIntervalMinutes)
+    : 0;
   if (autonomousIntervalMinutes > 0) {
     const objective = String(process.env.HABITAT_AUTONOMOUS_OBJECTIVE || "Create the next best ViceCityFiles short-form content mission.").trim();
     const project = String(process.env.HABITAT_AUTONOMOUS_PROJECT || "ViceCityFiles").trim();
@@ -937,8 +943,14 @@ export function registerContentEngine(app, deps) {
         autonomousMissionRunning = false;
       }
     };
-    setTimeout(runAutonomous, 10000);
-    setInterval(runAutonomous, autonomousIntervalMinutes * 60 * 1000);
+    const interval = setInterval(runAutonomous, autonomousIntervalMinutes * 60 * 1000);
+    interval.unref?.();
+    console.log("AX_AUTONOMOUS_SCHEDULER_POLICY", JSON.stringify({
+      firstRun:"after full interval (no boot-time dispatch)",
+      minimumIntervalMinutes:60,
+      configuredIntervalMinutes:configuredAutonomousIntervalMinutes,
+      effectiveIntervalMinutes:autonomousIntervalMinutes
+    }));
   }
 
   // Ax autonomous mission runner: executes every safe stage in order and stops only at the external publish approval boundary.
