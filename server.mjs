@@ -1,3 +1,4 @@
+import { buildCapabilityStatus } from "./capability-status.mjs";
 import { registerContentEngine } from "./content-engine.mjs";
 import { registerPublicPages } from "./public-pages.mjs";
 import { readFile } from "node:fs/promises";
@@ -1143,6 +1144,15 @@ async function runSystemCheck() {
 
   return { task, checks, report, overall };
 }
+
+app.get("/capabilities", (_req, res) => {
+  const device = androidAccessStatus();
+  return res.json(buildCapabilityStatus({
+    aiProviderConfigured: hasAnyAiProviderKey(),
+    workerRegistered: workerRegistry.has("habitat-qa-worker"),
+    androidStatus: device.status
+  }));
+});
 
 app.get("/workers", (req, res) => {
   return res.json({
