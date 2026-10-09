@@ -45,13 +45,21 @@ test("TikTok token refresh is persisted through the encrypted vault before use",
   assert.ok(source.includes("refusing to refresh credentials without durable storage"));
 });
 
-test("Artifact 001 uses real official images and narration, never silent placeholder audio", async () => {
+test("Artifact 001 uses official images, neural narration, and a clean non-overlapping layout", async () => {
   const source = await fs.readFile(new URL("../scripts/render-artifact-001.sh", import.meta.url), "utf8");
+  const workflow = await fs.readFile(new URL("../.github/workflows/artifact_001.yml", import.meta.url), "utf8");
   assert.ok(source.includes("rockstargames.com/VI/_next/static/media/"));
-  assert.ok(source.includes("translate.google.com/translate_tts"));
+  assert.ok(source.includes("edge-tts"));
+  assert.ok(source.includes("en-US-AndrewNeural"));
+  assert.ok(!source.includes("translate.google.com/translate_tts"));
+  assert.ok(source.includes("boxblur=24:12"));
+  assert.ok(source.includes("drawbox=x=40:y=125:w=1000:h=250"));
+  assert.ok(source.includes("drawbox=x=40:y=1535:w=1000:h=120"));
   assert.ok(source.includes("narration-present"));
   assert.ok(!source.includes("anullsrc"));
   assert.ok(!source.includes("placeholder-silence"));
+  assert.ok(workflow.includes("Run deterministic visual and audio QA"));
+  assert.ok(workflow.includes("if (result.status !== 'VISUAL_PASS') process.exit(1)"));
 });
 
 test("cross-session continuity checkpoint is durable and exposed by the backend", async () => {

@@ -18,6 +18,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y ffmpeg fonts-dejavu
 
+      - name: Validate renderer shell syntax
+        run: bash -n scripts/render-artifact-001.sh
+
       - name: Wait for Habitat Render deployment
         run: |
           set -e
@@ -87,12 +90,55 @@ jobs:
           assert duration >= 44
           assert int(video["width"]) == 1080 and int(video["height"]) == 1920
           print("CANONICAL ARTIFACT 001 VERIFIED")
-          print(json.dumps({"verified":True,"bytes":size,"durationSeconds":duration,"width":1080,"height":1920,"renderer":"rockstar-images-plus-narration-v2","audio":"narration-present","scenes":6}))
+          print(json.dumps({"verified":True,"bytes":size,"durationSeconds":duration,"width":1080,"height":1920,"renderer":"uncropped-images-neural-narration-v3","audio":"narration-present","scenes":6}))
           PY
 
-      - name: Upload Artifact 001 to GitHub Actions
+      - name: Run deterministic visual and audio QA
+        run: |
+          set -e
+          node --input-type=module <<'JS'
+          import fs from 'node:fs';
+          import { runVisualQA } from './visual-qa.mjs';
+          const titles = [
+            ['VICE CITY IS BACK', 'GTA VI • OFFICIAL DETAILS'],
+            ['NOVEMBER 19, 2026', 'ANNOUNCED RELEASE DATE'],
+            ['JASON + LUCIA', 'THE MAIN CHARACTERS'],
+            ['WELCOME TO LEONIDA', 'VICE CITY AND BEYOND'],
+            ['PS5 + XBOX SERIES X AND S', 'ANNOUNCED LAUNCH PLATFORMS'],
+            ['FACTS, NOT RUMORS', 'FOLLOW VICE CITY FILES']
+          ];
+          const footer = 'VICE CITY FILES  •  FACT-CHECKED GAMING UPDATES';
+          const renderPlan = {
+            format: '9:16',
+            scenes: titles.map(([title, subtitle]) => ({ title, subtitle })),
+            onScreenText: [
+              ...titles.map(([title]) => ({ text: title, fontSize: 48, bold: true })),
+              ...titles.map(([, subtitle]) => ({ text: subtitle, fontSize: 27, bold: false })),
+              { text: footer, fontSize: 23, bold: false }
+            ]
+          };
+          const result = await runVisualQA({
+            artifactPath: 'habitat-artifact-001.mp4',
+            renderPlan,
+            expectedSceneCount: 6,
+            requireAudio: true
+          });
+          fs.writeFileSync('visual-qa-report.json', JSON.stringify(result, null, 2));
+          console.log(JSON.stringify({
+            status: result.status,
+            checks: result.checks,
+            issues: result.issues
+          }, null, 2));
+          if (result.status !== 'VISUAL_PASS') process.exit(1);
+          JS
+
+      - name: Upload Artifact 001 and QA report to GitHub Actions
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: habitat-artifact-001
-          path: habitat-artifact-001.mp4
+          path: |
+            habitat-artifact-001.mp4
+            visual-qa-report.json
+          if-no-files-found: warn
           retention-days: 7

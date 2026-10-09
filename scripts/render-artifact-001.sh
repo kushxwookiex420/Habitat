@@ -5,7 +5,9 @@ OUT="${1:-habitat-artifact-001.mp4}"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
-# Use real official Rockstar GTA VI screenshots, not colored placeholder cards.
+# Official Rockstar media. Preserve the complete source image in the foreground;
+# use a softened, darkened duplicate as the portrait background instead of
+# aggressively cropping/zooming the source image.
 python - "$TMP" <<'PY'
 import os, sys, urllib.request
 root=sys.argv[1]
@@ -18,66 +20,88 @@ urls=[
  "https://www.rockstargames.com/VI/_next/static/media/Ambrosia_06.0j9c7-8nfb_xf.jpg?akim=1&imdensity=1&imwidth=960",
 ]
 for i,url in enumerate(urls,1):
- req=urllib.request.Request(url,headers={"User-Agent":"Mozilla/5.0 HabitatVideoBuilder/1.0"})
- with urllib.request.urlopen(req,timeout=20) as r:
+ req=urllib.request.Request(url,headers={"User-Agent":"Mozilla/5.0 HabitatVideoBuilder/2.0"})
+ with urllib.request.urlopen(req,timeout=25) as r:
   data=r.read()
   if len(data)<10000: raise RuntimeError(f"Screenshot {i} too small to be a real image")
-  ctype=r.headers.get("Content-Type","")
-  if not ctype.startswith("image/"): raise RuntimeError(f"Screenshot {i} was not an image: {ctype}")
+  if not r.headers.get("Content-Type","").startswith("image/"):
+   raise RuntimeError(f"Screenshot {i} was not an image")
   open(os.path.join(root,f"scene{i}.jpg"),"wb").write(data)
-print("Downloaded 6 official Rockstar screenshot assets.")
+print("Downloaded and validated six official Rockstar image assets.")
 PY
 
-# Natural-paced voiceover. If the free TTS endpoint fails, fail the build rather than
-# shipping a silent video that falsely appears ready.
+# Use a free neural voice instead of the robotic legacy TTS endpoint.
+python -m pip install --disable-pip-version-check --quiet edge-tts
 python - "$TMP" <<'PY'
-import json, os, sys, time, urllib.parse, urllib.request
+import asyncio, os, sys
+import edge_tts
 root=sys.argv[1]
 lines=[
- "Vice City is back in Grand Theft Auto six, and here are the confirmed details worth knowing.",
- "Rockstar's announced release date is November nineteenth, twenty twenty-six. Dates can change, so always check official updates.",
- "The story follows Jason Duval and Lucia Caminos. Rockstar has introduced both characters in its official materials.",
- "The setting is the fictional state of Leonida, with Vice City at its center. The official screenshots give us a look at its atmosphere.",
- "Rockstar has announced PlayStation five and Xbox Series X and S as launch platforms. Other platform details should be treated as unconfirmed unless Rockstar says otherwise.",
- "That is the difference between facts and rumors. Follow Vice City Files for clear, sourced Grand Theft Auto updates."
+ "Vice City is back in Grand Theft Auto six. Here are the official details worth knowing.",
+ "Rockstar has announced November nineteenth, twenty twenty-six as the release date. Release plans can change, so check Rockstar's official updates.",
+ "The story follows Jason Duval and Lucia Caminos, two characters Rockstar has introduced in its official materials.",
+ "The setting is Leonida, a fictional state inspired by Florida, with Vice City at its center. These official images offer a look at its world.",
+ "Rockstar has announced PlayStation five and Xbox Series X and S for launch. Treat other platform claims as unconfirmed unless Rockstar announces them.",
+ "That is what we know from official sources, without mixing in rumors. Follow Vice City Files for clear, sourced updates."
 ]
-parts=[]
-for i,line in enumerate(lines,1):
- url="https://translate.google.com/translate_tts?"+urllib.parse.urlencode({"ie":"UTF-8","client":"tw-ob","tl":"en-US","q":line})
- req=urllib.request.Request(url,headers={"User-Agent":"Mozilla/5.0"})
- with urllib.request.urlopen(req,timeout=25) as r:
-  audio=r.read()
- if len(audio)<1000: raise RuntimeError(f"TTS chunk {i} is empty or too small")
- path=os.path.join(root,f"voice{i}.mp3")
- open(path,"wb").write(audio)
- parts.append(path)
-with open(os.path.join(root,"voice.txt"),"w") as f:
- for p in parts: f.write("file '"+p.replace("'","'\\''")+"'\n")
+async def main():
+    parts=[]
+    for i,line in enumerate(lines,1):
+        path=os.path.join(root,f"voice{i}.mp3")
+        communicate=edge_tts.Communicate(line, "en-US-AndrewNeural", rate="-5%", volume="+0%", pitch="+0Hz")
+        await communicate.save(path)
+        if not os.path.exists(path) or os.path.getsize(path)<1000:
+            raise RuntimeError(f"Neural narration chunk {i} is missing or too small")
+        parts.append(path)
+    with open(os.path.join(root,"voice.txt"),"w") as f:
+        for p in parts: f.write("file '"+p.replace("'","'\\''")+"\n")
+asyncio.run(main())
 PY
 ffmpeg -hide_banner -loglevel error -y -f concat -safe 0 -i "$TMP/voice.txt" -ac 2 -ar 48000 "$TMP/voice.mp3"
 test -s "$TMP/voice.mp3"
 
-# Six real-image scenes with legible phone-first typography and gentle motion.
+# Each scene gets a dedicated title band above the full, uncropped image and a
+# separate footer below it. Only the blurred background gets a barely perceptible drift.
+TITLES=(
+  "VICE CITY IS BACK|GTA VI • OFFICIAL DETAILS"
+  "NOVEMBER 19, 2026|ANNOUNCED RELEASE DATE"
+  "JASON + LUCIA|THE MAIN CHARACTERS"
+  "WELCOME TO LEONIDA|VICE CITY AND BEYOND"
+  "PS5 + XBOX SERIES X AND S|ANNOUNCED LAUNCH PLATFORMS"
+  "FACTS, NOT RUMORS|FOLLOW VICE CITY FILES"
+)
+FILTER=""
+for i in 0 1 2 3 4 5; do
+  n=$((i+1))
+  title="${TITLES[$i]%%|*}"
+  subtitle="${TITLES[$i]#*|}"
+  # Escape FFmpeg drawtext punctuation that can occur in the title strings.
+  title=$(printf '%s' "$title" | sed 's/[\\:]/\\\\&/g')
+  subtitle=$(printf '%s' "$subtitle" | sed 's/[\\:]/\\\\&/g')
+  FILTER+="[$i:v]split=2[bg$i][fg$i];"
+  FILTER+="[bg$i]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,zoompan=z='min(1.05,1+on*0.0004)':d=1:s=1080x1920:fps=15,boxblur=24:12,eq=brightness=-0.18:saturation=0.72[base$i];"
+  FILTER+="[fg$i]scale=960:1050:force_original_aspect_ratio=decrease:flags=lanczos,format=rgba[photo$i];"
+  FILTER+="[base$i][photo$i]overlay=(W-w)/2:430+(1100-h)/2:shortest=1,"
+  FILTER+="drawbox=x=40:y=125:w=1000:h=250:color=black@0.70:t=fill,"
+  FILTER+="drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:text='$title':fontcolor=white:fontsize=48:x=(w-text_w)/2:y=185,"
+  FILTER+="drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='$subtitle':fontcolor=white:fontsize=27:x=(w-text_w)/2:y=280,"
+  FILTER+="drawbox=x=40:y=1535:w=1000:h=120:color=black@0.60:t=fill,"
+  FILTER+="drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='VICE CITY FILES  •  FACT-CHECKED GAMING UPDATES':fontcolor=white:fontsize=23:x=(w-text_w)/2:y=1580,"
+  FILTER+="fps=15,setsar=1,format=yuv420p[v$i];"
+done
+FILTER+="[v0][v1][v2][v3][v4][v5]concat=n=6:v=1:a=0,trim=duration=45,setpts=PTS-STARTPTS[v]"
+
 ffmpeg -hide_banner -loglevel error -y \
-  -loop 1 -t 7.5 -i "$TMP/scene1.jpg" \
-  -loop 1 -t 7.5 -i "$TMP/scene2.jpg" \
-  -loop 1 -t 7.5 -i "$TMP/scene3.jpg" \
-  -loop 1 -t 7.5 -i "$TMP/scene4.jpg" \
-  -loop 1 -t 7.5 -i "$TMP/scene5.jpg" \
-  -loop 1 -t 7.5 -i "$TMP/scene6.jpg" \
+  -loop 1 -framerate 15 -t 7.5 -i "$TMP/scene1.jpg" \
+  -loop 1 -framerate 15 -t 7.5 -i "$TMP/scene2.jpg" \
+  -loop 1 -framerate 15 -t 7.5 -i "$TMP/scene3.jpg" \
+  -loop 1 -framerate 15 -t 7.5 -i "$TMP/scene4.jpg" \
+  -loop 1 -framerate 15 -t 7.5 -i "$TMP/scene5.jpg" \
+  -loop 1 -framerate 15 -t 7.5 -i "$TMP/scene6.jpg" \
   -i "$TMP/voice.mp3" \
-  -filter_complex "
-[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,zoompan=z='min(1.035,zoom+0.00015)':d=1:s=1080x1920:fps=15,drawbox=x=0:y=220:w=1080:h=370:color=black@0.48:t=fill,drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:text='VICE CITY IS BACK':fontcolor=white:fontsize=52:x=(w-text_w)/2:y=330,drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='GTA VI  |  OFFICIAL DETAILS':fontcolor=white:fontsize=28:x=(w-text_w)/2:y=430,setsar=1[v0];
-[1:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,zoompan=z='min(1.035,zoom+0.00015)':d=1:s=1080x1920:fps=15,drawbox=x=0:y=220:w=1080:h=370:color=black@0.48:t=fill,drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:text='NOVEMBER 19, 2026':fontcolor=white:fontsize=48:x=(w-text_w)/2:y=330,drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='ANNOUNCED RELEASE DATE':fontcolor=white:fontsize=28:x=(w-text_w)/2:y=430,setsar=1[v1];
-[2:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,zoompan=z='min(1.035,zoom+0.00015)':d=1:s=1080x1920:fps=15,drawbox=x=0:y=220:w=1080:h=370:color=black@0.48:t=fill,drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:text='JASON + LUCIA':fontcolor=white:fontsize=52:x=(w-text_w)/2:y=330,drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='THE MAIN CHARACTERS':fontcolor=white:fontsize=28:x=(w-text_w)/2:y=430,setsar=1[v2];
-[3:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,zoompan=z='min(1.035,zoom+0.00015)':d=1:s=1080x1920:fps=15,drawbox=x=0:y=220:w=1080:h=370:color=black@0.48:t=fill,drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:text='WELCOME TO LEONIDA':fontcolor=white:fontsize=48:x=(w-text_w)/2:y=330,drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='VICE CITY AND BEYOND':fontcolor=white:fontsize=28:x=(w-text_w)/2:y=430,setsar=1[v3];
-[4:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,zoompan=z='min(1.035,zoom+0.00015)':d=1:s=1080x1920:fps=15,drawbox=x=0:y=220:w=1080:h=370:color=black@0.48:t=fill,drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:text='PS5 + XBOX SERIES X|S':fontcolor=white:fontsize=42:x=(w-text_w)/2:y=330,drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='ANNOUNCED PLATFORMS':fontcolor=white:fontsize=28:x=(w-text_w)/2:y=430,setsar=1[v4];
-[5:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,zoompan=z='min(1.035,zoom+0.00015)':d=1:s=1080x1920:fps=15,drawbox=x=0:y=220:w=1080:h=370:color=black@0.48:t=fill,drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:text='FACTS, NOT RUMORS':fontcolor=white:fontsize=48:x=(w-text_w)/2:y=330,drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='FOLLOW VICE CITY FILES':fontcolor=white:fontsize=28:x=(w-text_w)/2:y=430,setsar=1[v5];
-[v0][v1][v2][v3][v4][v5]concat=n=6:v=1:a=0,trim=duration=45,setpts=PTS-STARTPTS,format=yuv420p[v]
-" \
-  -map "[v]" -map 6:a:0 \
-  -c:v libx264 -preset ultrafast -crf 25 -pix_fmt yuv420p \
-  -c:a aac -b:a 128k -ar 48000 -af "loudnorm=I=-16:TP=-1.5:LRA=11" \
+  -filter_complex "$FILTER" -map "[v]" -map 6:a:0 \
+  -c:v libx264 -preset medium -crf 21 -pix_fmt yuv420p \
+  -c:a aac -b:a 160k -ar 48000 -af "loudnorm=I=-16:TP=-1.5:LRA=11" \
   -t 45 -shortest -movflags +faststart "$OUT"
 
 test -s "$OUT"
@@ -92,5 +116,5 @@ assert duration>=44, f"Artifact too short: {duration}"
 assert int(video["width"])==1080 and int(video["height"])==1920
 assert video["r_frame_rate"]=="15/1"
 assert audio.get("codec_type")=="audio"
-print(json.dumps({"verified":True,"bytes":size,"durationSeconds":duration,"width":1080,"height":1920,"renderer":"rockstar-images-plus-narration-v2","audio":"narration-present","scenes":6}))
+print(json.dumps({"verified":True,"bytes":size,"durationSeconds":duration,"width":1080,"height":1920,"renderer":"uncropped-images-neural-narration-v3","audio":"neural-narration-present","scenes":6}))
 PY
