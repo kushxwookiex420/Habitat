@@ -49,7 +49,7 @@ function safeAreaPreflight(renderPlan, width, height) {
   return { safeArea:{left:safeLeft,right:safeRight,top:safeTop,bottom:safeBottom}, issues };
 }
 
-export async function runVisualQA({ artifactPath, renderPlan = {}, expectedSceneCount = null }) {
+export async function runVisualQA({ artifactPath, renderPlan = {}, expectedSceneCount = null, requireAudio = true }) {
   const startedAt = Date.now();
   const issues = [];
   const checks = {};
@@ -61,11 +61,13 @@ export async function runVisualQA({ artifactPath, renderPlan = {}, expectedScene
 
     const probe = await execFileAsync("ffprobe", [
       "-v","error",
-      "-show_entries","format=duration,size:stream=index,codec_type,width,height,r_frame_rate,nb_frames",
+      "-show_entries","format=duration,size:stream=index,codec_type,codec_name,width,height,r_frame_rate,nb_frames,sample_rate,channels",
       "-of","json",artifactPath
     ]);
     const data = parseJson(probe.stdout);
-    const video = (data.streams || []).find(s => s.codec_type === "video") || {};
+    const streams = Array.isArray(data.streams) ? data.streams : [];
+    const video = streams.find(s => s.codec_type === "video") || {};
+    const audio = streams.find(s => s.codec_type === "audio") || null;
     const duration = Number(data?.format?.duration || 0);
     const width = Number(video.width || 0);
     const height = Number(video.height || 0);
@@ -76,6 +78,20 @@ export async function runVisualQA({ artifactPath, renderPlan = {}, expectedScene
     };
     if (duration <= 0) issues.push({ type:"invalid_duration", duration });
     if (!width || !height) issues.push({ type:"missing_video_dimensions" });
+
+    // Content intended for social publishing must carry an audio stream by default.
+    // This catches silent exports before they reach the creator approval step.
+    checks.audioTrack = {
+      status: audio || !requireAudio ? "PASS" : "FAIL",
+      required: Boolean(requireAudio),
+      present: Boolean(audio),
+      codec: audio?.codec_name || null,
+      sampleRate: audio?.sample_rate ? Number(audio.sample_rate) : null,
+      channels: audio?.channels ? Number(audio.channels) : null
+    };
+    if (!audio && requireAudio) {
+      issues.push({ type:"missing_audio_track", detail:"No audio stream was found; add the intended voiceover/music or explicitly set requireAudio=false for a silent deliverable." });
+    }
 
     const preflight = safeAreaPreflight(renderPlan, width, height);
     checks.safeArea = { status: preflight.issues.length ? "FAIL" : "PASS", ...preflight };
@@ -134,6 +150,7 @@ export async function runVisualQA({ artifactPath, renderPlan = {}, expectedScene
     const remediation = issues.map(issue => {
       switch (issue.type) {
         case "text_overflow_risk": return { action:"resize_text", text:issue.text, instruction:"Reduce font size or shorten the on-screen text until estimated width is within the safe area." };
+        case "missing_audio_track": return { action:"add_or_restore_audio", instruction:"Add the intended voiceover or licensed audio track, re-render, and re-run Visual QA." };
         case "sustained_black_frame": return { action:"repair_black_frames", instruction:"Replace the affected interval with a valid scene frame/background and re-render." };
         case "frozen_visual": return { action:"repair_frozen_scene", instruction:"Ensure the affected scene changes visually or shorten the static interval below the freeze threshold." };
         case "scene_progression_failed": return { action:"repair_scene_progression", instruction:"Ensure every planned scene produces a meaningful visual transition and re-render." };
