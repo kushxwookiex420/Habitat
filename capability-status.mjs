@@ -43,6 +43,11 @@ export function buildCapabilityStatus({
             ? "D1 repository is wired but not ready. If configured credentials fail, startup should fail closed rather than silently use memory."
             : "D1 repository is wired, but durable task storage is not active. Configure account ID, database ID, and a least-privilege D1 API token." 
       },
+      contentJobPersistence: {
+        status: "memory_only",
+        durable: false,
+        detail: "Content pipeline jobs, TikTok OAuth state, and OAuth tokens are separate in-memory stores and are not made durable by task-route D1 integration."
+      },
       androidDevice: androidStatus === "PASS"
         ? { status: "verified_recent_heartbeat", detail: "A recent Android heartbeat is registered." }
         : { status: "unverified", detail: "No recent Android heartbeat is currently verified." },
