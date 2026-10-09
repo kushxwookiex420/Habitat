@@ -132,11 +132,26 @@ export function registerContentEngine(app, deps) {
         return res.status(502).send("<h1>TikTok connection failed</h1><p>TikTok did not return an access token. Check the registered redirect URI and approved scopes in the TikTok Developer Portal.</p>");
       }
 
-      // Initial testing keeps the token in the running Habitat process.
-      // Persistent encrypted token storage should be added before multi-user production.
-      process.env.TIKTOK_ACCESS_TOKEN = String(tokenPayload.access_token);
-      if (tokenPayload.refresh_token) process.env.TIKTOK_REFRESH_TOKEN = String(tokenPayload.refresh_token);
-      if (tokenPayload.expires_in) process.env.TIKTOK_ACCESS_TOKEN_EXPIRES_AT = String(Date.now() + Number(tokenPayload.expires_in) * 1000);
+      const now = Date.now();
+      const tokenBundle = {
+        access_token: String(tokenPayload.access_token),
+        refresh_token: tokenPayload.refresh_token ? String(tokenPayload.refresh_token) : null,
+        access_token_expires_at: tokenPayload.expires_in ? String(now + Number(tokenPayload.expires_in) * 1000) : null,
+        refresh_token_expires_at: tokenPayload.refresh_expires_in ? String(now + Number(tokenPayload.refresh_expires_in) * 1000) : null,
+        open_id: tokenPayload.open_id ? String(tokenPayload.open_id) : null,
+        scope: tokenPayload.scope ? String(tokenPayload.scope) : null,
+        token_type: tokenPayload.token_type ? String(tokenPayload.token_type) : null
+      };
+      if (!secretVault) return res.status(503).send("<h1>TikTok token not saved</h1><p>Secure encrypted storage is not ready.</p>");
+      try { await secretVault.set("tiktok_tokens", tokenBundle); }
+      catch (error) {
+        console.error("TIKTOK_TOKEN_PERSIST_FAILED", String(error?.message || error));
+        return res.status(503).send("<h1>TikTok token not saved</h1><p>Authorization succeeded, but credentials could not be persisted securely. Please retry.</p>");
+      }
+      process.env.TIKTOK_ACCESS_TOKEN = tokenBundle.access_token;
+      if (tokenBundle.refresh_token) process.env.TIKTOK_REFRESH_TOKEN = tokenBundle.refresh_token;
+      if (tokenBundle.access_token_expires_at) process.env.TIKTOK_ACCESS_TOKEN_EXPIRES_AT = tokenBundle.access_token_expires_at;
+      if (tokenBundle.refresh_token_expires_at) process.env.TIKTOK_REFRESH_TOKEN_EXPIRES_AT = tokenBundle.refresh_token_expires_at;
 
       return res.status(200).send(`<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>Habitat — TikTok Connected</title><style>body{font-family:system-ui;background:#050914;color:#e9ffff;padding:32px;text-align:center}main{max-width:560px;margin:12vh auto;padding:28px;border:1px solid #164f5a;border-radius:20px;background:#08121c}a{display:inline-block;margin-top:20px;padding:13px 20px;border-radius:12px;background:#17d6c3;color:#041011;text-decoration:none;font-weight:700}</style></head><body><main><h1>✓ TikTok Connected</h1><p>Habitat is authorized to work with your TikTok account.</p><p>You can return to Habitat and continue the content workflow.</p><a href="https://kushxwookiex420.github.io/Habitat/">Return to Habitat</a></main></body></html>`);
     } catch (error) {
@@ -158,7 +173,8 @@ export function registerContentEngine(app, deps) {
       clientSecretPresent,
       connected,
       redirectUri: String(process.env.TIKTOK_REDIRECT_URI || "https://habitat-1-szzd.onrender.com/auth/tiktok/callback"),
-      scopes: ["user.info.basic", "video.upload", "video.publish"]
+      scopes: ["user.info.basic", "video.upload", "video.publish"],
+      tokenVaultReady: Boolean(secretVault)
     });
   });
 
