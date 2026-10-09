@@ -1,6 +1,6 @@
 # Habitat Ax — Durable Continuity Checkpoint
 
-**Last checkpoint:** 2026-10-09 07:37 UTC  
+**Last checkpoint:** 2026-10-09 07:57 UTC  
 **Repository:** https://github.com/kushxwookiex420/Habitat  
 **Live backend:** https://habitat-1-szzd.onrender.com  
 **Current rule:** Never claim a feature works until the live service or produced artifact has been tested.
@@ -12,8 +12,8 @@ Build Habitat into a dependable Android-first AI control center for DropPilot AI
 ## Verified facts at this checkpoint
 
 - Cloudflare Workers AI inference succeeded in Render logs using `@cf/meta/llama-3.2-1b-instruct`.
-- GitHub release contract tests passed on commit `624c78f596a49cc92dbb764ec5e8d9fc7747cccc` (run: https://github.com/kushxwookiex420/Habitat/actions/runs/37900042526).
-- GitHub CI syntax checks passed on commit `624c78f596a49cc92dbb764ec5e8d9fc7747cccc` (run: https://github.com/kushxwookiex420/Habitat/actions/runs/37900042613; final run status should be rechecked).
+- Latest storage-honesty regression checks passed on commit `0e066b26ad79215c460a1f35aed2930a8927f8c9`: Build Test https://github.com/kushxwookiex420/Habitat/actions/runs/37901681372 and CI https://github.com/kushxwookiex420/Habitat/actions/runs/37901681153.
+- Latest provider-awareness changes are committed as `6397fbf5d37487e01ad298dbf1ab34ea7a6404eb`; CI passed at https://github.com/kushxwookiex420/Habitat/actions/runs/37901893203, Build Test passed at https://github.com/kushxwookiex420/Habitat/actions/runs/37901893222, and release checks passed at https://github.com/kushxwookiex420/Habitat/actions/runs/37901893179. APK build for that commit was still in progress at https://github.com/kushxwookiex420/Habitat/actions/runs/37901893262 at the last check.
 - The autonomous scheduler no longer launches a mission 10 seconds after each boot and clamps its configured interval to at least 60 minutes.
 - The standalone Artifact 001 workflow is manual-only; ordinary commits should not trigger expensive video rendering.
 - Added `GET /continuity` and `GET /continuity/status` endpoints, backed by the committed `AX_CONTINUITY.md` file; README points fresh sessions to the checkpoint.
@@ -22,6 +22,9 @@ Build Habitat into a dependable Android-first AI control center for DropPilot AI
 - The Android APK workflow for commit `624c78f596a49cc92dbb764ec5e8d9fc7747cccc` was still running when last checked: https://github.com/kushxwookiex420/Habitat/actions/runs/37900042669. Check its result and artifact list before offering a download.
 - Current release page: https://github.com/kushxwookiex420/Habitat/releases/tag/habitat-v0.8-latest
 - TikTok OAuth has previously reported `connected:false`. Do not claim publishing works; keep it approval-gated.
+- The storage endpoint and system check now explicitly treat process-local memory as non-durable and block an overall VERIFIED PASS when storage is UNKNOWN.
+- Worker registry availability now checks all configured AI providers, including Cloudflare Workers AI, rather than relying only on OPENROUTER_API_KEY. Added `GET /brain/status` with provider-presence diagnostics that do not expose secret values. Release/CI/build tests passed for these changes; the latest APK build and live deployment still need confirmation.
+- Render deploy for the previous commit `0e066b26ad79215c460a1f35aed2930a8927f8c9` is live. The latest provider-aware deploy was queued at the last check; do not claim `/brain/status` is live until deployment completes and endpoint is checked.
 - No Render Postgres or Render Key Value instances were found in the connected Render workspace at last check.
 
 ## Important known gaps
@@ -45,7 +48,7 @@ Build Habitat into a dependable Android-first AI control center for DropPilot AI
 
 ## Next actions, in priority order
 
-1. **Finish APK build verification.** Check run 37900042669 and any newer run triggered by the latest checkpoint commit, fetch its artifacts/release asset only if the build succeeded, and report the actual outcome.
+1. **Finish latest deployment and APK verification.** Check Render deploy for commit `6397fbf5d37487e01ad298dbf1ab34ea7a6404eb`, verify `/brain/status` and `/storage/check` on the live backend, and check APK run 37901893262 plus artifact/release only if the build succeeded.
 2. **Add durable runtime persistence.** No Render Postgres or Key Value instances were found in the connected workspace. Inspect options genuinely available at zero cost before selecting one. Do not provision a paid database or storage product without approval. Persist content job state, step results, retries, OAuth state, and token expiry securely.
 3. **Resume/recovery API.** Make jobs discoverable after process restart, with idempotent retries and a single-worker/lease guard so multiple instances cannot duplicate work.
 4. **Verify Artifact 001 end to end.** Run the manual render workflow, ensure narration exists and is intelligible, inspect scene changes/text safe areas, confirm audio/video streams and duration, and publish the artifact only as a downloadable test output.
