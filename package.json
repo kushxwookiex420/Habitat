@@ -6,7 +6,7 @@
   "scripts": {
     "start": "node server.mjs",
     "test": "node --test tests/*.test.mjs",
-    "check": "node --check server.mjs && node --check content-engine.mjs && node --check d1-secret-vault.mjs && node --check d1-content-job-repository.mjs && node --check visual-qa.mjs && node --check tiktok-publisher.mjs"
+    "check": "node --check server.mjs && node --check content-engine.mjs && node --check d1-secret-vault.mjs && node --check d1-content-job-repository.mjs && node --check visual-qa.mjs && node --check tiktok-publisher.mjs && node --check scripts/vice-city-release-gate.mjs"
   },
   "dependencies": {
     "express": "^5.1.0",
