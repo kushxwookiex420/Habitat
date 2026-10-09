@@ -20,6 +20,7 @@ jobs:
           node --check visual-qa.mjs
           node --check tiktok-publisher.mjs
           node --check scripts/vice-city-release-gate.mjs
+          bash -n scripts/assemble-vice-city-files.sh
       - name: Run release contract tests
         run: npm test
       - name: Confirm video release gate fails closed
