@@ -1,5 +1,6 @@
 import { buildCapabilityStatus } from "./capability-status.mjs";
 import { claimTaskDispatch } from "./task-dispatch-guard.mjs";
+import { createD1TaskRepository } from "./d1-task-repository.mjs";
 import { registerContentEngine } from "./content-engine.mjs";
 import { registerPublicPages } from "./public-pages.mjs";
 import { readFile } from "node:fs/promises";
@@ -920,6 +921,48 @@ Be direct, natural, practical, detailed when the task warrants it, and honest ab
 
 const taskStore = new Map();
 
+let taskRepository = null;
+let taskStorageReady = false;
+
+function hasD1TaskCredentials(env = process.env) {
+  return Boolean(
+    String(env.CLOUDFLARE_ACCOUNT_ID || "").trim() &&
+    String(env.HABITAT_D1_DATABASE_ID || "").trim() &&
+    String(env.HABITAT_D1_API_TOKEN || "").trim()
+  );
+}
+
+async function initializeTaskStorage() {
+  if (!hasD1TaskCredentials()) {
+    console.log("TASK_STORAGE: memory-only — D1 credentials are not configured");
+    return;
+  }
+  // If credentials are present, fail startup rather than silently losing writes
+  // to memory when durable storage is misconfigured or unavailable.
+  taskRepository = createD1TaskRepository({
+    accountId: process.env.CLOUDFLARE_ACCOUNT_ID,
+    databaseId: process.env.HABITAT_D1_DATABASE_ID,
+    apiToken: process.env.HABITAT_D1_API_TOKEN
+  });
+  await taskRepository.initialize();
+  const restored = await taskRepository.list({ limit: 500 });
+  for (const task of restored) taskStore.set(task.id, task);
+  taskStorageReady = true;
+  console.log("TASK_STORAGE: D1 ready; restored " + restored.length + " task records");
+}
+
+async function persistTask(task) {
+  if (!taskRepository || !taskStorageReady) return task;
+  const existing = await taskRepository.get(task.id);
+  if (existing) return await taskRepository.update(task.id, task);
+  return await taskRepository.create(task);
+}
+
+async function listStoredTasks() {
+  if (taskRepository && taskStorageReady) return taskRepository.list({ limit: 500 });
+  return Array.from(taskStore.values());
+}
+
 const workerRegistry = new Map([
   ["habitat-qa-worker", {
     id: "habitat-qa-worker",
@@ -1151,7 +1194,9 @@ app.get("/capabilities", (_req, res) => {
   return res.json(buildCapabilityStatus({
     aiProviderConfigured: hasAnyAiProviderKey(),
     workerRegistered: workerRegistry.has("habitat-qa-worker"),
-    androidStatus: device.status
+    androidStatus: device.status,
+    taskRepositoryConfigured: hasD1TaskCredentials(),
+    taskRepositoryReady: taskStorageReady
   }));
 });
 
@@ -1162,42 +1207,71 @@ app.get("/workers", (req, res) => {
   });
 });
 
-app.get("/storage/check", (req, res) => {
+app.get("/storage/check", async (_req, res) => {
+  if (taskRepository && taskStorageReady) {
+    try {
+      const check = await taskRepository.healthCheck();
+      return res.status(check.ok ? 200 : 503).json({
+        ok: check.ok, storage: "cloudflare-d1", durable: true,
+        persistence: "cloudflare-d1", restoredTaskCount: taskStore.size,
+        detail: "D1 health check passed. This verifies the configured task repository, not the separate in-memory content-job or TikTok OAuth stores."
+      });
+    } catch {
+      return res.status(503).json({
+        ok: false, storage: "cloudflare-d1", durable: false,
+        persistence: "cloudflare-d1", detail: "Configured D1 repository health check failed."
+      });
+    }
+  }
   const probePassed = storageSelfTest();
   return res.status(probePassed ? 200 : 503).json({
-    ok: false,
-    storage: probePassed ? "memory-only" : "failed",
-    durable: false,
-    persistence: "process-local",
+    ok: probePassed, storage: probePassed ? "memory-only" : "failed",
+    durable: false, persistence: "process-local",
     detail: probePassed
       ? "Memory write/read/delete passed, but this is not durable storage. Task history can be lost on restart."
       : "In-process write/read/delete probe failed."
   });
 });
 
-app.post("/tasks", (req, res) => {
+app.post("/tasks", async (req, res) => {
   const title = String(req.body?.title || "").trim();
   const description = String(req.body?.description || title).trim();
   if (!title) return res.status(400).json({ ok: false, error: "title required" });
   const task = {
     id: makeTaskId(), title, description, status: "planned", owner: "Ax",
-    worker: null, createdAt: nowIso(), delegatedAt: null,
+    worker: null, createdAt: nowIso(), updatedAt: nowIso(), delegatedAt: null,
     completedAt: null, verifiedAt: null, result: null, error: null
   };
-  taskStore.set(task.id, task);
-  return res.json({ ok: true, task });
+  try {
+    // Persist first; never acknowledge a durable task that failed to write.
+    if (taskRepository && taskStorageReady) await taskRepository.create(task);
+    taskStore.set(task.id, task);
+    return res.json({ ok: true, task, persistence: taskRepository && taskStorageReady ? "cloudflare-d1" : "process-local" });
+  } catch {
+    return res.status(503).json({ ok: false, error: "task storage write failed; task was not accepted" });
+  }
 });
 
-app.get("/tasks", (req, res) => {
-  const tasks = Array.from(taskStore.values())
-    .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
-  return res.json({ ok: true, tasks });
+app.get("/tasks", async (_req, res) => {
+  try {
+    const tasks = (await listStoredTasks())
+      .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+    return res.json({ ok: true, tasks, persistence: taskRepository && taskStorageReady ? "cloudflare-d1" : "process-local" });
+  } catch {
+    return res.status(503).json({ ok: false, error: "task storage read failed" });
+  }
 });
 
-app.get("/tasks/:id", (req, res) => {
-  const task = taskStore.get(req.params.id);
-  if (!task) return res.status(404).json({ ok: false, error: "task not found" });
-  return res.json({ ok: true, task });
+app.get("/tasks/:id", async (req, res) => {
+  try {
+    const task = taskRepository && taskStorageReady
+      ? await taskRepository.get(req.params.id)
+      : taskStore.get(req.params.id);
+    if (!task) return res.status(404).json({ ok: false, error: "task not found" });
+    return res.json({ ok: true, task });
+  } catch {
+    return res.status(503).json({ ok: false, error: "task storage read failed" });
+  }
 });
 
 app.post("/tasks/:id/delegate", async (req, res) => {
@@ -1206,7 +1280,10 @@ app.post("/tasks/:id/delegate", async (req, res) => {
 
   if (!hasAnyAiProviderKey()) {
     task.status = "failed";
-    task.error = "No AI provider key is configured. Set CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID, GEMINI_API_KEY, GROQ_API_KEY, or OPENROUTER_API_KEY. Cerebras requires CEREBRAS_API_KEY and HABITAT_ALLOW_PAID_PROVIDERS=true.";
+    task.error = "No AI provider key is configured. Set CLOUDFLARE_API_TOKEN with CLOUDFLARE_ACCOUNT_ID for Workers AI, GEMINI_API_KEY, GROQ_API_KEY, or OPENROUTER_API_KEY. Cerebras requires CEREBRAS_API_KEY and HABITAT_ALLOW_PAID_PROVIDERS=true.";
+    try { await persistTask(task); } catch {
+      return res.status(503).json({ ok: false, error: "task storage write failed" });
+    }
     return res.status(503).json({ ok: false, task });
   }
 
@@ -1222,6 +1299,15 @@ app.post("/tasks/:id/delegate", async (req, res) => {
     });
   }
   task.worker = workerRegistry.has("habitat-qa-worker") ? "habitat-qa-worker" : null;
+  task.updatedAt = nowIso();
+  try {
+    await persistTask(task);
+  } catch {
+    task.status = "planned";
+    task.delegatedAt = null;
+    task.updatedAt = nowIso();
+    return res.status(503).json({ ok: false, error: "could not persist dispatch claim; worker was not started" });
+  }
 
   try {
     // Real backend checks first. These verify the service path itself rather
@@ -1238,6 +1324,8 @@ app.post("/tasks/:id/delegate", async (req, res) => {
       task.status = "failed";
       task.error = "Habitat backend health verification failed.";
       task.result = JSON.stringify({ checks: { backendHealth: health } });
+      task.updatedAt = nowIso();
+      await persistTask(task);
       return res.status(502).json({ ok: false, task });
     }
 
@@ -1290,6 +1378,8 @@ app.post("/tasks/:id/delegate", async (req, res) => {
     if (!result.trim()) {
       task.status = "failed";
       task.error = "Worker returned an empty result after one real QA retry.";
+      task.updatedAt = nowIso();
+      await persistTask(task);
       return res.status(502).json({ ok: false, task });
     }
 
@@ -1331,11 +1421,17 @@ app.post("/tasks/:id/delegate", async (req, res) => {
     task.status = fullyVerified ? "verified" : "blocked";
     task.completedAt = nowIso();
     if (fullyVerified) task.verifiedAt = nowIso();
+    task.updatedAt = nowIso();
+    await persistTask(task);
 
     return res.json({ ok: true, task });
   } catch (error) {
     task.status = "failed";
     task.error = String(error?.message || error);
+    task.updatedAt = nowIso();
+    try { await persistTask(task); } catch {
+      return res.status(503).json({ ok: false, error: "task failed and its final state could not be persisted" });
+    }
     return res.status(502).json({ ok: false, task });
   }
 });
@@ -1594,6 +1690,8 @@ app.post("/system-check", async (req, res) => {
     });
   }
 });
+
+await initializeTaskStorage();
 
 app.listen(
   port,
