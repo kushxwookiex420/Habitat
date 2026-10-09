@@ -36,6 +36,15 @@ test("TikTok publisher validates consent and publish result", async () => {
   assert.ok(source.includes("publish_id") || source.includes("publishId"));
 });
 
+test("TikTok token refresh is persisted through the encrypted vault before use", async () => {
+  const source = await fs.readFile(new URL("../tiktok-publisher.mjs", import.meta.url), "utf8");
+  assert.ok(source.includes("async function ensureAccessToken()"));
+  assert.ok(source.includes('grant_type: "refresh_token"'));
+  assert.ok(source.includes('await tokenVault.set("tiktok_tokens", bundle)'));
+  assert.ok(source.includes("refreshInFlight"));
+  assert.ok(source.includes("refusing to refresh credentials without durable storage"));
+});
+
 test("Artifact 001 uses real official images and narration, never silent placeholder audio", async () => {
   const source = await fs.readFile(new URL("../scripts/render-artifact-001.sh", import.meta.url), "utf8");
   assert.ok(source.includes("rockstargames.com/VI/_next/static/media/"));

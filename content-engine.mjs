@@ -15,7 +15,7 @@ export function registerContentEngine(app, deps) {
   const { nowIso, makeTaskId, taskStore, workerRegistry, brainChat, contentJobRepository, secretVault } = deps;
   const contentJobs = new Map();
   const tiktokOAuthStates = new Map();
-  registerTikTokPublisher(app, (id) => contentJobs.get(id));
+  registerTikTokPublisher(app, (id) => contentJobs.get(id), secretVault);
 
   // Persist each returned content-job state before acknowledging the API response.
   // This keeps all stage handlers behind the same awaited durability boundary.
