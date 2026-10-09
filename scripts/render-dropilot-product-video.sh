@@ -12,7 +12,7 @@ file work/product.png | grep -E 'PNG image|JPEG image|Web/P image' >/dev/null ||
 say1='Crumbs hiding in your car interior? Take a look at the HOTO AutoCare Air Duster and Vacuum.'
 say2='The listing describes a compact cleanup tool for car interiors and everyday dusty surfaces.'
 say3='Check the product page for the current price, specifications, attachments, availability, and shipping.'
-say4='Want the details? Visit DropPilot and tap the HOTO AutoCare listing.'
+say4='Want the details? Tap the product link to check the HOTO AutoCare listing.'
 
 tts() {
   local text="$1" output="$2"
@@ -30,7 +30,7 @@ ffmpeg -hide_banner -loglevel error -y -f concat -safe 0 -i work/voice.txt -c:a 
 VOICE_DURATION=$(ffprobe -v error -show_entries format=duration -of csv=p=0 work/voice.mp3)
 DURATION=$(awk -v d="$VOICE_DURATION" 'BEGIN { v=d+1.8; if(v<22) v=22; if(v>30) v=30; printf "%.2f",v }')
 
-# Stable, legible layout: background is a softened, darkened fill; the actual product
+# Stable, legible layout: background is a softened, darkened fill; no promotional logo or brand watermark is burned into the video, and the actual product
 # image stays centered and unobstructed, with copy in a fixed safe area.
 ffmpeg -hide_banner -loglevel error -y \
   -loop 1 -i work/product.png -i work/voice.mp3 \
@@ -43,7 +43,7 @@ drawbox=x=44:y=1470:w=992:h=340:color=black@0.68:t=fill,
 drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:text='CRUMBS IN HARD-TO-REACH SPOTS?':fontcolor=white:fontsize=48:line_spacing=8:x=(w-text_w)/2:y=116:enable='between(t,0,5)',
 drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:text='A CLOSER LOOK AT HOTO AUTOCARE':fontcolor=white:fontsize=43:x=(w-text_w)/2:y=166:enable='between(t,5,11)',
 drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:text='CHECK THE SPECS + ATTACHMENTS':fontcolor=white:fontsize=42:x=(w-text_w)/2:y=166:enable='between(t,11,18)',
-drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:text='SEE DETAILS AT DROPPILOT':fontcolor=white:fontsize=48:x=(w-text_w)/2:y=1550:enable='between(t,18,30)',
+drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:text='CHECK PRICE + DETAILS':fontcolor=white:fontsize=48:x=(w-text_w)/2:y=1550:enable='between(t,18,30)',
 drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='Price and availability may change':fontcolor=white:fontsize=28:x=(w-text_w)/2:y=1630,
 drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='Tap the product link to learn more':fontcolor=white:fontsize=30:x=(w-text_w)/2:y=1690,
 fps=30,format=yuv420p[v]" \
