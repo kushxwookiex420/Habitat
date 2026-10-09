@@ -157,3 +157,13 @@ Build Habitat into a dependable Android-first AI control center for DropPilot AI
 - Increased visual end padding before trimming to the measured narration-plus-tail duration in `scripts/render-artifact-001.sh` (commit `1be50a0f44289471ac55ee3d8e9a0d296b641a1d`).
 - Added a deterministic `streamSync` check to `visual-qa.mjs`: fail if video/audio stream durations differ by more than 0.12 seconds, especially when audio exceeds video (commit `23e5b494430e9f47c8856c1b9f78a02774e8106d`). Added contract tests in commit `72bf936aab273817b2b064602ebd831a785b5979`. Release checks passed at run [106](https://github.com/kushxwookiex420/Habitat/actions/runs/37989131823).
 - Artifact workflow was updated to rerun when visual QA changes; latest run [70](https://github.com/kushxwookiex420/Habitat/actions/runs/37989144979) is queued. It still cannot complete assembly until `assets/vice-city-files-assets.zip` is committed to the repo. The user has been given the ZIP download and a review-preview MP4 link; the upload page is `https://github.com/kushxwookiex420/Habitat/upload/main/assets`.
+
+## Current in-progress milestone — 2026-10-09
+
+- Active branch: `fix/product-demo-action-footage-gate`; pull request #27: https://github.com/kushxwookiex420/Habitat/pull/27.
+- Product-demo renderer changes require explicit commercial reuse permission and action categories (`vacuuming`, `blowing`, `attachments-in-use`), with at least two distinct categories per render. These are caller-supplied labels, **not computer-vision proof** that the footage actually depicts the action.
+- Render responses preserve source metadata, mark action review as pending human review, and keep public publishing approval-gated.
+- Added `.github/workflows/product-demo-ci.yml` to run backend syntax checks and regression tests on relevant pull requests and on this work branch. Added regression cases for missing action labels, repeated action types, missing reuse permission, missing product name, too-short narration, and clip-count limits.
+- The latest observed workflow runs for commit `17d3b0e4c9e0f75f0504dafa474cc33aba0b8bf1` were queued/in progress; do not mark CI as passed until the workflow reports success.
+- **Not yet completed:** merge, Render deployment/live verification, authorized direct video URLs for the actual HOTO AutoCare Air Duster & Vacuum, a newly rendered MP4, and human visual inspection. The official HOTO demo is a discovery lead, not permission to reuse commercial footage.
+- Next steps: inspect CI outcomes; fix any failures; merge only after checks pass; identify footage with explicit commercial reuse rights; render and inspect the final sales video; then request the user's approval before posting.
