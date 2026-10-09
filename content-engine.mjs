@@ -12,7 +12,7 @@ function cryptoRandomState() {
 // unless a connected publisher worker explicitly reports it.
 
 export function registerContentEngine(app, deps) {
-  const { nowIso, makeTaskId, taskStore, workerRegistry, brainChat, contentJobRepository } = deps;
+  const { nowIso, makeTaskId, taskStore, workerRegistry, brainChat, contentJobRepository, secretVault } = deps;
   const contentJobs = new Map();
   const tiktokOAuthStates = new Map();
   registerTikTokPublisher(app, (id) => contentJobs.get(id));
@@ -38,15 +38,23 @@ export function registerContentEngine(app, deps) {
 
   // TikTok Login Kit (Web) connection flow.
   // Secrets and tokens remain server-side; the browser only follows redirects.
-  app.get("/auth/tiktok", (req, res) => {
+  app.get("/auth/tiktok", async (req, res) => {
     const clientKey = String(process.env.TIKTOK_CLIENT_KEY || "").trim();
     const clientSecret = String(process.env.TIKTOK_CLIENT_SECRET || "").trim();
     if (!clientKey || !clientSecret) {
       return res.status(503).send("<h1>Habitat TikTok connection is not configured</h1><p>Add TIKTOK_CLIENT_KEY and TIKTOK_CLIENT_SECRET to the Habitat-1 Render environment, then redeploy.</p>");
     }
 
+    if (!secretVault) return res.status(503).send("<h1>Secure TikTok storage is not ready</h1><p>Habitat requires its encrypted D1 token vault before authorization.</p>");
+
     const state = cryptoRandomState();
-    tiktokOAuthStates.set(state, { createdAt: Date.now() });
+    const stateRecord = { createdAt: Date.now() };
+    try { await secretVault.set("tiktok_oauth_state:" + state, stateRecord); }
+    catch (error) {
+      console.error("TIKTOK_OAUTH_STATE_PERSIST_FAILED", String(error?.message || error));
+      return res.status(503).send("<h1>TikTok connection temporarily unavailable</h1><p>Authorization state could not be saved securely.</p>");
+    }
+    tiktokOAuthStates.set(state, stateRecord);
     // Bound in-memory state storage so abandoned login attempts cannot accumulate.
     for (const [key, value] of tiktokOAuthStates) {
       if (Date.now() - value.createdAt > 10 * 60 * 1000) tiktokOAuthStates.delete(key);
@@ -71,10 +79,19 @@ export function registerContentEngine(app, deps) {
 
   app.get("/auth/tiktok/callback", async (req, res) => {
     const state = String(req.query?.state || "");
-    const stateRecord = tiktokOAuthStates.get(state);
+    let stateRecord = null;
+    if (secretVault && state) {
+      try {
+        stateRecord = await secretVault.get("tiktok_oauth_state:" + state);
+        await secretVault.delete("tiktok_oauth_state:" + state);
+      } catch (error) {
+        console.error("TIKTOK_OAUTH_STATE_READ_FAILED", String(error?.message || error));
+        return res.status(503).send("<h1>TikTok connection temporarily unavailable</h1><p>Authorization state could not be verified securely.</p>");
+      }
+    }
     tiktokOAuthStates.delete(state);
 
-    if (!stateRecord || Date.now() - stateRecord.createdAt > 10 * 60 * 1000) {
+    if (!secretVault || !stateRecord || Date.now() - stateRecord.createdAt > 10 * 60 * 1000) {
       return res.status(400).send("<h1>TikTok connection failed</h1><p>Invalid or expired authorization state. Please start Connect TikTok again from Habitat.</p>");
     }
 
