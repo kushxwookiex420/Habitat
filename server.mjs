@@ -15,6 +15,14 @@ function getApiKey() {
   const rawApiKey = process.env.OPENROUTER_API_KEY;
   return rawApiKey ? String(rawApiKey).trim().replace(/^["']|["']$/g, "") : "";
 }
+function hasAnyAiProviderKey() {
+  return Boolean(
+    getApiKey() ||
+    String(process.env.GROQ_API_KEY || "").trim() ||
+    String(process.env.GEMINI_API_KEY || "").trim() ||
+    String(process.env.CEREBRAS_API_KEY || "").trim()
+  );
+}
 const apiKey = getApiKey();
 const model = "openrouter/free";
 // Do not hard-code free-model IDs: providers retire and rename them frequently.
@@ -435,10 +443,9 @@ app.post("/chat", async (req, res) => {
       });
     }
 
-    if (!apiKey) {
-      return res.status(500).json({
-        error:
-          "OPENROUTER_API_KEY is not configured on the Habitat server."
+    if (!hasAnyAiProviderKey()) {
+      return res.status(503).json({
+        error: "No AI provider key is configured. Set GEMINI_API_KEY, GROQ_API_KEY, CEREBRAS_API_KEY, or OPENROUTER_API_KEY."
       });
     }
 
@@ -1083,10 +1090,10 @@ app.post("/tasks/:id/delegate", async (req, res) => {
   const task = taskStore.get(req.params.id);
   if (!task) return res.status(404).json({ ok: false, error: "task not found" });
 
-  if (!apiKey) {
+  if (!hasAnyAiProviderKey()) {
     task.status = "failed";
-    task.error = "OPENROUTER_API_KEY is not configured.";
-    return res.status(500).json({ ok: false, task });
+    task.error = "No AI provider key is configured. Set GEMINI_API_KEY, GROQ_API_KEY, CEREBRAS_API_KEY, or OPENROUTER_API_KEY.";
+    return res.status(503).json({ ok: false, task });
   }
 
   task.status = "delegated";
@@ -1294,10 +1301,10 @@ app.post("/orchestrate/dropilot", async (req, res) => {
       return res.status(400).json({ ok: false, error: "mission required" });
     }
 
-    if (!apiKey) {
-      return res.status(500).json({
+    if (!hasAnyAiProviderKey()) {
+      return res.status(503).json({
         ok: false,
-        error: "OPENROUTER_API_KEY is not configured on the Habitat server."
+        error: "No AI provider key is configured. Set GEMINI_API_KEY, GROQ_API_KEY, CEREBRAS_API_KEY, or OPENROUTER_API_KEY."
       });
     }
 
@@ -1400,7 +1407,7 @@ app.post("/orchestrate/vicecity", async (req, res) => {
     const channelContext = req.body?.channelContext || {};
 
     if (!mission) return res.status(400).json({ ok: false, error: "mission required" });
-    if (!apiKey) return res.status(500).json({ ok: false, error: "OPENROUTER_API_KEY is not configured on the Habitat server." });
+    if (!hasAnyAiProviderKey()) return res.status(503).json({ ok: false, error: "No AI provider key is configured. Set GEMINI_API_KEY, GROQ_API_KEY, CEREBRAS_API_KEY, or OPENROUTER_API_KEY." });
 
     const contextText = JSON.stringify(channelContext, null, 2);
     const roles = [
