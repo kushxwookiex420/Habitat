@@ -4,7 +4,7 @@
  */
 export function wrapOverlayText(value, maxChars) {
   const limit = Math.max(1, Math.floor(Number(maxChars) || 1));
-  const words = String(value ?? "").replace(/[\\u0000-\\u001f\\u007f]/g, " ").trim().split(/\\s+/).filter(Boolean);
+  const words = String(value ?? "").replace(/[\u0000-\u001f\u007f]/g, " ").trim().split(/\s+/).filter(Boolean);
   const lines = [];
   let line = "";
   for (const rawWord of words) {
@@ -19,5 +19,5 @@ export function wrapOverlayText(value, maxChars) {
     else { lines.push(line); line = word; }
   }
   if (line) lines.push(line);
-  return lines.join("\\n");
+  return lines.join("\n");
 }
