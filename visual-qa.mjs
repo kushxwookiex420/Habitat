@@ -79,6 +79,28 @@ export async function runVisualQA({ artifactPath, renderPlan = {}, expectedScene
     if (duration <= 0) issues.push({ type:"invalid_duration", duration });
     if (!width || !height) issues.push({ type:"missing_video_dimensions" });
 
+    // Never let a longer audio stream be silently cut at the end of the video.
+    const videoDuration = Number(video.duration || 0);
+    const audioDuration = Number(audio?.duration || 0);
+    const streamDelta = Math.abs(videoDuration - audioDuration);
+    const streamSyncPass = videoDuration > 0 && audioDuration > 0 && streamDelta <= 0.12;
+    checks.streamSync = {
+      status: streamSyncPass ? "PASS" : "FAIL",
+      videoDurationSeconds: videoDuration,
+      audioDurationSeconds: audioDuration,
+      deltaSeconds: Number(streamDelta.toFixed(3)),
+      toleranceSeconds: 0.12
+    };
+    if (!streamSyncPass) {
+      issues.push({
+        type: audioDuration > videoDuration + 0.12 ? "audio_longer_than_video" : "stream_duration_mismatch",
+        videoDurationSeconds: videoDuration,
+        audioDurationSeconds: audioDuration,
+        deltaSeconds: Number(streamDelta.toFixed(3)),
+        detail: "Reject the artifact if audio exceeds video or stream durations do not align."
+      });
+    }
+
     // Content intended for social publishing must carry an audio stream by default.
     // This catches silent exports before they reach the creator approval step.
     checks.audioTrack = {
