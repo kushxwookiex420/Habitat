@@ -126,13 +126,14 @@ export async function runVisualQA({ artifactPath, renderPlan = {}, expectedScene
       "-hide_banner","-loglevel","info","-i",artifactPath,
       "-vf","blackdetect=d=0.60:pix_th=0.02",
       "-an","-f","null","-"
-    ]).catch(e => ({ stdout:"", stderr:String(e?.stderr || e?.message || e) }));
+    ]).catch(e => ({ stdout:"", stderr:String(e?.stderr || e?.message || e), inspectionError:String(e?.message || e) }));
     const blackMatches = String(black.stderr || "").match(/black_start:([0-9.]+).*?black_end:([0-9.]+).*?black_duration:([0-9.]+)/g) || [];
     const blackIntervals = blackMatches.map(line => {
       const m=line.match(/black_start:([0-9.]+).*?black_end:([0-9.]+).*?black_duration:([0-9.]+)/);
       return m ? {start:Number(m[1]),end:Number(m[2]),duration:Number(m[3])} : null;
     }).filter(Boolean);
-    checks.blackFrames = { status: blackIntervals.length ? "FAIL" : "PASS", intervals:blackIntervals };
+    checks.blackFrames = { status: black.inspectionError ? "UNKNOWN" : blackIntervals.length ? "FAIL" : "PASS", intervals:blackIntervals };
+    if (black.inspectionError) issues.push({ type:"visual_inspection_tool_failed", detector:"black_frames", detail:black.inspectionError });
     if (blackIntervals.length) issues.push({ type:"sustained_black_frame", intervals:blackIntervals });
 
     // Freeze detector catches the exact class of failure where a video plays but
@@ -141,14 +142,15 @@ export async function runVisualQA({ artifactPath, renderPlan = {}, expectedScene
       "-hide_banner","-loglevel","info","-i",artifactPath,
       "-vf","freezedetect=n=0.003:d=2",
       "-an","-f","null","-"
-    ]).catch(e => ({ stdout:"", stderr:String(e?.stderr || e?.message || e) }));
+    ]).catch(e => ({ stdout:"", stderr:String(e?.stderr || e?.message || e), inspectionError:String(e?.message || e) }));
     const freezeText = String(freeze.stderr || "");
     const freezeMatches = freezeText.match(/freeze_start:([0-9.]+).*?freeze_duration:([0-9.]+)/g) || [];
     const freezeIntervals = freezeMatches.map(line => {
       const m=line.match(/freeze_start:([0-9.]+).*?freeze_duration:([0-9.]+)/);
       return m ? {start:Number(m[1]),duration:Number(m[2])} : null;
     }).filter(Boolean).filter(x => x.duration >= 2.5);
-    checks.freeze = { status: freezeIntervals.length ? "FAIL" : "PASS", intervals:freezeIntervals };
+    checks.freeze = { status: freeze.inspectionError ? "UNKNOWN" : freezeIntervals.length ? "FAIL" : "PASS", intervals:freezeIntervals };
+    if (freeze.inspectionError) issues.push({ type:"visual_inspection_tool_failed", detector:"freeze", detail:freeze.inspectionError });
     if (freezeIntervals.length) issues.push({ type:"frozen_visual", intervals:freezeIntervals });
 
     // Scene-change detector: require meaningful visual transitions when the plan
@@ -157,15 +159,16 @@ export async function runVisualQA({ artifactPath, renderPlan = {}, expectedScene
       "-hide_banner","-loglevel","info","-i",artifactPath,
       "-vf","select='gt(scene,0.02)',showinfo",
       "-an","-f","null","-"
-    ]).catch(e => ({ stdout:"", stderr:String(e?.stderr || e?.message || e) }));
+    ]).catch(e => ({ stdout:"", stderr:String(e?.stderr || e?.message || e), inspectionError:String(e?.message || e) }));
     const sceneTimes = [...String(scene.stderr || "").matchAll(/pts_time:([0-9.]+)/g)].map(m => Number(m[1]));
     const uniqueSceneTimes = sceneTimes.filter((v,i,a) => i === 0 || Math.abs(v-a[i-1]) > 0.25);
     const plannedCount = expectedSceneCount ?? (Array.isArray(renderPlan?.scenes) ? renderPlan.scenes.length : 0);
     const minimumTransitions = Math.max(0, Number(plannedCount || 0) - 1);
     checks.sceneProgression = {
-      status: minimumTransitions === 0 || uniqueSceneTimes.length >= Math.max(1, minimumTransitions) ? "PASS" : "FAIL",
+      status: scene.inspectionError ? "UNKNOWN" : minimumTransitions === 0 || uniqueSceneTimes.length >= Math.max(1, minimumTransitions) ? "PASS" : "FAIL",
       plannedScenes:Number(plannedCount || 0), detectedTransitions:uniqueSceneTimes.length, transitionTimes:uniqueSceneTimes.slice(0,50)
     };
+    if (scene.inspectionError) issues.push({ type:"visual_inspection_tool_failed", detector:"scene_progression", detail:scene.inspectionError });
     if (checks.sceneProgression.status === "FAIL") {
       issues.push({ type:"scene_progression_failed", plannedScenes:Number(plannedCount || 0), detectedTransitions:uniqueSceneTimes.length, transitionTimes:uniqueSceneTimes });
     }
@@ -179,6 +182,7 @@ export async function runVisualQA({ artifactPath, renderPlan = {}, expectedScene
         case "sustained_black_frame": return { action:"repair_black_frames", instruction:"Replace the affected interval with a valid scene frame/background and re-render." };
         case "frozen_visual": return { action:"repair_frozen_scene", instruction:"Ensure the affected scene changes visually or shorten the static interval below the freeze threshold." };
         case "scene_progression_failed": return { action:"repair_scene_progression", instruction:"Ensure every planned scene produces a meaningful visual transition and re-render." };
+        case "visual_inspection_tool_failed": return { action:"repair_visual_inspection", instruction:"Restore FFmpeg/FFprobe availability and rerun Visual QA. An inspection tool error is not a passing result." };
         case "aspect_ratio_plan_mismatch": return { action:"repair_aspect_ratio", instruction:"Render the requested 9:16 output at 1080x1920." };
         case "scene_plan_missing": return { action:"repair_scene_plan", instruction:"Supply an explicit scene list before rendering." };
         default: return { action:"inspect_and_repair", instruction:"Resolve the machine-reported defect and re-run Visual QA." };
