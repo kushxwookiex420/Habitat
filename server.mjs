@@ -150,12 +150,20 @@ async function brainChat(payload) {
   }
 
   if (geminiKey) {
-    providers.push({
-      name: "gemini",
-      model: requestedModel === model ? (process.env.GEMINI_MODEL || "gemini-3.8-flash") : requestedModel,
-      url: `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(requestedModel === model ? (process.env.GEMINI_MODEL || "gemini-3.8-flash") : requestedModel)}:generateContent?key=${encodeURIComponent(geminiKey)}`,
-      headers: { "Content-Type": "application/json" }
-    });
+    // Free-tier model availability can vary by account and surge demand. Try a
+    // short, ordered list so one unavailable/busy model does not block the mission.
+    const configuredGeminiModel = String(process.env.GEMINI_MODEL || "").trim();
+    const geminiModels = requestedModel === model
+      ? [...new Set([configuredGeminiModel, "gemini-3.8-flash", "gemini-3.5-flash-lite", "gemini-2.5-flash-lite"].filter(Boolean))]
+      : [requestedModel];
+    for (const geminiModel of geminiModels) {
+      providers.push({
+        name: "gemini",
+        model: geminiModel,
+        url: `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(geminiModel)}:generateContent?key=${encodeURIComponent(geminiKey)}`,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
   }
 
   if (cerebrasKey) {
