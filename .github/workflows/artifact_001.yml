@@ -146,8 +146,8 @@ jobs:
           VICE_CITY_EDIT_MANIFEST: assets/vice-city-edit-manifest.json
         run: |
           set -e
-          INTRO="\${VICE_CITY_FILES_INTRO_PATH:-assets/vice-city-files-intro.mp4}"
-          OUTRO="\${VICE_CITY_FILES_OUTRO_PATH:-assets/vice-city-files-outro.mp4}"
+          INTRO="${VICE_CITY_FILES_INTRO_PATH:-assets/vice-city-files-intro.mp4}"
+          OUTRO="${VICE_CITY_FILES_OUTRO_PATH:-assets/vice-city-files-outro.mp4}"
           node scripts/vice-city-release-gate.mjs \
             habitat-artifact-001.mp4 "$INTRO" "$OUTRO" vice-city-release-gate-report.json
 
