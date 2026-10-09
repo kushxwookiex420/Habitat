@@ -45,6 +45,18 @@ test("Artifact 001 uses real official images and narration, never silent placeho
   assert.ok(!source.includes("placeholder-silence"));
 });
 
+test("cross-session continuity checkpoint is durable and exposed by the backend", async () => {
+  const checkpoint = await fs.readFile(new URL("../AX_CONTINUITY.md", import.meta.url), "utf8");
+  const server = await fs.readFile(new URL("../server.mjs", import.meta.url), "utf8");
+  const resources = await fs.readFile(new URL("../docs/FREE_RESOURCES.md", import.meta.url), "utf8");
+  assert.ok(checkpoint.includes("Resume protocol for every new Ax / coding-agent session"));
+  assert.ok(checkpoint.includes("runtime persistence"));
+  assert.ok(server.includes('app.get("/continuity"'));
+  assert.ok(server.includes('app.get("/continuity/status"'));
+  assert.ok(server.includes('new URL("./AX_CONTINUITY.md", import.meta.url)'));
+  assert.ok(resources.includes("No misleading \`free forever\` claims"));
+});
+
 test("critical modules are present and non-empty", async () => {
   for (const file of ["server.mjs", "content-engine.mjs", "visual-qa.mjs", "tiktok-publisher.mjs"]) {
     const source = await fs.readFile(new URL("../" + file, import.meta.url), "utf8");
