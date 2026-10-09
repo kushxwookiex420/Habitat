@@ -54,20 +54,20 @@ async def main():
             raise RuntimeError(f"Neural narration chunk {i} is missing or too small")
         parts.append(path)
     with open(os.path.join(root,"voice.txt"),"w") as f:
-        for p in parts: f.write("file '"+p.replace("'","'\\''")+"\\n")
+        for p in parts: f.write("file '"+p.replace("'","'\\''")+"\n")
 asyncio.run(main())
 PY
 ffmpeg -hide_banner -loglevel error -y -f concat -safe 0 -i "$TMP/voice.txt" -ac 2 -ar 48000 "$TMP/voice.mp3"
 test -s "$TMP/voice.mp3"
 
 # Each scene gets a dedicated title band above the full, uncropped image and a
-# separate footer below it. No zoompan: the source art remains readable.
+# separate footer below it. Only the blurred background gets a barely perceptible drift.
 TITLES=(
   "VICE CITY IS BACK|GTA VI • OFFICIAL DETAILS"
   "NOVEMBER 19, 2026|ANNOUNCED RELEASE DATE"
   "JASON + LUCIA|THE MAIN CHARACTERS"
   "WELCOME TO LEONIDA|VICE CITY AND BEYOND"
-  "PS5 + XBOX SERIES X|S|ANNOUNCED LAUNCH PLATFORMS"
+  "PS5 + XBOX SERIES X AND S|ANNOUNCED LAUNCH PLATFORMS"
   "FACTS, NOT RUMORS|FOLLOW VICE CITY FILES"
 )
 FILTER=""
@@ -79,7 +79,7 @@ for i in 0 1 2 3 4 5; do
   title=$(printf '%s' "$title" | sed 's/[\\:]/\\\\&/g')
   subtitle=$(printf '%s' "$subtitle" | sed 's/[\\:]/\\\\&/g')
   FILTER+="[$i:v]split=2[bg$i][fg$i];"
-  FILTER+="[bg$i]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=24:12,eq=brightness=-0.18:saturation=0.72[base$i];"
+  FILTER+="[bg$i]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,zoompan=z='min(1.02,1+on*0.00012)':d=1:s=1080x1920:fps=15,boxblur=24:12,eq=brightness=-0.18:saturation=0.72[base$i];"
   FILTER+="[fg$i]scale=960:1050:force_original_aspect_ratio=decrease:flags=lanczos,format=rgba[photo$i];"
   FILTER+="[base$i][photo$i]overlay=(W-w)/2:430:shortest=1,"
   FILTER+="drawbox=x=40:y=125:w=1000:h=250:color=black@0.70:t=fill,"
