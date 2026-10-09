@@ -1050,6 +1050,7 @@ export function registerContentEngine(app, deps) {
         return { ok: true, durable: false, restored: 0 };
       }
       await contentJobRepository.initialize();
+      const fs = await import("node:fs/promises");
       const restoredJobs = await contentJobRepository.list({ limit: 500 });
       let interrupted = 0;
       for (const job of restoredJobs) {
@@ -1065,6 +1066,27 @@ export function registerContentEngine(app, deps) {
             };
             changed = true;
             interrupted += 1;
+          }
+        }
+        // A D1 row preserves metadata, not Render's ephemeral /tmp video bytes.
+        // Never leave a vanished artifact marked verified/publishable after restart.
+        const editResult = job.stages?.edit?.result;
+        const artifact = editResult?.artifact;
+        if (artifact?.path && artifact.verified === true) {
+          try {
+            await fs.access(artifact.path);
+          } catch {
+            job.stages.edit.status = "interrupted";
+            job.stages.edit.result = {
+              ...(editResult && typeof editResult === "object" ? editResult : {}),
+              artifact: {
+                ...artifact,
+                verified: false,
+                status: "missing_after_restart",
+                unavailableReason: "The video file was stored on ephemeral Render disk and is no longer available."
+              }
+            };
+            changed = true;
           }
         }
         if (changed) {
