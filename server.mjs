@@ -39,7 +39,7 @@ app.get("/continuity/status", async (_req, res) => {
       source:"committed repository checkpoint",
       checkpointDate,
       durableAcrossConversations:true,
-      runtimeJobPersistence:"not yet implemented",
+      runtimeJobPersistence: process.env.HABITAT_D1_DATABASE_ID && process.env.HABITAT_D1_API_TOKEN ? "cloudflare-d1" : "memory-only",
       sourceUrl:"https://github.com/kushxwookiex420/Habitat/blob/main/AX_CONTINUITY.md"
     });
   } catch (error) {
@@ -925,6 +925,7 @@ const taskStore = new Map();
 
 let taskRepository = null;
 let taskStorageReady = false;
+let contentStorageReady = false;
 
 function hasD1TaskCredentials(env = process.env) {
   return Boolean(
@@ -1233,7 +1234,8 @@ app.get("/capabilities", (_req, res) => {
     workerRegistered: workerRegistry.has("habitat-qa-worker"),
     androidStatus: device.status,
     taskRepositoryConfigured: hasD1TaskCredentials(),
-    taskRepositoryReady: taskStorageReady
+    taskRepositoryReady: taskStorageReady,
+    contentJobRepositoryReady: contentStorageReady
   }));
 });
 
@@ -1772,7 +1774,8 @@ app.post("/system-check", async (req, res) => {
 });
 
 await initializeTaskStorage();
-await contentEngine.initialize();
+const contentStorageInit = await contentEngine.initialize();
+contentStorageReady = contentStorageInit?.durable === true;
 
 app.listen(
   port,

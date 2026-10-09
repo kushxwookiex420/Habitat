@@ -5,7 +5,8 @@ export function buildCapabilityStatus({
   androidStatus = "UNVERIFIED",
   memoryProbePassed = false,
   taskRepositoryConfigured = false,
-  taskRepositoryReady = false
+  taskRepositoryReady = false,
+  contentJobRepositoryReady = false
 } = {}) {
   const d1CredentialsPresent = taskRepositoryConfigured || Boolean(
     String(env.CLOUDFLARE_ACCOUNT_ID || "").trim() &&
@@ -44,9 +45,12 @@ export function buildCapabilityStatus({
             : "D1 repository is wired, but durable task storage is not active. Configure account ID, database ID, and a least-privilege D1 API token." 
       },
       contentJobPersistence: {
-        status: "memory_only",
-        durable: false,
-        detail: "Content pipeline jobs, TikTok OAuth state, and OAuth tokens are separate in-memory stores and are not made durable by task-route D1 integration."
+        status: contentJobRepositoryReady ? "ready" : "blocked",
+        adapter: contentJobRepositoryReady ? "cloudflare-d1" : "in-memory",
+        durable: contentJobRepositoryReady,
+        detail: contentJobRepositoryReady
+          ? "Content-job schema initialized and persisted jobs restored from D1 at startup. Render video bytes and TikTok OAuth state/tokens remain separate and are not durable."
+          : "Durable content-job storage is not ready; verify the D1 repository initialization and credentials."
       },
       androidDevice: androidStatus === "PASS"
         ? { status: "verified_recent_heartbeat", detail: "A recent Android heartbeat is registered." }
