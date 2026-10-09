@@ -1,12 +1,8 @@
 name: Artifact 001 execution
 
+# Deliberately manual: generating a full video must never be triggered by ordinary commits.
+# This avoids deployments interrupting the render job and avoids duplicate expensive missions.
 on:
-  push:
-    branches: [main]
-    paths:
-      - '.github/workflows/artifact_001.yml'
-      - 'content-engine.mjs'
-      - 'artifacts/**'
   workflow_dispatch:
 
 jobs:
