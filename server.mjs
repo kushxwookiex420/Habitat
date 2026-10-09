@@ -1051,14 +1051,25 @@ async function runSystemCheck() {
     ? { status: worker.status === "available" ? "PASS" : "FAIL", detail: worker.name + " is registered and " + worker.status + "." }
     : { status: "FAIL", detail: "QA worker is not registered." };
 
-  const storagePassed = storageSelfTest();
-  // This probe only tests the process-local Map. It must never be presented
-  // as durable persistence: Render's free web service filesystem is ephemeral.
-  checks.storage = {
-    status: storagePassed ? "UNKNOWN" : "FAIL",
-    detail: storagePassed
+  let storagePassed = false;
+  let storageDetail = "";
+  if (taskRepository && taskStorageReady) {
+    try {
+      await taskRepository.healthCheck();
+      storagePassed = true;
+      storageDetail = "Configured Cloudflare D1 task repository health check passed.";
+    } catch {
+      storageDetail = "Configured Cloudflare D1 task repository health check failed.";
+    }
+  } else {
+    storagePassed = storageSelfTest();
+    storageDetail = storagePassed
       ? "In-process memory probe passed, but durable task persistence is not configured; records may be lost on restart."
-      : "In-process task storage probe failed."
+      : "In-process task storage probe failed.";
+  }
+  checks.storage = {
+    status: taskRepository && taskStorageReady ? (storagePassed ? "PASS" : "FAIL") : (storagePassed ? "UNKNOWN" : "FAIL"),
+    detail: storageDetail
   };
 
   const task = {
@@ -1076,10 +1087,20 @@ async function runSystemCheck() {
     error: null
   };
 
-  const taskWasCreated = taskStore.set(task.id, task);
+  taskStore.set(task.id, task);
+  let taskWasCreated = taskStore.has(task.id);
+  if (taskWasCreated && taskRepository && taskStorageReady) {
+    try {
+      await taskRepository.create(task);
+    } catch {
+      taskWasCreated = false;
+    }
+  }
   checks.taskCreation = {
-    status: taskStore.has(task.id) ? "PASS" : "FAIL",
-    detail: "Real task record created: " + task.id
+    status: taskWasCreated ? "PASS" : "FAIL",
+    detail: taskWasCreated
+      ? "Task record created" + (taskRepository && taskStorageReady ? " and persisted to D1: " : ": ") + task.id
+      : "Task record could not be persisted: " + task.id
   };
 
   try {
@@ -1161,8 +1182,14 @@ async function runSystemCheck() {
     task.status = "verified";
     task.completedAt = nowIso();
     task.verifiedAt = nowIso();
+    task.updatedAt = nowIso();
+    if (taskRepository && taskStorageReady) await persistTask(task);
   } catch (error) {
     task.status = "failed";
+    task.updatedAt = nowIso();
+    if (taskRepository && taskStorageReady) {
+      try { await persistTask(task); } catch {}
+    }
     task.error = String(error?.message || error);
     if (!checks.modelWorker) {
       checks.modelWorker = { status: "FAIL", detail: task.error };
