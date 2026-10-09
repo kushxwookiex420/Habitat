@@ -1,7 +1,65 @@
 const API_BASE = "https://open.tiktokapis.com";
+let tokenVault = null;
+let refreshInFlight = null;
 
 function tokenFromEnv() {
   return String(process.env.TIKTOK_ACCESS_TOKEN || "").trim();
+}
+
+async function ensureAccessToken() {
+  const token = tokenFromEnv();
+  const expiresAt = Number(process.env.TIKTOK_ACCESS_TOKEN_EXPIRES_AT || 0);
+  if (token && (!expiresAt || Date.now() < expiresAt - 60_000)) return token;
+  const refreshToken = String(process.env.TIKTOK_REFRESH_TOKEN || "").trim();
+  if (!refreshToken) {
+    if (token && expiresAt && Date.now() >= expiresAt) throw new Error("TikTok access token expired and no refresh token is available; reconnect TikTok.");
+    if (token) return token;
+    throw new Error("TIKTOK_ACCESS_TOKEN is not configured");
+  }
+  const refreshExpiresAt = Number(process.env.TIKTOK_REFRESH_TOKEN_EXPIRES_AT || 0);
+  if (refreshExpiresAt && Date.now() >= refreshExpiresAt) throw new Error("TikTok refresh token expired; reconnect TikTok.");
+  if (!tokenVault) throw new Error("Encrypted TikTok token vault is unavailable; refusing to refresh credentials without durable storage.");
+  if (refreshInFlight) return refreshInFlight;
+
+  refreshInFlight = (async () => {
+    const clientKey = String(process.env.TIKTOK_CLIENT_KEY || "").trim();
+    const clientSecret = String(process.env.TIKTOK_CLIENT_SECRET || "").trim();
+    if (!clientKey || !clientSecret) throw new Error("TikTok client credentials are not configured for token refresh.");
+    const response = await fetch(API_BASE + "/v2/oauth/token/", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        client_key: clientKey,
+        client_secret: clientSecret,
+        grant_type: "refresh_token",
+        refresh_token: refreshToken
+      })
+    });
+    let payload = {};
+    try { payload = await response.json(); } catch {}
+    if (!response.ok || !payload?.access_token) {
+      throw new Error("TikTok access-token refresh failed with HTTP " + response.status + "; reconnect TikTok if the refresh token was revoked.");
+    }
+    const now = Date.now();
+    const bundle = {
+      access_token: String(payload.access_token),
+      refresh_token: payload.refresh_token ? String(payload.refresh_token) : refreshToken,
+      access_token_expires_at: payload.expires_in ? String(now + Number(payload.expires_in) * 1000) : null,
+      refresh_token_expires_at: payload.refresh_expires_in ? String(now + Number(payload.refresh_expires_in) * 1000) : String(refreshExpiresAt || ""),
+      open_id: payload.open_id ? String(payload.open_id) : null,
+      scope: payload.scope ? String(payload.scope) : null,
+      token_type: payload.token_type ? String(payload.token_type) : null
+    };
+    await tokenVault.set("tiktok_tokens", bundle);
+    process.env.TIKTOK_ACCESS_TOKEN = bundle.access_token;
+    process.env.TIKTOK_REFRESH_TOKEN = bundle.refresh_token;
+    if (bundle.access_token_expires_at) process.env.TIKTOK_ACCESS_TOKEN_EXPIRES_AT = bundle.access_token_expires_at;
+    if (bundle.refresh_token_expires_at) process.env.TIKTOK_REFRESH_TOKEN_EXPIRES_AT = bundle.refresh_token_expires_at;
+    return bundle.access_token;
+  })();
+
+  try { return await refreshInFlight; }
+  finally { refreshInFlight = null; }
 }
 
 export function buildTikTokPublisherStatus({ tokenPresent = false, mode = "direct", creatorPreflightPassed = false } = {}) {
@@ -34,8 +92,7 @@ export function tiktokConfig() {
 }
 
 async function tiktokJson(path, body) {
-  const token = tokenFromEnv();
-  if (!token) throw new Error("TIKTOK_ACCESS_TOKEN is not configured");
+  const token = await ensureAccessToken();
   const response = await fetch(API_BASE + path, {
     method: "POST",
     headers: {
@@ -159,7 +216,8 @@ export async function publishTikTokDirect({ artifactPath, bytes, durationSeconds
   };
 }
 
-export function registerTikTokPublisher(app, getJob) {
+export function registerTikTokPublisher(app, getJob, secretVault = null) {
+  tokenVault = secretVault;
   app.post("/content/publisher/creator-info", async (req, res) => {
     try {
       const payload = await queryCreatorInfo();
