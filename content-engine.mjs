@@ -500,7 +500,7 @@ export function registerContentEngine(app, deps) {
       const inputs = [];
       const filters = [];
       sceneInputs.forEach((s, i) => {
-        inputs.push("-loop","1","-t",String(s.dur),"-i",imagePaths[i]);
+        inputs.push("-f","image2","-loop","1","-framerate","10","-t",String(s.dur),"-i",imagePaths[i]);
         const title = esc(s.title);
         const sub = esc(s.sub);
         filters.push(
