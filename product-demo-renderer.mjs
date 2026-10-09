@@ -24,6 +24,8 @@ const outputs = new Map();
 const MAX_CLIPS = 4;
 const MAX_BYTES_PER_CLIP = 35 * 1024 * 1024;
 const MAX_VIDEO_SECONDS = 30;
+const REQUIRED_PRODUCT_ACTIONS = new Set(["vacuuming", "blowing", "attachments-in-use"]);
+const MIN_DISTINCT_PRODUCT_ACTIONS = 2;
 
 function isPrivateIp(ip) {
   if (net.isIPv4(ip)) {
@@ -93,7 +95,7 @@ export function registerProductDemoRenderer(app) {
       acceptsOnlyDirectHttpsMedia:true, requiresExplicitReusePermission:true,
       maxClips:MAX_CLIPS, maxBytesPerClip:MAX_BYTES_PER_CLIP,
       outputPersistence:"temporary instance storage; durable artifact storage is not configured",
-      note:"Every source requires permissionConfirmed=true. Final output must pass machine Visual QA and still requires user approval to publish."
+      note:"Every source requires permissionConfirmed=true and an action label. At least two distinct product-in-action types are mandatory. Final output must pass machine Visual QA and still requires user approval to publish.", requiredProductActions:[...REQUIRED_PRODUCT_ACTIONS], minimumDistinctProductActions:MIN_DISTINCT_PRODUCT_ACTIONS
     });
   });
 
@@ -105,6 +107,10 @@ export function registerProductDemoRenderer(app) {
     if (!productName) return sendError(res,400,"productName is required.");
     if (!clips.length || clips.length > MAX_CLIPS) return sendError(res,400,"Supply 1 to 4 direct video clips.");
     if (clips.some(c => c?.permissionConfirmed !== true)) return sendError(res,403,"Every source must have confirmed commercial reuse permission.");
+    const actionTypes = clips.map(c => safeText(c?.action,40).toLowerCase());
+    if (actionTypes.some(action => !REQUIRED_PRODUCT_ACTIONS.has(action))) return sendError(res,400,"Every clip must be labeled with action: vacuuming, blowing, or attachments-in-use. Still images and generic b-roll are not accepted.");
+    const distinctActions = new Set(actionTypes);
+    if (distinctActions.size < MIN_DISTINCT_PRODUCT_ACTIONS) return sendError(res,422,"Product-demo QA blocked: footage must show at least two distinct real product actions. Repeated footage or a slideshow is not enough.");
     if (voiceover.length < 40) return sendError(res,400,"Provide a fact-checked voiceover of at least 40 characters.");
     let dir;
     try {
@@ -116,7 +122,7 @@ export function registerProductDemoRenderer(app) {
         if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || end <= start || end-start > MAX_VIDEO_SECONDS) {
           throw new Error("Each clip needs valid start/end times and may be at most 30 seconds.");
         }
-        sources.push({url:url.toString(),start,end});
+        sources.push({url:url.toString(),start,end,action:safeText(clip?.action,40).toLowerCase(),sourceTitle:safeText(clip?.sourceTitle,160),sourceUrl:safeText(clip?.sourceUrl || clip?.url,1000)});
       }
       dir = await fs.mkdtemp(path.join(os.tmpdir(),"habitat-product-demo-"));
       const sourcePaths = [];
@@ -143,7 +149,7 @@ export function registerProductDemoRenderer(app) {
         const file = path.join(dir,"source-"+i+".mp4");
         await fs.writeFile(file,Buffer.concat(chunks));
         await execFileAsync(ffprobePath,["-v","error","-select_streams","v:0","-show_entries","stream=codec_type","-of","csv=p=0",file],{timeout:15000});
-        sourcePaths.push({path:file,start:source.start,end:source.end});
+        sourcePaths.push({path:file,start:source.start,end:source.end,action:source.action,sourceTitle:source.sourceTitle,sourceUrl:source.sourceUrl});
       }
 
       // Prepare wrapped overlay files before constructing the FFmpeg filter graph.
@@ -193,7 +199,7 @@ export function registerProductDemoRenderer(app) {
       if(!stat.size) throw new Error("FFmpeg produced an empty output.");
       const qa=await runVisualQA({
         artifactPath:outputPath,
-        renderPlan:{format:"9:16",scenes:sourcePaths.map((s,i)=>({start:sourcePaths.slice(0,i).reduce((n,x)=>n+x.end-x.start,0),end:sourcePaths.slice(0,i+1).reduce((n,x)=>n+x.end-x.start,0),title:"Product demonstration "+(i+1)})),onScreenText:[{text:wrapOverlayText(productName,22),fontSize:52,bold:true},{text:wrapOverlayText(callToAction,40),fontSize:34,bold:false}]},
+        renderPlan:{format:"9:16",scenes:sourcePaths.map((s,i)=>({start:sourcePaths.slice(0,i).reduce((n,x)=>n+x.end-x.start,0),end:sourcePaths.slice(0,i+1).reduce((n,x)=>n+x.end-x.start,0),title:({vacuuming:"Vacuum shown collecting debris",blowing:"Blower shown moving dust","attachments-in-use":"Attachments shown in use"})[s.action] || "Product demonstration "+(i+1)})),onScreenText:[{text:wrapOverlayText(productName,22),fontSize:52,bold:true},{text:wrapOverlayText(callToAction,40),fontSize:34,bold:false}]},
         expectedSceneCount:sourcePaths.length,requireAudio:true
       });
       const probe=await execFileAsync(ffprobePath,["-v","error","-show_entries","format=duration,size:stream=codec_type,width,height","-of","json",outputPath]);
@@ -202,12 +208,14 @@ export function registerProductDemoRenderer(app) {
       const a=(meta.streams||[]).find(s=>s.codec_type==="audio");
       const durationSeconds=Number(meta.format?.duration||0);
       const verified=qa.status==="VISUAL_PASS"&&Number(v.width)===1080&&Number(v.height)===1920&&Boolean(a)&&durationSeconds>=Math.max(1,duration-0.2);
-      outputs.set(id,{outputPath,dir,productName,createdAt:new Date().toISOString(),verified,qa,durationSeconds,bytes:stat.size});
+      outputs.set(id,{outputPath,dir,productName,createdAt:new Date().toISOString(),verified,qa,durationSeconds,bytes:stat.size,productActionCoverage:[...distinctActions],sourceManifest:sourcePaths.map(s=>({action:s.action,sourceTitle:s.sourceTitle,sourceUrl:s.sourceUrl,permissionConfirmed:true,startSeconds:s.start,endSeconds:s.end}))});
       return res.status(verified?200:422).json({
         ok:verified,id,productName,status:verified?"verified":"blocked",verified,approvalRequired:true,
         artifactUrl:"/product-demo/render/"+id+"/artifact",
         artifact:{type:"mp4",durationSeconds,width:Number(v.width),height:Number(v.height),bytes:stat.size},
         visualQA:qa,
+        productActionCoverage:[...distinctActions],
+        sourceManifest:sourcePaths.map(s=>({action:s.action,sourceTitle:s.sourceTitle,sourceUrl:s.sourceUrl,permissionConfirmed:true,startSeconds:s.start,endSeconds:s.end})),
         publishStatus:"not_published",
         note:verified?"Rendered and machine-checked. Human approval is still required before publishing.":"QA blocked this output; resolve reported issues before approval."
       });
