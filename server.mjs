@@ -50,11 +50,18 @@ function getApiKey() {
   return rawApiKey ? String(rawApiKey).trim().replace(/^["']|["']$/g, "") : "";
 }
 function hasAnyAiProviderKey() {
+  const cloudflareReady =
+    Boolean(String(process.env.CLOUDFLARE_API_TOKEN || "").trim()) &&
+    Boolean(String(process.env.CLOUDFLARE_ACCOUNT_ID || "").trim());
+  const cerebrasReady =
+    Boolean(String(process.env.CEREBRAS_API_KEY || "").trim()) &&
+    String(process.env.HABITAT_ALLOW_PAID_PROVIDERS || "").toLowerCase() === "true";
   return Boolean(
     getApiKey() ||
     String(process.env.GROQ_API_KEY || "").trim() ||
     String(process.env.GEMINI_API_KEY || "").trim() ||
-    String(process.env.CEREBRAS_API_KEY || "").trim()
+    cloudflareReady ||
+    cerebrasReady
   );
 }
 const apiKey = getApiKey();
@@ -67,7 +74,7 @@ const providerTimeoutMs = 30000;
 
 if (!hasAnyAiProviderKey()) {
   console.warn(
-    "WARNING: No AI provider key is configured. Set GEMINI_API_KEY, GROQ_API_KEY, CEREBRAS_API_KEY, or OPENROUTER_API_KEY."
+    "WARNING: No AI provider is configured. Set CLOUDFLARE_API_TOKEN + CLOUDFLARE_ACCOUNT_ID, GEMINI_API_KEY, GROQ_API_KEY, OPENROUTER_API_KEY, or explicitly enable a paid provider."
   );
 }
 
@@ -521,7 +528,7 @@ app.get("/device/status", (req, res) => {
 app.get("/health", (req, res) => {
   res.json({
     habitat: "online",
-    brain: (getApiKey() || process.env.GROQ_API_KEY || process.env.GEMINI_API_KEY || process.env.CEREBRAS_API_KEY) ? "ready" : "missing_api_key",
+    brain: hasAnyAiProviderKey() ? "ready" : "missing_api_key",
     backend: "ready",
     provider: "multi-provider",
     model,
@@ -995,7 +1002,7 @@ async function runSystemCheck() {
   checks.brain = {
     status: providerConfigured ? "PASS" : "FAIL",
     detail: providerConfigured
-      ? "At least one AI provider is configured (Groq, Gemini, or OpenRouter)."
+      ? "At least one AI provider is configured (Cloudflare Workers AI, Groq, Gemini, OpenRouter, or explicitly enabled Cerebras)."
       : "No AI provider key is configured."
   };
 
