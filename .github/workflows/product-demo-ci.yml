@@ -13,7 +13,7 @@ on:
       - "package.json"
       - ".github/workflows/product-demo-ci.yml"
   push:
-    branches: ["fix/product-demo-action-footage-gate"]
+    branches: ["fix/product-demo-action-footage-gate", "feat/product-demo-scene-polish"]
     paths:
       - "product-demo-renderer.mjs"
       - "product-demo-research.mjs"
