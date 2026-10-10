@@ -1127,7 +1127,7 @@ export function registerContentEngine(app, deps) {
       const intervalMinutes = Math.max(60, Number(process.env.HABITAT_AUTONOMOUS_INTERVAL_MINUTES || 60));
       const intervalMs = intervalMinutes * 60 * 1000;
       const windowStart = new Date(Math.floor(Date.now() / intervalMs) * intervalMs).toISOString();
-      const scopeKey = "autonomous:" + project + ":" + platform + ":" + windowStart;
+      const scopeKey = "autonomous:" + project + ":" + platform + ":lease-v2:" + windowStart;
       const leaseToken = crypto.randomUUID();
       try {
         scheduledLease = await leaseRepository.acquire({
