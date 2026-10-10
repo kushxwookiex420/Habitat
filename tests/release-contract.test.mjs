@@ -219,6 +219,7 @@ test("video renderer derives narration and mobile-safe scene overlays from the g
   assert.ok(renderer.includes("used_titles=set()"));
   assert.ok(renderer.includes("used_subtitles=set()"));
   assert.ok(renderer.includes("FOLLOW VICE CITY FILES"));
+  assert.ok(renderer.includes("Verified updates only"));
   assert.ok(renderer.includes("candidate=shots[i] if i<len(shots) else fallback_subs[i]"));
   assert.ok(renderer.includes("line.strip().lower().startswith(subtitle.lower())"));
   assert.ok(!renderer.includes('" ".join(line.split()[:7])'), "subtitle text must not be cut from the beginning of narration");
