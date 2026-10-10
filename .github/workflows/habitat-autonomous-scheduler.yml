@@ -44,7 +44,7 @@ jobs:
           mission_platform="tiktok"
           if [[ "${GITHUB_EVENT_NAME}" == "push" ]]; then
             # Isolate the one-shot verification lease from the normal hourly TikTok lease.
-            mission_platform="tiktok-verify"
+            mission_platform="tiktok-verify-${GITHUB_RUN_ID}"
           fi
           jq -n --arg project "ViceCityFiles" --arg platform "${mission_platform}" --arg format "9:16" --arg objective "Create the next best factual, source-checked Vice City Files short. Use a complete opening and closing, readable text, varied scenes, no unsupported claims, and stop before publishing for human approval." '{project:$project,platform:$platform,format:$format,objective:$objective}' > "${payload_file}"
           jq -e '.objective | type == "string" and length > 0' "${payload_file}" >/dev/null
