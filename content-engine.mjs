@@ -14,6 +14,124 @@ import { normalizeViceCityScript } from "./vice-city-script-fallback.mjs";
 import { DEJAVU_REGULAR, DEJAVU_BOLD } from "./font-paths.mjs";
 import { publishTikTokDirect, registerTikTokPublisher, tiktokConfig } from "./tiktok-publisher.mjs";
 
+
+
+/**
+ * Fetch official, shareable Rockstar character-video clips using HTTP range requests.
+ * This avoids downloading the full archive or holding a large ZIP in memory.
+ * Returns local MP4 paths; null/empty means the renderer may use its still-image fallback.
+ */
+async function fetchOfficialViceCityClips(outDir, fs, path) {
+  const archiveUrl = String(process.env.HABITAT_VICE_CITY_FOOTAGE_ZIP_URL ||
+    "https://media-rockstargames-com.akamaized.net/VI/downloads/videos/GTAVI_Videos.zip").trim();
+  const clipDir = path.join(outDir, "official-video-clips");
+  await fs.mkdir(clipDir, { recursive:true });
+  const existing = (await fs.readdir(clipDir)).filter(name => /\.(mp4|mov|m4v|webm)$/i.test(name)).sort();
+  const cached = [];
+  for (const name of existing) {
+    const file = path.join(clipDir, name);
+    try { if ((await fs.stat(file)).size > 10000) cached.push(file); } catch {}
+  }
+  if (cached.length >= 6) return cached.slice(0, 6);
+
+  const getRange = async (start, end) => {
+    const response = await fetch(archiveUrl, {
+      headers:{ "User-Agent":"Mozilla/5.0 HabitatAx/1.0", "Range":`bytes=${start}-${end}`, "Accept":"application/zip,*/*;q=0.8" },
+      signal:AbortSignal.timeout(30000)
+    });
+    if (response.status !== 206) throw new Error("official_video_archive_range_not_supported_http_" + response.status);
+    const range = String(response.headers.get("content-range") || "");
+    if (!range.startsWith(`bytes ${start}-${end}/`)) throw new Error("official_video_archive_invalid_content_range");
+    return { response, bytes:Buffer.from(await response.arrayBuffer()) };
+  };
+
+  const sizeProbe = await fetch(archiveUrl, {
+    method:"HEAD", headers:{ "User-Agent":"Mozilla/5.0 HabitatAx/1.0" },
+    signal:AbortSignal.timeout(15000)
+  });
+  let archiveSize = Number(sizeProbe.headers.get("content-length") || 0);
+  if (!archiveSize) {
+    const first = await getRange(0, 0);
+    const match = String(first.response.headers.get("content-range") || "").match(/\/(\d+)$/);
+    archiveSize = Number(match?.[1] || 0);
+  }
+  if (!Number.isSafeInteger(archiveSize) || archiveSize < 1000) throw new Error("official_video_archive_size_unavailable");
+
+  const tailStart = Math.max(0, archiveSize - 65557);
+  const tailResult = await getRange(tailStart, archiveSize - 1);
+  const tail = tailResult.bytes;
+  const eocdSignature = Buffer.from([0x50,0x4b,0x05,0x06]);
+  const eocd = tail.lastIndexOf(eocdSignature);
+  if (eocd < 0 || eocd + 22 > tail.length) throw new Error("official_video_archive_directory_not_found");
+  const entryCount = tail.readUInt16LE(eocd + 10);
+  const directorySize = tail.readUInt32LE(eocd + 12);
+  const directoryOffset = tail.readUInt32LE(eocd + 16);
+  if (entryCount === 0xffff || directorySize === 0xffffffff || directoryOffset === 0xffffffff)
+    throw new Error("official_video_archive_zip64_not_supported");
+  if (directorySize < 1 || directorySize > 8 * 1024 * 1024) throw new Error("official_video_archive_directory_size_invalid");
+  const directoryResult = await getRange(directoryOffset, directoryOffset + directorySize - 1);
+  const directory = directoryResult.bytes;
+  const entries = [];
+  let cursor = 0;
+  while (cursor + 46 <= directory.length && entries.length < entryCount) {
+    if (directory.readUInt32LE(cursor) !== 0x02014b50) throw new Error("official_video_archive_directory_corrupt");
+    const flags = directory.readUInt16LE(cursor + 8);
+    const method = directory.readUInt16LE(cursor + 10);
+    const compressedSize = directory.readUInt32LE(cursor + 20);
+    const uncompressedSize = directory.readUInt32LE(cursor + 24);
+    const nameLength = directory.readUInt16LE(cursor + 28);
+    const extraLength = directory.readUInt16LE(cursor + 30);
+    const commentLength = directory.readUInt16LE(cursor + 32);
+    const localOffset = directory.readUInt32LE(cursor + 42);
+    const name = directory.subarray(cursor + 46, cursor + 46 + nameLength).toString("utf8");
+    if (/\.(mp4|mov|m4v|webm)$/i.test(name) && !name.endsWith("/")) {
+      entries.push({ name, flags, method, compressedSize, uncompressedSize, localOffset });
+    }
+    cursor += 46 + nameLength + extraLength + commentLength;
+  }
+  const priority = ["jason","lucia","cal_","boobie","dre","real_dimez","raul","brian"];
+  entries.sort((a,b) => {
+    const rank = name => { const lower = name.toLowerCase(); const index = priority.findIndex(token => lower.includes(token)); return index < 0 ? 100 : index; };
+    return rank(a.name) - rank(b.name) || a.name.localeCompare(b.name);
+  });
+  const selected = entries.slice(0, 6);
+  if (selected.length < 4) throw new Error("official_video_archive_has_too_few_video_clips");
+
+  const { Readable } = await import("node:stream");
+  const { pipeline } = await import("node:stream/promises");
+  const { createWriteStream } = await import("node:fs");
+  const { createInflateRaw } = await import("node:zlib");
+  const paths = [];
+  for (let index = 0; index < selected.length; index++) {
+    const entry = selected[index];
+    if (entry.flags & 1) throw new Error("official_video_archive_encrypted_entry");
+    if (![0,8].includes(entry.method)) throw new Error("official_video_archive_compression_unsupported");
+    if (entry.compressedSize < 1 || entry.compressedSize > 180 * 1024 * 1024 ||
+        entry.uncompressedSize < 10000 || entry.uncompressedSize > 260 * 1024 * 1024)
+      throw new Error("official_video_clip_size_out_of_bounds");
+    const local = await getRange(entry.localOffset, entry.localOffset + 29);
+    if (local.bytes.readUInt32LE(0) !== 0x04034b50) throw new Error("official_video_archive_local_header_invalid");
+    const localNameLength = local.bytes.readUInt16LE(26);
+    const localExtraLength = local.bytes.readUInt16LE(28);
+    const dataStart = entry.localOffset + 30 + localNameLength + localExtraLength;
+    const dataEnd = dataStart + entry.compressedSize - 1;
+    const data = await fetch(archiveUrl, {
+      headers:{ "User-Agent":"Mozilla/5.0 HabitatAx/1.0", "Range":`bytes=${dataStart}-${dataEnd}`, "Accept":"application/zip,*/*;q=0.8" },
+      signal:AbortSignal.timeout(120000)
+    });
+    if (data.status !== 206 || !data.body) throw new Error("official_video_clip_range_fetch_failed_http_" + data.status);
+    const filename = path.basename(entry.name).replace(/[^a-zA-Z0-9._-]/g, "_");
+    const target = path.join(clipDir, String(index + 1).padStart(2,"0") + "-" + filename);
+    const source = Readable.fromWeb(data.body);
+    if (entry.method === 8) await pipeline(source, createInflateRaw(), createWriteStream(target));
+    else await pipeline(source, createWriteStream(target));
+    const stat = await fs.stat(target);
+    if (stat.size !== entry.uncompressedSize) throw new Error("official_video_clip_size_mismatch");
+    paths.push(target);
+  }
+  return paths;
+}
+
 function cryptoRandomState() {
   return crypto.randomBytes(24).toString("hex");
 }
@@ -526,21 +644,30 @@ export function registerContentEngine(app, deps) {
         "https://www.rockstargames.com/VI/_next/static/media/Ambrosia_06.0j9c7-8nfb_xf.jpg?akim=1&imdensity=1&imwidth=540"
       ];
       const imagePaths = [];
-      // Download one asset at a time: parallel full-resolution buffers caused
-      // memory spikes on the small instance and could kill the render worker.
-      for (const [i, imageUrl] of officialImageUrls.entries()) {
-        const imageResponse = await fetch(imageUrl, {
-          headers: { "User-Agent": "Mozilla/5.0 HabitatAx/1.0", "Accept": "image/jpeg,*/*;q=0.1" },
-          signal: AbortSignal.timeout(15000)
-        });
-        const imageType = String(imageResponse.headers.get("content-type") || "");
-        if (!imageResponse.ok || !imageType.startsWith("image/")) throw new Error("official_visual_asset_unavailable_" + (i + 1) + "_http_" + imageResponse.status);
-        const imageBytes = Buffer.from(await imageResponse.arrayBuffer());
-        if (imageBytes.length < 10000) throw new Error("official_visual_asset_too_small_" + (i + 1));
-        const imageExt = imageType.includes("webp") ? ".webp" : imageType.includes("avif") ? ".avif" : imageType.includes("png") ? ".png" : ".jpg";
-        const imagePath = path.join(outDir, "official-scene-" + String(i + 1).padStart(2, "0") + imageExt);
-        await fs.writeFile(imagePath, imageBytes);
-        imagePaths.push(imagePath);
+      let officialVideoPaths = [];
+      try {
+        officialVideoPaths = await fetchOfficialViceCityClips(outDir, fs, path);
+        if (officialVideoPaths.length >= 4) console.log("VICE_CITY_VIDEO_FOOTAGE_READY", job.id, JSON.stringify({ clips:officialVideoPaths.length, source:"Rockstar official shareable video downloads" }));
+      } catch (footageError) {
+        console.warn("VICE_CITY_VIDEO_FOOTAGE_UNAVAILABLE", job.id, String(footageError?.message || footageError).slice(0,240));
+      }
+      // Keep the existing official stills as a safe fallback if the official video
+      // archive does not support range requests in this runtime.
+      if (officialVideoPaths.length < 4) {
+        for (const [i, imageUrl] of officialImageUrls.entries()) {
+          const imageResponse = await fetch(imageUrl, {
+            headers: { "User-Agent": "Mozilla/5.0 HabitatAx/1.0", "Accept": "image/jpeg,*/*;q=0.1" },
+            signal: AbortSignal.timeout(15000)
+          });
+          const imageType = String(imageResponse.headers.get("content-type") || "");
+          if (!imageResponse.ok || !imageType.startsWith("image/")) throw new Error("official_visual_asset_unavailable_" + (i + 1) + "_http_" + imageResponse.status);
+          const imageBytes = Buffer.from(await imageResponse.arrayBuffer());
+          if (imageBytes.length < 10000) throw new Error("official_visual_asset_too_small_" + (i + 1));
+          const imageExt = imageType.includes("webp") ? ".webp" : imageType.includes("avif") ? ".avif" : imageType.includes("png") ? ".png" : ".jpg";
+          const imagePath = path.join(outDir, "official-scene-" + String(i + 1).padStart(2, "0") + imageExt);
+          await fs.writeFile(imagePath, imageBytes);
+          imagePaths.push(imagePath);
+        }
       }
 
       // Produce real spoken narration before encoding. Use short Google Translate TTS
@@ -612,24 +739,60 @@ export function registerContentEngine(app, deps) {
         sceneFramePaths.push(framePath);
       }
 
-      sceneInputs.forEach((s, i) => {
-        inputs.push("-loop","1","-framerate","10","-t",String(s.dur),"-i",sceneFramePaths[i]);
-        filters.push(
-          "["+i+":v]scale=540:960:force_original_aspect_ratio=increase,crop=540:960,fps=10,trim=duration="+s.dur+",setpts=PTS-STARTPTS,drawbox=x=0:y=0:w=iw:h=ih:color=black@0.12:t=fill,drawbox=x=20+20*t:y=205:w=8:h=550:color=white@0.16:t=fill,setsar=1[v"+i+"]"
-        );
-      });
-      filters.push(sceneInputs.map((_,i)=>"[v"+i+"]").join("")+"concat=n="+sceneInputs.length+":v=1:a=0,scale=1080:1920:flags=fast_bilinear,format=yuv420p[v]");
-
-      await execFileAsync(ffmpegPath, [
-        "-hide_banner","-loglevel","error","-y","-filter_complex_threads","1",
-        ...inputs,
-        "-i",voicePath,
-        "-filter_complex",filters.join(";"),
-        "-map","[v]","-map","6:a:0",
-        "-c:v","libx264","-preset","ultrafast","-crf","32","-pix_fmt","yuv420p","-threads","1",
-        "-af","apad,atrim=duration=45","-c:a","aac","-b:a","128k","-ar","48000","-t","45","-shortest",
-        "-movflags","+faststart",outputPath
-      ],{timeout:120000});
+      let visualMode = "official-still-image-fallback";
+      if (officialVideoPaths.length >= 4) {
+        // Render one real moving-footage scene at a time to keep peak memory low.
+        visualMode = "official-game-footage";
+        const segmentPaths = [];
+        for (const [i, scene] of sceneInputs.entries()) {
+          const overlaySvg = buildSceneOverlaySvg({ title:scene.title, subtitle:scene.sub, fontScale });
+          const overlayPath = path.join(outDir, "video-overlay-" + i + ".png");
+          await sharp(Buffer.from(overlaySvg)).png().toFile(overlayPath);
+          const segmentPath = path.join(outDir, "video-segment-" + i + ".mp4");
+          const sourcePath = officialVideoPaths[i % officialVideoPaths.length];
+          const segmentFilter = "[0:v]scale=540:960:force_original_aspect_ratio=increase,crop=540:960,fps=10,trim=duration=" + scene.dur + ",setpts=PTS-STARTPTS[bg];[1:v]format=rgba[ov];[bg][ov]overlay=0:0:shortest=1,format=yuv420p[v]";
+          await execFileAsync(ffmpegPath, [
+            "-hide_banner","-loglevel","error","-y","-stream_loop","-1","-i",sourcePath,
+            "-loop","1","-framerate","10","-t",String(scene.dur),"-i",overlayPath,
+            "-filter_complex_threads","1","-filter_complex",segmentFilter,"-map","[v]","-an",
+            "-c:v","libx264","-preset","ultrafast","-crf","30","-pix_fmt","yuv420p","-threads","1",
+            "-t",String(scene.dur),segmentPath
+          ],{timeout:90000});
+          segmentPaths.push(segmentPath);
+        }
+        const concatPath = path.join(outDir, "video-segments.txt");
+        await fs.writeFile(concatPath, segmentPaths.map(file => "file '" + file.replace(/'/g, "'\\''") + "'").join("\n") + "\n");
+        const silentPath = path.join(outDir, "official-footage-concat.mp4");
+        await execFileAsync(ffmpegPath, [
+          "-hide_banner","-loglevel","error","-y","-f","concat","-safe","0","-i",concatPath,
+          "-c","copy","-movflags","+faststart",silentPath
+        ],{timeout:60000});
+        await execFileAsync(ffmpegPath, [
+          "-hide_banner","-loglevel","error","-y","-i",silentPath,"-i",voicePath,
+          "-vf","scale=1080:1920:flags=fast_bilinear,format=yuv420p","-map","0:v:0","-map","1:a:0",
+          "-c:v","libx264","-preset","ultrafast","-crf","32","-threads","1",
+          "-af","apad,atrim=duration=45","-c:a","aac","-b:a","128k","-ar","48000","-t","45","-shortest",
+          "-movflags","+faststart",outputPath
+        ],{timeout:120000});
+      } else {
+        sceneInputs.forEach((s, i) => {
+          inputs.push("-loop","1","-framerate","10","-t",String(s.dur),"-i",sceneFramePaths[i]);
+          filters.push(
+            "["+i+":v]scale=540:960:force_original_aspect_ratio=increase,crop=540:960,fps=10,trim=duration="+s.dur+",setpts=PTS-STARTPTS,drawbox=x=0:y=0:w=iw:h=ih:color=black@0.12:t=fill,drawbox=x=20+20*t:y=205:w=8:h=550:color=white@0.16:t=fill,setsar=1[v"+i+"]"
+          );
+        });
+        filters.push(sceneInputs.map((_,i)=>"[v"+i+"]").join("")+"concat=n="+sceneInputs.length+":v=1:a=0,scale=1080:1920:flags=fast_bilinear,format=yuv420p[v]");
+        await execFileAsync(ffmpegPath, [
+          "-hide_banner","-loglevel","error","-y","-filter_complex_threads","1",
+          ...inputs,
+          "-i",voicePath,
+          "-filter_complex",filters.join(";"),
+          "-map","[v]","-map","6:a:0",
+          "-c:v","libx264","-preset","ultrafast","-crf","32","-pix_fmt","yuv420p","-threads","1",
+          "-af","apad,atrim=duration=45","-c:a","aac","-b:a","128k","-ar","48000","-t","45","-shortest",
+          "-movflags","+faststart",outputPath
+        ],{timeout:120000});
+      }
 
       const stat=await fs.stat(outputPath);
       if(!stat.size) throw new Error("ffmpeg produced an empty artifact");
@@ -650,7 +813,8 @@ export function registerContentEngine(app, deps) {
       const artifact={
         type:"mp4",status:"rendered",path:outputPath,bytes:stat.size,
         durationSeconds,width:1080,height:1920,renderedAt:nowIso(),
-        verified:false,renderer:"ffmpeg-scene-engine-v6-official-visuals-narrated",
+        verified:false,renderer:officialVideoPaths.length >= 4 ? "ffmpeg-scene-engine-v7-official-game-footage" : "ffmpeg-scene-engine-v6-official-stills",
+        visualMode:officialVideoPaths.length >= 4 ? "official-game-footage" : "official-still-image-fallback",
         audio:"google-translate-tts-narration",
         scenes:scenes.map(s=>({start:s.start,end:s.end,title:s.title}))
       };
