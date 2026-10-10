@@ -19,5 +19,5 @@ jobs:
     name: Create and QA one autonomous Vice City Files short
     uses: ./.github/workflows/artifact_001.yml
     with:
-      objective: "Create the next best factual, source-checked Vice City Files short. Use a complete opening and closing, readable text, varied scenes, no unsupported claims, and stop before publishing for human approval."
+      objective: "Create a fresh Vice City Files short about one distinct Rockstar-confirmed GTA VI detail. Choose a different angle, hook, and scene sequence rather than repeating the previous video. Keep every claim limited to verified official information; omit rumors and anything not established by the supplied research. Use six distinct scene beats, readable labels, natural 45-60 second narration, a complete opening and closing, and stop before publishing for human approval."
     secrets: inherit
