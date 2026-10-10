@@ -1,6 +1,8 @@
 import crypto from "node:crypto";
 import ffmpegPath from "ffmpeg-static";
 import ffprobeStatic from "ffprobe-static";
+import sharp from "sharp";
+import { buildSceneOverlaySvg } from "./scene-overlay.mjs";
 
 const ffprobePath = ffprobeStatic.path;
 import { runVisualQA } from "./visual-qa.mjs";
@@ -583,13 +585,30 @@ export function registerContentEngine(app, deps) {
       ];
       const inputs = [];
       const filters = [];
+      const overlayPaths = [];
+      for (const [i, scene] of sceneInputs.entries()) {
+        const overlayPath = path.join(outDir, "scene-overlay-" + i + ".png");
+        const overlaySvg = buildSceneOverlaySvg({
+          title: scene.title,
+          subtitle: scene.sub,
+          fontScale
+        });
+        await sharp(Buffer.from(overlaySvg)).png().toFile(overlayPath);
+        overlayPaths.push(overlayPath);
+      }
+
       sceneInputs.forEach((s, i) => {
-        inputs.push("-i",imagePaths[i]);
-        const title = esc(s.title);
-        const sub = esc(s.sub);
+        // ffmpeg-static is built without the drawtext filter on Render. Rasterize
+        // readable title/footer overlays with Sharp, then composite those PNGs.
+        inputs.push("-loop","1","-framerate","10","-t",String(s.dur),"-i",imagePaths[i]);
+        inputs.push("-loop","1","-framerate","10","-t",String(s.dur),"-i",overlayPaths[i]);
         filters.push(
-          "["+i+":v]scale=540:960:force_original_aspect_ratio=increase,crop=540:960,tpad=stop_mode=clone:stop_duration="+s.dur+",fps=10,trim=duration="+s.dur+",setpts=PTS-STARTPTS,drawbox=x=0:y=0:w=iw:h=ih:color=black@0.34:t=fill,drawbox=x=20+20*t:y=205:w=8:h=550:color=white@0.16:t=fill,drawtext=fontfile="+DEJAVU_BOLD+":text='"+title+"':fontcolor=white:fontsize="+Math.round(32*fontScale)+":x=(w-text_w)/2:y=280,drawtext=fontfile="+DEJAVU_REGULAR+":text='"+sub+"':fontcolor=white@0.88:fontsize="+Math.round(18*fontScale)+":x=(w-text_w)/2:y=345,drawtext=fontfile="+DEJAVU_REGULAR+":text='ROCKSTAR GAMES • FAN COMMENTARY':fontcolor=white@0.82:fontsize=13:x=(w-text_w)/2:y=858,setsar=1[v"+i+"]"
+          "["+(i*2)+":v]scale=540:960:force_original_aspect_ratio=increase,crop=540:960,fps=10,trim=duration="+s.dur+",setpts=PTS-STARTPTS,drawbox=x=0:y=0:w=iw:h=ih:color=black@0.34:t=fill,drawbox=x=20+20*t:y=205:w=8:h=550:color=white@0.16:t=fill[base"+i+"]"
         );
+        filters.push(
+          "["+(i*2+1)+":v]scale=540:960,format=rgba,fps=10,trim=duration="+s.dur+",setpts=PTS-STARTPTS[ov"+i+"]"
+        );
+        filters.push("[base"+i+"][ov"+i+"]overlay=0:0:shortest=1,setsar=1[v"+i+"]");
       });
       filters.push(sceneInputs.map((_,i)=>"[v"+i+"]").join("")+"concat=n="+sceneInputs.length+":v=1:a=0,scale=1080:1920:flags=fast_bilinear,format=yuv420p[v]");
 
@@ -598,7 +617,7 @@ export function registerContentEngine(app, deps) {
         ...inputs,
         "-i",voicePath,
         "-filter_complex",filters.join(";"),
-        "-map","[v]","-map","6:a:0",
+        "-map","[v]","-map","12:a:0",
         "-c:v","libx264","-preset","ultrafast","-crf","32","-pix_fmt","yuv420p",
         "-af","apad,atrim=duration=45","-c:a","aac","-b:a","128k","-ar","48000","-t","45","-shortest",
         "-movflags","+faststart",outputPath
