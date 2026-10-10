@@ -197,6 +197,8 @@ ffmpeg -hide_banner -loglevel error -y \
 
 test -s "$OUT"
 cp "$TMP/broll-attribution.txt" "${OUT}.attribution.txt"
+cp "$TMP/scene-plan.json" "vice-city-scene-plan.json"
+cp "$TMP/broll-credit-line.txt" "vice-city-broll-credit-line.txt"
 ffprobe -v error -show_entries format=duration,size:stream=codec_type,width,height,r_frame_rate -of json "$OUT" > "$TMP/probe.json"
 python - "$TMP/probe.json" "$OUT" "$BODY_DURATION" <<'PY'
 import json, os, sys
