@@ -24,7 +24,7 @@ const outputs = new Map();
 const MAX_CLIPS = 4;
 const MAX_BYTES_PER_CLIP = 35 * 1024 * 1024;
 const MAX_VIDEO_SECONDS = 30;
-const REQUIRED_PRODUCT_ACTIONS = new Set(["vacuuming", "blowing", "attachments-in-use"]);
+const REQUIRED_PRODUCT_ACTIONS = new Set(["vacuuming", "blowing", "attachments-in-use", "assembly", "installation", "operation", "feature-demo", "controls-in-use", "opening-closing", "storage-in-use", "cleaning-in-use", "pouring-dispensing", "kitchen-prep", "fit-adjustment", "material-detail", "size-comparison", "before-after", "product-handling", "accessory-use"]);
 const MIN_DISTINCT_PRODUCT_ACTIONS = 2;
 
 function isPrivateIp(ip) {
@@ -93,7 +93,7 @@ export function registerProductDemoRenderer(app) {
     return res.status(ready ? 200 : 503).json({
       ok:ready, ready, feature:"product-demo-renderer", checks,
       acceptsOnlyDirectHttpsMedia:true, requiresExplicitReusePermission:true,
-      maxClips:MAX_CLIPS, maxBytesPerClip:MAX_BYTES_PER_CLIP,
+      maxClips:MAX_CLIPS, maxBytesPerClip:MAX_BYTES_PER_CLIP, supportedActionLabels:["vacuuming","blowing","attachments-in-use","assembly","installation","operation","feature-demo","controls-in-use","opening-closing","storage-in-use","cleaning-in-use","pouring-dispensing","kitchen-prep","fit-adjustment","material-detail","size-comparison","before-after","product-handling","accessory-use"],
       outputPersistence:"temporary instance storage; durable artifact storage is not configured",
       note:"Every source requires permissionConfirmed=true and an action label. At least two distinct product-in-action types are mandatory. Final output must pass machine Visual QA and still requires user approval to publish.", requiredProductActions:[...REQUIRED_PRODUCT_ACTIONS], minimumDistinctProductActions:MIN_DISTINCT_PRODUCT_ACTIONS,
       humanActionReviewRequired:true, actionLabelsAreNotVisualProof:true
@@ -109,7 +109,7 @@ export function registerProductDemoRenderer(app) {
     if (!clips.length || clips.length > MAX_CLIPS) return sendError(res,400,"Supply 1 to 4 direct video clips.");
     if (clips.some(c => c?.permissionConfirmed !== true)) return sendError(res,403,"Every source must have confirmed commercial reuse permission.");
     const actionTypes = clips.map(c => safeText(c?.action,40).toLowerCase());
-    if (actionTypes.some(action => !REQUIRED_PRODUCT_ACTIONS.has(action))) return sendError(res,400,"Every clip must be labeled with action: vacuuming, blowing, or attachments-in-use. Still images and generic b-roll are not accepted.");
+    if (actionTypes.some(action => !REQUIRED_PRODUCT_ACTIONS.has(action))) return sendError(res,400,"Every clip must use a supported product-specific action label from render status. Still images and generic b-roll are not accepted.");
     const distinctActions = new Set(actionTypes);
     if (distinctActions.size < MIN_DISTINCT_PRODUCT_ACTIONS) return sendError(res,422,"Product-demo QA blocked: footage must show at least two distinct real product actions. Repeated footage or a slideshow is not enough.");
     if (voiceover.length < 40) return sendError(res,400,"Provide a fact-checked voiceover of at least 40 characters.");
@@ -163,11 +163,7 @@ export function registerProductDemoRenderer(app) {
       const inputArgs=[];
       const filters=[];
       const clipDuration=sourcePaths.reduce((sum,s)=>sum+s.end-s.start,0);
-      const actionLabels={
-        vacuuming:"VACUUM IN ACTION",
-        blowing:"BLOWER IN ACTION",
-        "attachments-in-use":"ATTACHMENT IN USE"
-      };
+      const actionLabels={vacuuming:"VACUUM IN ACTION",blowing:"BLOWER IN ACTION","attachments-in-use":"ATTACHMENT IN USE",assembly:"SETUP / ASSEMBLY",installation:"INSTALLATION IN USE",operation:"PRODUCT IN OPERATION","feature-demo":"FEATURE DEMONSTRATION","controls-in-use":"CONTROLS IN USE","opening-closing":"OPEN / CLOSE DEMO","storage-in-use":"STORAGE IN USE","cleaning-in-use":"CLEANING IN USE","pouring-dispensing":"POUR / DISPENSE DEMO","kitchen-prep":"KITCHEN PREP IN USE","fit-adjustment":"FIT / ADJUSTMENT DEMO","material-detail":"MATERIAL / DETAIL","size-comparison":"SIZE / SCALE DEMO","before-after":"BEFORE / AFTER","product-handling":"PRODUCT HANDLING","accessory-use":"ACCESSORY IN USE"};
       for (const [i,s] of sourcePaths.entries()) {
         inputArgs.push("-ss",String(s.start),"-t",String(s.end-s.start),"-i",s.path);
         const actionLabelPath=path.join(dir,"action-label-"+i+".txt");
