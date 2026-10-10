@@ -158,10 +158,15 @@ test("visual QA falls back to system FFmpeg when bundled npm binaries are absent
 });
 
 
-test("autonomous scheduler skips artifact download when an idempotent duplicate has no job id", async () => {
-  const workflow = await fs.readFile(new URL("../.github/workflows/habitat-autonomous-scheduler.yml", import.meta.url), "utf8");
-  assert.ok(workflow.includes("if: success() && steps.dispatch.outputs.job_id != ''"));
-  assert.equal((workflow.match(/if: success\(\) && steps\.dispatch\.outputs\.job_id != ''/g) || []).length, 2);
+test("autonomous scheduler delegates heavy video rendering to the external GitHub runner", async () => {
+  const scheduler = await fs.readFile(new URL("../.github/workflows/habitat-autonomous-scheduler.yml", import.meta.url), "utf8");
+  const renderer = await fs.readFile(new URL("../.github/workflows/artifact_001.yml", import.meta.url), "utf8");
+  assert.ok(scheduler.includes("uses: ./.github/workflows/artifact_001.yml"));
+  assert.ok(scheduler.includes('cron: "17 14 * * *"'));
+  assert.ok(!scheduler.includes("/content/autonomous-run"));
+  assert.ok(renderer.includes("workflow_call:"));
+  assert.ok(renderer.includes("Render real MP4 locally"));
+  assert.ok(renderer.includes("Run deterministic visual and audio QA"));
 });
 
 
