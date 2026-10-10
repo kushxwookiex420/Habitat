@@ -172,6 +172,8 @@ test("autonomous scheduler delegates each durable content stage instead of relyi
     assert.ok(workflow.includes("run_stage " + stage), "missing durable stage " + stage);
   }
   assert.ok(workflow.includes("D1 rehydrates the"));
+  assert.equal((workflow.match(/--fail-with-body --retry 6 --retry-all-errors/g) || []).length, 1);
+  assert.equal((workflow.match(/--fail-with-body --max-time/g) || []).length, 1);
   assert.ok(workflow.includes(".job.stages.edit.result.artifact.verified == true"));
   assert.ok(workflow.includes(".gate.status == \"READY_TO_PUBLISH\""));
   assert.ok(!workflow.includes('for attempt in $(seq 1 95); do'));
