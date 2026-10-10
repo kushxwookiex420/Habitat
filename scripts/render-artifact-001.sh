@@ -114,7 +114,9 @@ for i,line in enumerate(lines):
  if title.lower() in used_titles:
   title=f"SCENE {i+1}"
  used_titles.add(title.lower())
- candidate=shots[i] if i<len(shots) else " ".join(line.split()[:7])
+ candidate=shots[i] if i<len(shots) else fallback_subs[i]
+ # Never turn the first words of a narration sentence into a caption: that
+ # can create an unfinished-looking subtitle such as "the facts Rockstar has a".
  if str(candidate).strip().lower() in ("title card","end card") or str(candidate).strip().lower()==title.lower() or str(candidate).strip().lower() in used_subtitles:
   candidate=fallback_subs[i]
  subtitle=clean_label(candidate,34,fallback_subs[i])
