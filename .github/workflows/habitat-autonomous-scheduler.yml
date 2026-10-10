@@ -47,7 +47,8 @@ jobs:
   render:
     name: Create, render, and QA the daily review artifact
     needs: choose-daily-topic
-    uses: ./.github/workflows/artifact_001.yml
+    uses: kushxwookiex420/Habitat/.github/workflows/artifact_001.yml@main
     with:
       objective: ${{ needs.choose-daily-topic.outputs.objective }}
+      source_ref: main
     secrets: inherit
