@@ -1819,7 +1819,7 @@ const secretVault = secretVaultConfigured ? createD1SecretVault({
   apiToken: process.env.HABITAT_D1_API_TOKEN,
   encryptionKey: tokenEncryptionKey
 }) : null;
-const contentEngine = registerContentEngine(app, { nowIso, makeTaskId, taskStore, workerRegistry, brainChat, contentJobRepository, secretVault });
+const contentEngine = registerContentEngine(app, { nowIso, makeTaskId, taskStore, workerRegistry, brainChat, contentJobRepository, secretVault, getDispatchLeaseRepository: () => dispatchLeaseReady ? dispatchLeaseRepository : null });
 
 /*
  * AX DIRECT VERIFICATION ENDPOINT
