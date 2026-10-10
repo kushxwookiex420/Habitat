@@ -27,16 +27,38 @@ jobs:
         run: |
           set -e
           sudo apt-get update
-          sudo apt-get install -y ffmpeg fonts-dejavu
+          sudo apt-get install -y ffmpeg fonts-dejavu librsvg2-bin
 
-      - name: Restore packaged Vice City Files branding assets
+      - name: Restore or build Vice City Files branding assets
         run: |
+          set -euo pipefail
+          mkdir -p assets
           if [ -f assets/vice-city-files-assets.zip ]; then
-            mkdir -p assets
             unzip -o assets/vice-city-files-assets.zip -d assets
-          else
-            echo "Branding bundle is not in the repository yet; assembly will fail closed rather than omit the intro/outro."
           fi
+          # The repository's title-card source is versioned; do not let a missing
+          # optional media ZIP strand the whole render after the body is ready.
+          if [ ! -s assets/vice-city-files-intro.mp4 ] || [ ! -s assets/vice-city-files-outro.mp4 ]; then
+            rsvg-convert -o /tmp/vice-city-title-card.png artifacts/vice-city-6-title-card.svg
+            ffmpeg -hide_banner -loglevel error -y \
+              -loop 1 -framerate 30 -i /tmp/vice-city-title-card.png \
+              -f lavfi -i anullsrc=channel_layout=stereo:sample_rate=48000 \
+              -vf "drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:text='THE STORY BEHIND THE HYPE':fontcolor=white:fontsize=38:x=(w-text_w)/2:y=1260,format=yuv420p" \
+              -t 7 -map 0:v:0 -map 1:a:0 -c:v libx264 -preset ultrafast -crf 22 \
+              -c:a aac -b:a 96k -ar 48000 -ac 2 -shortest -movflags +faststart \
+              assets/vice-city-files-intro.mp4
+            ffmpeg -hide_banner -loglevel error -y \
+              -loop 1 -framerate 30 -i /tmp/vice-city-title-card.png \
+              -f lavfi -i anullsrc=channel_layout=stereo:sample_rate=48000 \
+              -vf "drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:text='FOLLOW FOR FACT-CHECKED GAMING UPDATES':fontcolor=white:fontsize=34:x=(w-text_w)/2:y=1260,format=yuv420p" \
+              -t 3.5 -map 0:v:0 -map 1:a:0 -c:v libx264 -preset ultrafast -crf 22 \
+              -c:a aac -b:a 96k -ar 48000 -ac 2 -shortest -movflags +faststart \
+              assets/vice-city-files-outro.mp4
+          fi
+          test -s assets/vice-city-files-intro.mp4
+          test -s assets/vice-city-files-outro.mp4
+          ffprobe -v error -select_streams v:0 -show_entries stream=width,height,r_frame_rate -of compact \
+            assets/vice-city-files-intro.mp4 assets/vice-city-files-outro.mp4 2>/dev/null || true
 
       - name: Validate renderer shell syntax
         run: bash -n scripts/render-artifact-001.sh
