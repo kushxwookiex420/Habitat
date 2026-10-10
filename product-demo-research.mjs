@@ -33,8 +33,18 @@ function absoluteResultUrl(raw) {
   try {
     const parsed = new URL(url, "https://duckduckgo.com");
     const redirect = parsed.searchParams.get("uddg") || parsed.searchParams.get("url");
-    if (redirect) url = decodeURIComponent(redirect);
-    else url = parsed.href;
+    const bingRedirect = parsed.hostname.endsWith("bing.com") && parsed.pathname.startsWith("/ck/a")
+      ? parsed.searchParams.get("u") : null;
+    if (redirect) {
+      url = decodeURIComponent(redirect);
+    } else if (bingRedirect) {
+      // Bing wraps real destinations in a base64url "u=a1..." parameter.
+      const encoded = bingRedirect.startsWith("a1") ? bingRedirect.slice(2) : bingRedirect;
+      try {
+        const decoded = Buffer.from(encoded, "base64url").toString("utf8");
+        url = /^https?:\/\//i.test(decoded) ? decoded : parsed.href;
+      } catch { url = parsed.href; }
+    } else url = parsed.href;
   } catch {}
   return /^https?:\/\//i.test(url) ? url : null;
 }
@@ -78,7 +88,7 @@ export function parseDuckDuckGo(html) {
   return results;
 }
 
-function parseBing(html) {
+export function parseBing(html) {
   const source = String(html || "");
   const results = [];
   const seen = new Set();
@@ -131,12 +141,29 @@ function hostOf(raw) {
   try { return new URL(raw).hostname.replace(/^www\./, ""); } catch { return ""; }
 }
 
+const RELEVANCE_STOP_WORDS = new Set([
+  "product", "products", "video", "videos", "official", "review", "demo", "demonstration",
+  "how", "use", "watch", "best", "new", "the", "and", "for", "with", "from", "pack",
+  "set", "your", "this", "that", "store", "shop", "online", "buy", "sale", "brand"
+]);
+
+export function isProductRelevant(productName, brand, model, row) {
+  const terms = (String(productName || "") + " " + String(brand || "") + " " + String(model || ""))
+    .toLowerCase().match(/[a-z0-9]{3,}/g) || [];
+  const productTerms = [...new Set(terms.filter(t => !RELEVANCE_STOP_WORDS.has(t)))];
+  const haystack = (String(row?.title || "") + " " + String(row?.snippet || "") + " " + String(row?.url || ""))
+    .toLowerCase();
+  const overlap = productTerms.filter(term => haystack.includes(term)).length;
+  const needed = productTerms.length >= 3 ? 2 : 1;
+  return productTerms.length > 0 && overlap >= needed;
+}
+
 export function registerProductDemoResearch(app) {
   app.get("/product-demo/status", (_req, res) => res.json({
     ok: true,
     feature: "product-demo-research",
     webSearch: true,
-    parserVersion: "1.2-ddg-lite-bing-fallback",
+    parserVersion: "1.3-bing-unwrapped-relevance-filter",
     automaticThirdPartyDownload: false,
     clipAssembly: "not configured by this research module",
     rightsPolicy: "Search results are leads only; verify commercial reuse permission before editing or publishing."
@@ -165,6 +192,7 @@ export function registerProductDemoResearch(app) {
       const candidates = [];
       const seen = new Set();
       const diagnostics = [];
+      let irrelevantResultCount = 0;
       for (let i = 0; i < settled.length; i++) {
         const result = settled[i];
         if (result.status !== "fulfilled") {
@@ -176,6 +204,12 @@ export function registerProductDemoResearch(app) {
           const key = row.url.toLowerCase();
           if (seen.has(key)) continue;
           seen.add(key);
+          // Search-engine pages and generic matches are not product evidence.
+          if (/^(?:www\.)?(?:bing\.com|duckduckgo\.com)$/i.test(hostOf(row.url)) ||
+              !isProductRelevant(productName, brand, model, row)) {
+            irrelevantResultCount++;
+            continue;
+          }
           const host = hostOf(row.url);
           const officialOrSupplier = /manufacturer|official|supplier|wholesale/i.test(row.title + " " + host) ||
             (supplierUrl && host && host === hostOf(supplierUrl));
@@ -201,6 +235,7 @@ export function registerProductDemoResearch(app) {
         diagnostics,
         candidates,
         candidateCount: candidates.length,
+        irrelevantResultCount,
         videoPageCandidateCount: candidates.filter(c => c.mediaTypeHint === "video-page-candidate" || c.mediaTypeHint === "direct-video-candidate").length,
         directVideoCandidateCount: candidates.filter(c => c.mediaTypeHint === "direct-video-candidate").length,
         searchProviderFailures: diagnostics.filter(d => !d.ok).length,
