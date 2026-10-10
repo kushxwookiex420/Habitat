@@ -975,7 +975,8 @@ export function registerContentEngine(app, deps) {
   const autonomousIntervalMinutes = configuredAutonomousIntervalMinutes > 0
     ? Math.max(60, configuredAutonomousIntervalMinutes)
     : 0;
-  if (autonomousIntervalMinutes > 0) {
+  const inProcessSchedulerEnabled = String(process.env.HABITAT_AUTONOMOUS_IN_PROCESS_SCHEDULER || "").toLowerCase() === "true";
+  if (autonomousIntervalMinutes > 0 && inProcessSchedulerEnabled) {
     const objective = String(process.env.HABITAT_AUTONOMOUS_OBJECTIVE || "Create the next best ViceCityFiles short-form content mission.").trim();
     const project = String(process.env.HABITAT_AUTONOMOUS_PROJECT || "ViceCityFiles").trim();
     const platform = String(process.env.HABITAT_AUTONOMOUS_PLATFORM || "tiktok").trim().toLowerCase();
@@ -1060,6 +1061,13 @@ export function registerContentEngine(app, deps) {
       minimumIntervalMinutes:60,
       configuredIntervalMinutes:configuredAutonomousIntervalMinutes,
       effectiveIntervalMinutes:autonomousIntervalMinutes
+    }));
+  }
+
+  if (autonomousIntervalMinutes > 0 && !inProcessSchedulerEnabled) {
+    console.log("AX_AUTONOMOUS_SCHEDULER_DISABLED", JSON.stringify({
+      reason:"in-process scheduling is opt-in; use the external GitHub Actions scheduler to survive free-instance sleep",
+      configuredIntervalMinutes:configuredAutonomousIntervalMinutes
     }));
   }
 
