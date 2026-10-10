@@ -61,3 +61,28 @@ test("falls back when narration repeats the same words excessively", () => {
   const result = normalizeViceCityScript(validScript(repeated));
   assert.match(result.fallbackReason, /repetitive/);
 });
+
+
+test("uses a legacy-specific fallback when the daily objective is about Vice City's return", () => {
+  const objective = "Create a fresh Vice City Files short about the legacy of Vice City and its confirmed connection to GTA VI.";
+  const result = normalizeViceCityScript({ title: "broken model output" }, objective);
+  assert.equal(result.title, "VICE CITY'S RETURN");
+  assert.match(result.voiceover, /Vice City back as a central setting/i);
+  assert.equal(result.onScreenText.length, 6);
+  assert.equal(result.shotList.length, 6);
+});
+
+test("rejects a valid but generic script when it ignores the requested daily topic", () => {
+  const objective = "Create a fresh Vice City Files short about the legacy of Vice City.";
+  const result = normalizeViceCityScript(validScript(), objective);
+  assert.equal(result.title, "VICE CITY'S RETURN");
+  assert.match(result.fallbackReason, /did not address the requested daily topic/);
+});
+
+test("uses a platform-specific fallback when the free model cannot deliver a valid script", () => {
+  const objective = "Create a short about officially confirmed launch platforms and availability.";
+  const result = normalizeViceCityScript({}, objective);
+  assert.equal(result.title, "WHERE GTA VI IS ANNOUNCED");
+  assert.match(result.voiceover, /PlayStation Five and Xbox Series X and Series S/);
+  assert.equal(result.onScreenText.length, 6);
+});
