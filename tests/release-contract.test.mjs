@@ -171,12 +171,15 @@ test("visual QA falls back to system FFmpeg when bundled npm binaries are absent
 test("autonomous scheduler delegates heavy video rendering to the external GitHub runner", async () => {
   const scheduler = await fs.readFile(new URL("../.github/workflows/habitat-autonomous-scheduler.yml", import.meta.url), "utf8");
   const renderer = await fs.readFile(new URL("../.github/workflows/artifact_001.yml", import.meta.url), "utf8");
-  assert.ok(scheduler.includes("uses: ./.github/workflows/artifact_001.yml"));
+  assert.ok(scheduler.includes("uses: kushxwookiex420/Habitat/.github/workflows/artifact_001.yml@main"));
   assert.ok(scheduler.includes("choose-daily-topic"));
   assert.ok(scheduler.includes("date -u +%F"));
   assert.ok(scheduler.includes("date -u +%u"));
   assert.ok(scheduler.includes("needs.choose-daily-topic.outputs.objective"));
   assert.ok(scheduler.includes("daily-rotated B-roll"));
+  assert.ok(scheduler.includes("source_ref: main"));
+  assert.ok(renderer.includes("source_ref:"));
+  assert.ok(renderer.includes("ref: ${{ inputs.source_ref || github.sha }}"));
   assert.ok(scheduler.includes("push:"));
   assert.ok(scheduler.includes('cron: "17 14 * * *"'));
   assert.ok(!scheduler.includes("/content/autonomous-run"));
