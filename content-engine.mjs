@@ -975,7 +975,8 @@ export function registerContentEngine(app, deps) {
   const autonomousIntervalMinutes = configuredAutonomousIntervalMinutes > 0
     ? Math.max(60, configuredAutonomousIntervalMinutes)
     : 0;
-  if (autonomousIntervalMinutes > 0) {
+  const inProcessSchedulerEnabled = String(process.env.HABITAT_AUTONOMOUS_IN_PROCESS_SCHEDULER || "").toLowerCase() === "true";
+  if (autonomousIntervalMinutes > 0 && inProcessSchedulerEnabled) {
     const objective = String(process.env.HABITAT_AUTONOMOUS_OBJECTIVE || "Create the next best ViceCityFiles short-form content mission.").trim();
     const project = String(process.env.HABITAT_AUTONOMOUS_PROJECT || "ViceCityFiles").trim();
     const platform = String(process.env.HABITAT_AUTONOMOUS_PLATFORM || "tiktok").trim().toLowerCase();
@@ -1020,9 +1021,11 @@ export function registerContentEngine(app, deps) {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 10 * 60 * 1000);
       try {
+        const schedulerToken = String(process.env.HABITAT_AUTONOMOUS_SCHEDULER_TOKEN || "").trim();
+        if (!schedulerToken) throw new Error("HABITAT_AUTONOMOUS_SCHEDULER_TOKEN is not configured; scheduled run refused");
         const response = await fetch(publicBase + "/content/autonomous-run", {
           method:"POST",
-          headers:{"content-type":"application/json"},
+          headers:{"content-type":"application/json","x-habitat-scheduler-token":schedulerToken,"x-habitat-scheduler-lease":"already-claimed"},
           body:JSON.stringify({ project, objective, platform, format:"9:16" }),
           signal:controller.signal
         });
@@ -1061,16 +1064,58 @@ export function registerContentEngine(app, deps) {
     }));
   }
 
+  if (autonomousIntervalMinutes > 0 && !inProcessSchedulerEnabled) {
+    console.log("AX_AUTONOMOUS_SCHEDULER_DISABLED", JSON.stringify({
+      reason:"in-process scheduling is opt-in; use the external GitHub Actions scheduler to survive free-instance sleep",
+      configuredIntervalMinutes:configuredAutonomousIntervalMinutes
+    }));
+  }
+
   // Ax autonomous mission runner: executes every safe stage in order and stops only at the external publish approval boundary.
   app.post("/content/autonomous-run", async (req, res) => {
+    // Scheduled missions are triggered by GitHub Actions or the local scheduler.
+    // Require a shared secret so an anonymous caller cannot consume model/render resources.
+    const expectedToken = String(process.env.HABITAT_AUTONOMOUS_SCHEDULER_TOKEN || "").trim();
+    const suppliedToken = String(req.get("x-habitat-scheduler-token") || "").trim();
+    if (!expectedToken) return res.status(503).json({ ok:false, error:"autonomous scheduler secret is not configured" });
+    const expectedBytes = Buffer.from(expectedToken);
+    const suppliedBytes = Buffer.from(suppliedToken);
+    if (expectedBytes.length !== suppliedBytes.length || !crypto.timingSafeEqual(expectedBytes, suppliedBytes)) {
+      return res.status(401).json({ ok:false, error:"unauthorized autonomous scheduler request" });
+    }
     const objective = String(req.body?.objective || "").trim();
     if (!objective) return res.status(400).json({ ok:false, error:"objective required" });
-    const job = makeJob({
-      project: String(req.body?.project || "ViceCityFiles"),
-      objective,
-      platform: String(req.body?.platform || "tiktok"),
-      format: String(req.body?.format || "9:16")
-    });
+    const project = String(req.body?.project || "ViceCityFiles").trim();
+    const platform = String(req.body?.platform || "tiktok").trim().toLowerCase();
+    const format = String(req.body?.format || "9:16").trim();
+    const leaseAlreadyHeld = String(req.get("x-habitat-scheduler-lease") || "") === "already-claimed";
+    let scheduledLease = null;
+    if (!leaseAlreadyHeld) {
+      const leaseRepository = typeof getDispatchLeaseRepository === "function" ? getDispatchLeaseRepository() : null;
+      if (!leaseRepository || typeof leaseRepository.acquire !== "function") {
+        return res.status(503).json({ ok:false, error:"durable scheduler lease unavailable; mission refused" });
+      }
+      const intervalMinutes = Math.max(60, Number(process.env.HABITAT_AUTONOMOUS_INTERVAL_MINUTES || 60));
+      const intervalMs = intervalMinutes * 60 * 1000;
+      const windowStart = new Date(Math.floor(Date.now() / intervalMs) * intervalMs).toISOString();
+      const scopeKey = "autonomous:" + project + ":" + platform + ":" + windowStart;
+      const leaseToken = crypto.randomUUID();
+      try {
+        scheduledLease = await leaseRepository.acquire({
+          scopeKey,
+          leaseToken,
+          nowIso: nowIso(),
+          expiresAt: new Date(new Date(windowStart).getTime() + intervalMs + 10 * 60 * 1000).toISOString()
+        });
+      } catch {
+        return res.status(503).json({ ok:false, error:"durable scheduler lease claim failed; mission refused" });
+      }
+      if (!scheduledLease.acquired) {
+        return res.status(409).json({ ok:false, duplicate:true, error:"scheduled mission window already claimed", project, platform, windowStart });
+      }
+      // Keep this window claim until expiry; do not release it after a successful run.
+    }
+    const job = makeJob({ project, objective, platform, format });
     const base = req.protocol + "://" + req.get("host");
     const stages = [];
     const call = async (path, body = {}) => {
