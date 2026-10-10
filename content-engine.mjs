@@ -503,7 +503,10 @@ export function registerContentEngine(app, deps) {
         "You are Ax Script Writer.",
         "Create one short-form production script from this research.",
         "Return JSON with: title, hook, voiceover, onScreenText, shotList, caption, hashtags.",
-        "Keep claims grounded in the supplied research; do not invent facts.",
+        "Keep claims grounded in the supplied research; do not invent facts or imply rumors are confirmed.",
+        "Target 110-135 spoken words for a 45-60 second short at natural pace; never pad or repeat to hit length.",
+        "Provide exactly six distinct shotList beats in narrative order and six concise onScreenText labels, each no more than five words.",
+        "Open with a clear hook in the first sentence and end with a complete closing line and a natural follow/follow-up call to action.",
         "Objective: " + job.objective,
         "Research: " + JSON.stringify(research)
       ].join("\n");
