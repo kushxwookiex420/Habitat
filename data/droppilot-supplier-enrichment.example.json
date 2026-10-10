@@ -1,0 +1,17 @@
+{
+  "products": [
+    {
+      "shopifyProductId": "REPLACE_WITH_EXACT_SHOPIFY_PRODUCT_GID",
+      "supplierCost": 0,
+      "shippingCost": 0,
+      "platformFeeRate": 0.08,
+      "paymentFeeRate": 0.03,
+      "otherPerOrderCosts": 0,
+      "demandScore": 0,
+      "demoScore": 0,
+      "supplierReliabilityScore": 0,
+      "evidenceUrl": "https://example.com/replace-with-real-evidence",
+      "evidenceCheckedAt": "2026-10-10T00:00:00Z"
+    }
+  ]
+}
