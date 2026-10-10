@@ -3,7 +3,9 @@ name: DropPilot full catalog demo research
 on:
   workflow_dispatch:
   push:
+    branches: ["main"]
     paths:
+      - '.github/workflows/droppilot-full-catalog-research.yml'
       - 'scripts/trigger-droppilot-catalog-research.txt'
 
 permissions:
