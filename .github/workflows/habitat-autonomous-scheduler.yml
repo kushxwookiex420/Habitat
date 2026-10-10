@@ -41,17 +41,19 @@ jobs:
           BASE="https://habitat-1-szzd.onrender.com"
           payload_file="$(mktemp)"
           trap 'rm -f "${payload_file}"' EXIT
-          printf '%s' '{"project":"ViceCityFiles","platform":"tiktok","format":"9:16","objective":"Create the next best factual, source-checked Vice City Files short. Use a complete opening and closing, readable text, varied scenes, no unsupported claims, and stop before publishing for human approval."}' > "${payload_file}"
+          mission_platform="tiktok"
+          if [[ "${GITHUB_EVENT_NAME}" == "push" ]]; then
+            # Isolate the one-shot verification lease from the normal hourly TikTok lease.
+            mission_platform="tiktok-verify"
+          fi
+          jq -n --arg project "ViceCityFiles" --arg platform "${mission_platform}" --arg format "9:16" --arg objective "Create the next best factual, source-checked Vice City Files short. Use a complete opening and closing, readable text, varied scenes, no unsupported claims, and stop before publishing for human approval." '{project:$project,platform:$platform,format:$format,objective:$objective}' > "${payload_file}"
           jq -e '.objective | type == "string" and length > 0' "${payload_file}" >/dev/null
           echo "Validated scheduler payload bytes: $(wc -c < "${payload_file}" | tr -d ' ')"
 
           objective_encoded="$(jq -rn --arg value "$(jq -r '.objective' "${payload_file}")" '$value | @uri')"
-          lease_header_args=()
           if [[ "${GITHUB_EVENT_NAME}" == "push" ]]; then
             # Allow Render to finish its auto-deploy before the guarded one-shot verification request.
             sleep 75
-            # Only the guarded one-shot verification push bypasses lease acquisition.
-            lease_header_args=(-H "x-habitat-scheduler-lease: already-claimed")
           fi
           http_response="$(curl --http1.1 --silent --show-error --max-time 900 \
             -w '\n%{http_code}\n%{content_type}' \
@@ -59,9 +61,8 @@ jobs:
             -H "Accept: application/json" \
             -H "Expect:" \
             -H "x-habitat-scheduler-token: ${HABITAT_AUTONOMOUS_SCHEDULER_TOKEN}" \
-            "${lease_header_args[@]}" \
             --data-binary "@${payload_file}" \
-            "${BASE}/content/autonomous-run?objective=${objective_encoded}&project=ViceCityFiles&platform=tiktok&format=9%3A16")"
+            "${BASE}/content/autonomous-run?objective=${objective_encoded}&project=ViceCityFiles&platform=${mission_platform}&format=9%3A16")"
 
           content_type="$(printf '%s' "${http_response}" | tail -n 1)"
           http_status="$(printf '%s' "${http_response}" | tail -n 2 | head -n 1)"
