@@ -46,7 +46,7 @@ jobs:
           trap 'rm -f "${payload_file}"' EXIT
           lease_bypass=false
           if [[ "${GITHUB_EVENT_NAME}" == "push" ]]; then lease_bypass=true; fi
-          jq -n --arg project "ViceCityFiles" --arg platform "tiktok" --arg format "9:16" --arg objective "Create the next best factual, source-checked Vice City Files short. Use a complete opening and closing, readable text, varied scenes, no unsupported claims, and stop before publishing for human approval." --argjson lease_bypass "${lease_bypass}" '{project:$project,platform:$platform,format:$format,objective:$objective,schedulerLeaseAlreadyHeld:$lease_bypass}' > "${payload_file}"
+          jq -n --arg project "ViceCityFiles" --arg platform "tiktok" --arg format "9:16" --arg objective "Create the next best factual, source-checked Vice City Files short. Use a complete opening and closing, readable text, varied scenes, no unsupported claims, and stop before publishing for human approval." --argjson lease_bypass "${lease_bypass}" '{project:$project,platform:$platform,format:$format,objective:$objective,schedulerLeaseAlreadyHeld:$lease_bypass,deferStagesToCaller:true}' > "${payload_file}"
           jq -e '.objective | type == "string" and length > 0' "${payload_file}" >/dev/null
           echo "Validated scheduler payload bytes: $(wc -c < "${payload_file}" | tr -d ' ')"
 
@@ -112,26 +112,73 @@ jobs:
 
           echo "Tracking durable content job: ${job_id}"
           echo "job_id=${job_id}" >> "$GITHUB_OUTPUT"
-          final_status=""
-          for attempt in $(seq 1 95); do
-            status_response="$(curl --silent --show-error --max-time 20 \
-              -H "Accept: application/json" \
-              "${BASE}/content/jobs/${job_id}" || true)"
-            if printf '%s' "${status_response}" | jq -e '.ok == true and .job.autonomousRun.status != null' >/dev/null 2>&1; then
-              final_status="$(printf '%s' "${status_response}" | jq -r '.job.autonomousRun.status')"
-              if [[ "${final_status}" != "RUNNING" ]]; then
-                printf '%s' "${status_response}" | jq '{jobId:.job.id, mission:.job.autonomousRun, renderLoop:.job.renderLoop, artifact:.job.stages.edit.result.artifact}'
-                break
-              fi
-            fi
-            sleep 10
-          done
 
-          if [[ "${final_status}" != "READY_TO_PUBLISH" ]]; then
-            echo "::error::Autonomous mission did not reach READY_TO_PUBLISH; final status=${final_status:-timeout}."
-            if [[ -n "${status_response:-}" ]]; then printf '%s' "${status_response}" | jq . 2>/dev/null || true; fi
-            exit 1
-          fi
+          # Run every durable stage from the scheduler runner instead of keeping
+          # the whole mission inside a detached Render process. D1 rehydrates the
+          # job between requests, so a Render restart cannot silently kill the chain.
+          run_stage() {
+            local stage="$1"
+            local timeout="$2"
+            local retries="$3"
+            local response status
+            echo "Running durable content stage: ${stage}"
+            if [[ "${retries}" == "yes" ]]; then
+              response="$(curl --http1.1 --silent --show-error --retry 6 --retry-all-errors --retry-delay 8 --retry-max-time 180 --max-time "${timeout}" \
+                -w '\n%{http_code}' -X POST \
+                -H "Content-Type: application/json" -H "Accept: application/json" -H "Expect:" \
+                --data '{}' "${BASE}/content/jobs/${job_id}/${stage}")"
+            else
+              response="$(curl --http1.1 --silent --show-error --max-time "${timeout}" \
+                -w '\n%{http_code}' -X POST \
+                -H "Content-Type: application/json" -H "Accept: application/json" -H "Expect:" \
+                --data '{}' "${BASE}/content/jobs/${job_id}/${stage}")"
+            fi
+            status="$(printf '%s' "${response}" | tail -n 1)"
+            response="$(printf '%s' "${response}" | sed '$d')"
+            echo "Stage ${stage}: HTTP ${status}"
+            if [[ "${status}" != "200" ]] || ! printf '%s' "${response}" | jq -e '.ok == true' >/dev/null 2>&1; then
+              echo "Stage response preview:"
+              printf '%s' "${response}" | jq '{ok,error,renderLoop,review,gate,jobId}' 2>/dev/null || printf '%s' "${response}" | head -c 700
+              echo
+              # Render can finish even if an edge proxy drops the response.
+              # Inspect durable job state before deciding whether the render failed.
+              if [[ "${stage}" == "render-loop" ]]; then
+                local snapshot
+                snapshot="$(curl --silent --show-error --max-time 25 -H "Accept: application/json" "${BASE}/content/jobs/${job_id}" || true)"
+                if printf '%s' "${snapshot}" | jq -e '.ok == true and .job.stages.edit.result.artifact.verified == true and .job.stages.edit.result.artifact.status == "verified"' >/dev/null 2>&1; then
+                  echo "Render output was durably recorded and verified despite the dropped response."
+                  return 0
+                fi
+              fi
+              return 1
+            fi
+            if [[ "${stage}" == "render-loop" ]]; then
+              printf '%s' "${response}" | jq -e '.artifact.verified == true and .visualQA.status == "VISUAL_PASS"' >/dev/null || {
+                echo "::error::Render stage returned without a verified artifact and VISUAL_PASS."
+                return 1
+              }
+            fi
+            if [[ "${stage}" == "ax-review" ]]; then
+              printf '%s' "${response}" | jq -e '.review.status == "AX_APPROVED"' >/dev/null || {
+                echo "::error::Ax review did not approve the artifact."
+                return 1
+              }
+            fi
+            if [[ "${stage}" == "quality-gate" ]]; then
+              printf '%s' "${response}" | jq -e '.gate.status == "READY_TO_PUBLISH"' >/dev/null || {
+                echo "::error::Content quality gate did not reach READY_TO_PUBLISH."
+                return 1
+              }
+            fi
+          }
+
+          run_stage research 240 yes
+          run_stage script 240 yes
+          run_stage render-plan 240 yes
+          run_stage render-loop 900 no
+          run_stage ax-review 240 yes
+          run_stage quality-gate 240 yes
+          final_status="READY_TO_PUBLISH"
 
           {
             echo "## Autonomous content mission"
