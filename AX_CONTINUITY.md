@@ -167,3 +167,14 @@ Build Habitat into a dependable Android-first AI control center for DropPilot AI
 - The latest observed workflow runs for commit `17d3b0e4c9e0f75f0504dafa474cc33aba0b8bf1` were queued/in progress; do not mark CI as passed until the workflow reports success.
 - **Not yet completed:** merge, Render deployment/live verification, authorized direct video URLs for the actual HOTO AutoCare Air Duster & Vacuum, a newly rendered MP4, and human visual inspection. The official HOTO demo is a discovery lead, not permission to reuse commercial footage.
 - Next steps: inspect CI outcomes; fix any failures; merge only after checks pass; identify footage with explicit commercial reuse rights; render and inspect the final sales video; then request the user's approval before posting.
+
+## 2026-10-10 — Durable dispatch lease integration in progress
+
+- PR #36: https://github.com/kushxwookiex420/Habitat/pull/36 (draft; not merged or deployed).
+- D1-backed lease repository uses an atomic unique-scope upsert, expiry recovery, and token-matched release. Unit tests cover concurrent claim attempts, expiry/reclaim, stale release protection, and project/platform/window scope separation.
+- The lease is now wired into `POST /tasks/:id/delegate`; durable task dispatch fails closed if task storage is ready but the lease repository is not. `/storage/check` now checks the lease repository too.
+- The actual autonomous scheduler is in `content-engine.mjs`, not `server.mjs`. Scheduler ticks now obtain a D1 lease keyed by project, platform, and a stable interval window. The lease is retained until the scheduled window expires so another instance cannot re-run the same window after the first request finishes. If durable lease storage is unavailable, the scheduler refuses uncoordinated dispatch.
+- The latest PR head is `847bbac879ae00d91c8ff98f7bb1f2823ffabc7f`. CI checks were still running at the last inspection; check all required checks before considering merge.
+- Render service `srv-daq1c6t9fdbs73ehd41g` remains on deployed main commit `8cbf006171b7067cb643d91355468e4ae1d4591b`; PR #36 changes are not live. The current live logs show the autonomous scheduler configured for ViceCityFiles/TikTok at a 60-minute interval. Do not claim duplicate-dispatch prevention is live until merge/deploy and runtime logs confirm the new lease-protected messages.
+- Shopify current baseline remains 56 sessions, 1 cart addition, 1 checkout started, 0 completed checkouts, and 0 orders. Do not claim sales or alter inventory/prices without evidence and approval.
+- TikTok OAuth/token persistence uses the content engine's encrypted D1 vault flow; authorization and publish permission still require a successful live connection/preflight. Never claim a public post succeeded without provider confirmation.
