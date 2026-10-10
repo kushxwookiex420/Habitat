@@ -70,7 +70,7 @@ jobs:
             -H "x-habitat-objective: $(jq -r '.objective' "${payload_file}")" \
             "${lease_header[@]}" \
             --data-binary "@${payload_file}" \
-            "${BASE}/content/autonomous-run?objective=${objective_encoded}&project=ViceCityFiles&platform=tiktok&format=9%3A16")"
+            "${BASE}/content/autonomous-run?objective=${objective_encoded}&project=ViceCityFiles&platform=tiktok&format=9%3A16&schedulerLeaseAlreadyHeld=${lease_bypass}")"
 
           content_type="$(printf '%s' "${http_response}" | tail -n 1)"
           http_status="$(printf '%s' "${http_response}" | tail -n 2 | head -n 1)"
