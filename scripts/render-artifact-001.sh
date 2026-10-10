@@ -92,7 +92,7 @@ for i in 0 1 2 3 4 5; do
   title=$(printf '%s' "$title" | sed 's/[\\:]/\\\\&/g')
   subtitle=$(printf '%s' "$subtitle" | sed 's/[\\:]/\\\\&/g')
   FILTER+="[$i:v]split=2[bg$i][fg$i];"
-  FILTER+="[bg$i]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,zoompan=z='min(1.05,1+on*0.0004)':d=1:s=1080x1920:fps=15,boxblur=24:12,eq=brightness=-0.18:saturation=0.72[base$i];"
+  FILTER+="[bg$i]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=24:12,eq=brightness=-0.18:saturation=0.72,fps=30[base$i];"
   FILTER+="[fg$i]scale=960:1050:force_original_aspect_ratio=decrease:flags=lanczos,format=rgba[photo$i];"
   FILTER+="[base$i][photo$i]overlay=(W-w)/2:430+(1100-h)/2:shortest=1,"
   FILTER+="drawbox=x=40:y=125:w=1000:h=250:color=black@0.70:t=fill,"
@@ -100,12 +100,12 @@ for i in 0 1 2 3 4 5; do
   FILTER+="drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='$subtitle':fontcolor=white:fontsize=24:x=(w-text_w)/2:y=280,"
   FILTER+="drawbox=x=40:y=1535:w=1000:h=120:color=black@0.60:t=fill,"
   FILTER+="drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='VICE CITY FILES  •  FACT-CHECKED GAMING UPDATES':fontcolor=white:fontsize=23:x=(w-text_w)/2:y=1580,"
-  FILTER+="fps=15,setsar=1,format=yuv420p[v$i];"
+  FILTER+="fps=30,setsar=1,format=yuv420p[v$i];"
 done
 FILTER+="[v0][v1][v2][v3][v4][v5]concat=n=6:v=1:a=0,tpad=stop_mode=clone:stop_duration=2,trim=duration=$BODY_DURATION,setpts=PTS-STARTPTS[v]"
 
 ffmpeg -hide_banner -loglevel error -y \
-  -loop 1 -framerate 15 -t "$SCENE_DURATION" -i "$TMP/scene1.jpg" \
+  -loop 1 -framerate 30 -t "$SCENE_DURATION" -i "$TMP/scene1.jpg" \
   -loop 1 -framerate 15 -t "$SCENE_DURATION" -i "$TMP/scene2.jpg" \
   -loop 1 -framerate 15 -t "$SCENE_DURATION" -i "$TMP/scene3.jpg" \
   -loop 1 -framerate 15 -t "$SCENE_DURATION" -i "$TMP/scene4.jpg" \
@@ -128,7 +128,7 @@ assert size>100000, f"Artifact unexpectedly small: {size}"
 expected=float(sys.argv[3])
 assert duration>=expected-0.2, f"Artifact shorter than measured narration plus tail: {duration} < {expected}"
 assert int(video["width"])==1080 and int(video["height"])==1920
-assert video["r_frame_rate"]=="15/1"
+assert video["r_frame_rate"]=="30/1"
 assert audio.get("codec_type")=="audio"
-print(json.dumps({"verified":True,"bytes":size,"durationSeconds":duration,"width":1080,"height":1920,"renderer":"source-duration-neural-narration-v4","audio":"complete-narration-plus-one-second-tail","scenes":6,"expectedBodyDurationSeconds":expected}))
+print(json.dumps({"verified":True,"bytes":size,"durationSeconds":duration,"width":1080,"height":1920,"renderer":"source-duration-neural-narration-v5-smooth-30fps","audio":"complete-narration-plus-one-second-tail","scenes":6,"expectedBodyDurationSeconds":expected}))
 PY
