@@ -766,12 +766,12 @@ export function registerContentEngine(app, deps) {
         ],{timeout:30000});
         await execFileAsync(ffmpegPath, [
           "-hide_banner","-loglevel","error","-y","-threads","1","-stream_loop","-1","-i",silentPath,"-i",voicePath,
-          "-vf","scale=540:960:force_original_aspect_ratio=increase,crop=540:960,fps=10,scale=1080:1920:flags=fast_bilinear,format=yuv420p",
+          "-vf","scale=360:640:force_original_aspect_ratio=increase,crop=360:640,fps=12,scale=720:1280:flags=fast_bilinear,format=yuv420p",
           "-map","0:v:0","-map","1:a:0",
           "-c:v","libx264","-preset","ultrafast","-crf","32","-threads","1",
           "-af","apad,atrim=duration=45","-c:a","aac","-b:a","128k","-ar","48000","-t","45","-shortest",
           "-movflags","+faststart",outputPath
-        ],{timeout:180000});
+        ],{timeout:240000});
       } else {
         sceneInputs.forEach((s, i) => {
           inputs.push("-loop","1","-framerate","10","-t",String(s.dur),"-i",sceneFramePaths[i]);
@@ -805,12 +805,14 @@ export function registerContentEngine(app, deps) {
       const durationSeconds=Number(probeData?.format?.duration||0);
       const videoStream=(probeData?.streams||[]).find(x=>x.codec_type==="video")||{};
       if(durationSeconds<44) throw new Error("rendered artifact duration verification failed");
-      if(Number(videoStream.width)!==1080 || Number(videoStream.height)!==1920)
+      const expectedWidth = officialVideoPaths.length >= 4 ? 720 : 1080;
+      const expectedHeight = officialVideoPaths.length >= 4 ? 1280 : 1920;
+      if(Number(videoStream.width)!==expectedWidth || Number(videoStream.height)!==expectedHeight)
         throw new Error("rendered artifact dimensions verification failed");
 
       const artifact={
         type:"mp4",status:"rendered",path:outputPath,bytes:stat.size,
-        durationSeconds,width:1080,height:1920,renderedAt:nowIso(),
+        durationSeconds,width:expectedWidth,height:expectedHeight,renderedAt:nowIso(),
         verified:false,renderer:officialVideoPaths.length >= 4 ? "ffmpeg-scene-engine-v7-official-game-footage" : "ffmpeg-scene-engine-v6-official-stills",
         visualMode:officialVideoPaths.length >= 4 ? "official-game-footage" : "official-still-image-fallback",
         audio:"google-translate-tts-narration",
