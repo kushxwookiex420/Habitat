@@ -1111,7 +1111,7 @@ export function registerContentEngine(app, deps) {
     }
     // JSON remains the primary contract. Accept query fallbacks for external
     // schedulers in case an intermediary delivers the request without its body.
-    const objective = String(req.body?.objective || req.query?.objective || "").trim();
+    const objective = String(req.body?.objective || req.query?.objective || req.get("x-habitat-objective") || "").trim();
     if (!objective) return res.status(400).json({ ok:false, error:"objective required", bodyParsed: Boolean(req.body && Object.keys(req.body).length), contentType: String(req.get("content-type") || "") });
     const project = String(req.body?.project || req.query?.project || "ViceCityFiles").trim();
     const platform = String(req.body?.platform || req.query?.platform || "tiktok").trim().toLowerCase();
