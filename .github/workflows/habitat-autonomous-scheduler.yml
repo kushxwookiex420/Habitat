@@ -36,12 +36,26 @@ jobs:
         run: |
           set -euo pipefail
           BASE="https://habitat-1-szzd.onrender.com"
-          response="$(curl --fail --silent --show-error --max-time 900 \
+          http_response="$(curl --silent --show-error --max-time 900 \
+            -w '\n%{http_code}' \
             -H "content-type: application/json" \
             -H "x-habitat-scheduler-token: ${HABITAT_AUTONOMOUS_SCHEDULER_TOKEN}" \
             -X POST "${BASE}/content/autonomous-run" \
             -d '{"project":"ViceCityFiles","platform":"tiktok","format":"9:16","objective":"Create the next best factual, source-checked Vice City Files short. Use a complete opening and closing, readable text, varied scenes, no unsupported claims, and stop before publishing for human approval."}')"
+          status="${http_response##*
+\n'}"
+          response="${http_response%
+\n'*}"
           echo "${response}" | jq .
+          if [[ "${status}" == "409" ]]; then
+            echo "The scheduled window was already claimed; duplicate mission safely skipped."
+            echo "- Result: idempotent duplicate skipped" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          if [[ "${status}" != "200" ]]; then
+            echo "::error::Autonomous dispatch returned HTTP ${status}"
+            exit 1
+          fi
           echo "${response}" | jq -e '.ok == true and .autonomousRun.status != null' >/dev/null
           {
             echo "## Autonomous content mission"
