@@ -1,0 +1,30 @@
+name: DropPilot catalog demo research batches
+on:
+  workflow_dispatch:
+    inputs:
+      batch_index:
+        description: Zero-based catalog batch from the 183-product snapshot
+        required: true
+        default: '0'
+permissions:
+  contents: read
+jobs:
+  research:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Run product-specific demo research
+        env:
+          BATCH_INDEX: ${{ inputs.batch_index }}
+          HABITAT_BASE_URL: https://habitat-1-szzd.onrender.com
+        run: node scripts/research-droppilot-demo-batch.mjs
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DropPilot-Demo-Research-Batch-${{ inputs.batch_index }}
+          path: dist/droppilot-demo-research-batch.json
+          if-no-files-found: error
+          retention-days: 30
