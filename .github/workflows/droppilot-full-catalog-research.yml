@@ -1,0 +1,41 @@
+name: DropPilot full catalog demo research
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Two batches at once limits pressure on Habitat's free research backend.
+concurrency:
+  group: droppilot-full-catalog-research
+  cancel-in-progress: false
+
+jobs:
+  research:
+    name: Research batch ${{ matrix.batch }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        batch: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Search product-specific demo sources
+        env:
+          BATCH_INDEX: ${{ matrix.batch }}
+          HABITAT_BASE_URL: https://habitat-1-szzd.onrender.com
+        run: node scripts/research-droppilot-demo-batch.mjs
+      - name: Save research evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: DropPilot-Demo-Research-Batch-${{ matrix.batch }}
+          path: dist/droppilot-demo-research-batch.json
+          if-no-files-found: warn
+          retention-days: 30
