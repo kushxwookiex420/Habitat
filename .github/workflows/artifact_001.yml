@@ -89,7 +89,7 @@ jobs:
 
       - name: Create content mission
         env:
-          OBJECTIVE: ${{ inputs.objective || 'Create Artifact 001: Vice City 6: The Next Big Leap' }}
+          OBJECTIVE: "${{ inputs.objective || 'Create Artifact 001: Vice City 6: The Next Big Leap' }}"
         run: |
           set -euo pipefail
           jq -n --arg objective "$OBJECTIVE" '{project:"ViceCityFiles",objective:$objective,platform:"tiktok",format:"9:16"}' > /tmp/job-request.json
