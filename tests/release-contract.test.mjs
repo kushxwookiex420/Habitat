@@ -55,12 +55,17 @@ test("Artifact 001 uses official images, neural narration, and a clean non-overl
   assert.ok(source.includes("edge-tts"));
   assert.ok(source.includes("en-US-AndrewNeural"));
   assert.ok(!source.includes("translate.google.com/translate_tts"));
-  assert.ok(source.includes("boxblur=24:12"));
+  assert.ok(source.includes("clip1.mp4"));
+  assert.ok(source.includes("clip6.mp4"));
+  assert.ok(source.includes("Real-world B-roll (NOT GTA gameplay)"));
+  assert.ok(source.includes("REAL-WORLD B-ROLL • NOT GAMEPLAY"));
+  assert.ok(source.includes("broll-attribution.txt"));
+  assert.ok(source.includes("overlay=(W-w)/2:430+(650-h)/2:shortest=1"));
   assert.ok(source.includes("drawbox=x=40:y=125:w=1000:h=250"));
   assert.ok(source.includes("drawbox=x=40:y=1535:w=1000:h=120"));
   assert.ok(source.includes("VOICE_DURATION"));
   assert.ok(source.includes("apad=pad_dur=1"));
-  assert.ok(source.includes("source-duration-neural-narration-v6-script-driven"));
+  assert.ok(source.includes("source-duration-neural-narration-v7-moving-broll"));
   assert.ok(source.includes("-loop 1 -framerate 30"));
   assert.ok(!source.includes("-loop 1 -framerate 15"), "every still-scene input must use the same 30 fps cadence");
   assert.ok(!source.includes("zoompan"), "the renderer must not reintroduce zoompan judder");
@@ -201,4 +206,15 @@ test("video renderer derives narration and mobile-safe scene overlays from the g
   assert.ok(renderer.includes('jq -r ".scenes[$i].title"'));
   assert.ok(renderer.includes('jq -r ".scenes[$i].subtitle"'));
   assert.ok(renderer.includes('renderer":"source-duration-neural-narration-v6-script-driven"'));
+});
+
+
+test("Artifact 001 uses six moving B-roll clips with attribution and a no-gameplay disclaimer", async () => {
+  const source = await fs.readFile(new URL("../scripts/render-artifact-001.sh", import.meta.url), "utf8");
+  const workflow = await fs.readFile(new URL("../.github/workflows/artifact_001.yml", import.meta.url), "utf8");
+  assert.equal((source.match(/videos\.pexels\.com\/video-files\//g) || []).length, 6);
+  assert.ok(source.includes('cp "$TMP/broll-attribution.txt" "${OUT}.attribution.txt"'));
+  assert.ok(source.includes('map "[v]" -map 12:a:0'));
+  assert.ok(workflow.includes("habitat-artifact-001-body.mp4.attribution.txt"));
+  assert.ok(workflow.includes("habitat-artifact-001.mp4.attribution.txt"));
 });
