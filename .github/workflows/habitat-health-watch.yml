@@ -16,15 +16,16 @@ jobs:
   health:
     name: Check live Habitat service
     runs-on: ubuntu-latest
-    timeout-minutes: 3
+    timeout-minutes: 5
     steps:
-      - name: Check backend health
+      - name: Check backend health with transient-failure retries
         shell: bash
         run: |
           set -euo pipefail
           BASE="https://habitat-1-szzd.onrender.com"
+          CURL=(curl --fail --silent --show-error --connect-timeout 10 --max-time 40 --retry 3 --retry-all-errors --retry-delay 5)
 
-          health="$(curl --fail --silent --show-error --max-time 25 "$BASE/health")"
+          health="$("${CURL[@]}" "$BASE/health")"
           echo "$health" | jq .
           echo "$health" | jq -e '
             .habitat == "online" and
@@ -32,7 +33,7 @@ jobs:
             .brain == "ready"
           ' >/dev/null
 
-          continuity="$(curl --fail --silent --show-error --max-time 25 "$BASE/continuity/status")"
+          continuity="$("${CURL[@]}" "$BASE/continuity/status")"
           echo "$continuity" | jq .
           echo "$continuity" | jq -e '
             .ok == true and
@@ -46,6 +47,7 @@ jobs:
             echo "- Live backend responds over HTTPS."
             echo "- AI provider configuration is present (this does not prove every model call succeeds)."
             echo "- Continuity checkpoint and Cloudflare D1 persistence are reported ready."
+            echo "- Transient network/cold-start failures are retried before reporting failure."
             echo "- Checked at: $(date -u +'%Y-%m-%d %H:%M:%S UTC')"
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -56,7 +58,7 @@ jobs:
           {
             echo "## Habitat health watch: FAIL"
             echo ""
-            echo "At least one live endpoint or readiness assertion failed."
+            echo "At least one live endpoint or readiness assertion failed after retries."
             echo "Inspect this run's logs and the Render service logs before attempting a repair."
             echo "This workflow is diagnostic only; it does not restart services, modify secrets, or change production data."
             echo "- Checked at: $(date -u +'%Y-%m-%d %H:%M:%S UTC')"
