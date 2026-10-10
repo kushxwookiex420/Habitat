@@ -59,7 +59,9 @@ test("Artifact 001 uses official images, neural narration, and a clean non-overl
   assert.ok(source.includes("clip6.mp4"));
   assert.ok(source.includes("36657530/15540706_360_640_30fps.mp4"));
   assert.ok(source.includes("Travel Oyo"));
-  assert.ok(source.includes("B-ROLL • PEXELS • PAASHUU"));
+  assert.ok(source.includes("broll-credit-line.txt"));
+  assert.ok(source.includes("random.Random(datetime.date.today().toordinal()).shuffle(broll_pool)"));
+  assert.ok(source.includes("creators=sorted({creator.upper() for url,page,creator in broll})"));
   assert.ok(source.includes("Real-world B-roll (NOT GTA gameplay)"));
   assert.ok(source.includes("REAL-WORLD B-ROLL • NOT GAMEPLAY"));
   assert.ok(source.includes("broll-attribution.txt"));
