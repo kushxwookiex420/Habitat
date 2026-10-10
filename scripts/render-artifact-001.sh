@@ -149,20 +149,28 @@ for i in 0 1 2 3 4 5; do
   # Escape FFmpeg drawtext punctuation that can occur in the title strings.
   title=$(printf '%s' "$title" | sed 's/[\\:]/\\\\&/g')
   subtitle=$(printf '%s' "$subtitle" | sed 's/[\\:]/\\\\&/g')
-  FILTER+="[$i:v]split=2[bg$i][fg$i];"
-  FILTER+="[bg$i]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=24:12,eq=brightness=-0.18:saturation=0.72,fps=30[base$i];"
-  FILTER+="[fg$i]scale=960:1050:force_original_aspect_ratio=decrease:flags=lanczos,format=rgba[photo$i];"
-  FILTER+="[base$i][photo$i]overlay=(W-w)/2:430+(1100-h)/2:shortest=1,"
+  still=$((i+6))
+  FILTER+="[$i:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,eq=brightness=-0.18:saturation=0.78,fps=30[base$i];"
+  FILTER+="[$still:v]scale=760:650:force_original_aspect_ratio=decrease:flags=lanczos,format=rgba[photo$i];"
+  FILTER+="[base$i][photo$i]overlay=(W-w)/2:430+(650-h)/2:shortest=1,"
   FILTER+="drawbox=x=40:y=125:w=1000:h=250:color=black@0.70:t=fill,"
   FILTER+="drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:text='$title':fontcolor=white:fontsize=44:x=(w-text_w)/2:y=185,"
   FILTER+="drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='$subtitle':fontcolor=white:fontsize=24:x=(w-text_w)/2:y=280,"
   FILTER+="drawbox=x=40:y=1535:w=1000:h=120:color=black@0.60:t=fill,"
-  FILTER+="drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='VICE CITY FILES  •  FACT-CHECKED GAMING UPDATES':fontcolor=white:fontsize=23:x=(w-text_w)/2:y=1580,"
+  FILTER+="drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='REAL-WORLD B-ROLL • NOT GAMEPLAY • VICE CITY FILES':fontcolor=white:fontsize=21:x=(w-text_w)/2:y=1580,"
+  FILTER+="drawbox=x=40:y=1655:w=1000:h=80:color=black@0.72:t=fill,"
+  FILTER+="drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='PEXELS: PAASHUU • MESSIEDO XADINHO • EVGENIJ MIKHAILOV • KAUSHIK MAHADEVAN • MARYNA':fontcolor=white:fontsize=14:x=(w-text_w)/2:y=1685,"
   FILTER+="fps=30,setsar=1,format=yuv420p[v$i];"
 done
 FILTER+="[v0][v1][v2][v3][v4][v5]concat=n=6:v=1:a=0,tpad=stop_mode=clone:stop_duration=2,trim=duration=$BODY_DURATION,setpts=PTS-STARTPTS[v]"
 
 ffmpeg -hide_banner -loglevel error -y \
+  -i "$TMP/clip1.mp4" \
+  -i "$TMP/clip2.mp4" \
+  -i "$TMP/clip3.mp4" \
+  -i "$TMP/clip4.mp4" \
+  -i "$TMP/clip5.mp4" \
+  -i "$TMP/clip6.mp4" \
   -loop 1 -framerate 30 -t "$SCENE_DURATION" -i "$TMP/scene1.jpg" \
   -loop 1 -framerate 30 -t "$SCENE_DURATION" -i "$TMP/scene2.jpg" \
   -loop 1 -framerate 30 -t "$SCENE_DURATION" -i "$TMP/scene3.jpg" \
@@ -170,12 +178,13 @@ ffmpeg -hide_banner -loglevel error -y \
   -loop 1 -framerate 30 -t "$SCENE_DURATION" -i "$TMP/scene5.jpg" \
   -loop 1 -framerate 30 -t "$SCENE_DURATION" -i "$TMP/scene6.jpg" \
   -i "$TMP/voice.mp3" \
-  -filter_complex "$FILTER" -map "[v]" -map 6:a:0 \
+  -filter_complex "$FILTER" -map "[v]" -map 12:a:0 \
   -c:v libx264 -preset medium -crf 21 -pix_fmt yuv420p \
   -c:a aac -b:a 160k -ar 48000 -af "loudnorm=I=-16:TP=-1.5:LRA=11,apad=pad_dur=1" \
   -t "$BODY_DURATION" -movflags +faststart "$OUT"
 
 test -s "$OUT"
+cp "$TMP/broll-attribution.txt" "${OUT}.attribution.txt"
 ffprobe -v error -show_entries format=duration,size:stream=codec_type,width,height,r_frame_rate -of json "$OUT" > "$TMP/probe.json"
 python - "$TMP/probe.json" "$OUT" "$BODY_DURATION" <<'PY'
 import json, os, sys
@@ -188,5 +197,5 @@ assert duration>=expected-0.2, f"Artifact shorter than measured narration plus t
 assert int(video["width"])==1080 and int(video["height"])==1920
 assert video["r_frame_rate"]=="30/1"
 assert audio.get("codec_type")=="audio"
-print(json.dumps({"verified":True,"bytes":size,"durationSeconds":duration,"width":1080,"height":1920,"renderer":"source-duration-neural-narration-v6-script-driven","audio":"complete-narration-plus-one-second-tail","scenes":6,"expectedBodyDurationSeconds":expected}))
+print(json.dumps({"verified":True,"bytes":size,"durationSeconds":duration,"width":1080,"height":1920,"renderer":"source-duration-neural-narration-v7-moving-broll","audio":"complete-narration-plus-one-second-tail","scenes":6,"expectedBodyDurationSeconds":expected}))
 PY
