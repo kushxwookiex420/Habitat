@@ -10,7 +10,7 @@ const FALLBACK = {
   hook: "Here are the GTA VI details Rockstar has officially announced.",
   voiceover: "Rockstar Games has announced Grand Theft Auto Six for November nineteenth, twenty twenty-six. The story follows Jason Duval and Lucia Caminos through Leonida, with Vice City at the center of the setting. PlayStation Five and Xbox Series X and Series S are the announced launch platforms. Keep rumors separate from official announcements, and check Rockstar sources before treating new claims as facts. Follow Vice City Files for clear updates without speculation.",
   onScreenText: ["GTA VI CONFIRMED DETAILS", "NOVEMBER 19, 2026", "JASON + LUCIA", "VICE CITY • LEONIDA", "PS5 • XBOX SERIES X|S", "FACTS, NOT RUMORS"],
-  shotList: ["opening title", "announced release date", "Jason and Lucia", "Vice City and Leonida", "announced launch platforms", "branded closing"],
+  shotList: ["opening title", "announced release date", "Jason and Lucia", "Vice City and Leonida", "announced launch platforms", "follow for official updates"],
   caption: "GTA VI details from official Rockstar announcements. Facts, not rumors.",
   hashtags: ["#GTA6", "#GTAVI", "#ViceCity", "#RockstarGames", "#GamingNews"],
   sources: SOURCES
@@ -22,7 +22,7 @@ const TOPIC_FALLBACKS = {
     hook: "Vice City is returning—here is what connects the old setting to GTA VI.",
     voiceover: "Grand Theft Auto VI brings Vice City back as a central setting, while the official story reaches beyond the city into the fictional state of Leonida. Rockstar names Jason Duval and Lucia Caminos as the two leads and describes a story that draws them into a criminal conspiracy after a score goes wrong. The game is scheduled for November nineteenth, twenty twenty-six, with PlayStation Five and Xbox Series X and Series S as launch platforms. That is the confirmed bridge to the Vice City legacy: the city returns, the setting expands into Leonida, and a new pair of leads anchors the story. Details beyond official announcements remain unconfirmed. Follow Vice City Files for source-based updates.",
     onScreenText: ["VICE CITY RETURNS", "A NEW LEONIDA STORY", "JASON + LUCIA", "THE CITY IS BACK", "NOVEMBER 19, 2026", "VERIFIED UPDATES ONLY"],
-    shotList: ["Vice City legacy", "Leonida setting", "Jason and Lucia", "returning city setting", "official release date", "verified closing"],
+    shotList: ["Vice City legacy", "Leonida setting", "Jason and Lucia", "the city returns", "official release date", "follow for official updates"],
     caption: "What is officially confirmed about Vice City's return in GTA VI—no rumors.",
     hashtags: ["#GTA6", "#ViceCity", "#GTAVI", "#RockstarGames", "#GamingNews"],
     sources: SOURCES
