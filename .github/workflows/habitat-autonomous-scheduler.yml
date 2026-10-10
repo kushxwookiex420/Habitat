@@ -97,12 +97,41 @@ jobs:
           }
 
           printf '%s' "${response}" | jq .
+          job_id="$(printf '%s' "${response}" | jq -r '.job.id // empty')"
+          if [[ -z "${job_id}" ]]; then
+            echo "::error::Accepted mission response did not include a durable job id."
+            exit 1
+          fi
+
+          echo "Tracking durable content job: ${job_id}"
+          final_status=""
+          for attempt in $(seq 1 110); do
+            status_response="$(curl --silent --show-error --max-time 20 \
+              -H "Accept: application/json" \
+              "${BASE}/content/jobs/${job_id}" || true)"
+            if printf '%s' "${status_response}" | jq -e '.ok == true and .job.autonomousRun.status != null' >/dev/null 2>&1; then
+              final_status="$(printf '%s' "${status_response}" | jq -r '.job.autonomousRun.status')"
+              if [[ "${final_status}" != "RUNNING" ]]; then
+                printf '%s' "${status_response}" | jq '{jobId:.job.id, mission:.job.autonomousRun, renderLoop:.job.renderLoop, artifact:.job.stages.edit.result.artifact}'
+                break
+              fi
+            fi
+            sleep 10
+          done
+
+          if [[ "${final_status}" != "READY_TO_PUBLISH" ]]; then
+            echo "::error::Autonomous mission did not reach READY_TO_PUBLISH; final status=${final_status:-timeout}."
+            if [[ -n "${status_response:-}" ]]; then printf '%s' "${status_response}" | jq . 2>/dev/null || true; fi
+            exit 1
+          fi
+
           {
             echo "## Autonomous content mission"
             echo ""
             echo "- Project: ViceCityFiles"
             echo "- Platform: TikTok"
-            echo "- Dispatch endpoint accepted the mission."
+            echo "- Durable job: ${job_id}"
+            echo "- Result: ${final_status}"
             echo "- External publishing remains approval-gated."
             echo "- Checked at: $(date -u +'%Y-%m-%d %H:%M:%S UTC')"
           } >> "$GITHUB_STEP_SUMMARY"
