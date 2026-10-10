@@ -6,9 +6,8 @@ SCRIPT_JSON="${2:-}"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
-# Official Rockstar media. Preserve the complete source image in the foreground;
-# use a softened, darkened duplicate as the portrait background instead of
-# aggressively cropping/zooming the source image.
+# Official Rockstar stills are paired with six distinct real-world video clips.
+# The on-screen disclaimer makes clear that the stock clips are not GTA gameplay.
 python - "$TMP" "$SCRIPT_JSON" <<'PY'
 import json, os, re, sys, urllib.request
 root, script_path = sys.argv[1], sys.argv[2]
@@ -43,9 +42,9 @@ for i,(url,page,creator) in enumerate(broll,1):
   if len(data)<50000: raise RuntimeError(f"Moving B-roll clip {i} is too small")
   open(os.path.join(root,f"clip{i}.mp4"),"wb").write(data)
 with open(os.path.join(root,"broll-attribution.txt"),"w",encoding="utf-8") as f:
- f.write("Real-world B-roll (NOT GTA gameplay) — Pexels\\n")
- f.write("Used as illustrative context only; not footage from Grand Theft Auto VI.\\n\\n")
- for url,page,creator in broll: f.write(f"{creator} — {page}\\n")
+ f.write("Real-world B-roll (NOT GTA gameplay) — Pexels\n")
+ f.write("Used as illustrative context only; not footage from Grand Theft Auto VI.\n\n")
+ for url,page,creator in broll: f.write(f"{creator} — {page}\n")
 fallback_voice = [
  "Vice City is back in Grand Theft Auto six. Here are the official details worth knowing.",
  "Rockstar has announced November nineteenth, twenty twenty-six as the release date. Release plans can change, so check Rockstar's official updates.",
@@ -98,7 +97,7 @@ for i,line in enumerate(lines):
  scene_rows.append({"voiceover":line,"title":title,"subtitle":subtitle})
 with open(os.path.join(root,"scene-plan.json"),"w",encoding="utf-8") as f:
  json.dump({"title":script.get("title","Vice City Files"),"scenes":scene_rows},f,ensure_ascii=False,indent=2)
-print("Downloaded six official Rockstar stills and built a six-scene plan from the current content script.")
+print("Downloaded six official Rockstar stills and six moving B-roll clips; built a six-scene plan from the current content script.")
 PY
 # Use a free neural voice instead of the robotic legacy TTS endpoint.
 python -m pip install --disable-pip-version-check --quiet edge-tts
