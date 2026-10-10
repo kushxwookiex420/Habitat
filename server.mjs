@@ -1,6 +1,7 @@
 import { buildCapabilityStatus } from "./capability-status.mjs";
 import { claimTaskDispatch } from "./task-dispatch-guard.mjs";
 import { createD1TaskRepository } from "./d1-task-repository.mjs";
+import { createD1DispatchLeaseRepository } from "./d1-dispatch-lease-repository.mjs";
 import { markInterruptedTask, prepareTaskRetry } from "./task-recovery.mjs";
 import { registerContentEngine } from "./content-engine.mjs";
 import { registerProductDemoResearch } from "./product-demo-research.mjs";
@@ -932,6 +933,8 @@ const taskStore = new Map();
 
 let taskRepository = null;
 let taskStorageReady = false;
+let dispatchLeaseRepository = null;
+let dispatchLeaseReady = false;
 let contentStorageReady = false;
 
 function hasD1TaskCredentials(env = process.env) {
@@ -955,6 +958,13 @@ async function initializeTaskStorage() {
     apiToken: process.env.HABITAT_D1_API_TOKEN
   });
   await taskRepository.initialize();
+  dispatchLeaseRepository = createD1DispatchLeaseRepository({
+    accountId: process.env.CLOUDFLARE_ACCOUNT_ID,
+    databaseId: process.env.HABITAT_D1_DATABASE_ID,
+    apiToken: process.env.HABITAT_D1_API_TOKEN
+  });
+  await dispatchLeaseRepository.initialize();
+  dispatchLeaseReady = true;
   const restored = await taskRepository.list({ limit: 500 });
   taskStorageReady = true;
   let interruptedCount = 0;
@@ -967,6 +977,7 @@ async function initializeTaskStorage() {
     }
   }
   console.log("TASK_STORAGE: D1 ready; restored " + restored.length + " task records; marked " + interruptedCount + " interrupted for review");
+  console.log("TASK_DISPATCH_LEASE: D1-backed cross-instance claim guard ready");
 }
 
 async function persistTask(task) {
@@ -1380,6 +1391,40 @@ app.post("/tasks/:id/delegate", async (req, res) => {
       return res.status(503).json({ ok: false, error: "task storage write failed" });
     }
     return res.status(503).json({ ok: false, task });
+  }
+
+  // A persisted task alone does not prevent two Render instances from dispatching
+  // it at once. Acquire a durable, task-scoped lease before the process-local
+  // state transition; fail closed if durable storage is active but the lease
+  // repository is unavailable.
+  let dispatchLease = null;
+  if (taskStorageReady) {
+    if (!dispatchLeaseReady || !dispatchLeaseRepository) {
+      return res.status(503).json({ ok: false, error: "durable dispatch lease is unavailable; worker was not started" });
+    }
+    const scopeKey = "task:" + task.id;
+    const leaseToken = makeTaskId();
+    const claimedAt = nowIso();
+    try {
+      dispatchLease = await dispatchLeaseRepository.acquire({
+        scopeKey,
+        leaseToken,
+        nowIso: claimedAt,
+        expiresAt: new Date(Date.now() + 5 * 60 * 1000).toISOString()
+      });
+    } catch {
+      return res.status(503).json({ ok: false, error: "durable dispatch claim failed; worker was not started" });
+    }
+    if (!dispatchLease.acquired) {
+      return res.status(409).json({ ok: false, duplicate: true, dispatch: "dispatch_already_in_progress", task });
+    }
+    // Release after the response has finished. If the process crashes, expiry
+    // permits recovery; a stale owner cannot release a replacement lease.
+    res.once("finish", () => {
+      dispatchLeaseRepository.release({ scopeKey, leaseToken }).catch(() => {
+        console.warn("TASK_DISPATCH_LEASE_RELEASE_FAILED", JSON.stringify({ taskId: task.id }));
+      });
+    });
   }
 
   const dispatchClaim = claimTaskDispatch(task, { now: nowIso });
