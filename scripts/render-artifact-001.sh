@@ -28,6 +28,24 @@ for i,url in enumerate(urls,1):
   if not r.headers.get("Content-Type","").startswith("image/"):
    raise RuntimeError(f"Screenshot {i} was not an image")
   open(os.path.join(root,f"scene{i}.jpg"),"wb").write(data)
+broll=[
+ ("https://videos.pexels.com/video-files/37461919/15867630_360_640_60fps.mp4","https://www.pexels.com/video/aerial-view-of-miami-skyline-at-dusk-37461919/","paashuu"),
+ ("https://videos.pexels.com/video-files/34594007/14659483_360_640_30fps.mp4","https://www.pexels.com/video/cloudy-miami-skyline-across-the-bay-34594007/","Messiedo Xadinho"),
+ ("https://videos.pexels.com/video-files/34679320/14699430_360_640_60fps.mp4","https://www.pexels.com/video/nighttime-city-street-with-moving-vehicles-34679320/","Evgenij Mikhailov"),
+ ("https://videos.pexels.com/video-files/36905735/15633523_360_640_60fps.mp4","https://www.pexels.com/video/scenic-coastal-road-with-palm-trees-and-traffic-36905735/","Kaushik Mahadevan"),
+ ("https://videos.pexels.com/video-files/39402632/16776918_360_640_30fps.mp4","https://www.pexels.com/video/aerial-view-of-miami-s-sunny-waterfront-39402632/","Maryna"),
+ ("https://videos.pexels.com/video-files/34679319/14699412_360_640_60fps.mp4","https://www.pexels.com/video/nighttime-city-street-with-passing-car-and-streetlights-34679319/","Evgenij Mikhailov"),
+]
+for i,(url,page,creator) in enumerate(broll,1):
+ req=urllib.request.Request(url,headers={"User-Agent":"Mozilla/5.0 HabitatVideoBuilder/3.0"})
+ with urllib.request.urlopen(req,timeout=40) as r:
+  data=r.read()
+  if len(data)<50000: raise RuntimeError(f"Moving B-roll clip {i} is too small")
+  open(os.path.join(root,f"clip{i}.mp4"),"wb").write(data)
+with open(os.path.join(root,"broll-attribution.txt"),"w",encoding="utf-8") as f:
+ f.write("Real-world B-roll (NOT GTA gameplay) — Pexels\\n")
+ f.write("Used as illustrative context only; not footage from Grand Theft Auto VI.\\n\\n")
+ for url,page,creator in broll: f.write(f"{creator} — {page}\\n")
 fallback_voice = [
  "Vice City is back in Grand Theft Auto six. Here are the official details worth knowing.",
  "Rockstar has announced November nineteenth, twenty twenty-six as the release date. Release plans can change, so check Rockstar's official updates.",
