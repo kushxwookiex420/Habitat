@@ -5,6 +5,12 @@ name: Artifact 001 execution
 # on ordinary app commits. This workflow never publishes to TikTok.
 on:
   workflow_call:
+    inputs:
+      objective:
+        description: "Content mission objective"
+        required: false
+        default: "Create Artifact 001: Vice City 6: The Next Big Leap"
+        type: string
   workflow_dispatch:
     inputs:
       objective:
@@ -22,6 +28,10 @@ on:
       - "scripts/assemble-vice-city-files.sh"
       - "assets/**"
       - "docs/VICE_CITY_FILES_VIDEO_QA.md"
+
+concurrency:
+  group: vice-city-files-video-production
+  cancel-in-progress: false
 
 jobs:
   execute-artifact-001:
