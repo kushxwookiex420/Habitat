@@ -13,7 +13,11 @@ test("uses a factual render-compatible fallback when model narration is missing"
 
 test("preserves a valid model voiceover without replacing it", () => {
   const voiceover = "This is a complete model voiceover with enough words to pass the production narration minimum.";
-  const result = normalizeViceCityScript({ title: "Generated", voiceover });
+  const result = normalizeViceCityScript({
+    title: "Generated", hook: "A factual hook", voiceover,
+    onScreenText: ["Title"], shotList: ["Opening"], caption: "Factual caption",
+    hashtags: ["#Gaming"]
+  });
   assert.equal(result.voiceover, voiceover);
   assert.equal(result.fallbackReason, undefined);
 });
