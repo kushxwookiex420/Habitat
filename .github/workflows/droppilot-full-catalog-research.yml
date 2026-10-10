@@ -11,7 +11,7 @@ permissions:
 
 # Two batches at once limits pressure on Habitat's free research backend.
 concurrency:
-  group: droppilot-full-catalog-research
+  group: droppilot-full-catalog-research-parser-v2
   cancel-in-progress: false
 
 jobs:
