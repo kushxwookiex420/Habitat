@@ -16,14 +16,14 @@ permissions:
   contents: read
 
 concurrency:
-  group: habitat-autonomous-content-v5
+  group: habitat-autonomous-content-v6
   cancel-in-progress: false
 
 jobs:
   run:
     name: Run one lease-protected autonomous content mission
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 18
     steps:
       - name: Require scheduler secret
         shell: bash
@@ -119,7 +119,7 @@ jobs:
           echo "Tracking durable content job: ${job_id}"
           echo "job_id=${job_id}" >> "$GITHUB_OUTPUT"
           final_status=""
-          for attempt in $(seq 1 65); do
+          for attempt in $(seq 1 95); do
             status_response="$(curl --silent --show-error --max-time 20 \
               -H "Accept: application/json" \
               "${BASE}/content/jobs/${job_id}" || true)"
