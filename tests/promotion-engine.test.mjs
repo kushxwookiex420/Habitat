@@ -63,6 +63,10 @@ test("registers a draft-only API and exposes truthful publishing status", () => 
   assert.equal(typeof routes.get("POST /promotion/plan"), "function");
 });
 
-test("enforces platform caption length limits before returning drafts", () => {
-  assert.throws(() => buildPromotionPlan({ ...base, productName: "X".repeat(180), features: ["feature ".repeat(100)], networks: ["bluesky"] }), /bluesky caption exceeds its 300-character limit/);
+test("keeps long-product captions within platform limits and preserves the tracked link", () => {
+  const plan = buildPromotionPlan({ ...base, productName: "X".repeat(180), features: ["feature ".repeat(100)], networks: ["bluesky"] });
+  const draft = plan.drafts[0];
+  assert.ok(draft.caption.length <= 300, "Bluesky caption must fit the 300-character limit");
+  assert.ok(draft.caption.includes(draft.trackedUrl), "compact caption must preserve the tracked product URL");
+  assert.equal(draft.published, false);
 });
