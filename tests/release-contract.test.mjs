@@ -61,6 +61,9 @@ test("Artifact 001 uses official images, neural narration, and a clean non-overl
   assert.ok(source.includes("VOICE_DURATION"));
   assert.ok(source.includes("apad=pad_dur=1"));
   assert.ok(source.includes("source-duration-neural-narration-v5-smooth-30fps"));
+  assert.ok(source.includes("-loop 1 -framerate 30"));
+  assert.ok(!source.includes("-loop 1 -framerate 15"), "every still-scene input must use the same 30 fps cadence");
+  assert.ok(!source.includes("zoompan"), "the renderer must not reintroduce zoompan judder");
   assert.ok(!source.includes("anullsrc"));
   assert.ok(!source.includes("placeholder-silence"));
   assert.ok(workflow.includes("Run deterministic visual and audio QA"));
