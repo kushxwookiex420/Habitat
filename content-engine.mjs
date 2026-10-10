@@ -723,20 +723,22 @@ export function registerContentEngine(app, deps) {
       // Burn each text overlay into its still image before encoding. This keeps
       // FFmpeg at six video inputs instead of twelve simultaneous looping streams,
       // which avoids memory spikes on the small Render instance.
-      for (const [i, scene] of sceneInputs.entries()) {
-        const overlaySvg = buildSceneOverlaySvg({
-          title: scene.title,
-          subtitle: scene.sub,
-          fontScale
-        });
-        const overlayPng = await sharp(Buffer.from(overlaySvg)).png().toBuffer();
-        const framePath = path.join(outDir, "scene-frame-" + i + ".jpg");
-        await sharp(imagePaths[i])
-          .resize(540, 960, { fit:"cover", position:"centre" })
-          .composite([{ input:overlayPng, blend:"over" }])
-          .jpeg({ quality:88, mozjpeg:true })
-          .toFile(framePath);
-        sceneFramePaths.push(framePath);
+      if (officialVideoPaths.length < 4) {
+        for (const [i, scene] of sceneInputs.entries()) {
+          const overlaySvg = buildSceneOverlaySvg({
+            title: scene.title,
+            subtitle: scene.sub,
+            fontScale
+          });
+          const overlayPng = await sharp(Buffer.from(overlaySvg)).png().toBuffer();
+          const framePath = path.join(outDir, "scene-frame-" + i + ".jpg");
+          await sharp(imagePaths[i])
+            .resize(540, 960, { fit:"cover", position:"centre" })
+            .composite([{ input:overlayPng, blend:"over" }])
+            .jpeg({ quality:88, mozjpeg:true })
+            .toFile(framePath);
+          sceneFramePaths.push(framePath);
+        }
       }
 
       let visualMode = "official-still-image-fallback";
