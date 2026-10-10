@@ -6,6 +6,10 @@ on:
   schedule:
     - cron: "37 14 * * *"
   workflow_dispatch:
+  push:
+    branches: ["main"]
+    paths:
+      - ".github/workflows/droppilot-demo-research-daily.yml"
 
 permissions:
   contents: read
@@ -24,6 +28,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          if [[ "${GITHUB_EVENT_NAME}" == "push" ]]; then
+            echo "Allowing the Render deployment to settle before demo research."
+            sleep 75
+          fi
           day_of_year="$(date -u +%j)"
           first=$((10#${day_of_year} % 19))
           second=$(((first + 1) % 19))
