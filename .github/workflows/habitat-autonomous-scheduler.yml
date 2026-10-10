@@ -50,7 +50,9 @@ jobs:
           BASE="https://habitat-1-szzd.onrender.com"
           payload_file="$(mktemp)"
           trap 'rm -f "${payload_file}"' EXIT
-          jq -n --arg project "ViceCityFiles" --arg platform "tiktok" --arg format "9:16" --arg objective "Create the next best factual, source-checked Vice City Files short. Use a complete opening and closing, readable text, varied scenes, no unsupported claims, and stop before publishing for human approval." '{project:$project,platform:$platform,format:$format,objective:$objective}' > "${payload_file}"
+          lease_bypass=false
+          if [[ "${GITHUB_EVENT_NAME}" == "push" ]]; then lease_bypass=true; fi
+          jq -n --arg project "ViceCityFiles" --arg platform "tiktok" --arg format "9:16" --arg objective "Create the next best factual, source-checked Vice City Files short. Use a complete opening and closing, readable text, varied scenes, no unsupported claims, and stop before publishing for human approval." --argjson lease_bypass "${lease_bypass}" '{project:$project,platform:$platform,format:$format,objective:$objective,schedulerLeaseAlreadyHeld:$lease_bypass}' > "${payload_file}"
           jq -e '.objective | type == "string" and length > 0' "${payload_file}" >/dev/null
           echo "Validated scheduler payload bytes: $(wc -c < "${payload_file}" | tr -d ' ')"
 
