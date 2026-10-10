@@ -1098,8 +1098,9 @@ export function registerContentEngine(app, deps) {
     const format = String(req.body?.format || req.query?.format || "9:16").trim();
     const leaseAlreadyHeld = String(req.get("x-habitat-scheduler-lease") || "") === "already-claimed";
     let scheduledLease = null;
+    let leaseRepository = null;
     if (!leaseAlreadyHeld) {
-      const leaseRepository = typeof getDispatchLeaseRepository === "function" ? getDispatchLeaseRepository() : null;
+      leaseRepository = typeof getDispatchLeaseRepository === "function" ? getDispatchLeaseRepository() : null;
       if (!leaseRepository || typeof leaseRepository.acquire !== "function") {
         return res.status(503).json({ ok:false, error:"durable scheduler lease unavailable; mission refused" });
       }
@@ -1156,6 +1157,17 @@ export function registerContentEngine(app, deps) {
       };
       res.json({ ok:true, job, autonomousRun:job.autonomousRun });
     } catch (error) {
+      // A failed mission should not lock out recovery for the full scheduler window.
+      // Release only the lease this request acquired; successful runs retain their lease.
+      if (scheduledLease?.acquired && leaseRepository && typeof leaseRepository.release === "function") {
+        try {
+          await leaseRepository.release({ scopeKey: scheduledLease.scopeKey, leaseToken: scheduledLease.leaseToken });
+        } catch (releaseError) {
+          console.warn("AX_AUTONOMOUS_LEASE_RELEASE_FAILED", JSON.stringify({
+            project, platform, message:String(releaseError?.message || releaseError).slice(0,180)
+          }));
+        }
+      }
       job.autonomousRun = { status:"BLOCKED", owner:"Ax", stages, error:String(error?.message || error), failedAt:nowIso() };
       res.status(502).json({ ok:false, error:"autonomous mission stopped", job, autonomousRun:job.autonomousRun, detail:error?.payload || null });
     }
