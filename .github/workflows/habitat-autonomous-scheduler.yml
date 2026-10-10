@@ -48,6 +48,8 @@ jobs:
           objective_encoded="$(jq -rn --arg value "$(jq -r '.objective' "${payload_file}")" '$value | @uri')"
           lease_header_args=()
           if [[ "${GITHUB_EVENT_NAME}" == "push" ]]; then
+            # Allow Render to finish its auto-deploy before the guarded one-shot verification request.
+            sleep 75
             # Only the guarded one-shot verification push bypasses lease acquisition.
             lease_header_args=(-H "x-habitat-scheduler-lease: already-claimed")
           fi
