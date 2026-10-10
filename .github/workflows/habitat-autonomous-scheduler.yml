@@ -37,6 +37,7 @@ jobs:
           fi
 
       - name: Dispatch Vice City Files mission
+        id: dispatch
         shell: bash
         env:
           HABITAT_AUTONOMOUS_SCHEDULER_TOKEN: ${{ secrets.HABITAT_AUTONOMOUS_SCHEDULER_TOKEN }}
@@ -109,6 +110,7 @@ jobs:
           fi
 
           echo "Tracking durable content job: ${job_id}"
+          echo "job_id=${job_id}" >> "$GITHUB_OUTPUT"
           final_status=""
           for attempt in $(seq 1 65); do
             status_response="$(curl --silent --show-error --max-time 20 \
@@ -140,3 +142,33 @@ jobs:
             echo "- External publishing remains approval-gated."
             echo "- Checked at: $(date -u +'%Y-%m-%d %H:%M:%S UTC')"
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Download verified MP4
+        if: success()
+        shell: bash
+        env:
+          BASE: https://habitat-1-szzd.onrender.com
+          JOB_ID: ${{ steps.dispatch.outputs.job_id }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${JOB_ID}" ]]; then
+            echo "::error::No verified job ID was produced."
+            exit 1
+          fi
+          curl --fail --silent --show-error --retry 3 --retry-delay 2 --max-time 90 \
+            "${BASE}/content/jobs/${JOB_ID}/artifact" -o vice-city-files-verified.mp4
+          bytes="$(wc -c < vice-city-files-verified.mp4 | tr -d ' ')"
+          if [[ "${bytes}" -lt 1000000 ]]; then
+            echo "::error::Downloaded video is unexpectedly small (${bytes} bytes)."
+            exit 1
+          fi
+          echo "Verified MP4 downloaded: ${bytes} bytes"
+
+      - name: Upload verified MP4 artifact
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vice-city-files-verified-mp4
+          path: vice-city-files-verified.mp4
+          if-no-files-found: error
+          retention-days: 7
