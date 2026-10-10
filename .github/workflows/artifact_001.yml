@@ -167,7 +167,7 @@ jobs:
           assert duration >= 44
           assert int(video["width"]) == 1080 and int(video["height"]) == 1920
           print("CANONICAL ARTIFACT 001 VERIFIED")
-          print(json.dumps({"verified":True,"bytes":size,"durationSeconds":duration,"width":1080,"height":1920,"renderer":"uncropped-images-neural-narration-v3","audio":"narration-present","scenes":6}))
+          print(json.dumps({"verified":True,"bytes":size,"durationSeconds":duration,"width":1080,"height":1920,"renderer":"source-duration-neural-narration-v7-moving-broll","audio":"narration-present","scenes":6}))
           PY
 
       - name: Run deterministic visual and audio QA
@@ -228,6 +228,8 @@ jobs:
           path: |
             habitat-artifact-001.mp4
             habitat-artifact-001-body.mp4
+            habitat-artifact-001.mp4.attribution.txt
+            habitat-artifact-001-body.mp4.attribution.txt
             visual-qa-report.json
             vice-city-release-gate-report.json
           if-no-files-found: warn
