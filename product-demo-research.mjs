@@ -230,7 +230,7 @@ export function registerProductDemoResearch(app) {
         ok: true,
         product: { productName, brand: brand || null, model: model || null, category: category || null, supplierUrl: supplierUrl || null, supplierHost },
         searchedAt: new Date().toISOString(),
-        parserVersion: "1.2-ddg-lite-bing-fallback",
+        parserVersion: "1.3-bing-unwrapped-relevance-filter",
         queries,
         diagnostics,
         candidates,
