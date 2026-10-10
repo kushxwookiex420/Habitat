@@ -1,0 +1,60 @@
+name: DropPilot Daily Demo Footage Research
+
+# Rotate through the 19 catalog batches in pairs. Research finds candidate media;
+# it does not assert commercial rights or download/publish third-party footage.
+on:
+  schedule:
+    - cron: "37 14 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: droppilot-demo-research-daily-v1
+  cancel-in-progress: false
+
+jobs:
+  choose-batches:
+    runs-on: ubuntu-latest
+    outputs:
+      batches: ${{ steps.choose.outputs.batches }}
+    steps:
+      - id: choose
+        shell: bash
+        run: |
+          set -euo pipefail
+          day_of_year="$(date -u +%j)"
+          first=$((10#${day_of_year} % 19))
+          second=$(((first + 1) % 19))
+          printf 'batches=["%s","%s"]\n' "$first" "$second" >> "$GITHUB_OUTPUT"
+          echo "Rotating product demo research through batches $first and $second."
+
+  research:
+    needs: choose-batches
+    name: Research demo sources batch ${{ matrix.batch }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        batch: ${{ fromJSON(needs.choose-batches.outputs.batches) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Search product-specific demo sources
+        env:
+          BATCH_INDEX: ${{ matrix.batch }}
+          HABITAT_BASE_URL: https://habitat-1-szzd.onrender.com
+        run: node scripts/research-droppilot-demo-batch.mjs
+      - name: Save research evidence for rights review
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: DropPilot-Daily-Demo-Research-Batch-${{ matrix.batch }}
+          path: dist/droppilot-demo-research-batch.json
+          if-no-files-found: warn
+          retention-days: 30
