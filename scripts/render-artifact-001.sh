@@ -50,10 +50,10 @@ if len(voice)<80:
  print("Script did not contain production-length narration; using canonical fact-safe fallback.")
 sentences=[x.strip() for x in re.split(r"(?<=[.!?])\s+",voice) if x.strip()]
 if len(sentences)>=6:
- buckets=[[] for _ in range(6)]; counts=[0]*6
- for sentence in sentences:
-  idx=min(range(6),key=lambda j:counts[j])
-  buckets[idx].append(sentence); counts[idx]+=len(sentence.split())
+ buckets=[[] for _ in range(6)]
+ for sentence_index,sentence in enumerate(sentences):
+  scene_index=min(5,(sentence_index*6)//len(sentences))
+  buckets[scene_index].append(sentence)
  lines=[" ".join(b) for b in buckets]
 else:
  words=voice.split()
