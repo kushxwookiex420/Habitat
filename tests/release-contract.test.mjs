@@ -175,3 +175,16 @@ test("autonomous scheduler delegates heavy video rendering to the external GitHu
 
 
 
+
+
+test("DropPilot runs a bounded daily rotation of demo-source research without auto-using third-party footage", async () => {
+  const workflow = await fs.readFile(new URL("../.github/workflows/droppilot-demo-research-daily.yml", import.meta.url), "utf8");
+  const research = await fs.readFile(new URL("../product-demo-research.mjs", import.meta.url), "utf8");
+  assert.ok(workflow.includes('cron: "37 14 * * *"'));
+  assert.ok(workflow.includes("max-parallel: 2"));
+  assert.ok(workflow.includes('first=$((10#${day_of_year} % 19))'));
+  assert.ok(workflow.includes("second=$(((first + 1) % 19))"));
+  assert.ok(workflow.includes("Save research evidence for rights review"));
+  assert.ok(research.includes("Results are leads, NOT proof of reuse rights"));
+  assert.ok(research.includes("commercial permission/licence is confirmed"));
+});
