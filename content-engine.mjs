@@ -17,7 +17,7 @@ function cryptoRandomState() {
 // unless a connected publisher worker explicitly reports it.
 
 export function registerContentEngine(app, deps) {
-  const { nowIso, makeTaskId, taskStore, workerRegistry, brainChat, contentJobRepository, secretVault } = deps;
+  const { nowIso, makeTaskId, taskStore, workerRegistry, brainChat, contentJobRepository, secretVault, getDispatchLeaseRepository } = deps;
   const contentJobs = new Map();
   const tiktokOAuthStates = new Map();
   registerTikTokPublisher(app, (id) => contentJobs.get(id), secretVault);
@@ -989,9 +989,34 @@ export function registerContentEngine(app, deps) {
         console.log("AX_AUTONOMOUS_TICK_SKIPPED", JSON.stringify({reason:"mission already running",at:nowIso()}));
         return;
       }
+      const leaseRepository = typeof getDispatchLeaseRepository === "function" ? getDispatchLeaseRepository() : null;
+      if (!leaseRepository || typeof leaseRepository.acquire !== "function") {
+        console.error("AX_AUTONOMOUS_TICK_SKIPPED", JSON.stringify({reason:"durable dispatch lease unavailable; refusing uncoordinated dispatch",project,platform,at:nowIso()}));
+        return;
+      }
+      const intervalMs = autonomousIntervalMinutes * 60 * 1000;
+      const windowStart = new Date(Math.floor(Date.now() / intervalMs) * intervalMs).toISOString();
+      const scopeKey = "autonomous:" + project + ":" + platform + ":" + windowStart;
+      const leaseToken = crypto.randomUUID();
+      let lease;
+      try {
+        lease = await leaseRepository.acquire({
+          scopeKey,
+          leaseToken,
+          nowIso: nowIso(),
+          expiresAt: new Date(Date.now() + 12 * 60 * 1000).toISOString()
+        });
+      } catch {
+        console.error("AX_AUTONOMOUS_TICK_SKIPPED", JSON.stringify({reason:"durable dispatch lease claim failed; refusing uncoordinated dispatch",project,platform,windowStart,at:nowIso()}));
+        return;
+      }
+      if (!lease.acquired) {
+        console.log("AX_AUTONOMOUS_TICK_SKIPPED", JSON.stringify({reason:"scheduled window already claimed by another instance",project,platform,windowStart,at:nowIso()}));
+        return;
+      }
       autonomousMissionRunning = true;
       const startedAt = nowIso();
-      console.log("AX_AUTONOMOUS_DISPATCH", JSON.stringify({project, platform, objective, startedAt}));
+      console.log("AX_AUTONOMOUS_DISPATCH", JSON.stringify({project, platform, objective, startedAt, windowStart, leaseProtected:true}));
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 10 * 60 * 1000);
       try {
@@ -1010,15 +1035,22 @@ export function registerContentEngine(app, deps) {
           missionStatus:payload?.autonomousRun?.status || null,
           stages:payload?.autonomousRun?.stages || [],
           startedAt,
-          completedAt:nowIso()
+          completedAt:nowIso(),
+          leaseProtected:true,
+          windowStart
         }));
       } catch (error) {
         console.error("AX_AUTONOMOUS_TICK_FAILED", JSON.stringify({
-          message:String(error?.message || error), startedAt, failedAt:nowIso()
+          message:String(error?.message || error), startedAt, failedAt:nowIso(), windowStart
         }));
       } finally {
         clearTimeout(timeout);
         autonomousMissionRunning = false;
+        try {
+          await leaseRepository.release({ scopeKey, leaseToken });
+        } catch {
+          console.warn("AX_AUTONOMOUS_LEASE_RELEASE_FAILED", JSON.stringify({project,platform,windowStart}));
+        }
       }
     };
     const interval = setInterval(runAutonomous, autonomousIntervalMinutes * 60 * 1000);
