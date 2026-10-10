@@ -1,8 +1,6 @@
 name: Artifact 001 execution
 
-# Manual runs remain available. A narrow path-filtered main-branch trigger lets a
-# renderer/workflow change produce a QA-gated review artifact without triggering
-# on ordinary app commits. This workflow never publishes to TikTok.
+# Manual and scheduled runs share the same QA-gated renderer; publishing remains approval-gated.
 on:
   workflow_call:
     inputs:
@@ -11,12 +9,22 @@ on:
         required: false
         default: "Create Artifact 001: Vice City 6: The Next Big Leap"
         type: string
+      source_ref:
+        description: "Source branch or commit for the renderer"
+        required: false
+        default: "main"
+        type: string
   workflow_dispatch:
     inputs:
       objective:
         description: "Content mission objective"
         required: false
         default: "Create Artifact 001: Vice City 6: The Next Big Leap"
+        type: string
+      source_ref:
+        description: "Source branch or commit for the renderer"
+        required: false
+        default: "main"
         type: string
   push:
     branches: ["main"]
@@ -39,6 +47,8 @@ jobs:
     steps:
       - name: Check out Habitat source
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_ref || github.sha }}
 
       - name: Install FFmpeg
         run: |
