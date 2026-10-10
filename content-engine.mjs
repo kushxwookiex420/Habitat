@@ -743,24 +743,18 @@ export function registerContentEngine(app, deps) {
 
       let visualMode = "official-still-image-fallback";
       if (officialVideoPaths.length >= 4) {
-        // Render one real moving-footage scene at a time to keep peak memory low.
+        // Preserve real moving footage with stream-copy scene trims first. Only the final
+        // joined video is encoded, avoiding six expensive transcodes on the small worker.
         visualMode = "official-game-footage";
         const segmentPaths = [];
         for (const [i, scene] of sceneInputs.entries()) {
-          const overlaySvg = buildSceneOverlaySvg({ title:scene.title, subtitle:scene.sub, fontScale });
-          const overlayPath = path.join(outDir, "video-overlay-" + i + ".png");
-          await sharp(Buffer.from(overlaySvg)).png().toFile(overlayPath);
           const segmentPath = path.join(outDir, "video-segment-" + i + ".mp4");
           const sourcePath = officialVideoPaths[i % officialVideoPaths.length];
-          const segmentFilter = "[0:v]scale=540:960:force_original_aspect_ratio=increase,crop=540:960,fps=10,trim=duration=" + scene.dur + ",setpts=PTS-STARTPTS[bg];[1:v]format=rgba[ov];[bg][ov]overlay=0:0:shortest=1,format=yuv420p[v]";
           await execFileAsync(ffmpegPath, [
             "-hide_banner","-loglevel","error","-y",
-            "-threads","1","-analyzeduration","1000000","-probesize","1000000","-stream_loop","-1","-i",sourcePath,
-            "-loop","1","-framerate","10","-t",String(scene.dur),"-i",overlayPath,
-            "-filter_threads","1","-filter_complex_threads","1","-filter_complex",segmentFilter,"-map","[v]","-an",
-            "-c:v","libx264","-preset","ultrafast","-crf","30","-pix_fmt","yuv420p","-threads","1",
-            "-t",String(scene.dur),segmentPath
-          ],{timeout:90000});
+            "-i",sourcePath,"-t",String(scene.dur),"-map","0:v:0","-an",
+            "-c:v","copy","-avoid_negative_ts","make_zero",segmentPath
+          ],{timeout:30000});
           segmentPaths.push(segmentPath);
         }
         const concatPath = path.join(outDir, "video-segments.txt");
@@ -769,10 +763,11 @@ export function registerContentEngine(app, deps) {
         await execFileAsync(ffmpegPath, [
           "-hide_banner","-loglevel","error","-y","-f","concat","-safe","0","-i",concatPath,
           "-c","copy","-movflags","+faststart",silentPath
-        ],{timeout:60000});
+        ],{timeout:30000});
         await execFileAsync(ffmpegPath, [
-          "-hide_banner","-loglevel","error","-y","-i",silentPath,"-i",voicePath,
-          "-vf","scale=1080:1920:flags=fast_bilinear,format=yuv420p","-map","0:v:0","-map","1:a:0",
+          "-hide_banner","-loglevel","error","-y","-threads","1","-i",silentPath,"-i",voicePath,
+          "-vf","scale=540:960:force_original_aspect_ratio=increase,crop=540:960,scale=1080:1920:flags=fast_bilinear,format=yuv420p",
+          "-map","0:v:0","-map","1:a:0",
           "-c:v","libx264","-preset","ultrafast","-crf","32","-threads","1",
           "-af","apad,atrim=duration=45","-c:a","aac","-b:a","128k","-ar","48000","-t","45","-shortest",
           "-movflags","+faststart",outputPath
