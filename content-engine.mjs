@@ -1334,6 +1334,23 @@ export function registerContentEngine(app, deps) {
       // Keep this window claim until expiry; do not release it after a successful run.
     }
     const job = makeJob({ project, objective, platform, format });
+
+    // Durable orchestration mode: let GitHub Actions advance one persisted stage
+    // at a time. This avoids a detached in-process task being lost when a free
+    // Render instance restarts or scales to zero between stage requests.
+    const delegateStages = req.body?.deferStagesToCaller === true ||
+      String(req.query?.deferStagesToCaller || "").toLowerCase() === "true";
+    if (delegateStages) {
+      job.autonomousRun = {
+        status:"STAGES_DELEGATED",
+        owner:"Ax/GitHub Actions",
+        stages:[],
+        acceptedAt:nowIso(),
+        orchestration:"durable-stage-by-stage"
+      };
+      return res.status(200).json({ ok:true, job, autonomousRun:job.autonomousRun });
+    }
+
     // Internal stage calls stay on this instance and bypass Render edge request timeouts.
     const base = "http://127.0.0.1:" + String(process.env.PORT || 10000);
     const stages = [];
