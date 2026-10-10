@@ -754,9 +754,10 @@ export function registerContentEngine(app, deps) {
           const sourcePath = officialVideoPaths[i % officialVideoPaths.length];
           const segmentFilter = "[0:v]scale=540:960:force_original_aspect_ratio=increase,crop=540:960,fps=10,trim=duration=" + scene.dur + ",setpts=PTS-STARTPTS[bg];[1:v]format=rgba[ov];[bg][ov]overlay=0:0:shortest=1,format=yuv420p[v]";
           await execFileAsync(ffmpegPath, [
-            "-hide_banner","-loglevel","error","-y","-stream_loop","-1","-i",sourcePath,
+            "-hide_banner","-loglevel","error","-y",
+            "-threads","1","-analyzeduration","1000000","-probesize","1000000","-stream_loop","-1","-i",sourcePath,
             "-loop","1","-framerate","10","-t",String(scene.dur),"-i",overlayPath,
-            "-filter_complex_threads","1","-filter_complex",segmentFilter,"-map","[v]","-an",
+            "-filter_threads","1","-filter_complex_threads","1","-filter_complex",segmentFilter,"-map","[v]","-an",
             "-c:v","libx264","-preset","ultrafast","-crf","30","-pix_fmt","yuv420p","-threads","1",
             "-t",String(scene.dur),segmentPath
           ],{timeout:90000});
