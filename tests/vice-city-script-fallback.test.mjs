@@ -52,7 +52,7 @@ test("falls back when narration contains placeholder text", () => {
 test("falls back when narration is raw JSON rather than spoken prose", () => {
   const result = normalizeViceCityScript(validScript(JSON.stringify({ voiceover: validVoiceover })));
   assert.ok(result.fallbackReason);
-  assert.equal(result.voiceover, validScript().voiceover === result.voiceover ? validVoiceover : result.voiceover);
+  assert.equal(result.voiceover, normalizeViceCityScript({}).voiceover);
   assert.doesNotMatch(result.voiceover, /^\s*\{/);
 });
 
