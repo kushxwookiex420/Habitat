@@ -60,7 +60,7 @@ test("Artifact 001 uses official images, neural narration, and a clean non-overl
   assert.ok(source.includes("drawbox=x=40:y=1535:w=1000:h=120"));
   assert.ok(source.includes("VOICE_DURATION"));
   assert.ok(source.includes("apad=pad_dur=1"));
-  assert.ok(source.includes("source-duration-neural-narration-v4"));
+  assert.ok(source.includes("source-duration-neural-narration-v5-smooth-30fps"));
   assert.ok(!source.includes("anullsrc"));
   assert.ok(!source.includes("placeholder-silence"));
   assert.ok(workflow.includes("Run deterministic visual and audio QA"));
