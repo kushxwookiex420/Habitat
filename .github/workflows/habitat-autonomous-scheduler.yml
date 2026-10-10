@@ -1,222 +1,25 @@
 name: Habitat Autonomous Content Scheduler
 
+# Keep heavy FFmpeg rendering on GitHub's runner, not the small Render web
+# process. The called workflow researches, scripts, renders, assembles, runs QA,
+# and uploads a review artifact. It never publishes externally.
 on:
-  # Run independently of code deployments so a deploy cannot kill an active mission.
   schedule:
-    - cron: "7 * * * *"
+    - cron: "17 14 * * *"
   workflow_dispatch:
+  push:
+    branches: ["main"]
+    paths:
+      - ".github/workflows/habitat-autonomous-scheduler.yml"
 
 permissions:
   contents: read
 
 concurrency:
-  group: habitat-autonomous-content-v10
+  group: habitat-autonomous-content-external-render-v1
   cancel-in-progress: false
 
 jobs:
-  run:
-    name: Run one lease-protected autonomous content mission
-    runs-on: ubuntu-latest
-    timeout-minutes: 18
-    steps:
-      - name: Require scheduler secret
-        shell: bash
-        env:
-          HABITAT_AUTONOMOUS_SCHEDULER_TOKEN: ${{ secrets.HABITAT_AUTONOMOUS_SCHEDULER_TOKEN }}
-        run: |
-          set -euo pipefail
-          if [[ -z "${HABITAT_AUTONOMOUS_SCHEDULER_TOKEN}" ]]; then
-            echo "::error::Configure HABITAT_AUTONOMOUS_SCHEDULER_TOKEN in both GitHub Actions secrets and Render environment before enabling scheduled missions."
-            exit 1
-          fi
-
-      - name: Dispatch Vice City Files mission
-        id: dispatch
-        shell: bash
-        env:
-          HABITAT_AUTONOMOUS_SCHEDULER_TOKEN: ${{ secrets.HABITAT_AUTONOMOUS_SCHEDULER_TOKEN }}
-        run: |
-          set -euo pipefail
-          if [[ "${GITHUB_EVENT_NAME}" == "push" ]]; then
-            echo "Waiting for Render to deploy the commit before testing the live mission."
-            sleep 75
-          fi
-          BASE="https://habitat-1-szzd.onrender.com"
-          payload_file="$(mktemp)"
-          trap 'rm -f "${payload_file}"' EXIT
-          lease_bypass=false
-          if [[ "${GITHUB_EVENT_NAME}" == "push" ]]; then lease_bypass=true; fi
-          jq -n --arg project "ViceCityFiles" --arg platform "tiktok" --arg format "9:16" --arg objective "Create the next best factual, source-checked Vice City Files short. Use a complete opening and closing, readable text, varied scenes, no unsupported claims, and stop before publishing for human approval." --argjson lease_bypass "${lease_bypass}" '{project:$project,platform:$platform,format:$format,objective:$objective,schedulerLeaseAlreadyHeld:$lease_bypass,deferStagesToCaller:true}' > "${payload_file}"
-          jq -e '.objective | type == "string" and length > 0' "${payload_file}" >/dev/null
-          echo "Validated scheduler payload bytes: $(wc -c < "${payload_file}" | tr -d ' ')"
-
-          objective_encoded="$(jq -rn --arg value "$(jq -r '.objective' "${payload_file}")" '$value | @uri')"
-          lease_header=()
-          if [[ "${GITHUB_EVENT_NAME}" == "push" ]]; then
-            lease_header=(-H "x-habitat-scheduler-lease: already-claimed")
-          fi
-          http_response="$(curl --http1.1 --silent --show-error --max-time 900 \
-            -w '\n%{http_code}\n%{content_type}' \
-            -H "Content-Type: application/json" \
-            -H "Accept: application/json" \
-            -H "Expect:" \
-            -H "x-habitat-scheduler-token: ${HABITAT_AUTONOMOUS_SCHEDULER_TOKEN}" \
-            -H "x-habitat-objective: $(jq -r '.objective' "${payload_file}")" \
-            "${lease_header[@]}" \
-            --data-binary "@${payload_file}" \
-            "${BASE}/content/autonomous-run?objective=${objective_encoded}&project=ViceCityFiles&platform=tiktok&format=9%3A16&schedulerLeaseAlreadyHeld=${lease_bypass}")"
-
-          content_type="$(printf '%s' "${http_response}" | tail -n 1)"
-          http_status="$(printf '%s' "${http_response}" | tail -n 2 | head -n 1)"
-          response="$(printf '%s' "${http_response}" | sed '$d' | sed '$d')"
-
-          echo "Habitat dispatch HTTP status: ${http_status}"
-          echo "Habitat response content type: ${content_type}"
-
-          if [[ "${http_status}" == "409" ]]; then
-            echo "The scheduled window was already claimed; duplicate mission safely skipped."
-            echo "- Result: idempotent duplicate skipped" >> "$GITHUB_STEP_SUMMARY"
-            exit 0
-          fi
-
-          if [[ "${http_status}" != "200" ]]; then
-            echo "::error::Autonomous dispatch returned HTTP ${http_status:-unknown}."
-            if [[ -n "${response}" ]]; then
-              echo "Response preview (first 500 characters):"
-              printf '%s' "${response}" | head -c 500
-              echo
-            fi
-            exit 1
-          fi
-
-          if ! printf '%s' "${response}" | jq -e . >/dev/null 2>&1; then
-            echo "::error::Habitat returned HTTP 200 but the response was not valid JSON."
-            echo "Response preview (first 500 characters):"
-            printf '%s' "${response}" | head -c 500
-            echo
-            exit 1
-          fi
-
-          printf '%s' "${response}" | jq -e '.ok == true and .autonomousRun.status != null' >/dev/null || {
-            echo "::error::Habitat returned JSON, but it did not confirm an accepted autonomous mission."
-            printf '%s' "${response}" | jq .
-            exit 1
-          }
-
-          printf '%s' "${response}" | jq .
-          job_id="$(printf '%s' "${response}" | jq -r '.job.id // empty')"
-          if [[ -z "${job_id}" ]]; then
-            echo "::error::Accepted mission response did not include a durable job id."
-            exit 1
-          fi
-
-          echo "Tracking durable content job: ${job_id}"
-          echo "job_id=${job_id}" >> "$GITHUB_OUTPUT"
-
-          # Run every durable stage from the scheduler runner instead of keeping
-          # the whole mission inside a detached Render process. D1 rehydrates the
-          # job between requests, so a Render restart cannot silently kill the chain.
-          run_stage() {
-            local stage="$1"
-            local timeout="$2"
-            local retries="$3"
-            local response status
-            echo "Running durable content stage: ${stage}"
-            if [[ "${retries}" == "yes" ]]; then
-              response="$(curl --http1.1 --silent --show-error --fail-with-body --retry 6 --retry-all-errors --retry-delay 8 --retry-max-time 180 --max-time "${timeout}" \
-                -w '\n%{http_code}' -X POST \
-                -H "Content-Type: application/json" -H "Accept: application/json" -H "Expect:" \
-                --data '{}' "${BASE}/content/jobs/${job_id}/${stage}" || true)"
-            else
-              response="$(curl --http1.1 --silent --show-error --fail-with-body --max-time "${timeout}" \
-                -w '\n%{http_code}' -X POST \
-                -H "Content-Type: application/json" -H "Accept: application/json" -H "Expect:" \
-                --data '{}' "${BASE}/content/jobs/${job_id}/${stage}" || true)"
-            fi
-            status="$(printf '%s' "${response}" | tail -n 1)"
-            response="$(printf '%s' "${response}" | sed '$d')"
-            echo "Stage ${stage}: HTTP ${status}"
-            if [[ "${status}" != "200" ]] || ! printf '%s' "${response}" | jq -e '.ok == true' >/dev/null 2>&1; then
-              echo "Stage response preview:"
-              printf '%s' "${response}" | jq '{ok,error,renderLoop,review,gate,jobId}' 2>/dev/null || printf '%s' "${response}" | head -c 700
-              echo
-              # Render can finish even if an edge proxy drops the response.
-              # Inspect durable job state before deciding whether the render failed.
-              if [[ "${stage}" == "render-loop" ]]; then
-                local snapshot
-                snapshot="$(curl --silent --show-error --max-time 25 -H "Accept: application/json" "${BASE}/content/jobs/${job_id}" || true)"
-                if printf '%s' "${snapshot}" | jq -e '.ok == true and .job.stages.edit.result.artifact.verified == true and .job.stages.edit.result.artifact.status == "verified"' >/dev/null 2>&1; then
-                  echo "Render output was durably recorded and verified despite the dropped response."
-                  return 0
-                fi
-              fi
-              return 1
-            fi
-            if [[ "${stage}" == "render-loop" ]]; then
-              printf '%s' "${response}" | jq -e '.artifact.verified == true and .visualQA.status == "VISUAL_PASS"' >/dev/null || {
-                echo "::error::Render stage returned without a verified artifact and VISUAL_PASS."
-                return 1
-              }
-            fi
-            if [[ "${stage}" == "ax-review" ]]; then
-              printf '%s' "${response}" | jq -e '.review.status == "AX_APPROVED"' >/dev/null || {
-                echo "::error::Ax review did not approve the artifact."
-                return 1
-              }
-            fi
-            if [[ "${stage}" == "quality-gate" ]]; then
-              printf '%s' "${response}" | jq -e '.gate.status == "READY_TO_PUBLISH"' >/dev/null || {
-                echo "::error::Content quality gate did not reach READY_TO_PUBLISH."
-                return 1
-              }
-            fi
-          }
-
-          run_stage research 240 yes
-          run_stage script 240 yes
-          run_stage render-plan 240 yes
-          run_stage render-loop 900 no
-          run_stage ax-review 240 yes
-          run_stage quality-gate 240 yes
-          final_status="READY_TO_PUBLISH"
-
-          {
-            echo "## Autonomous content mission"
-            echo ""
-            echo "- Project: ViceCityFiles"
-            echo "- Platform: TikTok"
-            echo "- Durable job: ${job_id}"
-            echo "- Result: ${final_status}"
-            echo "- External publishing remains approval-gated."
-            echo "- Checked at: $(date -u +'%Y-%m-%d %H:%M:%S UTC')"
-          } >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Download verified MP4
-        if: success() && steps.dispatch.outputs.job_id != ''
-        shell: bash
-        env:
-          BASE: https://habitat-1-szzd.onrender.com
-          JOB_ID: ${{ steps.dispatch.outputs.job_id }}
-        run: |
-          set -euo pipefail
-          if [[ -z "${JOB_ID}" ]]; then
-            echo "::error::No verified job ID was produced."
-            exit 1
-          fi
-          curl --fail --silent --show-error --retry 3 --retry-delay 2 --max-time 90 \
-            "${BASE}/content/jobs/${JOB_ID}/artifact" -o vice-city-files-verified.mp4
-          bytes="$(wc -c < vice-city-files-verified.mp4 | tr -d ' ')"
-          if [[ "${bytes}" -lt 1000000 ]]; then
-            echo "::error::Downloaded video is unexpectedly small (${bytes} bytes)."
-            exit 1
-          fi
-          echo "Verified MP4 downloaded: ${bytes} bytes"
-
-      - name: Upload verified MP4 artifact
-        if: success() && steps.dispatch.outputs.job_id != ''
-        uses: actions/upload-artifact@v4
-        with:
-          name: vice-city-files-verified-mp4
-          path: vice-city-files-verified.mp4
-          if-no-files-found: error
-          retention-days: 7
+  produce-review-ready-content:
+    name: Research, render, and QA content outside the Render web process
+    uses: ./.github/workflows/artifact_001.yml
