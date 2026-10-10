@@ -17,3 +17,10 @@ test("preserves a valid model voiceover without replacing it", () => {
   assert.equal(result.voiceover, voiceover);
   assert.equal(result.fallbackReason, undefined);
 });
+
+test("falls back when narration is long but required production fields are absent", () => {
+  const result = normalizeViceCityScript({ voiceover: "This is long enough narration but the rest of the script schema is incomplete and cannot be rendered safely." });
+  assert.ok(result.fallbackReason);
+  assert.ok(Array.isArray(result.onScreenText) && result.onScreenText.length > 0);
+  assert.ok(Array.isArray(result.hashtags) && result.hashtags.length > 0);
+});
