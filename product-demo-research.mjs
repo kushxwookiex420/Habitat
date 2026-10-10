@@ -10,7 +10,7 @@ const MAX_QUERY_LENGTH = 180;
 const MAX_RESULTS_PER_QUERY = 10;
 
 function clean(value, max = 180) {
-  return String(value ?? "").replace(/[\\u0000-\\u001f\\u007f]/g, " ").trim().slice(0, max);
+  return String(value ?? "").replace(/[\u0000-\u001f\u007f]/g, " ").trim().slice(0, max);
 }
 
 function decodeHtml(value) {
@@ -18,14 +18,14 @@ function decodeHtml(value) {
     .replace(/&amp;/g, "&").replace(/&quot;/g, '"')
     .replace(/&#x27;|&#39;/g, "'").replace(/&lt;/g, "<")
     .replace(/&gt;/g, ">").replace(/&nbsp;/g, " ")
-    .replace(/&#(\\d+);/g, (_, n) => String.fromCodePoint(Number(n)))
-    .replace(/&#x([\\da-f]+);/gi, (_, n) => String.fromCodePoint(parseInt(n, 16)));
+    .replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(Number(n)))
+    .replace(/&#x([\da-f]+);/gi, (_, n) => String.fromCodePoint(parseInt(n, 16)));
 }
 
 function stripTags(value) {
-  return decodeHtml(String(value || "").replace(/<script[\\s\\S]*?<\\/script>/gi, " ")
-    .replace(/<style[\\s\\S]*?<\\/style>/gi, " ").replace(/<[^>]+>/g, " "))
-    .replace(/\\s+/g, " ").trim();
+  return decodeHtml(String(value || "").replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ").replace(/<[^>]+>/g, " "))
+    .replace(/\s+/g, " ").trim();
 }
 
 function absoluteResultUrl(raw) {
@@ -36,7 +36,7 @@ function absoluteResultUrl(raw) {
     if (redirect) url = decodeURIComponent(redirect);
     else url = parsed.href;
   } catch {}
-  return /^https?:\\/\\//i.test(url) ? url : null;
+  return /^https?:\/\//i.test(url) ? url : null;
 }
 
 // DDG changes its result markup periodically. Parse anchors globally instead of
@@ -45,7 +45,7 @@ function parseDuckDuckGo(html) {
   const source = String(html || "");
   const results = [];
   const seen = new Set();
-  const anchorPattern = /<a\\b([^>]*?)>([\\s\\S]*?)<\\/a>/gi;
+  const anchorPattern = /<a\b([^>]*?)>([\s\S]*?)<\/a>/gi;
   let match;
   while ((match = anchorPattern.exec(source)) && results.length < MAX_RESULTS_PER_QUERY) {
     const attrs = match[1];
@@ -56,19 +56,19 @@ function parseDuckDuckGo(html) {
     if (!url || !title || seen.has(url)) continue;
     seen.add(url);
     const around = source.slice(Math.max(0, match.index - 1800), Math.min(source.length, anchorPattern.lastIndex + 2600));
-    const snippetMatch = around.match(/class=["'][^"']*result__snippet[^"']*["'][^>]*>([\\s\\S]*?)<\\/[^>]+>/i);
+    const snippetMatch = around.match(/class=["'][^"']*result__snippet[^"']*["'][^>]*>([\s\S]*?)<\/[^>]+>/i);
     results.push({ title, url, snippet: stripTags(snippetMatch?.[1] || "") });
   }
 
   // Fallback for the DDG lite layout, which does not always use result__a.
   if (!results.length) {
-    const lite = /<a\\b([^>]*?)href=["']([^"']+)["']([^>]*)>([\\s\\S]*?)<\\/a>/gi;
+    const lite = /<a\b([^>]*?)href=["']([^"']+)["']([^>]*)>([\s\S]*?)<\/a>/gi;
     while ((match = lite.exec(source)) && results.length < MAX_RESULTS_PER_QUERY) {
       const attrs = match[1] + " " + match[3];
       const href = match[2];
       const title = stripTags(match[4]);
       const url = absoluteResultUrl(href);
-      if (!url || !title || !/https?:/i.test(url) || /duckduckgo\\.com\\/(?:html|lite)/i.test(url)) continue;
+      if (!url || !title || !/https?:/i.test(url) || /duckduckgo\.com\/(?:html|lite)/i.test(url)) continue;
       if (/^(?:next|previous|images|videos|news|maps|settings|feedback)$/i.test(title)) continue;
       if (seen.has(url)) continue;
       seen.add(url);
@@ -107,7 +107,7 @@ async function searchWeb(query) {
 }
 
 function hostOf(raw) {
-  try { return new URL(raw).hostname.replace(/^www\\./, ""); } catch { return ""; }
+  try { return new URL(raw).hostname.replace(/^www\./, ""); } catch { return ""; }
 }
 
 export function registerProductDemoResearch(app) {
@@ -159,7 +159,7 @@ export function registerProductDemoResearch(app) {
           const officialOrSupplier = /manufacturer|official|supplier|wholesale/i.test(row.title + " " + host) ||
             (supplierUrl && host && host === hostOf(supplierUrl));
           const videoSignal = /video|watch|demo|demonstrat|how.to|review|youtube|vimeo|tiktok|mp4/i.test(row.title + " " + row.url + " " + row.snippet);
-          const directVideo = /\\.(?:mp4|webm|mov)(?:[?#]|$)/i.test(row.url);
+          const directVideo = /\.(?:mp4|webm|mov)(?:[?#]|$)/i.test(row.url);
           candidates.push({
             ...row, host, query: queries[i],
             sourcePriority: officialOrSupplier ? "check-first" : "review",
