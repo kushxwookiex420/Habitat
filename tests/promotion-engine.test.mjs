@@ -5,6 +5,8 @@ import { buildPromotionPlan, registerPromotionEngine } from "../promotion-engine
 const base = {
   productName: "Universal Car Seat Gap Organizer",
   productUrl: "https://2tanuk-yx.myshopify.com/products/car-organizer",
+  productActive: true,
+  productAvailable: true,
   category: "Car organization",
   features: ["Multiple storage pockets", "Available in four colors"],
   networks: ["tiktok", "instagram", "facebook", "pinterest", "youtube", "x", "threads", "bluesky"]
@@ -29,7 +31,12 @@ test("builds distinct multi-network drafts with tracked links", () => {
 test("rejects missing product name or URL and insecure destinations", () => {
   assert.throws(() => buildPromotionPlan({ productUrl: base.productUrl }), /productName is required/);
   assert.throws(() => buildPromotionPlan({ productName: "Item" }), /productUrl is required/);
-  assert.throws(() => buildPromotionPlan({ productName: "Item", productUrl: "http://example.com/item" }), /HTTPS/);
+  assert.throws(() => buildPromotionPlan({ ...base, productUrl: "http://2tanuk-yx.myshopify.com/products/item" }), /HTTPS/);
+  assert.throws(() => buildPromotionPlan({ ...base, productUrl: "https://example.com/products/item" }), /configured DropPilot Shopify store domain/);
+  assert.throws(() => buildPromotionPlan({ ...base, productUrl: "https://2tanuk-yx.myshopify.com/collections/home" }), /directly to a Shopify product page/);
+  assert.throws(() => buildPromotionPlan({ ...base, productActive: false }), /productActive must be true/);
+  assert.throws(() => buildPromotionPlan({ ...base, productAvailable: false }), /productAvailable must be true/);
+  assert.throws(() => buildPromotionPlan({ ...base, productActive: undefined }), /productActive must be true/);
 });
 
 test("rejects unsupported networks and deduplicates requested networks", () => {
@@ -54,4 +61,8 @@ test("registers a draft-only API and exposes truthful publishing status", () => 
   registerPromotionEngine(app);
   assert.equal(typeof routes.get("GET /promotion/status"), "function");
   assert.equal(typeof routes.get("POST /promotion/plan"), "function");
+});
+
+test("enforces platform caption length limits before returning drafts", () => {
+  assert.throws(() => buildPromotionPlan({ ...base, productName: "X".repeat(180), features: ["feature ".repeat(100)], networks: ["bluesky"] }), /bluesky caption exceeds its 300-character limit/);
 });
