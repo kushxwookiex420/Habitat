@@ -37,24 +37,50 @@ jobs:
           set -euo pipefail
           BASE="https://habitat-1-szzd.onrender.com"
           http_response="$(curl --silent --show-error --max-time 900 \
-            -w '\n%{http_code}' \
+            -w '\n%{http_code}\n%{content_type}' \
             -H "content-type: application/json" \
             -H "x-habitat-scheduler-token: ${HABITAT_AUTONOMOUS_SCHEDULER_TOKEN}" \
             -X POST "${BASE}/content/autonomous-run" \
             -d '{"project":"ViceCityFiles","platform":"tiktok","format":"9:16","objective":"Create the next best factual, source-checked Vice City Files short. Use a complete opening and closing, readable text, varied scenes, no unsupported claims, and stop before publishing for human approval."}')"
-          status="$(printf '%s' "$http_response" | tail -n 1)"
-          response="$(printf '%s' "$http_response" | sed '$d')"
-          echo "${response}" | jq .
-          if [[ "${status}" == "409" ]]; then
+
+          content_type="$(printf '%s' "${http_response}" | tail -n 1)"
+          http_status="$(printf '%s' "${http_response}" | tail -n 2 | head -n 1)"
+          response="$(printf '%s' "${http_response}" | sed '$d' | sed '$d')"
+
+          echo "Habitat dispatch HTTP status: ${http_status}"
+          echo "Habitat response content type: ${content_type}"
+
+          if [[ "${http_status}" == "409" ]]; then
             echo "The scheduled window was already claimed; duplicate mission safely skipped."
             echo "- Result: idempotent duplicate skipped" >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
-          if [[ "${status}" != "200" ]]; then
-            echo "::error::Autonomous dispatch returned HTTP ${status}"
+
+          if [[ "${http_status}" != "200" ]]; then
+            echo "::error::Autonomous dispatch returned HTTP ${http_status:-unknown}."
+            if [[ -n "${response}" ]]; then
+              echo "Response preview (first 500 characters):"
+              printf '%s' "${response}" | head -c 500
+              echo
+            fi
             exit 1
           fi
-          echo "${response}" | jq -e '.ok == true and .autonomousRun.status != null' >/dev/null
+
+          if ! printf '%s' "${response}" | jq -e . >/dev/null 2>&1; then
+            echo "::error::Habitat returned HTTP 200 but the response was not valid JSON."
+            echo "Response preview (first 500 characters):"
+            printf '%s' "${response}" | head -c 500
+            echo
+            exit 1
+          fi
+
+          printf '%s' "${response}" | jq -e '.ok == true and .autonomousRun.status != null' >/dev/null || {
+            echo "::error::Habitat returned JSON, but it did not confirm an accepted autonomous mission."
+            printf '%s' "${response}" | jq .
+            exit 1
+          }
+
+          printf '%s' "${response}" | jq .
           {
             echo "## Autonomous content mission"
             echo ""
