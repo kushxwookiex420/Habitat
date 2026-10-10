@@ -1,1 +1,2 @@
 One-time trigger: rerun the 19-batch DropPilot catalog research after the demo-result parser fixes. This file exists only to launch that controlled rerun; do not edit it to schedule recurring runs.
+Rerun after Bing fallback and honest empty-result accounting: 2026-10-10T03:00Z
