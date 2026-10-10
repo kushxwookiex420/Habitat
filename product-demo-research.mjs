@@ -41,7 +41,7 @@ function absoluteResultUrl(raw) {
 
 // DDG changes its result markup periodically. Parse anchors globally instead of
 // depending on one exact <div class="result..."> wrapper.
-function parseDuckDuckGo(html) {
+export function parseDuckDuckGo(html) {
   const source = String(html || "");
   const results = [];
   const seen = new Set();
