@@ -7,6 +7,7 @@ on:
     branches: [main]
     paths:
       - ".github/workflows/habitat-autonomous-scheduler.yml"
+      - "content-engine.mjs"
   schedule:
     - cron: "7 * * * *"
   workflow_dispatch:
@@ -41,6 +42,10 @@ jobs:
           HABITAT_AUTONOMOUS_SCHEDULER_TOKEN: ${{ secrets.HABITAT_AUTONOMOUS_SCHEDULER_TOKEN }}
         run: |
           set -euo pipefail
+          if [[ "${GITHUB_EVENT_NAME}" == "push" ]]; then
+            echo "Waiting for Render to deploy the commit before testing the live mission."
+            sleep 75
+          fi
           BASE="https://habitat-1-szzd.onrender.com"
           payload_file="$(mktemp)"
           trap 'rm -f "${payload_file}"' EXIT
