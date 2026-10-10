@@ -146,3 +146,13 @@ test("Artifact 001 workflow can rebuild branded intro/outro clips when the optio
   assert.ok(workflow.includes("test -s assets/vice-city-files-intro.mp4"));
   assert.ok(workflow.includes("test -s assets/vice-city-files-outro.mp4"));
 });
+
+
+test("visual QA falls back to system FFmpeg when bundled npm binaries are absent", async () => {
+  const visualQa = await fs.readFile(new URL("../visual-qa.mjs", import.meta.url), "utf8");
+  assert.ok(visualQa.includes('process.env.HABITAT_FFMPEG_PATH || "ffmpeg"'));
+  assert.ok(visualQa.includes('process.env.HABITAT_FFPROBE_PATH || "ffprobe"'));
+  assert.ok(visualQa.includes('createRequire(import.meta.url)'));
+  assert.doesNotMatch(visualQa, /^import ffmpegPath from "ffmpeg-static";/m);
+  assert.doesNotMatch(visualQa, /^import ffprobeStatic from "ffprobe-static";/m);
+});
