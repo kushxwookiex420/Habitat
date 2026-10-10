@@ -1,0 +1,63 @@
+name: Habitat Continuous Health Watch
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: habitat-health-watch
+  cancel-in-progress: true
+
+jobs:
+  health:
+    name: Check live Habitat service
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Check backend health
+        shell: bash
+        run: |
+          set -euo pipefail
+          BASE="https://habitat-1-szzd.onrender.com"
+
+          health="$(curl --fail --silent --show-error --max-time 25 "$BASE/health")"
+          echo "$health" | jq .
+          echo "$health" | jq -e '
+            .habitat == "online" and
+            .backend == "ready" and
+            .brain == "ready"
+          ' >/dev/null
+
+          continuity="$(curl --fail --silent --show-error --max-time 25 "$BASE/continuity/status")"
+          echo "$continuity" | jq .
+          echo "$continuity" | jq -e '
+            .ok == true and
+            .durableAcrossConversations == true and
+            .runtimeJobPersistence == "cloudflare-d1"
+          ' >/dev/null
+
+          {
+            echo "## Habitat health watch: PASS"
+            echo ""
+            echo "- Live backend responds over HTTPS."
+            echo "- AI provider configuration is present (this does not prove every model call succeeds)."
+            echo "- Continuity checkpoint and Cloudflare D1 persistence are reported ready."
+            echo "- Checked at: $(date -u +'%Y-%m-%d %H:%M:%S UTC')"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Report failed check in workflow summary
+        if: failure()
+        shell: bash
+        run: |
+          {
+            echo "## Habitat health watch: FAIL"
+            echo ""
+            echo "At least one live endpoint or readiness assertion failed."
+            echo "Inspect this run's logs and the Render service logs before attempting a repair."
+            echo "This workflow is diagnostic only; it does not restart services, modify secrets, or change production data."
+            echo "- Checked at: $(date -u +'%Y-%m-%d %H:%M:%S UTC')"
+          } >> "$GITHUB_STEP_SUMMARY"
