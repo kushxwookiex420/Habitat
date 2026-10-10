@@ -74,3 +74,45 @@ test("content job survives a new app instance and can continue research from D1-
     assert.ok(durable.get(jobId).stages.research.result);
   });
 });
+
+
+test("autonomous scheduler can delegate durable stages to GitHub instead of a detached Render task", async () => {
+  const durable = new Map();
+  const repository = {
+    async upsert(job) { durable.set(job.id, structuredClone(job)); return structuredClone(job); },
+    async get(id) { return structuredClone(durable.get(id) || null); },
+    async list() { return [...durable.values()].map(x => structuredClone(x)); },
+    async healthCheck() { return { ok:true, durable:true }; }
+  };
+  const previousToken = process.env.HABITAT_AUTONOMOUS_SCHEDULER_TOKEN;
+  process.env.HABITAT_AUTONOMOUS_SCHEDULER_TOKEN = "test-scheduler-token";
+  try {
+    await withServer(makeApp(repository), async base => {
+      const response = await fetch(base + "/content/autonomous-run", {
+        method:"POST",
+        headers:{
+          "content-type":"application/json",
+          "x-habitat-scheduler-token":"test-scheduler-token",
+          "x-habitat-scheduler-lease":"already-claimed"
+        },
+        body:JSON.stringify({
+          project:"ViceCityFiles",
+          objective:"Test durable delegated orchestration",
+          platform:"tiktok",
+          format:"9:16",
+          deferStagesToCaller:true
+        })
+      });
+      const body = await response.json();
+      assert.equal(response.status,200,JSON.stringify(body));
+      assert.equal(body.ok,true);
+      assert.equal(body.autonomousRun.status,"STAGES_DELEGATED");
+      assert.equal(body.autonomousRun.orchestration,"durable-stage-by-stage");
+      assert.ok(durable.has(body.job.id),"delegated mission must be persisted before the response completes");
+      assert.equal(durable.get(body.job.id).autonomousRun.status,"STAGES_DELEGATED");
+    });
+  } finally {
+    if (previousToken === undefined) delete process.env.HABITAT_AUTONOMOUS_SCHEDULER_TOKEN;
+    else process.env.HABITAT_AUTONOMOUS_SCHEDULER_TOKEN = previousToken;
+  }
+});
