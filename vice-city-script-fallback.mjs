@@ -5,7 +5,9 @@
  */
 export function normalizeViceCityScript(script) {
   const value = script && typeof script === "object" ? script : {};
-  if (typeof value.voiceover === "string" && value.voiceover.trim().length >= 80) {
+  const hasRequiredFields = ["title", "hook", "caption"].every(key => typeof value[key] === "string" && value[key].trim()) &&
+    ["onScreenText", "shotList", "hashtags"].every(key => Array.isArray(value[key]) && value[key].length > 0);
+  if (hasRequiredFields && typeof value.voiceover === "string" && value.voiceover.trim().length >= 80) {
     return { ...value, voiceover: value.voiceover.trim() };
   }
   return {
