@@ -225,6 +225,8 @@ test("Artifact 001 uses six moving B-roll clips with attribution and a no-gamepl
   const workflow = await fs.readFile(new URL("../.github/workflows/artifact_001.yml", import.meta.url), "utf8");
   assert.equal((source.match(/videos\.pexels\.com\/video-files\//g) || []).length, 8);
   assert.ok(source.includes('cp "$TMP/broll-attribution.txt" "${OUT}.attribution.txt"'));
+  assert.ok(source.includes('cp "$TMP/scene-plan.json" vice-city-scene-plan.json'));
+  assert.ok(source.includes('cp "$TMP/broll-credit-line.txt" vice-city-broll-credit-line.txt'));
   assert.ok(source.includes('map "[v]" -map 12:a:0'));
   assert.ok(workflow.includes("habitat-artifact-001-body.mp4.attribution.txt"));
   assert.ok(workflow.includes("habitat-artifact-001.mp4.attribution.txt"));
