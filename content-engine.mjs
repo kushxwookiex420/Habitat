@@ -1421,6 +1421,16 @@ export function registerContentEngine(app, deps) {
       for (const job of restoredJobs) {
         if (!job || typeof job.id !== "string") continue;
         let changed = false;
+        if (job.autonomousRun?.status === "RUNNING") {
+          job.autonomousRun = {
+            ...job.autonomousRun,
+            status:"INTERRUPTED",
+            interruptedAt:nowIso(),
+            recoveryAction:"The worker process restarted before the mission completed; start a fresh mission rather than treating the old worker as active."
+          };
+          changed = true;
+          interrupted += 1;
+        }
         for (const stage of Object.values(job.stages || {})) {
           if (stage?.status === "running") {
             stage.status = "interrupted";
