@@ -205,7 +205,7 @@ test("video renderer derives narration and mobile-safe scene overlays from the g
   assert.ok(renderer.includes('scene-plan.json'));
   assert.ok(renderer.includes('jq -r ".scenes[$i].title"'));
   assert.ok(renderer.includes('jq -r ".scenes[$i].subtitle"'));
-  assert.ok(renderer.includes('renderer":"source-duration-neural-narration-v6-script-driven"'));
+  assert.ok(renderer.includes('renderer":"source-duration-neural-narration-v7-moving-broll"'));
 });
 
 
