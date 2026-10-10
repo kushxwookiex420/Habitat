@@ -1,23 +1,53 @@
 name: Habitat Autonomous Content Scheduler
 
 on:
-  # Keep this separate from deploy-triggered checks: video rendering belongs on
-  # GitHub's runner, not a detached task on a sleeping/restarting Render instance.
+  # Run daily and allow a manual run; code changes to this scheduler also
+  # exercise the complete production path instead of the old Render dispatch.
   schedule:
     - cron: "17 14 * * *"
   workflow_dispatch:
+  push:
+    branches: ["main"]
+    paths:
+      - ".github/workflows/habitat-autonomous-scheduler.yml"
 
 permissions:
   contents: read
 
 concurrency:
-  group: habitat-autonomous-content-v11
+  group: habitat-autonomous-content-v12
   cancel-in-progress: false
 
 jobs:
+  choose-daily-topic:
+    name: Select a dated, rotating content objective
+    runs-on: ubuntu-latest
+    outputs:
+      objective: ${{ steps.select.outputs.objective }}
+    steps:
+      - name: Choose the daily editorial angle
+        id: select
+        shell: bash
+        run: |
+          set -euo pipefail
+          day="$(date -u +%F)"
+          weekday="$(date -u +%u)"
+          case "$weekday" in
+            1) angle="official release timing and what Rockstar has actually confirmed" ;;
+            2) angle="Jason and Lucia's confirmed story setup" ;;
+            3) angle="Vice City and Leonida, with real-world Miami context clearly labeled as B-roll" ;;
+            4) angle="officially confirmed launch platforms and availability" ;;
+            5) angle="confirmed trailer details, separating facts from speculation" ;;
+            6) angle="the legacy of Vice City and its confirmed connection to GTA VI" ;;
+            7) angle="one distinct official Rockstar update not repeated in recent videos" ;;
+          esac
+          objective="Create a fresh Vice City Files short for $day about $angle. Research official sources first; keep every claim limited to verified information; omit rumors and unsupported details. Choose a different hook, scene sequence, captions, and daily-rotated B-roll from recent videos. Use six distinct scene beats, readable labels, natural 45-60 second narration, the approved intro and branded outro, and stop for human approval before publishing."
+          echo "objective=$objective" >> "$GITHUB_OUTPUT"
+
   render:
-    name: Create and QA one autonomous Vice City Files short
+    name: Create, render, and QA the daily review artifact
+    needs: choose-daily-topic
     uses: ./.github/workflows/artifact_001.yml
     with:
-      objective: "Create a fresh Vice City Files short about one distinct Rockstar-confirmed GTA VI detail. Choose a different angle, hook, and scene sequence rather than repeating the previous video. Keep every claim limited to verified official information; omit rumors and anything not established by the supplied research. Use six distinct scene beats, readable labels, natural 45-60 second narration, a complete opening and closing, and stop before publishing for human approval."
+      objective: ${{ needs.choose-daily-topic.outputs.objective }}
     secrets: inherit
