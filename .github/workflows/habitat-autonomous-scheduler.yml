@@ -123,15 +123,15 @@ jobs:
             local response status
             echo "Running durable content stage: ${stage}"
             if [[ "${retries}" == "yes" ]]; then
-              response="$(curl --http1.1 --silent --show-error --retry 6 --retry-all-errors --retry-delay 8 --retry-max-time 180 --max-time "${timeout}" \
+              response="$(curl --http1.1 --silent --show-error --fail-with-body --retry 6 --retry-all-errors --retry-delay 8 --retry-max-time 180 --max-time "${timeout}" \
                 -w '\n%{http_code}' -X POST \
                 -H "Content-Type: application/json" -H "Accept: application/json" -H "Expect:" \
-                --data '{}' "${BASE}/content/jobs/${job_id}/${stage}")"
+                --data '{}' "${BASE}/content/jobs/${job_id}/${stage}" || true)"
             else
-              response="$(curl --http1.1 --silent --show-error --max-time "${timeout}" \
+              response="$(curl --http1.1 --silent --show-error --fail-with-body --max-time "${timeout}" \
                 -w '\n%{http_code}' -X POST \
                 -H "Content-Type: application/json" -H "Accept: application/json" -H "Expect:" \
-                --data '{}' "${BASE}/content/jobs/${job_id}/${stage}")"
+                --data '{}' "${BASE}/content/jobs/${job_id}/${stage}" || true)"
             fi
             status="$(printf '%s' "${response}" | tail -n 1)"
             response="$(printf '%s' "${response}" | sed '$d')"
