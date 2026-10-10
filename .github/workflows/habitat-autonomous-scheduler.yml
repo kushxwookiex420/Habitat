@@ -1,25 +1,23 @@
 name: Habitat Autonomous Content Scheduler
 
-# Keep heavy FFmpeg rendering on GitHub's runner, not the small Render web
-# process. The called workflow researches, scripts, renders, assembles, runs QA,
-# and uploads a review artifact. It never publishes externally.
 on:
+  # Keep this separate from deploy-triggered checks: video rendering belongs on
+  # GitHub's runner, not a detached task on a sleeping/restarting Render instance.
   schedule:
     - cron: "17 14 * * *"
   workflow_dispatch:
-  push:
-    branches: ["main"]
-    paths:
-      - ".github/workflows/habitat-autonomous-scheduler.yml"
 
 permissions:
   contents: read
 
 concurrency:
-  group: habitat-autonomous-content-external-render-v1
+  group: habitat-autonomous-content-v11
   cancel-in-progress: false
 
 jobs:
-  produce-review-ready-content:
-    name: Research, render, and QA content outside the Render web process
+  render:
+    name: Create and QA one autonomous Vice City Files short
     uses: ./.github/workflows/artifact_001.yml
+    with:
+      objective: "Create the next best factual, source-checked Vice City Files short. Use a complete opening and closing, readable text, varied scenes, no unsupported claims, and stop before publishing for human approval."
+    secrets: inherit
