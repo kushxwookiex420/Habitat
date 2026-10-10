@@ -22,7 +22,11 @@ jobs:
           node --check server.mjs
           node --check content-engine.mjs
           node --check visual-qa.mjs
+      - name: Run regression tests
+        run: npm test
       - name: Verify required modules
         run: |
           test -f content-engine.mjs
           test -f visual-qa.mjs
+          test -f product-demo-research.mjs
+          test -f product-demo-renderer.mjs
