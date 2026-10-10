@@ -1123,7 +1123,7 @@ export function registerContentEngine(app, deps) {
     const project = String(req.body?.project || req.query?.project || "ViceCityFiles").trim();
     const platform = String(req.body?.platform || req.query?.platform || "tiktok").trim().toLowerCase();
     const format = String(req.body?.format || req.query?.format || "9:16").trim();
-    const leaseAlreadyHeld = String(req.get("x-habitat-scheduler-lease") || "") === "already-claimed";
+    const leaseAlreadyHeld = String(req.get("x-habitat-scheduler-lease") || "") === "already-claimed" || req.body?.schedulerLeaseAlreadyHeld === true;
     let scheduledLease = null;
     let leaseRepository = null;
     if (!leaseAlreadyHeld) {
