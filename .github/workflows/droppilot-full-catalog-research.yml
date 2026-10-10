@@ -2,6 +2,9 @@ name: DropPilot full catalog demo research
 
 on:
   workflow_dispatch:
+  push:
+    paths:
+      - 'scripts/trigger-droppilot-catalog-research.txt'
 
 permissions:
   contents: read
