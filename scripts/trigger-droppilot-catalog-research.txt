@@ -2,3 +2,4 @@ One-time trigger: rerun the 19-batch DropPilot catalog research after the demo-r
 Rerun after Bing fallback and honest empty-result accounting: 2026-10-10T03:00Z
 Parser regex fix deployed candidate; rerun catalog against corrected Bing fallback: 2026-10-10T03:00:30Z
 Retry catalog run using parser-v2 concurrency group after stale queued run: 2026-10-10T03:06Z
+Rerun catalog after parser v1.3 deployed and release checks passed: 2026-10-10T03:16Z
