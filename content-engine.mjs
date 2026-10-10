@@ -4,6 +4,7 @@ import ffprobeStatic from "ffprobe-static";
 
 const ffprobePath = ffprobeStatic.path;
 import { runVisualQA } from "./visual-qa.mjs";
+import { normalizeViceCityScript } from "./vice-city-script-fallback.mjs";
 import { DEJAVU_REGULAR, DEJAVU_BOLD } from "./font-paths.mjs";
 import { publishTikTokDirect, registerTikTokPublisher, tiktokConfig } from "./tiktok-publisher.mjs";
 
@@ -394,6 +395,11 @@ export function registerContentEngine(app, deps) {
       const text = response?.choices?.[0]?.message?.content || "";
       let script;
       try { script = JSON.parse(text); } catch { script = { raw: text }; }
+      if (job.project === "ViceCityFiles") {
+        const normalized = normalizeViceCityScript(script);
+        if (normalized.fallbackReason) console.warn("CONTENT_SCRIPT_FALLBACK", job.id, normalized.fallbackReason);
+        script = normalized;
+      }
 
       update(job, "script", "completed", script);
       update(job, "edit", "ready");
