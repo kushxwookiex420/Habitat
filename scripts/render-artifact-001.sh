@@ -120,6 +120,8 @@ for i,line in enumerate(lines):
  if str(candidate).strip().lower() in ("title card","end card") or str(candidate).strip().lower()==title.lower() or str(candidate).strip().lower() in used_subtitles:
   candidate=fallback_subs[i]
  subtitle=clean_label(candidate,34,fallback_subs[i])
+ if len(subtitle.split()) >= 4 and line.strip().lower().startswith(subtitle.lower()):
+  subtitle=clean_label(fallback_subs[i],34,fallback_subs[i])
  if subtitle.lower()==title.lower() or subtitle.lower() in used_subtitles:
   subtitle=clean_label(fallback_subs[i],34,fallback_subs[i])
  if subtitle.lower()==title.lower() or subtitle.lower() in used_subtitles:
