@@ -1,13 +1,7 @@
 name: Habitat Autonomous Content Scheduler
 
 on:
-  # Safe bootstrap trigger: changing this workflow can exercise the real dispatch path.
-  # Re-trigger once after autonomous-run was changed to acknowledge before rendering.
-  push:
-    branches: [main]
-    paths:
-      - ".github/workflows/habitat-autonomous-scheduler.yml"
-      - "content-engine.mjs"
+  # Run independently of code deployments so a deploy cannot kill an active mission.
   schedule:
     - cron: "7 * * * *"
   workflow_dispatch:
