@@ -20,13 +20,13 @@ function cleanText(value) {
 
 function narrationProblem(value) {
   const text = cleanText(value);
+  if (/\b(lorem ipsum|insert narration|voiceover goes here|placeholder text|as an ai language model)\b/i.test(text)) return "voiceover contains placeholder or meta text";
+  if (/^(\s*\{[\s\S]*\}|\s*\[[\s\S]*\])$/.test(text)) return "voiceover contains raw structured data instead of narration";
   if (text.length < 180) return "voiceover too short for a complete short-form narration";
   const words = text.match(/[\p{L}\p{N}]+(?:['’][\p{L}]+)*/gu) || [];
   if (words.length < 35) return "voiceover has fewer than 35 spoken words";
-  if (/^(\s*\{[\s\S]*\}|\s*\[[\s\S]*\])$/.test(text)) return "voiceover contains raw structured data instead of narration";
-  if (/\b(lorem ipsum|insert narration|voiceover goes here|placeholder text|as an ai language model)\b/i.test(text)) return "voiceover contains placeholder or meta text";
   const unique = new Set(words.map(word => word.toLowerCase()));
-  if (words.length >= 35 && unique.size / words.length < 0.28) return "voiceover is excessively repetitive";
+  if (unique.size / words.length < 0.28) return "voiceover is excessively repetitive";
   if ((text.match(/[.!?](?:\s|$)/g) || []).length < 2) return "voiceover lacks sentence boundaries";
   return null;
 }
