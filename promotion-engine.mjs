@@ -38,6 +38,22 @@ function trackedUrl(rawUrl, campaign, network) {
 function compactTags(network) {
   return HASHTAGS[network] || ["#DropPilotMarket"];
 }
+
+function fitCaption(network, caption, productName, link, hashtags, limit) {
+  if (caption.length <= limit) return caption;
+  const prefix = network === "x" ? "Product find: " : "Product: ";
+  const tag = hashtags[0] || "";
+  let suffix = ". Details: " + link + (tag ? "\n\n" + tag : "");
+  let available = limit - prefix.length - suffix.length;
+  if (available < 1 && tag) {
+    suffix = ". Details: " + link;
+    available = limit - prefix.length - suffix.length;
+  }
+  if (available < 1) {
+    throw new Error(network + " tracked product URL is too long for its " + limit + "-character caption limit");
+  }
+  return prefix + productName.slice(0, available).trimEnd() + suffix;
+}
 function captionFor(network, productName, category, features, link) {
   const detail = features.length ? " " + features.slice(0, 3).join(" · ") + "." : "";
   const categoryLine = category ? " " + category + " find." : "";
@@ -77,8 +93,9 @@ export function buildPromotionPlan(input = {}) {
   const drafts = networks.map(network => {
     const url = trackedUrl(rawUrl, campaign, network);
     const hashtags = compactTags(network);
-    const caption = captionFor(network, productName, category, features, url) + "\n\n" + hashtags.join(" ");
+    const rawCaption = captionFor(network, productName, category, features, url) + "\n\n" + hashtags.join(" ");
     const limit = CAPTION_LIMITS[network];
+    const caption = fitCaption(network, rawCaption, productName, url, hashtags, limit);
     if (caption.length > limit) throw new Error(network + " caption exceeds its " + limit + "-character limit; shorten product details or features");
     return {
       network,
