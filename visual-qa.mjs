@@ -6,10 +6,21 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import fs from "node:fs/promises";
-import ffmpegPath from "ffmpeg-static";
-import ffprobeStatic from "ffprobe-static";
+import { createRequire } from "node:module";
 
-const ffprobePath = ffprobeStatic.path;
+// Prefer bundled binaries when the npm packages are installed (Render), but
+// fall back to system FFmpeg/FFprobe in lean CI runners that install apt packages.
+const require = createRequire(import.meta.url);
+let ffmpegPath = process.env.HABITAT_FFMPEG_PATH || "ffmpeg";
+let ffprobePath = process.env.HABITAT_FFPROBE_PATH || "ffprobe";
+try {
+  const bundledFfmpeg = require("ffmpeg-static");
+  if (bundledFfmpeg) ffmpegPath = bundledFfmpeg;
+} catch {}
+try {
+  const bundledFfprobe = require("ffprobe-static");
+  if (bundledFfprobe?.path) ffprobePath = bundledFfprobe.path;
+} catch {}
 
 const execFileAsync = promisify(execFile);
 
