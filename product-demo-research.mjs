@@ -196,7 +196,7 @@ export function registerProductDemoResearch(app) {
         ok: true,
         product: { productName, brand: brand || null, model: model || null, category: category || null, supplierUrl: supplierUrl || null, supplierHost },
         searchedAt: new Date().toISOString(),
-        parserVersion: "1.1-fallback-html-lite",
+        parserVersion: "1.2-ddg-lite-bing-fallback",
         queries,
         diagnostics,
         candidates,
