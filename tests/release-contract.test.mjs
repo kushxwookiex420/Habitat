@@ -231,7 +231,8 @@ test("Artifact 001 uses six moving B-roll clips with attribution and a no-gamepl
   assert.ok(workflow.includes("habitat-artifact-001-body.mp4.attribution.txt"));
   assert.ok(workflow.includes("vice-city-scene-plan.json"));
   assert.ok(workflow.includes("vice-city-broll-credit-line.txt"));
-  assert.ok(workflow.includes("source_count < 6"));
+  assert.ok(workflow.includes("source_count >= 6"));
+  assert.ok(workflow.includes("sourceCount < 6"));
   assert.ok(workflow.includes("habitat-artifact-001.mp4.attribution.txt"));
 });
 
