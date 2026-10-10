@@ -16,7 +16,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: habitat-autonomous-content-v3
+  group: habitat-autonomous-content-v4
   cancel-in-progress: false
 
 jobs:
