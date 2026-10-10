@@ -177,6 +177,8 @@ test("autonomous scheduler delegates heavy video rendering to the external GitHu
   assert.ok(scheduler.includes("date -u +%u"));
   assert.ok(scheduler.includes("needs.choose-daily-topic.outputs.objective"));
   assert.ok(scheduler.includes("daily-rotated B-roll"));
+  assert.ok(scheduler.includes("natural scene subtitles rather than generic title-card or verified-closing labels"));
+  assert.ok(!scheduler.includes('labels like "title card"'));
   assert.ok(scheduler.includes("source_ref: main"));
   assert.ok(renderer.includes("source_ref:"));
   assert.ok(renderer.includes("ref: ${{ inputs.source_ref || github.sha }}"));
