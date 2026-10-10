@@ -1083,11 +1083,13 @@ export function registerContentEngine(app, deps) {
     if (expectedBytes.length !== suppliedBytes.length || !crypto.timingSafeEqual(expectedBytes, suppliedBytes)) {
       return res.status(401).json({ ok:false, error:"unauthorized autonomous scheduler request" });
     }
-    const objective = String(req.body?.objective || "").trim();
-    if (!objective) return res.status(400).json({ ok:false, error:"objective required" });
-    const project = String(req.body?.project || "ViceCityFiles").trim();
-    const platform = String(req.body?.platform || "tiktok").trim().toLowerCase();
-    const format = String(req.body?.format || "9:16").trim();
+    // JSON remains the primary contract. Accept query fallbacks for external
+    // schedulers in case an intermediary delivers the request without its body.
+    const objective = String(req.body?.objective || req.query?.objective || "").trim();
+    if (!objective) return res.status(400).json({ ok:false, error:"objective required", bodyParsed: Boolean(req.body && Object.keys(req.body).length), contentType: String(req.get("content-type") || "") });
+    const project = String(req.body?.project || req.query?.project || "ViceCityFiles").trim();
+    const platform = String(req.body?.platform || req.query?.platform || "tiktok").trim().toLowerCase();
+    const format = String(req.body?.format || req.query?.format || "9:16").trim();
     const leaseAlreadyHeld = String(req.get("x-habitat-scheduler-lease") || "") === "already-claimed";
     let scheduledLease = null;
     if (!leaseAlreadyHeld) {
