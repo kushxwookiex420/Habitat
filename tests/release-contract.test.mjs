@@ -172,6 +172,12 @@ test("autonomous scheduler delegates heavy video rendering to the external GitHu
   const scheduler = await fs.readFile(new URL("../.github/workflows/habitat-autonomous-scheduler.yml", import.meta.url), "utf8");
   const renderer = await fs.readFile(new URL("../.github/workflows/artifact_001.yml", import.meta.url), "utf8");
   assert.ok(scheduler.includes("uses: ./.github/workflows/artifact_001.yml"));
+  assert.ok(scheduler.includes("choose-daily-topic"));
+  assert.ok(scheduler.includes("date -u +%F"));
+  assert.ok(scheduler.includes("date -u +%u"));
+  assert.ok(scheduler.includes("needs.choose-daily-topic.outputs.objective"));
+  assert.ok(scheduler.includes("daily-rotated B-roll"));
+  assert.ok(scheduler.includes("push:"));
   assert.ok(scheduler.includes('cron: "17 14 * * *"'));
   assert.ok(!scheduler.includes("/content/autonomous-run"));
   assert.ok(renderer.includes("workflow_call:"));
