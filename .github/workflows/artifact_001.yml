@@ -167,7 +167,7 @@ jobs:
           plan=json.load(open("vice-city-scene-plan.json",encoding="utf-8"))
           attribution=open("habitat-artifact-001-body.mp4.attribution.txt",encoding="utf-8").read()
           credit=open("vice-city-broll-credit-line.txt",encoding="utf-8").read().strip()
-          source_count=len(re.findall(r"https://www\\.pexels\\.com/video/",attribution))
+          source_count=len(re.findall(r"https://www\.pexels\.com/video/",attribution))
           assert size > 0
           assert duration >= 44
           assert int(video["width"]) == 1080 and int(video["height"]) == 1920
