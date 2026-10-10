@@ -4,6 +4,15 @@ run-name: Habitat APK Build — ${{ github.ref_name }} / ${{ github.sha }}
 on:
   push:
     branches: [ main, ax-v0.6-real-brain, ax-v0.6-brain-identity, ax-v0.7-droppilot-operator, ax-task-orchestration-fix, ax/quality-gate-first-artifact ]
+    paths:
+      - "app/**"
+      - "gradle/**"
+      - "build.gradle*"
+      - "settings.gradle*"
+      - "gradle.properties"
+      - "gradlew"
+      - "gradlew.bat"
+      - ".github/workflows/build.yml"
   workflow_dispatch:
 
 # Ax build trigger verified: every main push packages a fresh debug APK.
