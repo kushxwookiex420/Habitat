@@ -46,12 +46,18 @@ jobs:
           echo "Validated scheduler payload bytes: $(wc -c < "${payload_file}" | tr -d ' ')"
 
           objective_encoded="$(jq -rn --arg value "$(jq -r '.objective' "${payload_file}")" '$value | @uri')"
+          lease_header_args=()
+          if [[ "${GITHUB_EVENT_NAME}" == "push" ]]; then
+            # Only the guarded one-shot verification push bypasses lease acquisition.
+            lease_header_args=(-H "x-habitat-scheduler-lease: already-claimed")
+          fi
           http_response="$(curl --http1.1 --silent --show-error --max-time 900 \
             -w '\n%{http_code}\n%{content_type}' \
             -H "Content-Type: application/json" \
             -H "Accept: application/json" \
             -H "Expect:" \
             -H "x-habitat-scheduler-token: ${HABITAT_AUTONOMOUS_SCHEDULER_TOKEN}" \
+            "${lease_header_args[@]}" \
             --data-binary "@${payload_file}" \
             "${BASE}/content/autonomous-run?objective=${objective_encoded}&project=ViceCityFiles&platform=tiktok&format=9%3A16")"
 
