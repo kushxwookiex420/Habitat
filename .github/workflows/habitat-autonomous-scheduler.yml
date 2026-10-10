@@ -49,6 +49,11 @@ jobs:
             -H "Expect:" \
             -H "x-habitat-scheduler-token: ${HABITAT_AUTONOMOUS_SCHEDULER_TOKEN}" \
             --data-binary "@${payload_file}" \
+            --get \
+            --data-urlencode "objective=Create the next best factual, source-checked Vice City Files short. Use a complete opening and closing, readable text, varied scenes, no unsupported claims, and stop before publishing for human approval." \
+            --data-urlencode "project=ViceCityFiles" \
+            --data-urlencode "platform=tiktok" \
+            --data-urlencode "format=9:16" \
             "${BASE}/content/autonomous-run")"
 
           content_type="$(printf '%s' "${http_response}" | tail -n 1)"
