@@ -151,7 +151,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Download verified MP4
-        if: success()
+        if: success() && steps.dispatch.outputs.job_id != ''
         shell: bash
         env:
           BASE: https://habitat-1-szzd.onrender.com
@@ -172,7 +172,7 @@ jobs:
           echo "Verified MP4 downloaded: ${bytes} bytes"
 
       - name: Upload verified MP4 artifact
-        if: success()
+        if: success() && steps.dispatch.outputs.job_id != ''
         uses: actions/upload-artifact@v4
         with:
           name: vice-city-files-verified-mp4
