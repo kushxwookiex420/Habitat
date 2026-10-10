@@ -523,7 +523,7 @@ export function registerContentEngine(app, deps) {
       let script;
       try { script = JSON.parse(text); } catch { script = { raw: text }; }
       if (job.project === "ViceCityFiles") {
-        const normalized = normalizeViceCityScript(script);
+        const normalized = normalizeViceCityScript(script, job.objective);
         if (normalized.fallbackReason) console.warn("CONTENT_SCRIPT_FALLBACK", job.id, normalized.fallbackReason);
         script = normalized;
       }
