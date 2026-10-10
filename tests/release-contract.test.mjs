@@ -234,6 +234,9 @@ test("Artifact 001 uses six moving B-roll clips with attribution and a no-gamepl
 test("APK release publishing is serialized and stale commits cannot replace the latest release", async () => {
   const workflow = await fs.readFile(new URL("../.github/workflows/build.yml", import.meta.url), "utf8");
   assert.ok(workflow.includes("group: habitat-apk-latest-release"));
+  assert.ok(workflow.includes('"app/**"'));
+  assert.ok(workflow.includes('"gradle/**"'));
+  assert.ok(workflow.includes('"settings.gradle*"'));
   assert.ok(workflow.includes("cancel-in-progress: false"));
   assert.ok(workflow.includes("git fetch origin main"));
   assert.ok(workflow.includes('CURRENT_MAIN="$(git rev-parse origin/main)"'));
