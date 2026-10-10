@@ -23,9 +23,11 @@ for (const p of batch) {
     let response;
     let research = {};
     let lastRequestError = null;
+    let attempts = 0;
     // Render cold starts and public search providers can transiently fail. Retry once,
     // including valid-but-empty searches, while preserving every attempt's evidence.
     for (let attempt = 0; attempt < 2; attempt++) {
+      attempts = attempt + 1;
       try {
         response = await fetch(base + "/product-demo/research", {
           method: "POST",
@@ -53,7 +55,7 @@ for (const p of batch) {
       status: response?.ok && research.ok && candidateCount > 0 ? "researched" : "research_failed",
       httpStatus: response?.status || null,
       requestError: lastRequestError,
-      attempts: 2,
+      attempts,
       research,
       researchFailureReason: candidateCount === 0 ? "no candidate sources parsed after retry" : null,
       videoWorkflowStatus: "not_rendered",
