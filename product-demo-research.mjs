@@ -82,15 +82,15 @@ function parseBing(html) {
   const source = String(html || "");
   const results = [];
   const seen = new Set();
-  const blocks = source.match(/<li\\b[^>]*class=["'][^"']*b_algo[^"']*["'][^>]*>[\\s\\S]*?<\\/li>/gi) || [];
+  const blocks = source.match(/<li\b[^>]*class=["'][^"']*b_algo[^"']*["'][^>]*>[\s\S]*?<\/li>/gi) || [];
   for (const block of blocks) {
-    const match = block.match(/<h2[^>]*>\\s*<a\\b[^>]*href=["']([^"']+)["'][^>]*>([\\s\\S]*?)<\\/a>/i);
+    const match = block.match(/<h2[^>]*>\s*<a\b[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/i);
     if (!match) continue;
     const url = absoluteResultUrl(match[1]);
     const title = stripTags(match[2]);
     if (!url || !title || seen.has(url)) continue;
     seen.add(url);
-    const snippet = stripTags(block.match(/<p[^>]*>([\\s\\S]*?)<\\/p>/i)?.[1] || "");
+    const snippet = stripTags(block.match(/<p[^>]*>([\s\S]*?)<\/p>/i)?.[1] || "");
     results.push({ title, url, snippet });
     if (results.length >= MAX_RESULTS_PER_QUERY) break;
   }
