@@ -867,6 +867,21 @@ export function registerContentEngine(app, deps) {
       res.status(502).json({ok:false,error:"media render failed",detail:String(error?.message||error),job});
     }
   };
+  // Serialize FFmpeg work on the 512 MiB instance. Multiple scheduler runs may
+  // overlap during deploy recovery; they must never render in parallel and OOM.
+  const unlockedRenderJobHandler = renderJobHandler;
+  let renderQueue = Promise.resolve();
+  renderJobHandler = async (req, res) => {
+    const previous = renderQueue;
+    let release;
+    renderQueue = new Promise(resolve => { release = resolve; });
+    await previous;
+    try {
+      return await unlockedRenderJobHandler(req, res);
+    } finally {
+      release();
+    }
+  };
   app.post("/content/jobs/:id/render", renderJobHandler);
 
   // Closed-loop render endpoint: failed visual QA feeds remediation back into the renderer.
