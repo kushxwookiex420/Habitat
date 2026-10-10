@@ -163,3 +163,16 @@ test("autonomous scheduler skips artifact download when an idempotent duplicate 
   assert.ok(workflow.includes("if: success() && steps.dispatch.outputs.job_id != ''"));
   assert.equal((workflow.match(/if: success\(\) && steps\.dispatch\.outputs\.job_id != ''/g) || []).length, 2);
 });
+
+
+test("autonomous scheduler delegates each durable content stage instead of relying on a detached Render worker", async () => {
+  const workflow = await fs.readFile(new URL("../.github/workflows/habitat-autonomous-scheduler.yml", import.meta.url), "utf8");
+  assert.ok(workflow.includes("deferStagesToCaller:true"));
+  for (const stage of ["research", "script", "render-plan", "render-loop", "ax-review", "quality-gate"]) {
+    assert.ok(workflow.includes("run_stage " + stage), "missing durable stage " + stage);
+  }
+  assert.ok(workflow.includes("D1 rehydrates the"));
+  assert.ok(workflow.includes(".job.stages.edit.result.artifact.verified == true"));
+  assert.ok(workflow.includes(".gate.status == \"READY_TO_PUBLISH\""));
+  assert.ok(!workflow.includes('for attempt in $(seq 1 95); do'));
+});
