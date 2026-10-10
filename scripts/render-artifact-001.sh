@@ -96,15 +96,33 @@ raw_titles=script.get("onScreenText",[])
 if not isinstance(raw_titles,list): raw_titles=[]
 shots=script.get("shotList",[])
 if not isinstance(shots,list): shots=[]
-fallback_titles=["VICE CITY FACTS","OFFICIAL DETAILS","THE STORY","WHAT IS CONFIRMED","LAUNCH PLATFORMS","FACTS NOT RUMORS"]
-fallback_subs=["Confirmed details","Official information","Source-checked update","Facts, not rumors","What Rockstar announced","Follow Vice City Files"]
+fallback_titles=["VICE CITY FACTS","OFFICIAL DETAILS","THE STORY","WHAT IS CONFIRMED","LAUNCH PLATFORMS","FOLLOW VICE CITY FILES"]
+fallback_subs=["Confirmed details","Jason and Lucia","Vice City and Leonida","What Rockstar confirmed","Release information","Follow Vice City Files"]
 scene_rows=[]
+used_titles=set()
+used_subtitles=set()
 for i,line in enumerate(lines):
- title=raw_titles[i] if len(raw_titles)>=6 else (shots[i] if i<len(shots) else " ".join(line.split()[:4]))
- subtitle=shots[i] if i<len(shots) else " ".join(line.split()[:7])
+ if i<len(raw_titles):
+  title=raw_titles[i]
+ elif i<len(shots) and str(shots[i]).strip().lower() not in ("title card","end card"):
+  title=shots[i]
+ else:
+  title=fallback_titles[i]
  title=clean_label(title,25,fallback_titles[i]).upper()
- subtitle=clean_label(subtitle,34,fallback_subs[i])
- if title.lower()==subtitle.lower(): subtitle=clean_label(" ".join(line.split()[:6]),34,fallback_subs[i])
+ if title.lower() in used_titles:
+  title=clean_label(fallback_titles[i],25,fallback_titles[i]).upper()
+ if title.lower() in used_titles:
+  title=f"SCENE {i+1}"
+ used_titles.add(title.lower())
+ candidate=shots[i] if i<len(shots) else " ".join(line.split()[:7])
+ if str(candidate).strip().lower() in ("title card","end card") or str(candidate).strip().lower()==title.lower() or str(candidate).strip().lower() in used_subtitles:
+  candidate=fallback_subs[i]
+ subtitle=clean_label(candidate,34,fallback_subs[i])
+ if subtitle.lower()==title.lower() or subtitle.lower() in used_subtitles:
+  subtitle=clean_label(fallback_subs[i],34,fallback_subs[i])
+ if subtitle.lower()==title.lower() or subtitle.lower() in used_subtitles:
+  subtitle=clean_label(" ".join(line.split()[:6]),34,fallback_subs[i])
+ used_subtitles.add(subtitle.lower())
  scene_rows.append({"voiceover":line,"title":title,"subtitle":subtitle})
 with open(os.path.join(root,"scene-plan.json"),"w",encoding="utf-8") as f:
  json.dump({"title":script.get("title","Vice City Files"),"scenes":scene_rows},f,ensure_ascii=False,indent=2)
