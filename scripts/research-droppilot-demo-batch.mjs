@@ -14,27 +14,48 @@ for (const p of batch) {
   const title = String(p.title || "").trim();
   if (!title) continue;
   try {
-    const response = await fetch(base + "/product-demo/research", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        productName: title.slice(0, 180),
-        brand: String(p.vendor || "").slice(0, 100),
-        category: String(p.productType || ""),
-        supplierUrl: String(p.supplierUrl || "")
-      }),
-      signal: AbortSignal.timeout(45000)
+    const requestBody = JSON.stringify({
+      productName: title.slice(0, 180),
+      brand: String(p.vendor || "").slice(0, 100),
+      category: String(p.productType || ""),
+      supplierUrl: String(p.supplierUrl || "")
     });
-    const research = await response.json().catch(() => ({}));
+    let response;
+    let research = {};
+    let lastRequestError = null;
+    // Render cold starts and public search providers can transiently fail. Retry once,
+    // including valid-but-empty searches, while preserving every attempt's evidence.
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        response = await fetch(base + "/product-demo/research", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: requestBody,
+          signal: AbortSignal.timeout(45000)
+        });
+        research = await response.json().catch(() => ({}));
+        lastRequestError = null;
+      } catch (error) {
+        lastRequestError = String(error?.message || error).slice(0, 240);
+        research = { ok: false, error: "Research request failed", details: lastRequestError };
+      }
+      const hasCandidates = Number(research.candidateCount || 0) > 0;
+      const retryableStatus = !response || [429, 500, 502, 503, 504].includes(response.status);
+      if ((response?.ok && research.ok && hasCandidates) || (attempt === 1) || (!retryableStatus && !response?.ok)) break;
+      await new Promise(resolve => setTimeout(resolve, 1500 * (attempt + 1)));
+    }
+    const candidateCount = Number(research.candidateCount || 0);
     results.push({
       shopifyProductId: p.shopifyProductId || null,
       title,
       productUrl: p.productUrl || null,
       vendor: p.vendor || null,
-      status: response.ok && research.ok && Number(research.candidateCount || 0) > 0 ? "researched" : "research_failed",
-      httpStatus: response.status,
+      status: response?.ok && research.ok && candidateCount > 0 ? "researched" : "research_failed",
+      httpStatus: response?.status || null,
+      requestError: lastRequestError,
+      attempts: 2,
       research,
-      researchFailureReason: Number(research.candidateCount || 0) === 0 ? "no candidate sources parsed" : null,
+      researchFailureReason: candidateCount === 0 ? "no candidate sources parsed after retry" : null,
       videoWorkflowStatus: "not_rendered",
       rightsStatus: "unverified",
       qaStatus: "not_run",
