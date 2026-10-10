@@ -60,7 +60,7 @@ test("Artifact 001 uses official images, neural narration, and a clean non-overl
   assert.ok(source.includes("drawbox=x=40:y=1535:w=1000:h=120"));
   assert.ok(source.includes("VOICE_DURATION"));
   assert.ok(source.includes("apad=pad_dur=1"));
-  assert.ok(source.includes("source-duration-neural-narration-v5-smooth-30fps"));
+  assert.ok(source.includes("source-duration-neural-narration-v6-script-driven"));
   assert.ok(source.includes("-loop 1 -framerate 30"));
   assert.ok(!source.includes("-loop 1 -framerate 15"), "every still-scene input must use the same 30 fps cadence");
   assert.ok(!source.includes("zoompan"), "the renderer must not reintroduce zoompan judder");
@@ -187,4 +187,16 @@ test("DropPilot runs a bounded daily rotation of demo-source research without au
   assert.ok(workflow.includes("Save research evidence for rights review"));
   assert.ok(research.includes("Results are leads, NOT proof of reuse rights"));
   assert.ok(research.includes("commercial permission/licence is confirmed"));
+});
+
+
+test("video renderer derives narration and mobile-safe scene overlays from the generated script", async () => {
+  const renderer = await fs.readFile(new URL("../scripts/render-artifact-001.sh", import.meta.url), "utf8");
+  assert.ok(renderer.includes('SCRIPT_JSON="${2:-}"'));
+  assert.ok(renderer.includes('payload.get("job",{}).get("stages",{}).get("script",{}).get("result")'));
+  assert.ok(renderer.includes('script.get("voiceover"'));
+  assert.ok(renderer.includes('scene-plan.json'));
+  assert.ok(renderer.includes('jq -r ".scenes[$i].title"'));
+  assert.ok(renderer.includes('jq -r ".scenes[$i].subtitle"'));
+  assert.ok(renderer.includes('renderer":"source-duration-neural-narration-v6-script-driven"'));
 });
