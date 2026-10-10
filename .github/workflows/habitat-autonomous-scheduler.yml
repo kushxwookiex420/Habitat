@@ -49,6 +49,7 @@ jobs:
             -H "Accept: application/json" \
             -H "Expect:" \
             -H "x-habitat-scheduler-token: ${HABITAT_AUTONOMOUS_SCHEDULER_TOKEN}" \
+            -H "x-habitat-objective: $(jq -r '.objective' "${payload_file}")" \\
             --data-binary "@${payload_file}" \
             "${BASE}/content/autonomous-run?objective=${objective_encoded}&project=ViceCityFiles&platform=tiktok&format=9%3A16")"
 
