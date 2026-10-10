@@ -36,12 +36,20 @@ jobs:
         run: |
           set -euo pipefail
           BASE="https://habitat-1-szzd.onrender.com"
-          http_response="$(curl --silent --show-error --max-time 900 \
+          payload_file="$(mktemp)"
+          trap 'rm -f "${payload_file}"' EXIT
+          cat > "${payload_file}" <<'JSON'
+          {"project":"ViceCityFiles","platform":"tiktok","format":"9:16","objective":"Create the next best factual, source-checked Vice City Files short. Use a complete opening and closing, readable text, varied scenes, no unsupported claims, and stop before publishing for human approval."}
+          JSON
+
+          http_response="$(curl --http1.1 --silent --show-error --max-time 900 \
             -w '\n%{http_code}\n%{content_type}' \
-            -H "content-type: application/json" \
+            -H "Content-Type: application/json" \
+            -H "Accept: application/json" \
+            -H "Expect:" \
             -H "x-habitat-scheduler-token: ${HABITAT_AUTONOMOUS_SCHEDULER_TOKEN}" \
-            -X POST "${BASE}/content/autonomous-run" \
-            -d '{"project":"ViceCityFiles","platform":"tiktok","format":"9:16","objective":"Create the next best factual, source-checked Vice City Files short. Use a complete opening and closing, readable text, varied scenes, no unsupported claims, and stop before publishing for human approval."}')"
+            --data-binary "@${payload_file}" \
+            "${BASE}/content/autonomous-run")"
 
           content_type="$(printf '%s' "${http_response}" | tail -n 1)"
           http_status="$(printf '%s' "${http_response}" | tail -n 2 | head -n 1)"
