@@ -153,6 +153,7 @@ jobs:
             assets/vice-city-files-outro.mp4 \
             habitat-artifact-001.mp4 \
             vice-city-edit-manifest.json
+          cp habitat-artifact-001-body.mp4.attribution.txt habitat-artifact-001.mp4.attribution.txt
 
       - name: Verify Artifact 001 metadata
         run: |
@@ -184,7 +185,7 @@ jobs:
             ['PS5 + XBOX SERIES X AND S', 'ANNOUNCED LAUNCH PLATFORMS'],
             ['FACTS, NOT RUMORS', 'FOLLOW VICE CITY FILES']
           ];
-          const footer = 'VICE CITY FILES  •  FACT-CHECKED GAMING UPDATES';
+          const footer = 'REAL-WORLD B-ROLL • NOT GAMEPLAY • VICE CITY FILES';
           const renderPlan = {
             format: '9:16',
             scenes: titles.map(([title, subtitle]) => ({ title, subtitle })),
