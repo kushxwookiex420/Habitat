@@ -41,7 +41,7 @@ jobs:
             6) angle="the legacy of Vice City and its confirmed connection to GTA VI" ;;
             7) angle="one distinct official Rockstar update not repeated in recent videos" ;;
           esac
-          objective="Create a fresh Vice City Files short for $day about $angle. Research official sources first; keep every claim limited to verified information; omit rumors and unsupported details. Choose a different hook, scene sequence, captions, and daily-rotated B-roll from recent videos. If model output is weak, use the objective-matched fallback for this angle; never recycle the generic canonical script for a rotated topic. Use six distinct scene beats, readable labels, natural 45-60 second narration, natural scene subtitles rather than generic labels like "title card" or "verified closing", the approved intro and branded outro, and stop for human approval before publishing."
+          objective="Create a fresh Vice City Files short for $day about $angle. Research official sources first; keep every claim limited to verified information; omit rumors and unsupported details. Choose a different hook, scene sequence, captions, and daily-rotated B-roll from recent videos. If model output is weak, use the objective-matched fallback for this angle; never recycle the generic canonical script for a rotated topic. Use six distinct scene beats, readable labels, natural 45-60 second narration, natural scene subtitles rather than generic title-card or verified-closing labels, the approved intro and branded outro, and stop for human approval before publishing."
           echo "objective=$objective" >> "$GITHUB_OUTPUT"
 
   render:
