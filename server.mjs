@@ -1,6 +1,7 @@
 import { buildCapabilityStatus } from "./capability-status.mjs";
 import { claimTaskDispatch } from "./task-dispatch-guard.mjs";
 import { createD1TaskRepository } from "./d1-task-repository.mjs";
+import { createD1DispatchLeaseRepository } from "./d1-dispatch-lease-repository.mjs";
 import { markInterruptedTask, prepareTaskRetry } from "./task-recovery.mjs";
 import { registerContentEngine } from "./content-engine.mjs";
 import { registerProductDemoResearch } from "./product-demo-research.mjs";
@@ -932,6 +933,8 @@ const taskStore = new Map();
 
 let taskRepository = null;
 let taskStorageReady = false;
+let dispatchLeaseRepository = null;
+let dispatchLeaseReady = false;
 let contentStorageReady = false;
 
 function hasD1TaskCredentials(env = process.env) {
@@ -955,6 +958,13 @@ async function initializeTaskStorage() {
     apiToken: process.env.HABITAT_D1_API_TOKEN
   });
   await taskRepository.initialize();
+  dispatchLeaseRepository = createD1DispatchLeaseRepository({
+    accountId: process.env.CLOUDFLARE_ACCOUNT_ID,
+    databaseId: process.env.HABITAT_D1_DATABASE_ID,
+    apiToken: process.env.HABITAT_D1_API_TOKEN
+  });
+  await dispatchLeaseRepository.initialize();
+  dispatchLeaseReady = true;
   const restored = await taskRepository.list({ limit: 500 });
   taskStorageReady = true;
   let interruptedCount = 0;
@@ -967,6 +977,7 @@ async function initializeTaskStorage() {
     }
   }
   console.log("TASK_STORAGE: D1 ready; restored " + restored.length + " task records; marked " + interruptedCount + " interrupted for review");
+  console.log("TASK_DISPATCH_LEASE: D1-backed cross-instance claim guard ready");
 }
 
 async function persistTask(task) {
@@ -1256,12 +1267,15 @@ app.get("/workers", (req, res) => {
 app.get("/storage/check", async (_req, res) => {
   if (taskRepository && taskStorageReady) {
     try {
-      const [taskCheck, contentCheck, vaultCheck] = await Promise.all([
+      const [taskCheck, contentCheck, vaultCheck, leaseCheck] = await Promise.all([
         taskRepository.healthCheck(),
         contentJobRepository ? contentJobRepository.healthCheck() : Promise.resolve({ ok: false, durable: false }),
-        secretVault ? secretVault.healthCheck() : Promise.resolve({ ok: false, durable: false })
+        secretVault ? secretVault.healthCheck() : Promise.resolve({ ok: false, durable: false }),
+        dispatchLeaseRepository && dispatchLeaseReady
+          ? dispatchLeaseRepository.healthCheck()
+          : Promise.resolve({ ok: false, durable: false })
       ]);
-      const ok = taskCheck.ok === true && contentCheck.ok === true && vaultCheck.ok === true;
+      const ok = taskCheck.ok === true && contentCheck.ok === true && vaultCheck.ok === true && leaseCheck.ok === true;
       return res.status(ok ? 200 : 503).json({
         ok,
         storage: "cloudflare-d1",
@@ -1270,8 +1284,9 @@ app.get("/storage/check", async (_req, res) => {
         restoredTaskCount: taskStore.size,
         contentJobPersistence: { ready: contentCheck.ok === true, durable: contentCheck.durable === true },
         encryptedTikTokVault: { ready: vaultCheck.ok === true, encryptedAtRest: true, keyValueExposed: false },
+        dispatchLease: { ready: leaseCheck.ok === true, durable: leaseCheck.durable === true },
         detail: ok
-          ? "Task storage, content-job storage, and encrypted TikTok vault health checks all passed. This does not prove TikTok authorization or posting is approved."
+          ? "Task storage, content-job storage, encrypted TikTok vault, and durable dispatch lease health checks all passed. This does not prove TikTok authorization or posting is approved."
           : "One or more durable storage health checks failed; inspect the per-component readiness fields."
       });
     } catch {
@@ -1380,6 +1395,40 @@ app.post("/tasks/:id/delegate", async (req, res) => {
       return res.status(503).json({ ok: false, error: "task storage write failed" });
     }
     return res.status(503).json({ ok: false, task });
+  }
+
+  // A persisted task alone does not prevent two Render instances from dispatching
+  // it at once. Acquire a durable, task-scoped lease before the process-local
+  // state transition; fail closed if durable storage is active but the lease
+  // repository is unavailable.
+  let dispatchLease = null;
+  if (taskStorageReady) {
+    if (!dispatchLeaseReady || !dispatchLeaseRepository) {
+      return res.status(503).json({ ok: false, error: "durable dispatch lease is unavailable; worker was not started" });
+    }
+    const scopeKey = "task:" + task.id;
+    const leaseToken = makeTaskId();
+    const claimedAt = nowIso();
+    try {
+      dispatchLease = await dispatchLeaseRepository.acquire({
+        scopeKey,
+        leaseToken,
+        nowIso: claimedAt,
+        expiresAt: new Date(Date.now() + 5 * 60 * 1000).toISOString()
+      });
+    } catch {
+      return res.status(503).json({ ok: false, error: "durable dispatch claim failed; worker was not started" });
+    }
+    if (!dispatchLease.acquired) {
+      return res.status(409).json({ ok: false, duplicate: true, dispatch: "dispatch_already_in_progress", task });
+    }
+    // Release after the response has finished. If the process crashes, expiry
+    // permits recovery; a stale owner cannot release a replacement lease.
+    res.once("finish", () => {
+      dispatchLeaseRepository.release({ scopeKey, leaseToken }).catch(() => {
+        console.warn("TASK_DISPATCH_LEASE_RELEASE_FAILED", JSON.stringify({ taskId: task.id }));
+      });
+    });
   }
 
   const dispatchClaim = claimTaskDispatch(task, { now: nowIso });
@@ -1770,7 +1819,7 @@ const secretVault = secretVaultConfigured ? createD1SecretVault({
   apiToken: process.env.HABITAT_D1_API_TOKEN,
   encryptionKey: tokenEncryptionKey
 }) : null;
-const contentEngine = registerContentEngine(app, { nowIso, makeTaskId, taskStore, workerRegistry, brainChat, contentJobRepository, secretVault });
+const contentEngine = registerContentEngine(app, { nowIso, makeTaskId, taskStore, workerRegistry, brainChat, contentJobRepository, secretVault, getDispatchLeaseRepository: () => dispatchLeaseReady ? dispatchLeaseRepository : null });
 
 /*
  * AX DIRECT VERIFICATION ENDPOINT
