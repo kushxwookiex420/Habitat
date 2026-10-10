@@ -23,7 +23,6 @@ test("uses a factual render-compatible fallback when model narration is missing"
   assert.equal(result.fallbackReason !== undefined, true);
   assert.ok(result.sources.some(source => source.includes("rockstargames.com")));
   assert.equal(result.shotList.length, 6);
-  assert.ok(result.shotList.includes("the city returns"));
   assert.equal(result.shotList[5], "follow for official updates");
 });
 
@@ -72,6 +71,8 @@ test("uses a legacy-specific fallback when the daily objective is about Vice Cit
   assert.match(result.voiceover, /Vice City back as a central setting/i);
   assert.equal(result.onScreenText.length, 6);
   assert.equal(result.shotList.length, 6);
+  assert.ok(result.shotList.includes("the city returns"));
+  assert.equal(result.shotList[5], "follow for official updates");
 });
 
 test("rejects a valid but generic script when it ignores the requested daily topic", () => {
