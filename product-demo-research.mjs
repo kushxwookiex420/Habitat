@@ -78,13 +78,34 @@ export function parseDuckDuckGo(html) {
   return results;
 }
 
+function parseBing(html) {
+  const source = String(html || "");
+  const results = [];
+  const seen = new Set();
+  const blocks = source.match(/<li\\b[^>]*class=["'][^"']*b_algo[^"']*["'][^>]*>[\\s\\S]*?<\\/li>/gi) || [];
+  for (const block of blocks) {
+    const match = block.match(/<h2[^>]*>\\s*<a\\b[^>]*href=["']([^"']+)["'][^>]*>([\\s\\S]*?)<\\/a>/i);
+    if (!match) continue;
+    const url = absoluteResultUrl(match[1]);
+    const title = stripTags(match[2]);
+    if (!url || !title || seen.has(url)) continue;
+    seen.add(url);
+    const snippet = stripTags(block.match(/<p[^>]*>([\\s\\S]*?)<\\/p>/i)?.[1] || "");
+    results.push({ title, url, snippet });
+    if (results.length >= MAX_RESULTS_PER_QUERY) break;
+  }
+  return results;
+}
+
 async function searchWeb(query) {
   const providers = [
-    "https://html.duckduckgo.com/html/?q=" + encodeURIComponent(query),
-    "https://lite.duckduckgo.com/lite/?q=" + encodeURIComponent(query)
+    { name: "duckduckgo-html", url: "https://html.duckduckgo.com/html/?q=" + encodeURIComponent(query), parse: parseDuckDuckGo },
+    { name: "duckduckgo-lite", url: "https://lite.duckduckgo.com/lite/?q=" + encodeURIComponent(query), parse: parseDuckDuckGo },
+    { name: "bing-html", url: "https://www.bing.com/search?q=" + encodeURIComponent(query), parse: parseBing }
   ];
   let lastError;
-  for (const url of providers) {
+  for (const provider of providers) {
+    const url = provider.url;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), SEARCH_TIMEOUT_MS);
     try {
@@ -94,8 +115,8 @@ async function searchWeb(query) {
       });
       if (!response.ok) throw new Error("Search provider returned HTTP " + response.status);
       const html = await response.text();
-      const results = parseDuckDuckGo(html);
-      if (results.length) return { results, provider: url.includes("/lite/") ? "duckduckgo-lite" : "duckduckgo-html", responseBytes: Buffer.byteLength(html) };
+      const results = provider.parse(html);
+      if (results.length) return { results, provider: provider.name, responseBytes: Buffer.byteLength(html) };
       lastError = new Error("Search page returned no parseable results (" + html.length + " characters)");
     } catch (error) {
       lastError = error;
@@ -115,7 +136,7 @@ export function registerProductDemoResearch(app) {
     ok: true,
     feature: "product-demo-research",
     webSearch: true,
-    parserVersion: "1.1-fallback-html-lite",
+    parserVersion: "1.2-ddg-lite-bing-fallback",
     automaticThirdPartyDownload: false,
     clipAssembly: "not configured by this research module",
     rightsPolicy: "Search results are leads only; verify commercial reuse permission before editing or publishing."
