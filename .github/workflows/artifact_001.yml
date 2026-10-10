@@ -240,6 +240,8 @@ jobs:
             habitat-artifact-001-body.mp4
             habitat-artifact-001.mp4.attribution.txt
             habitat-artifact-001-body.mp4.attribution.txt
+            vice-city-scene-plan.json
+            vice-city-broll-credit-line.txt
             visual-qa-report.json
             vice-city-release-gate-report.json
           if-no-files-found: warn
