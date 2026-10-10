@@ -1,4 +1,6 @@
 const ALLOWED_NETWORKS = new Set(["tiktok", "instagram", "facebook", "pinterest", "youtube", "x", "threads", "bluesky", "linkedin"]);
+const CAPTION_LIMITS = { tiktok: 2200, instagram: 2200, facebook: 63206, pinterest: 500, youtube: 5000, x: 280, threads: 500, bluesky: 300, linkedin: 3000 };
+const DEFAULT_STORE_HOST = "2tanuk-yx.myshopify.com";
 const HASHTAGS = {
   tiktok: ["#DropPilotMarket", "#EverydayFinds", "#ProductFinds", "#ShopSmall", "#UsefulFinds"],
   instagram: ["#DropPilotMarket", "#EverydayFinds", "#HomeFinds", "#ProductFinds", "#ShopOnline", "#FindsOfTheDay"],
@@ -24,6 +26,9 @@ function trackedUrl(rawUrl, campaign, network) {
   let url;
   try { url = new URL(rawUrl); } catch { throw new Error("productUrl must be a valid HTTPS product URL"); }
   if (url.protocol !== "https:") throw new Error("productUrl must use HTTPS");
+  const configuredHost = String(process.env.SHOPIFY_STORE_DOMAIN || DEFAULT_STORE_HOST).trim().toLowerCase();
+  if (url.hostname.toLowerCase() !== configuredHost) throw new Error("productUrl must use the configured DropPilot Shopify store domain");
+  if (!/^\\/products\\/[^/]+\\/?$/.test(url.pathname)) throw new Error("productUrl must point directly to a Shopify product page");
   url.searchParams.set("utm_source", network);
   url.searchParams.set("utm_medium", "social");
   url.searchParams.set("utm_campaign", campaign);
@@ -55,6 +60,8 @@ export function buildPromotionPlan(input = {}) {
   const rawUrl = clean(input.productUrl, 1000);
   if (!productName) throw new Error("productName is required");
   if (!rawUrl) throw new Error("productUrl is required");
+  if (input.productActive !== true) throw new Error("productActive must be true after verifying the Shopify product is active");
+  if (input.productAvailable !== true) throw new Error("productAvailable must be true after verifying inventory or supplier availability");
   const category = clean(input.category, 80);
   const features = Array.isArray(input.features)
     ? input.features.map(value => clean(value, 100)).filter(Boolean).slice(0, 5)
@@ -70,12 +77,14 @@ export function buildPromotionPlan(input = {}) {
   const drafts = networks.map(network => {
     const url = trackedUrl(rawUrl, campaign, network);
     const hashtags = compactTags(network);
-    const caption = captionFor(network, productName, category, features, url);
+    const caption = captionFor(network, productName, category, features, url) + "\n\n" + hashtags.join(" ");
+    const limit = CAPTION_LIMITS[network];
+    if (caption.length > limit) throw new Error(network + " caption exceeds its " + limit + "-character limit; shorten product details or features");
     return {
       network,
       networkLabel: titleCaseNetwork(network),
       title: productName.length > 80 ? productName.slice(0, 77).trimEnd() + "..." : productName,
-      caption: caption + "\n\n" + hashtags.join(" "),
+      caption,
       trackedUrl: url,
       hashtags,
       mediaRequired: ["tiktok", "instagram", "pinterest", "youtube"].includes(network),
