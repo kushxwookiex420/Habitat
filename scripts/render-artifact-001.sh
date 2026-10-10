@@ -33,7 +33,7 @@ broll=[
  ("https://videos.pexels.com/video-files/34679320/14699430_360_640_60fps.mp4","https://www.pexels.com/video/nighttime-city-street-with-moving-vehicles-34679320/","Evgenij Mikhailov"),
  ("https://videos.pexels.com/video-files/36905735/15633523_360_640_60fps.mp4","https://www.pexels.com/video/scenic-coastal-road-with-palm-trees-and-traffic-36905735/","Kaushik Mahadevan"),
  ("https://videos.pexels.com/video-files/39402632/16776918_360_640_30fps.mp4","https://www.pexels.com/video/aerial-view-of-miami-s-sunny-waterfront-39402632/","Maryna"),
- ("https://videos.pexels.com/video-files/34679319/14699412_360_640_60fps.mp4","https://www.pexels.com/video/nighttime-city-street-with-passing-car-and-streetlights-34679319/","Evgenij Mikhailov"),
+ ("https://videos.pexels.com/video-files/36657530/15540706_360_640_30fps.mp4","https://www.pexels.com/video/scenic-coastal-road-in-tropical-landscape-36657530/","Travel Oyo"),
 ]
 for i,(url,page,creator) in enumerate(broll,1):
  req=urllib.request.Request(url,headers={"User-Agent":"Mozilla/5.0 HabitatVideoBuilder/3.0"})
@@ -149,7 +149,7 @@ for i in 0 1 2 3 4 5; do
   title=$(printf '%s' "$title" | sed 's/[\\:]/\\\\&/g')
   subtitle=$(printf '%s' "$subtitle" | sed 's/[\\:]/\\\\&/g')
   still=$((i+6))
-  FILTER+="[$i:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,eq=brightness=-0.18:saturation=0.78,fps=30[base$i];"
+  FILTER+="[$i:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,eq=brightness=0.03:saturation=0.88,fps=30[base$i];"
   FILTER+="[$still:v]scale=760:650:force_original_aspect_ratio=decrease:flags=lanczos,format=rgba[photo$i];"
   FILTER+="[base$i][photo$i]overlay=(W-w)/2:430+(650-h)/2:shortest=1,"
   FILTER+="drawbox=x=40:y=125:w=1000:h=250:color=black@0.70:t=fill,"
@@ -158,7 +158,7 @@ for i in 0 1 2 3 4 5; do
   FILTER+="drawbox=x=40:y=1535:w=1000:h=120:color=black@0.60:t=fill,"
   FILTER+="drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='REAL-WORLD B-ROLL • NOT GAMEPLAY • VICE CITY FILES':fontcolor=white:fontsize=21:x=(w-text_w)/2:y=1580,"
   FILTER+="drawbox=x=40:y=1655:w=1000:h=80:color=black@0.72:t=fill,"
-  FILTER+="drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='PEXELS: PAASHUU • MESSIEDO XADINHO • EVGENIJ MIKHAILOV • KAUSHIK MAHADEVAN • MARYNA':fontcolor=white:fontsize=14:x=(w-text_w)/2:y=1685,"
+  FILTER+="drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='B-ROLL • PEXELS • PAASHUU • MESSIEDO XADINHO • EVGENIJ MIKHAILOV • KAUSHIK MAHADEVAN • MARYNA • TRAVEL OYO':fontcolor=white:fontsize=14:x=(w-text_w)/2:y=1685,"
   FILTER+="fps=30,setsar=1,format=yuv420p[v$i];"
 done
 FILTER+="[v0][v1][v2][v3][v4][v5]concat=n=6:v=1:a=0,tpad=stop_mode=clone:stop_duration=2,trim=duration=$BODY_DURATION,setpts=PTS-STARTPTS[v]"
