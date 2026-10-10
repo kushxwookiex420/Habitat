@@ -9,7 +9,7 @@ trap 'rm -rf "$TMP"' EXIT
 # Official Rockstar stills are paired with six distinct real-world video clips.
 # The on-screen disclaimer makes clear that the stock clips are not GTA gameplay.
 python - "$TMP" "$SCRIPT_JSON" <<'PY'
-import json, os, re, sys, urllib.request
+import json, os, re, sys, urllib.request, random, datetime
 root, script_path = sys.argv[1], sys.argv[2]
 urls=[
  "https://www.rockstargames.com/VI/_next/static/media/Jason_and_Lucia_08.0.bq0bdrl6g5y.jpg?akim=1&imdensity=1&imwidth=960",
@@ -27,14 +27,22 @@ for i,url in enumerate(urls,1):
   if not r.headers.get("Content-Type","").startswith("image/"):
    raise RuntimeError(f"Screenshot {i} was not an image")
   open(os.path.join(root,f"scene{i}.jpg"),"wb").write(data)
-broll=[
+broll_pool=[
  ("https://videos.pexels.com/video-files/37461919/15867630_360_640_60fps.mp4","https://www.pexels.com/video/aerial-view-of-miami-skyline-at-dusk-37461919/","paashuu"),
  ("https://videos.pexels.com/video-files/34594007/14659483_360_640_30fps.mp4","https://www.pexels.com/video/cloudy-miami-skyline-across-the-bay-34594007/","Messiedo Xadinho"),
  ("https://videos.pexels.com/video-files/34679320/14699430_360_640_60fps.mp4","https://www.pexels.com/video/nighttime-city-street-with-moving-vehicles-34679320/","Evgenij Mikhailov"),
  ("https://videos.pexels.com/video-files/36905735/15633523_360_640_60fps.mp4","https://www.pexels.com/video/scenic-coastal-road-with-palm-trees-and-traffic-36905735/","Kaushik Mahadevan"),
  ("https://videos.pexels.com/video-files/39402632/16776918_360_640_30fps.mp4","https://www.pexels.com/video/aerial-view-of-miami-s-sunny-waterfront-39402632/","Maryna"),
+ ("https://videos.pexels.com/video-files/30432353/13041765_360_640_60fps.mp4","https://www.pexels.com/video/nighttime-city-street-with-light-trails-30432353/","Evgenij Mikhailov"),
+ ("https://videos.pexels.com/video-files/36490817/15473301_360_640_30fps.mp4","https://www.pexels.com/video/night-street-view-on-mexico-city-s-paseo-de-la-reforma-36490817/","Israyosoy S."),
  ("https://videos.pexels.com/video-files/36657530/15540706_360_640_30fps.mp4","https://www.pexels.com/video/scenic-coastal-road-in-tropical-landscape-36657530/","Travel Oyo"),
 ]
+# Stable daily selection: every scheduled day gets a different six-clip mix,
+# while reruns on the same day remain reproducible and easy to debug.
+random.Random(datetime.date.today().toordinal()).shuffle(broll_pool)
+broll=broll_pool[:6]
+if len({item[0] for item in broll}) != 6:
+ raise RuntimeError("B-roll scene selection must contain six distinct video sources")
 for i,(url,page,creator) in enumerate(broll,1):
  req=urllib.request.Request(url,headers={"User-Agent":"Mozilla/5.0 HabitatVideoBuilder/3.0"})
  with urllib.request.urlopen(req,timeout=40) as r:
@@ -45,6 +53,9 @@ with open(os.path.join(root,"broll-attribution.txt"),"w",encoding="utf-8") as f:
  f.write("Real-world B-roll (NOT GTA gameplay) — Pexels\n")
  f.write("Used as illustrative context only; not footage from Grand Theft Auto VI.\n\n")
  for url,page,creator in broll: f.write(f"{creator} — {page}\n")
+creators=sorted({creator.upper() for url,page,creator in broll})
+with open(os.path.join(root,"broll-credit-line.txt"),"w",encoding="utf-8") as f:
+ f.write("B-ROLL • PEXELS • " + " • ".join(creators))
 fallback_voice = [
  "Vice City is back in Grand Theft Auto six. Here are the official details worth knowing.",
  "Rockstar has announced November nineteenth, twenty twenty-six as the release date. Release plans can change, so check Rockstar's official updates.",
@@ -158,7 +169,9 @@ for i in 0 1 2 3 4 5; do
   FILTER+="drawbox=x=40:y=1535:w=1000:h=120:color=black@0.60:t=fill,"
   FILTER+="drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='REAL-WORLD B-ROLL • NOT GAMEPLAY • VICE CITY FILES':fontcolor=white:fontsize=21:x=(w-text_w)/2:y=1580,"
   FILTER+="drawbox=x=40:y=1655:w=1000:h=80:color=black@0.72:t=fill,"
-  FILTER+="drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='B-ROLL • PEXELS • PAASHUU • MESSIEDO XADINHO • EVGENIJ MIKHAILOV • KAUSHIK MAHADEVAN • MARYNA • TRAVEL OYO':fontcolor=white:fontsize=14:x=(w-text_w)/2:y=1685,"
+  CREDIT_LINE="$(cat "$TMP/broll-credit-line.txt")"
+  CREDIT_LINE=$(printf '%s' "$CREDIT_LINE" | sed 's/[\\:]/\\\\&/g')
+  FILTER+="drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='$CREDIT_LINE':fontcolor=white:fontsize=14:x=(w-text_w)/2:y=1685,"
   FILTER+="fps=30,setsar=1,format=yuv420p[v$i];"
 done
 FILTER+="[v0][v1][v2][v3][v4][v5]concat=n=6:v=1:a=0,tpad=stop_mode=clone:stop_duration=2,trim=duration=$BODY_DURATION,setpts=PTS-STARTPTS[v]"
