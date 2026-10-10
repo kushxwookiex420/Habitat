@@ -2,15 +2,16 @@
 set -euo pipefail
 
 OUT="${1:-habitat-artifact-001.mp4}"
+SCRIPT_JSON="${2:-}"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
 # Official Rockstar media. Preserve the complete source image in the foreground;
 # use a softened, darkened duplicate as the portrait background instead of
 # aggressively cropping/zooming the source image.
-python - "$TMP" <<'PY'
-import os, sys, urllib.request
-root=sys.argv[1]
+python - "$TMP" "$SCRIPT_JSON" <<'PY'
+import json, os, re, sys, urllib.request
+root, script_path = sys.argv[1], sys.argv[2]
 urls=[
  "https://www.rockstargames.com/VI/_next/static/media/Jason_and_Lucia_08.0.bq0bdrl6g5y.jpg?akim=1&imdensity=1&imwidth=960",
  "https://www.rockstargames.com/VI/_next/static/media/Vice_City_10.0f1q-xa_4q8r2.jpg?akim=1&imdensity=1&imwidth=960",
@@ -20,23 +21,14 @@ urls=[
  "https://www.rockstargames.com/VI/_next/static/media/Ambrosia_06.0j9c7-8nfb_xf.jpg?akim=1&imdensity=1&imwidth=960",
 ]
 for i,url in enumerate(urls,1):
- req=urllib.request.Request(url,headers={"User-Agent":"Mozilla/5.0 HabitatVideoBuilder/2.0"})
+ req=urllib.request.Request(url,headers={"User-Agent":"Mozilla/5.0 HabitatVideoBuilder/3.0"})
  with urllib.request.urlopen(req,timeout=25) as r:
   data=r.read()
   if len(data)<10000: raise RuntimeError(f"Screenshot {i} too small to be a real image")
   if not r.headers.get("Content-Type","").startswith("image/"):
    raise RuntimeError(f"Screenshot {i} was not an image")
   open(os.path.join(root,f"scene{i}.jpg"),"wb").write(data)
-print("Downloaded and validated six official Rockstar image assets.")
-PY
-
-# Use a free neural voice instead of the robotic legacy TTS endpoint.
-python -m pip install --disable-pip-version-check --quiet edge-tts
-python - "$TMP" <<'PY'
-import asyncio, os, sys
-import edge_tts
-root=sys.argv[1]
-lines=[
+fallback_voice = [
  "Vice City is back in Grand Theft Auto six. Here are the official details worth knowing.",
  "Rockstar has announced November nineteenth, twenty twenty-six as the release date. Release plans can change, so check Rockstar's official updates.",
  "The story follows Jason Duval and Lucia Caminos, two characters Rockstar has introduced in its official materials.",
@@ -44,6 +36,62 @@ lines=[
  "Rockstar has announced PlayStation five and Xbox Series X and S for launch. Treat other platform claims as unconfirmed unless Rockstar announces them.",
  "That is what we know from official sources, without mixing in rumors. Follow Vice City Files for clear, sourced updates."
 ]
+script = {}
+if script_path and os.path.isfile(script_path):
+ try:
+  payload=json.load(open(script_path,encoding="utf-8"))
+  script=(payload.get("job",{}).get("stages",{}).get("script",{}).get("result") or payload.get("script") or payload)
+  if not isinstance(script,dict): script={}
+ except Exception as exc:
+  print("Script JSON unavailable; using safe fallback narration:",str(exc))
+voice=re.sub(r"\s+"," ",str(script.get("voiceover","") or "")).strip()
+if len(voice)<80:
+ voice=" ".join(fallback_voice)
+ print("Script did not contain production-length narration; using canonical fact-safe fallback.")
+sentences=[x.strip() for x in re.split(r"(?<=[.!?])\s+",voice) if x.strip()]
+if len(sentences)>=6:
+ buckets=[[] for _ in range(6)]; counts=[0]*6
+ for sentence in sentences:
+  idx=min(range(6),key=lambda j:counts[j])
+  buckets[idx].append(sentence); counts[idx]+=len(sentence.split())
+ lines=[" ".join(b) for b in buckets]
+else:
+ words=voice.split()
+ lines=[" ".join(words[(i*len(words))//6:((i+1)*len(words))//6]).rstrip(" ,;:") for i in range(6)]
+ lines=[x if x.endswith((".","!","?")) else x+"." for x in lines]
+ if any(not x for x in lines): lines=fallback_voice
+def clean_label(value,limit,fallback):
+ value=re.sub(r"[^A-Za-z0-9 +&-]"," ",str(value or ""))
+ value=re.sub(r"\s+"," ",value).strip()
+ return (value[:limit].rstrip() or fallback)
+raw_titles=script.get("onScreenText",[])
+if not isinstance(raw_titles,list): raw_titles=[]
+shots=script.get("shotList",[])
+if not isinstance(shots,list): shots=[]
+fallback_titles=["VICE CITY FACTS","OFFICIAL DETAILS","THE STORY","WHAT IS CONFIRMED","LAUNCH PLATFORMS","FACTS NOT RUMORS"]
+fallback_subs=["Confirmed details","Official information","Source-checked update","Facts, not rumors","What Rockstar announced","Follow Vice City Files"]
+scene_rows=[]
+for i,line in enumerate(lines):
+ title=raw_titles[i] if len(raw_titles)>=6 else (shots[i] if i<len(shots) else " ".join(line.split()[:4]))
+ subtitle=shots[i] if i<len(shots) else " ".join(line.split()[:7])
+ title=clean_label(title,25,fallback_titles[i]).upper()
+ subtitle=clean_label(subtitle,34,fallback_subs[i])
+ if title.lower()==subtitle.lower(): subtitle=clean_label(" ".join(line.split()[:6]),34,fallback_subs[i])
+ scene_rows.append({"voiceover":line,"title":title,"subtitle":subtitle})
+with open(os.path.join(root,"scene-plan.json"),"w",encoding="utf-8") as f:
+ json.dump({"title":script.get("title","Vice City Files"),"scenes":scene_rows},f,ensure_ascii=False,indent=2)
+print("Downloaded six official Rockstar stills and built a six-scene plan from the current content script.")
+PY
+# Use a free neural voice instead of the robotic legacy TTS endpoint.
+python -m pip install --disable-pip-version-check --quiet edge-tts
+python - "$TMP" <<'PY'
+import asyncio, json, os, sys
+import edge_tts
+root=sys.argv[1]
+plan=json.load(open(os.path.join(root,"scene-plan.json"),encoding="utf-8"))
+lines=[str(scene["voiceover"]) for scene in plan["scenes"]]
+if len(lines)!=6 or any(len(line.strip())<8 for line in lines):
+ raise RuntimeError("Dynamic scene plan must contain six meaningful narration segments")
 async def main():
     parts=[]
     for i,line in enumerate(lines,1):
@@ -75,19 +123,11 @@ echo "Narration source duration: ${VOICE_DURATION}s; body timeline with one-seco
 
 # Each scene gets a dedicated title band above the full, uncropped image and a
 # separate footer below it. Only the blurred background gets a barely perceptible drift.
-TITLES=(
-  "VICE CITY IS BACK|GTA VI • OFFICIAL DETAILS"
-  "NOVEMBER 19, 2026|ANNOUNCED RELEASE DATE"
-  "JASON + LUCIA|THE MAIN CHARACTERS"
-  "WELCOME TO LEONIDA|VICE CITY AND BEYOND"
-  "PS5 + XBOX SERIES X AND S|ANNOUNCED LAUNCH PLATFORMS"
-  "FACTS, NOT RUMORS|FOLLOW VICE CITY FILES"
-)
 FILTER=""
 for i in 0 1 2 3 4 5; do
   n=$((i+1))
-  title="${TITLES[$i]%%|*}"
-  subtitle="${TITLES[$i]#*|}"
+  title="$(jq -r ".scenes[$i].title" "$TMP/scene-plan.json")"
+  subtitle="$(jq -r ".scenes[$i].subtitle" "$TMP/scene-plan.json")"
   # Escape FFmpeg drawtext punctuation that can occur in the title strings.
   title=$(printf '%s' "$title" | sed 's/[\\:]/\\\\&/g')
   subtitle=$(printf '%s' "$subtitle" | sed 's/[\\:]/\\\\&/g')
@@ -130,5 +170,5 @@ assert duration>=expected-0.2, f"Artifact shorter than measured narration plus t
 assert int(video["width"])==1080 and int(video["height"])==1920
 assert video["r_frame_rate"]=="30/1"
 assert audio.get("codec_type")=="audio"
-print(json.dumps({"verified":True,"bytes":size,"durationSeconds":duration,"width":1080,"height":1920,"renderer":"source-duration-neural-narration-v5-smooth-30fps","audio":"complete-narration-plus-one-second-tail","scenes":6,"expectedBodyDurationSeconds":expected}))
+print(json.dumps({"verified":True,"bytes":size,"durationSeconds":duration,"width":1080,"height":1920,"renderer":"source-duration-neural-narration-v6-script-driven","audio":"complete-narration-plus-one-second-tail","scenes":6,"expectedBodyDurationSeconds":expected}))
 PY
