@@ -1,0 +1,54 @@
+name: Habitat Autonomous Content Scheduler
+
+on:
+  schedule:
+    - cron: "7 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: habitat-autonomous-content
+  cancel-in-progress: false
+
+jobs:
+  run:
+    name: Run one lease-protected autonomous content mission
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Require scheduler secret
+        shell: bash
+        env:
+          HABITAT_AUTONOMOUS_SCHEDULER_TOKEN: ${{ secrets.HABITAT_AUTONOMOUS_SCHEDULER_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${HABITAT_AUTONOMOUS_SCHEDULER_TOKEN}" ]]; then
+            echo "::error::Configure HABITAT_AUTONOMOUS_SCHEDULER_TOKEN in both GitHub Actions secrets and Render environment before enabling scheduled missions."
+            exit 1
+          fi
+
+      - name: Dispatch Vice City Files mission
+        shell: bash
+        env:
+          HABITAT_AUTONOMOUS_SCHEDULER_TOKEN: ${{ secrets.HABITAT_AUTONOMOUS_SCHEDULER_TOKEN }}
+        run: |
+          set -euo pipefail
+          BASE="https://habitat-1-szzd.onrender.com"
+          response="$(curl --fail --silent --show-error --max-time 900 \
+            -H "content-type: application/json" \
+            -H "x-habitat-scheduler-token: ${HABITAT_AUTONOMOUS_SCHEDULER_TOKEN}" \
+            -X POST "${BASE}/content/autonomous-run" \
+            -d '{"project":"ViceCityFiles","platform":"tiktok","format":"9:16","objective":"Create the next best factual, source-checked Vice City Files short. Use a complete opening and closing, readable text, varied scenes, no unsupported claims, and stop before publishing for human approval."}')"
+          echo "${response}" | jq .
+          echo "${response}" | jq -e '.ok == true and .autonomousRun.status != null' >/dev/null
+          {
+            echo "## Autonomous content mission"
+            echo ""
+            echo "- Project: ViceCityFiles"
+            echo "- Platform: TikTok"
+            echo "- Dispatch endpoint accepted the mission."
+            echo "- External publishing remains approval-gated."
+            echo "- Checked at: $(date -u +'%Y-%m-%d %H:%M:%S UTC')"
+          } >> "$GITHUB_STEP_SUMMARY"
