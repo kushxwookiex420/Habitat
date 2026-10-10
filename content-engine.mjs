@@ -1004,7 +1004,7 @@ export function registerContentEngine(app, deps) {
           scopeKey,
           leaseToken,
           nowIso: nowIso(),
-          expiresAt: new Date(Date.now() + 12 * 60 * 1000).toISOString()
+          expiresAt: new Date(new Date(windowStart).getTime() + intervalMs + 10 * 60 * 1000).toISOString()
         });
       } catch {
         console.error("AX_AUTONOMOUS_TICK_SKIPPED", JSON.stringify({reason:"durable dispatch lease claim failed; refusing uncoordinated dispatch",project,platform,windowStart,at:nowIso()}));
@@ -1046,11 +1046,9 @@ export function registerContentEngine(app, deps) {
       } finally {
         clearTimeout(timeout);
         autonomousMissionRunning = false;
-        try {
-          await leaseRepository.release({ scopeKey, leaseToken });
-        } catch {
-          console.warn("AX_AUTONOMOUS_LEASE_RELEASE_FAILED", JSON.stringify({project,platform,windowStart}));
-        }
+        // Keep the scheduled-window claim until the window expires. Releasing
+        // it immediately would let a second instance dispatch the same window
+        // again after the first request completed.
       }
     };
     const interval = setInterval(runAutonomous, autonomousIntervalMinutes * 60 * 1000);
