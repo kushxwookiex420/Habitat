@@ -106,11 +106,11 @@ FILTER+="[v0][v1][v2][v3][v4][v5]concat=n=6:v=1:a=0,tpad=stop_mode=clone:stop_du
 
 ffmpeg -hide_banner -loglevel error -y \
   -loop 1 -framerate 30 -t "$SCENE_DURATION" -i "$TMP/scene1.jpg" \
-  -loop 1 -framerate 15 -t "$SCENE_DURATION" -i "$TMP/scene2.jpg" \
-  -loop 1 -framerate 15 -t "$SCENE_DURATION" -i "$TMP/scene3.jpg" \
-  -loop 1 -framerate 15 -t "$SCENE_DURATION" -i "$TMP/scene4.jpg" \
-  -loop 1 -framerate 15 -t "$SCENE_DURATION" -i "$TMP/scene5.jpg" \
-  -loop 1 -framerate 15 -t "$SCENE_DURATION" -i "$TMP/scene6.jpg" \
+  -loop 1 -framerate 30 -t "$SCENE_DURATION" -i "$TMP/scene2.jpg" \
+  -loop 1 -framerate 30 -t "$SCENE_DURATION" -i "$TMP/scene3.jpg" \
+  -loop 1 -framerate 30 -t "$SCENE_DURATION" -i "$TMP/scene4.jpg" \
+  -loop 1 -framerate 30 -t "$SCENE_DURATION" -i "$TMP/scene5.jpg" \
+  -loop 1 -framerate 30 -t "$SCENE_DURATION" -i "$TMP/scene6.jpg" \
   -i "$TMP/voice.mp3" \
   -filter_complex "$FILTER" -map "[v]" -map 6:a:0 \
   -c:v libx264 -preset medium -crf 21 -pix_fmt yuv420p \
