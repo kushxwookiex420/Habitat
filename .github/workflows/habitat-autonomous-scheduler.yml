@@ -1,6 +1,11 @@
 name: Habitat Autonomous Content Scheduler
 
 on:
+  # Safe bootstrap trigger: changing this workflow can exercise the real dispatch path.
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/habitat-autonomous-scheduler.yml"
   schedule:
     - cron: "7 * * * *"
   workflow_dispatch:
