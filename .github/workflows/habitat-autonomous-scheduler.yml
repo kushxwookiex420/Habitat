@@ -38,9 +38,9 @@ jobs:
           BASE="https://habitat-1-szzd.onrender.com"
           payload_file="$(mktemp)"
           trap 'rm -f "${payload_file}"' EXIT
-          cat > "${payload_file}" <<'JSON'
-          {"project":"ViceCityFiles","platform":"tiktok","format":"9:16","objective":"Create the next best factual, source-checked Vice City Files short. Use a complete opening and closing, readable text, varied scenes, no unsupported claims, and stop before publishing for human approval."}
-          JSON
+          printf '%s' '{"project":"ViceCityFiles","platform":"tiktok","format":"9:16","objective":"Create the next best factual, source-checked Vice City Files short. Use a complete opening and closing, readable text, varied scenes, no unsupported claims, and stop before publishing for human approval."}' > "${payload_file}"
+          jq -e '.objective | type == "string" and length > 0' "${payload_file}" >/dev/null
+          echo "Validated scheduler payload bytes: $(wc -c < "${payload_file}" | tr -d ' ')"
 
           http_response="$(curl --http1.1 --silent --show-error --max-time 900 \
             -w '\n%{http_code}\n%{content_type}' \
