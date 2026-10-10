@@ -2,6 +2,10 @@ import crypto from "node:crypto";
 import ffmpegPath from "ffmpeg-static";
 import ffprobeStatic from "ffprobe-static";
 import sharp from "sharp";
+
+// Keep image processing within the memory budget of the free Render instance.
+sharp.cache({ memory:32, files:10, items:20 });
+sharp.concurrency(1);
 import { buildSceneOverlaySvg } from "./scene-overlay.mjs";
 
 const ffprobePath = ffprobeStatic.path;
@@ -521,7 +525,10 @@ export function registerContentEngine(app, deps) {
         "https://www.rockstargames.com/VI/_next/static/media/Vice_City_01.135x56yoeu.6t.jpg?akim=1&imdensity=1&imwidth=960",
         "https://www.rockstargames.com/VI/_next/static/media/Ambrosia_06.0j9c7-8nfb_xf.jpg?akim=1&imdensity=1&imwidth=960"
       ];
-      const imagePaths = await Promise.all(officialImageUrls.map(async (imageUrl, i) => {
+      const imagePaths = [];
+      // Download one asset at a time: parallel full-resolution buffers caused
+      // memory spikes on the small instance and could kill the render worker.
+      for (const [i, imageUrl] of officialImageUrls.entries()) {
         const imageResponse = await fetch(imageUrl, {
           headers: { "User-Agent": "Mozilla/5.0 HabitatAx/1.0", "Accept": "image/jpeg,*/*;q=0.1" },
           signal: AbortSignal.timeout(15000)
@@ -533,8 +540,8 @@ export function registerContentEngine(app, deps) {
         const imageExt = imageType.includes("webp") ? ".webp" : imageType.includes("avif") ? ".avif" : imageType.includes("png") ? ".png" : ".jpg";
         const imagePath = path.join(outDir, "official-scene-" + String(i + 1).padStart(2, "0") + imageExt);
         await fs.writeFile(imagePath, imageBytes);
-        return imagePath;
-      }));
+        imagePaths.push(imagePath);
+      }
 
       // Produce real spoken narration before encoding. Use short Google Translate TTS
           // chunks to avoid request-length limits; if speech generation fails, block the
@@ -1023,7 +1030,7 @@ export function registerContentEngine(app, deps) {
       }
       const intervalMs = autonomousIntervalMinutes * 60 * 1000;
       const windowStart = new Date(Math.floor(Date.now() / intervalMs) * intervalMs).toISOString();
-      const scopeKey = "autonomous:" + project + ":" + platform + ":lease-v2:" + windowStart;
+      const scopeKey = "autonomous:" + project + ":" + platform + ":lease-v3:" + windowStart;
       const leaseToken = crypto.randomUUID();
       let lease;
       try {
@@ -1127,7 +1134,7 @@ export function registerContentEngine(app, deps) {
       const intervalMinutes = Math.max(60, Number(process.env.HABITAT_AUTONOMOUS_INTERVAL_MINUTES || 60));
       const intervalMs = intervalMinutes * 60 * 1000;
       const windowStart = new Date(Math.floor(Date.now() / intervalMs) * intervalMs).toISOString();
-      const scopeKey = "autonomous:" + project + ":" + platform + ":lease-v2:" + windowStart;
+      const scopeKey = "autonomous:" + project + ":" + platform + ":lease-v3:" + windowStart;
       const leaseToken = crypto.randomUUID();
       try {
         scheduledLease = await leaseRepository.acquire({
