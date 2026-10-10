@@ -1267,12 +1267,15 @@ app.get("/workers", (req, res) => {
 app.get("/storage/check", async (_req, res) => {
   if (taskRepository && taskStorageReady) {
     try {
-      const [taskCheck, contentCheck, vaultCheck] = await Promise.all([
+      const [taskCheck, contentCheck, vaultCheck, leaseCheck] = await Promise.all([
         taskRepository.healthCheck(),
         contentJobRepository ? contentJobRepository.healthCheck() : Promise.resolve({ ok: false, durable: false }),
-        secretVault ? secretVault.healthCheck() : Promise.resolve({ ok: false, durable: false })
+        secretVault ? secretVault.healthCheck() : Promise.resolve({ ok: false, durable: false }),
+        dispatchLeaseRepository && dispatchLeaseReady
+          ? dispatchLeaseRepository.healthCheck()
+          : Promise.resolve({ ok: false, durable: false })
       ]);
-      const ok = taskCheck.ok === true && contentCheck.ok === true && vaultCheck.ok === true;
+      const ok = taskCheck.ok === true && contentCheck.ok === true && vaultCheck.ok === true && leaseCheck.ok === true;
       return res.status(ok ? 200 : 503).json({
         ok,
         storage: "cloudflare-d1",
@@ -1281,8 +1284,9 @@ app.get("/storage/check", async (_req, res) => {
         restoredTaskCount: taskStore.size,
         contentJobPersistence: { ready: contentCheck.ok === true, durable: contentCheck.durable === true },
         encryptedTikTokVault: { ready: vaultCheck.ok === true, encryptedAtRest: true, keyValueExposed: false },
+        dispatchLease: { ready: leaseCheck.ok === true, durable: leaseCheck.durable === true },
         detail: ok
-          ? "Task storage, content-job storage, and encrypted TikTok vault health checks all passed. This does not prove TikTok authorization or posting is approved."
+          ? "Task storage, content-job storage, encrypted TikTok vault, and durable dispatch lease health checks all passed. This does not prove TikTok authorization or posting is approved."
           : "One or more durable storage health checks failed; inspect the per-component readiness fields."
       });
     } catch {
