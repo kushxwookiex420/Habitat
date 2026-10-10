@@ -98,21 +98,21 @@ jobs:
         run: |
           set -e
           id=$(cat /tmp/job_id)
-          curl -sS -f -X POST "https://habitat-1-szzd.onrender.com/content/jobs/$id/research"             -H 'content-type: application/json' -d '{}' > /tmp/research.json
+          curl --retry 6 --retry-all-errors --retry-delay 8 --retry-max-time 180 --max-time 240 -sS -f -X POST "https://habitat-1-szzd.onrender.com/content/jobs/$id/research"             -H 'content-type: application/json' -d '{}' > /tmp/research.json
           cat /tmp/research.json
 
       - name: Script
         run: |
           set -e
           id=$(cat /tmp/job_id)
-          curl -sS -f -X POST "https://habitat-1-szzd.onrender.com/content/jobs/$id/script"             -H 'content-type: application/json' -d '{}' > /tmp/script.json
+          curl --retry 6 --retry-all-errors --retry-delay 8 --retry-max-time 180 --max-time 240 -sS -f -X POST "https://habitat-1-szzd.onrender.com/content/jobs/$id/script"             -H 'content-type: application/json' -d '{}' > /tmp/script.json
           cat /tmp/script.json
 
       - name: Render plan
         run: |
           set -e
           id=$(cat /tmp/job_id)
-          curl -sS -f -X POST "https://habitat-1-szzd.onrender.com/content/jobs/$id/render-plan"             -H 'content-type: application/json' -d '{}' > /tmp/plan.json
+          curl --retry 6 --retry-all-errors --retry-delay 8 --retry-max-time 180 --max-time 240 -sS -f -X POST "https://habitat-1-szzd.onrender.com/content/jobs/$id/render-plan"             -H 'content-type: application/json' -d '{}' > /tmp/plan.json
           cat /tmp/plan.json
 
       - name: Render real MP4 locally
