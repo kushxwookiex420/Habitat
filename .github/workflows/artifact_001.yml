@@ -57,8 +57,10 @@ jobs:
           fi
           test -s assets/vice-city-files-intro.mp4
           test -s assets/vice-city-files-outro.mp4
-          ffprobe -v error -select_streams v:0 -show_entries stream=width,height,r_frame_rate -of compact \
-            assets/vice-city-files-intro.mp4 assets/vice-city-files-outro.mp4 2>/dev/null || true
+          for clip in assets/vice-city-files-intro.mp4 assets/vice-city-files-outro.mp4; do
+            ffprobe -v error -select_streams v:0 -show_entries stream=width,height,r_frame_rate \
+              -of compact "$clip"
+          done
 
       - name: Validate renderer shell syntax
         run: bash -n scripts/render-artifact-001.sh
