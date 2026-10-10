@@ -585,40 +585,41 @@ export function registerContentEngine(app, deps) {
       ];
       const inputs = [];
       const filters = [];
-      const overlayPaths = [];
+      const sceneFramePaths = [];
+      // Burn each text overlay into its still image before encoding. This keeps
+      // FFmpeg at six video inputs instead of twelve simultaneous looping streams,
+      // which avoids memory spikes on the small Render instance.
       for (const [i, scene] of sceneInputs.entries()) {
-        const overlayPath = path.join(outDir, "scene-overlay-" + i + ".png");
         const overlaySvg = buildSceneOverlaySvg({
           title: scene.title,
           subtitle: scene.sub,
           fontScale
         });
-        await sharp(Buffer.from(overlaySvg)).png().toFile(overlayPath);
-        overlayPaths.push(overlayPath);
+        const overlayPng = await sharp(Buffer.from(overlaySvg)).png().toBuffer();
+        const framePath = path.join(outDir, "scene-frame-" + i + ".jpg");
+        await sharp(imagePaths[i])
+          .resize(540, 960, { fit:"cover", position:"centre" })
+          .composite([{ input:overlayPng, blend:"over" }])
+          .jpeg({ quality:88, mozjpeg:true })
+          .toFile(framePath);
+        sceneFramePaths.push(framePath);
       }
 
       sceneInputs.forEach((s, i) => {
-        // ffmpeg-static is built without the drawtext filter on Render. Rasterize
-        // readable title/footer overlays with Sharp, then composite those PNGs.
-        inputs.push("-loop","1","-framerate","10","-t",String(s.dur),"-i",imagePaths[i]);
-        inputs.push("-loop","1","-framerate","10","-t",String(s.dur),"-i",overlayPaths[i]);
+        inputs.push("-loop","1","-framerate","10","-t",String(s.dur),"-i",sceneFramePaths[i]);
         filters.push(
-          "["+(i*2)+":v]scale=540:960:force_original_aspect_ratio=increase,crop=540:960,fps=10,trim=duration="+s.dur+",setpts=PTS-STARTPTS,drawbox=x=0:y=0:w=iw:h=ih:color=black@0.34:t=fill,drawbox=x=20+20*t:y=205:w=8:h=550:color=white@0.16:t=fill[base"+i+"]"
+          "["+i+":v]scale=540:960:force_original_aspect_ratio=increase,crop=540:960,fps=10,trim=duration="+s.dur+",setpts=PTS-STARTPTS,drawbox=x=0:y=0:w=iw:h=ih:color=black@0.12:t=fill,drawbox=x=20+20*t:y=205:w=8:h=550:color=white@0.16:t=fill,setsar=1[v"+i+"]"
         );
-        filters.push(
-          "["+(i*2+1)+":v]scale=540:960,format=rgba,fps=10,trim=duration="+s.dur+",setpts=PTS-STARTPTS[ov"+i+"]"
-        );
-        filters.push("[base"+i+"][ov"+i+"]overlay=0:0:shortest=1,setsar=1[v"+i+"]");
       });
       filters.push(sceneInputs.map((_,i)=>"[v"+i+"]").join("")+"concat=n="+sceneInputs.length+":v=1:a=0,scale=1080:1920:flags=fast_bilinear,format=yuv420p[v]");
 
       await execFileAsync(ffmpegPath, [
-        "-hide_banner","-loglevel","error","-y",
+        "-hide_banner","-loglevel","error","-y","-filter_complex_threads","1",
         ...inputs,
         "-i",voicePath,
         "-filter_complex",filters.join(";"),
-        "-map","[v]","-map","12:a:0",
-        "-c:v","libx264","-preset","ultrafast","-crf","32","-pix_fmt","yuv420p",
+        "-map","[v]","-map","6:a:0",
+        "-c:v","libx264","-preset","ultrafast","-crf","32","-pix_fmt","yuv420p","-threads","1",
         "-af","apad,atrim=duration=45","-c:a","aac","-b:a","128k","-ar","48000","-t","45","-shortest",
         "-movflags","+faststart",outputPath
       ],{timeout:120000});
