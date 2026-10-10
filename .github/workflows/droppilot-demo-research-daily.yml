@@ -33,7 +33,8 @@ jobs:
             sleep 75
           fi
           day_of_year="$(date -u +%j)"
-          first=$((10#${day_of_year} % 19))
+          day_number=$((10#${day_of_year}))
+          first=$(((day_number - 1) * 2 % 19))
           second=$(((first + 1) % 19))
           printf 'batches=["%s","%s"]\n' "$first" "$second" >> "$GITHUB_OUTPUT"
           echo "Rotating product demo research through batches $first and $second."
