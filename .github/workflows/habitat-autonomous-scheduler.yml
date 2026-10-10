@@ -42,10 +42,8 @@ jobs:
             -H "x-habitat-scheduler-token: ${HABITAT_AUTONOMOUS_SCHEDULER_TOKEN}" \
             -X POST "${BASE}/content/autonomous-run" \
             -d '{"project":"ViceCityFiles","platform":"tiktok","format":"9:16","objective":"Create the next best factual, source-checked Vice City Files short. Use a complete opening and closing, readable text, varied scenes, no unsupported claims, and stop before publishing for human approval."}')"
-          status="${http_response##*
-\n'}"
-          response="${http_response%
-\n'*}"
+          status="$(printf '%s' "$http_response" | tail -n 1)"
+          response="$(printf '%s' "$http_response" | sed '$d')"
           echo "${response}" | jq .
           if [[ "${status}" == "409" ]]; then
             echo "The scheduled window was already claimed; duplicate mission safely skipped."
