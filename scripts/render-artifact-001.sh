@@ -97,7 +97,7 @@ if not isinstance(raw_titles,list): raw_titles=[]
 shots=script.get("shotList",[])
 if not isinstance(shots,list): shots=[]
 fallback_titles=["VICE CITY FACTS","OFFICIAL DETAILS","THE STORY","WHAT IS CONFIRMED","THE RELEASE PLAN","FOLLOW VICE CITY FILES"]
-fallback_subs=["Confirmed details","Jason and Lucia","Vice City and Leonida","What Rockstar confirmed","Release information","Verified updates only"]
+fallback_subs=["Officially announced","Release timing confirmed","Two protagonists","Florida-inspired setting","Current-generation consoles","Verified updates only"]
 scene_rows=[]
 used_titles=set()
 used_subtitles=set()
@@ -117,7 +117,12 @@ for i,line in enumerate(lines):
  candidate=shots[i] if i<len(shots) else fallback_subs[i]
  # Never turn the first words of a narration sentence into a caption: that
  # can create an unfinished-looking subtitle such as "the facts Rockstar has a".
- if str(candidate).strip().lower() in ("title card","end card") or str(candidate).strip().lower()==title.lower() or str(candidate).strip().lower() in used_subtitles:
+ candidate_label=str(candidate).strip().lower()
+ generic_labels=("title card","end card","opening title","branded closing","opening card","closing card","end screen","outro")
+ title_tokens=set(re.findall(r"[a-z0-9]+",title.lower()))-{"and","the","of","to","for","is","a","an"}
+ candidate_tokens=set(re.findall(r"[a-z0-9]+",candidate_label))-{"and","the","of","to","for","is","a","an"}
+ overlap=title_tokens & candidate_tokens
+ if candidate_label in generic_labels or candidate_label==title.lower() or candidate_label in used_subtitles or (len(overlap)>=2 and len(overlap)/max(1,len(candidate_tokens))>=0.65):
   candidate=fallback_subs[i]
  subtitle=clean_label(candidate,34,fallback_subs[i])
  if len(subtitle.split()) >= 4 and line.strip().lower().startswith(subtitle.lower()):
