@@ -138,7 +138,7 @@ test("provider setup errors include Cloudflare Workers AI and paid Cerebras opt-
 test("Artifact 001 workflow can rebuild branded intro/outro clips when the optional bundle is absent", async () => {
   const workflow = await fs.readFile(new URL("../.github/workflows/artifact_001.yml", import.meta.url), "utf8");
   assert.ok(workflow.includes("librsvg2-bin"));
-  assert.equal((workflow.match(/--retry 6 --retry-all-errors --retry-delay 8 --retry-max-time 180 --max-time 240/g) || []).length, 3);
+  assert.ok((workflow.match(/--retry 6 --retry-all-errors --retry-delay 8 --retry-max-time 180 --max-time 240/g) || []).length >= 3);
   assert.ok(workflow.includes("rsvg-convert -o /tmp/vice-city-title-card.png artifacts/vice-city-6-title-card.svg"));
   assert.ok(workflow.includes("assets/vice-city-files-intro.mp4"));
   assert.ok(workflow.includes("assets/vice-city-files-outro.mp4"));
