@@ -50,22 +50,23 @@ test("only one claimant can hold a scope until expiry", async () => {
   const repoB = createD1DispatchLeaseRepository({ ...config, fetchImpl: fake.fetchImpl });
   await repoA.initialize();
 
-  const leaseA = await repoA.acquire({
-    scopeKey: "DropPilotAI:tiktok:2026-10-10T18:00Z",
-    leaseToken: "token-a",
-    nowIso: "2026-10-10T17:59:00.000Z",
-    expiresAt: "2026-10-10T18:10:00.000Z"
-  });
-  const leaseB = await repoB.acquire({
-    scopeKey: "DropPilotAI:tiktok:2026-10-10T18:00Z",
-    leaseToken: "token-b",
-    nowIso: "2026-10-10T18:00:01.000Z",
-    expiresAt: "2026-10-10T18:10:01.000Z"
-  });
+  const attempts = await Promise.all([
+    repoA.acquire({
+      scopeKey: "DropPilotAI:tiktok:2026-10-10T18:00Z",
+      leaseToken: "token-a",
+      nowIso: "2026-10-10T17:59:00.000Z",
+      expiresAt: "2026-10-10T18:10:00.000Z"
+    }),
+    repoB.acquire({
+      scopeKey: "DropPilotAI:tiktok:2026-10-10T18:00Z",
+      leaseToken: "token-b",
+      nowIso: "2026-10-10T17:59:00.000Z",
+      expiresAt: "2026-10-10T18:10:00.000Z"
+    })
+  ]);
 
-  assert.equal(leaseA.acquired, true);
-  assert.equal(leaseB.acquired, false);
-  assert.equal(leaseB.reason, "lease_already_held");
+  assert.equal(attempts.filter(attempt => attempt.acquired).length, 1);
+  assert.equal(attempts.filter(attempt => !attempt.acquired && attempt.reason === "lease_already_held").length, 1);
 });
 
 test("expired lease can be reclaimed but an old owner cannot release the new lease", async () => {
