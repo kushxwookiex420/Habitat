@@ -34,7 +34,7 @@ test("product demo rejects footage without an explicit real-action label", async
   delete body.clips[0].action;
   await handler({ body }, response);
   assert.equal(response.statusCode, 400);
-  assert.match(response.payload.error, /action: vacuuming, blowing, or attachments-in-use/i);
+  assert.match(response.payload.error, /supported product-specific action label from render status/i);
 });
 
 test("product demo rejects repeated single-action footage", async () => {
