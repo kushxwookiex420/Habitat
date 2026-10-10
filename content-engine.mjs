@@ -1023,7 +1023,7 @@ export function registerContentEngine(app, deps) {
       }
       const intervalMs = autonomousIntervalMinutes * 60 * 1000;
       const windowStart = new Date(Math.floor(Date.now() / intervalMs) * intervalMs).toISOString();
-      const scopeKey = "autonomous:" + project + ":" + platform + ":" + windowStart;
+      const scopeKey = "autonomous:" + project + ":" + platform + ":lease-v2:" + windowStart;
       const leaseToken = crypto.randomUUID();
       let lease;
       try {
@@ -1145,7 +1145,8 @@ export function registerContentEngine(app, deps) {
       // Keep this window claim until expiry; do not release it after a successful run.
     }
     const job = makeJob({ project, objective, platform, format });
-    const base = req.protocol + "://" + req.get("host");
+    // Internal stage calls stay on this instance and bypass Render edge request timeouts.
+    const base = "http://127.0.0.1:" + String(process.env.PORT || 10000);
     const stages = [];
     const call = async (path, body = {}) => {
       const response = await fetch(base + path, {
