@@ -47,12 +47,21 @@ for (const p of batch) {
       await new Promise(resolve => setTimeout(resolve, 1500 * (attempt + 1)));
     }
     const candidateCount = Number(research.candidateCount || 0);
+    const videoPageCandidateCount = Number(research.videoPageCandidateCount || 0);
+    const directVideoCandidateCount = Number(research.directVideoCandidateCount || 0);
+    const hasSourceLeads = Boolean(response?.ok && research.ok && candidateCount > 0);
+    const hasVideoPageLeads = hasSourceLeads && videoPageCandidateCount > 0;
     results.push({
       shopifyProductId: p.shopifyProductId || null,
       title,
       productUrl: p.productUrl || null,
       vendor: p.vendor || null,
-      status: response?.ok && research.ok && candidateCount > 0 ? "researched" : "research_failed",
+      // A generic web page is not the same as a video source. Keep these states distinct
+      // so downstream automation cannot mistake search matches for usable demo footage.
+      status: hasVideoPageLeads ? "video_page_leads_found" : hasSourceLeads ? "web_leads_only" : "research_failed",
+      candidateCount,
+      videoPageCandidateCount,
+      directVideoCandidateCount,
       httpStatus: response?.status || null,
       requestError: lastRequestError,
       attempts,
@@ -90,9 +99,16 @@ const report = {
   catalogProductCount: products.length,
   startIndex: start,
   endIndexExclusive: start + batch.length,
-  researchedCount: results.filter(x => x.status === "researched").length,
+  // Keep researchedCount as a backward-compatible count of products with any source leads.
+  researchedCount: results.filter(x => x.candidateCount > 0).length,
+  sourceLeadProductCount: results.filter(x => x.candidateCount > 0).length,
+  videoPageLeadProductCount: results.filter(x => x.status === "video_page_leads_found").length,
+  webLeadOnlyProductCount: results.filter(x => x.status === "web_leads_only").length,
   failedCount: results.filter(x => x.status === "research_failed").length,
-  policy: "Search results are leads, not proof of reuse rights. No media is downloaded, rendered, or published by this research job. Recheck stock and price before scheduling; require confirmed commercial rights, QA, and human approval.",
+  totalCandidateCount: results.reduce((sum, x) => sum + Number(x.candidateCount || 0), 0),
+  totalVideoPageCandidateCount: results.reduce((sum, x) => sum + Number(x.videoPageCandidateCount || 0), 0),
+  totalDirectVideoCandidateCount: results.reduce((sum, x) => sum + Number(x.directVideoCandidateCount || 0), 0),
+  policy: "Search results are leads, not proof of actual video availability or reuse rights. Video-page leads require manual verification. No media is downloaded, rendered, or published by this research job. Recheck stock and price before scheduling; require confirmed commercial rights, QA, and human approval.",
   products: results
 };
 await fs.mkdir("dist", { recursive: true });
