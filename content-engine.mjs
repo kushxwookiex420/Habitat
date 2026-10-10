@@ -751,10 +751,12 @@ export function registerContentEngine(app, deps) {
           const segmentPath = path.join(outDir, "video-segment-" + i + ".mp4");
           const sourcePath = officialVideoPaths[i % officialVideoPaths.length];
           await execFileAsync(ffmpegPath, [
-            "-hide_banner","-loglevel","error","-y",
+            "-hide_banner","-loglevel","error","-y","-threads","1",
             "-i",sourcePath,"-t",String(scene.dur),"-map","0:v:0","-an",
-            "-c:v","copy","-avoid_negative_ts","make_zero",segmentPath
-          ],{timeout:30000});
+            "-vf","scale=360:640:force_original_aspect_ratio=increase,crop=360:640,fps=10,format=yuv420p",
+            "-c:v","libx264","-preset","ultrafast","-crf","32","-threads","1",
+            "-avoid_negative_ts","make_zero",segmentPath
+          ],{timeout:60000});
           segmentPaths.push(segmentPath);
         }
         const concatPath = path.join(outDir, "video-segments.txt");
@@ -766,7 +768,7 @@ export function registerContentEngine(app, deps) {
         ],{timeout:30000});
         await execFileAsync(ffmpegPath, [
           "-hide_banner","-loglevel","error","-y","-threads","1","-stream_loop","-1","-i",silentPath,"-i",voicePath,
-          "-vf","scale=360:640:force_original_aspect_ratio=increase,crop=360:640,fps=12,scale=720:1280:flags=fast_bilinear,format=yuv420p",
+          "-vf","scale=720:1280:flags=fast_bilinear,format=yuv420p",
           "-map","0:v:0","-map","1:a:0",
           "-c:v","libx264","-preset","ultrafast","-crf","32","-threads","1",
           "-af","apad,atrim=duration=45","-c:a","aac","-b:a","128k","-ar","48000","-t","45","-shortest",
