@@ -217,7 +217,7 @@ test("video renderer derives narration and mobile-safe scene overlays from the g
 test("Artifact 001 uses six moving B-roll clips with attribution and a no-gameplay disclaimer", async () => {
   const source = await fs.readFile(new URL("../scripts/render-artifact-001.sh", import.meta.url), "utf8");
   const workflow = await fs.readFile(new URL("../.github/workflows/artifact_001.yml", import.meta.url), "utf8");
-  assert.equal((source.match(/videos\.pexels\.com\/video-files\//g) || []).length, 6);
+  assert.equal((source.match(/videos\.pexels\.com\/video-files\//g) || []).length, 8);
   assert.ok(source.includes('cp "$TMP/broll-attribution.txt" "${OUT}.attribution.txt"'));
   assert.ok(source.includes('map "[v]" -map 12:a:0'));
   assert.ok(workflow.includes("habitat-artifact-001-body.mp4.attribution.txt"));
