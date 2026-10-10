@@ -807,8 +807,9 @@ export function registerContentEngine(app, deps) {
       const durationSeconds=Number(probeData?.format?.duration||0);
       const videoStream=(probeData?.streams||[]).find(x=>x.codec_type==="video")||{};
       if(durationSeconds<44) throw new Error("rendered artifact duration verification failed");
-      const expectedWidth = officialVideoPaths.length >= 4 ? 720 : 1080;
-      const expectedHeight = officialVideoPaths.length >= 4 ? 1280 : 1920;
+      // Both footage and still-image modes are normalized to the same vertical HD release spec.
+      const expectedWidth = 1080;
+      const expectedHeight = 1920;
       if(Number(videoStream.width)!==expectedWidth || Number(videoStream.height)!==expectedHeight)
         throw new Error("rendered artifact dimensions verification failed");
 
