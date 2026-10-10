@@ -1149,7 +1149,8 @@ export function registerContentEngine(app, deps) {
     const stages = [];
     const call = async (path, body = {}) => {
       const response = await fetch(base + path, {
-        method:"POST", headers:{"content-type":"application/json"}, body:JSON.stringify(body)
+        method:"POST", headers:{"content-type":"application/json"}, body:JSON.stringify(body),
+        signal:AbortSignal.timeout(15 * 60 * 1000)
       });
       let payload = {};
       try { payload = await response.json(); } catch {}
@@ -1161,36 +1162,52 @@ export function registerContentEngine(app, deps) {
       }
       return payload;
     };
-    try {
-      await call("/content/jobs/" + job.id + "/research");
-      await call("/content/jobs/" + job.id + "/script");
-      await call("/content/jobs/" + job.id + "/render-plan");
-      const rendered = await call("/content/jobs/" + job.id + "/render-loop");
-      const review = await call("/content/jobs/" + job.id + "/ax-review");
-      const gate = await call("/content/jobs/" + job.id + "/quality-gate");
-      // Never cross the external publishing boundary automatically unless a publisher bridge is configured.
-      job.autonomousRun = {
-        status: gate?.gate?.status === "READY_TO_PUBLISH" ? "READY_TO_PUBLISH" : "BLOCKED",
-        owner:"Ax", stages, renderLoop:rendered?.renderLoop || null,
-        axReview:review?.review || null, qualityGate:gate?.gate || null,
-        completedAt:nowIso()
-      };
-      res.json({ ok:true, job, autonomousRun:job.autonomousRun });
-    } catch (error) {
-      // A failed mission should not lock out recovery for the full scheduler window.
-      // Release only the lease this request acquired; successful runs retain their lease.
-      if (scheduledLease?.acquired && leaseRepository && typeof leaseRepository.release === "function") {
-        try {
-          await leaseRepository.release({ scopeKey: scheduledLease.scopeKey, leaseToken: scheduledLease.leaseToken });
-        } catch (releaseError) {
-          console.warn("AX_AUTONOMOUS_LEASE_RELEASE_FAILED", JSON.stringify({
-            project, platform, message:String(releaseError?.message || releaseError).slice(0,180)
-          }));
+
+    // A Render edge proxy can terminate long requests while FFmpeg is still
+    // rendering. Acknowledge the durable job immediately, then run the bounded
+    // pipeline in the background so the scheduler does not misclassify a slow
+    // render as a failed dispatch.
+    job.autonomousRun = { status:"RUNNING", owner:"Ax", stages, acceptedAt:nowIso() };
+    res.status(200).json({ ok:true, job, autonomousRun:job.autonomousRun });
+
+    void (async () => {
+      try {
+        await call("/content/jobs/" + job.id + "/research");
+        await call("/content/jobs/" + job.id + "/script");
+        await call("/content/jobs/" + job.id + "/render-plan");
+        const rendered = await call("/content/jobs/" + job.id + "/render-loop");
+        const review = await call("/content/jobs/" + job.id + "/ax-review");
+        const gate = await call("/content/jobs/" + job.id + "/quality-gate");
+        job.autonomousRun = {
+          status:gate?.gate?.status === "READY_TO_PUBLISH" ? "READY_TO_PUBLISH" : "BLOCKED",
+          owner:"Ax", stages, renderLoop:rendered?.renderLoop || null,
+          axReview:review?.review || null, qualityGate:gate?.gate || null,
+          completedAt:nowIso()
+        };
+        if (contentJobRepository) await contentJobRepository.upsert(job);
+        console.log("AX_AUTONOMOUS_MISSION_COMPLETE", JSON.stringify({
+          jobId:job.id, status:job.autonomousRun.status, stages:stages.length,
+          visualQA:job.autonomousRun.renderLoop?.status || null
+        }));
+      } catch (error) {
+        if (scheduledLease?.acquired && leaseRepository && typeof leaseRepository.release === "function") {
+          try {
+            await leaseRepository.release({ scopeKey:scheduledLease.scopeKey, leaseToken:scheduledLease.leaseToken });
+          } catch (releaseError) {
+            console.warn("AX_AUTONOMOUS_LEASE_RELEASE_FAILED", JSON.stringify({
+              project, platform, message:String(releaseError?.message || releaseError).slice(0,180)
+            }));
+          }
         }
+        job.autonomousRun = { status:"BLOCKED", owner:"Ax", stages, error:String(error?.message || error), failedAt:nowIso() };
+        try { if (contentJobRepository) await contentJobRepository.upsert(job); } catch (persistError) {
+          console.error("AX_AUTONOMOUS_FAILURE_PERSIST_FAILED", job.id, String(persistError?.message || persistError));
+        }
+        console.error("AX_AUTONOMOUS_MISSION_FAILED", JSON.stringify({
+          jobId:job.id, error:String(error?.message || error), stages
+        }));
       }
-      job.autonomousRun = { status:"BLOCKED", owner:"Ax", stages, error:String(error?.message || error), failedAt:nowIso() };
-      res.status(502).json({ ok:false, error:"autonomous mission stopped", job, autonomousRun:job.autonomousRun, detail:error?.payload || null });
-    }
+    })();
   });
 
   app.post("/content/jobs/:id/run-next", async (req, res) => {
