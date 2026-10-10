@@ -28,7 +28,7 @@ function trackedUrl(rawUrl, campaign, network) {
   if (url.protocol !== "https:") throw new Error("productUrl must use HTTPS");
   const configuredHost = String(process.env.SHOPIFY_STORE_DOMAIN || DEFAULT_STORE_HOST).trim().toLowerCase();
   if (url.hostname.toLowerCase() !== configuredHost) throw new Error("productUrl must use the configured DropPilot Shopify store domain");
-  if (!/^\\/products\\/[^/]+\\/?$/.test(url.pathname)) throw new Error("productUrl must point directly to a Shopify product page");
+  if (!/^\/products\/[^/]+\/?$/.test(url.pathname)) throw new Error("productUrl must point directly to a Shopify product page");
   url.searchParams.set("utm_source", network);
   url.searchParams.set("utm_medium", "social");
   url.searchParams.set("utm_campaign", campaign);
