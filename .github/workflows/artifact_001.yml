@@ -4,6 +4,7 @@ name: Artifact 001 execution
 # renderer/workflow change produce a QA-gated review artifact without triggering
 # on ordinary app commits. This workflow never publishes to TikTok.
 on:
+  workflow_call:
   workflow_dispatch:
     inputs:
       objective:
