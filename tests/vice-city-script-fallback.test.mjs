@@ -23,6 +23,8 @@ test("uses a factual render-compatible fallback when model narration is missing"
   assert.equal(result.fallbackReason !== undefined, true);
   assert.ok(result.sources.some(source => source.includes("rockstargames.com")));
   assert.equal(result.shotList.length, 6);
+  assert.ok(result.shotList.includes("the city returns"));
+  assert.equal(result.shotList[5], "follow for official updates");
 });
 
 test("preserves coherent model narration that passes production checks", () => {
