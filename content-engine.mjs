@@ -1020,9 +1020,11 @@ export function registerContentEngine(app, deps) {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 10 * 60 * 1000);
       try {
+        const schedulerToken = String(process.env.HABITAT_AUTONOMOUS_SCHEDULER_TOKEN || "").trim();
+        if (!schedulerToken) throw new Error("HABITAT_AUTONOMOUS_SCHEDULER_TOKEN is not configured; scheduled run refused");
         const response = await fetch(publicBase + "/content/autonomous-run", {
           method:"POST",
-          headers:{"content-type":"application/json"},
+          headers:{"content-type":"application/json","x-habitat-scheduler-token":schedulerToken},
           body:JSON.stringify({ project, objective, platform, format:"9:16" }),
           signal:controller.signal
         });
@@ -1063,6 +1065,16 @@ export function registerContentEngine(app, deps) {
 
   // Ax autonomous mission runner: executes every safe stage in order and stops only at the external publish approval boundary.
   app.post("/content/autonomous-run", async (req, res) => {
+    // Scheduled missions are triggered by GitHub Actions or the local scheduler.
+    // Require a shared secret so an anonymous caller cannot consume model/render resources.
+    const expectedToken = String(process.env.HABITAT_AUTONOMOUS_SCHEDULER_TOKEN || "").trim();
+    const suppliedToken = String(req.get("x-habitat-scheduler-token") || "").trim();
+    if (!expectedToken) return res.status(503).json({ ok:false, error:"autonomous scheduler secret is not configured" });
+    const expectedBytes = Buffer.from(expectedToken);
+    const suppliedBytes = Buffer.from(suppliedToken);
+    if (expectedBytes.length !== suppliedBytes.length || !crypto.timingSafeEqual(expectedBytes, suppliedBytes)) {
+      return res.status(401).json({ ok:false, error:"unauthorized autonomous scheduler request" });
+    }
     const objective = String(req.body?.objective || "").trim();
     if (!objective) return res.status(400).json({ ok:false, error:"objective required" });
     const job = makeJob({
