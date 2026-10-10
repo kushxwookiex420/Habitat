@@ -5,6 +5,12 @@ name: Artifact 001 execution
 # on ordinary app commits. This workflow never publishes to TikTok.
 on:
   workflow_dispatch:
+    inputs:
+      objective:
+        description: "Content mission objective"
+        required: false
+        default: "Create Artifact 001: Vice City 6: The Next Big Leap"
+        type: string
   push:
     branches: ["main"]
     paths:
@@ -82,9 +88,14 @@ jobs:
           exit 1
 
       - name: Create content mission
+        env:
+          OBJECTIVE: ${{ inputs.objective || 'Create Artifact 001: Vice City 6: The Next Big Leap' }}
         run: |
-          set -e
-          curl -sS -f -X POST https://habitat-1-szzd.onrender.com/content/jobs             -H 'content-type: application/json'             --data '{"project":"ViceCityFiles","objective":"Create Artifact 001: Vice City 6: The Next Big Leap","platform":"tiktok","format":"9:16"}'             > /tmp/job.json
+          set -euo pipefail
+          jq -n --arg objective "$OBJECTIVE" '{project:"ViceCityFiles",objective:$objective,platform:"tiktok",format:"9:16"}' > /tmp/job-request.json
+          curl --retry 6 --retry-all-errors --retry-delay 8 --retry-max-time 180 --max-time 240 -sS -f -X POST \
+            https://habitat-1-szzd.onrender.com/content/jobs \
+            -H 'content-type: application/json' --data-binary @/tmp/job-request.json > /tmp/job.json
           cat /tmp/job.json
           python - <<'PY'
           import json
