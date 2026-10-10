@@ -165,21 +165,13 @@ test("autonomous scheduler delegates heavy video rendering to the external GitHu
   assert.ok(scheduler.includes('cron: "17 14 * * *"'));
   assert.ok(!scheduler.includes("/content/autonomous-run"));
   assert.ok(renderer.includes("workflow_call:"));
+  assert.ok(renderer.includes('inputs.objective || \'Create Artifact 001: Vice City 6: The Next Big Leap\''));
+  assert.ok(scheduler.includes('cron: "17 14 * * *"'));
+  assert.ok(!scheduler.includes("deferStagesToCaller"));
+  assert.ok(!scheduler.includes("run_stage research"));
   assert.ok(renderer.includes("Render real MP4 locally"));
   assert.ok(renderer.includes("Run deterministic visual and audio QA"));
 });
 
 
-test("autonomous scheduler delegates each durable content stage instead of relying on a detached Render worker", async () => {
-  const workflow = await fs.readFile(new URL("../.github/workflows/habitat-autonomous-scheduler.yml", import.meta.url), "utf8");
-  assert.ok(workflow.includes("deferStagesToCaller:true"));
-  for (const stage of ["research", "script", "render-plan", "render-loop", "ax-review", "quality-gate"]) {
-    assert.ok(workflow.includes("run_stage " + stage), "missing durable stage " + stage);
-  }
-  assert.ok(workflow.includes("D1 rehydrates the"));
-  assert.equal((workflow.match(/--fail-with-body --retry 6 --retry-all-errors/g) || []).length, 1);
-  assert.equal((workflow.match(/--fail-with-body --max-time/g) || []).length, 1);
-  assert.ok(workflow.includes(".job.stages.edit.result.artifact.verified == true"));
-  assert.ok(workflow.includes(".gate.status == \"READY_TO_PUBLISH\""));
-  assert.ok(!workflow.includes('for attempt in $(seq 1 95); do'));
-});
+
