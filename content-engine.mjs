@@ -768,7 +768,7 @@ export function registerContentEngine(app, deps) {
         ],{timeout:30000});
         await execFileAsync(ffmpegPath, [
           "-hide_banner","-loglevel","error","-y","-threads","1","-stream_loop","-1","-i",silentPath,"-i",voicePath,
-          "-vf","scale=720:1280:flags=fast_bilinear,format=yuv420p",
+          "-vf","scale=1080:1920:flags=fast_bilinear,format=yuv420p",
           "-map","0:v:0","-map","1:a:0",
           "-c:v","libx264","-preset","ultrafast","-crf","32","-threads","1",
           "-af","apad,atrim=duration=45","-c:a","aac","-b:a","128k","-ar","48000","-t","45","-shortest",
