@@ -141,7 +141,7 @@ jobs:
         run: |
           set -e
           chmod +x scripts/render-artifact-001.sh
-          ./scripts/render-artifact-001.sh habitat-artifact-001-body.mp4
+          ./scripts/render-artifact-001.sh habitat-artifact-001-body.mp4 /tmp/script.json
 
       - name: Assemble approved intro, complete narration, and branded outro
         run: |
