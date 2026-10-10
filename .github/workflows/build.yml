@@ -12,6 +12,12 @@ on:
 permissions:
   contents: write
 
+# Serialize writes to the single rolling release asset; stale builds must not
+# overwrite the APK built from the latest main commit.
+concurrency:
+  group: habitat-apk-latest-release
+  cancel-in-progress: false
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -58,10 +64,17 @@ jobs:
           name: Habitat-v0.8-Ax-debug-apk
           path: artifact/Habitat-v0.8-Ax-debug.apk
       - name: Publish APK release
+        if: github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -e
+          git fetch origin main
+          CURRENT_MAIN="$(git rev-parse origin/main)"
+          if [ "$CURRENT_MAIN" != "$GITHUB_SHA" ]; then
+            echo "Skipping release publish for stale commit $GITHUB_SHA; current main is $CURRENT_MAIN."
+            exit 0
+          fi
           TAG="habitat-v0.8-latest"
           TITLE="Habitat v0.8 Ax — Latest APK"
           if gh release view "$TAG" >/dev/null 2>&1; then
