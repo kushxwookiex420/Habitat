@@ -156,3 +156,10 @@ test("visual QA falls back to system FFmpeg when bundled npm binaries are absent
   assert.doesNotMatch(visualQa, /^import ffmpegPath from "ffmpeg-static";/m);
   assert.doesNotMatch(visualQa, /^import ffprobeStatic from "ffprobe-static";/m);
 });
+
+
+test("autonomous scheduler skips artifact download when an idempotent duplicate has no job id", async () => {
+  const workflow = await fs.readFile(new URL("../.github/workflows/habitat-autonomous-scheduler.yml", import.meta.url), "utf8");
+  assert.ok(workflow.includes("if: success() && steps.dispatch.outputs.job_id != ''"));
+  assert.equal((workflow.match(/if: success\(\) && steps\.dispatch\.outputs\.job_id != ''/g) || []).length, 2);
+});
