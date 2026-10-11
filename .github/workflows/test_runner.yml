@@ -31,3 +31,12 @@ jobs:
         run: npm test
       - name: Check application and pipeline scripts
         run: npm run check
+      - name: Generate DropPilot product decision report
+        run: node scripts/rank-droppilot-products.mjs --out dist/droppilot-ranked-products.json
+      - name: Publish review report as workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: droppilot-product-decision-report
+          path: dist/droppilot-ranked-products.json
+          if-no-files-found: error
+          retention-days: 14
