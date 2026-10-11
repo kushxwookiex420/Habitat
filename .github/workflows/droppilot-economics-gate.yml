@@ -24,6 +24,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
+      - name: Run regression tests
+        run: npm test
       - name: Run economics ranker
         run: node scripts/rank-droppilot-products.mjs
       - name: Summarize gate decisions
