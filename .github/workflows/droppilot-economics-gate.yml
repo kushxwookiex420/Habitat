@@ -53,6 +53,21 @@ jobs:
             }))
           }, null, 2) + "\n");
           NODE
+      - name: Fail closed on unverified or unprofitable products
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from "node:fs";
+          const report = JSON.parse(fs.readFileSync("dist/droppilot-ranked-products.json", "utf8"));
+          const blocked = report.products.filter(p => p.decision !== "REVIEW_FOR_LISTING");
+          if (blocked.length) {
+            console.error(`Economics gate blocked ${blocked.length}/${report.productCount} products.`);
+            for (const p of blocked.slice(0, 30)) {
+              console.error(JSON.stringify({ title: p.title, decision: p.decision, missing: p.missing ?? [], estimatedNetMarginPercent: p.estimatedNetMarginPercent ?? null }));
+            }
+            process.exit(1);
+          }
+          console.log(`Economics gate passed: all ${report.productCount} products have evidence, stock, and at least 20% estimated net margin.`);
+          NODE
       - name: Upload economics decision report
         if: always()
         uses: actions/upload-artifact@v4
