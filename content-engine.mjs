@@ -279,7 +279,7 @@ export function registerContentEngine(app, deps) {
       try { tokenPayload = JSON.parse(tokenText); } catch {}
 
       if (!tokenResponse.ok || !tokenPayload?.access_token) {
-        console.error("TIKTOK_OAUTH_TOKEN_EXCHANGE_FAILED", tokenResponse.status, tokenText.slice(0, 500));
+        console.error("TIKTOK_OAUTH_TOKEN_EXCHANGE_FAILED", JSON.stringify({ httpStatus: tokenResponse.status, error: String(tokenPayload?.error || "unknown").slice(0, 80), logId: String(tokenPayload?.log_id || "").slice(0, 100) }));
         return res.status(502).send("<h1>TikTok connection failed</h1><p>TikTok did not return an access token. Check the registered redirect URI and approved scopes in the TikTok Developer Portal.</p>");
       }
 
