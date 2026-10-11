@@ -56,3 +56,18 @@ test("rejects a low-margin product even if demand and demo scores are high", () 
   assert.equal(result.eligibleForRanking, true);
   assert.equal(result.decision, "REJECT_LOW_MARGIN");
 });
+
+test("rejects PawCharm economics when selling price is below product plus supplier shipping", () => {
+  const charm = { ...product, minVariantPrice: "6.88", title: "PawCharm Keychain" };
+  const result = evaluateProduct(charm, {
+    ...evidence,
+    supplierCost: 6.88,
+    shippingCost: 5.49,
+    otherPerOrderCosts: 0,
+    platformFeeRate: 0.03,
+    paymentFeeRate: 0.03
+  });
+  assert.equal(result.decision, "REJECT_LOW_MARGIN");
+  assert.ok(result.estimatedNetProfitPerOrder < 0);
+  assert.ok(result.estimatedNetMarginPercent < 0);
+});
