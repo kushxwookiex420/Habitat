@@ -9,4 +9,6 @@ function shell(title, body) {
 }
 export function registerPublicPages(app) {
   for (const [path, body] of Object.entries(pages)) app.get(path, (req,res)=>res.type("html").send(shell(titles[path],body)));
+  // TikTok URL-prefix ownership verification: serve the exact verification token at the expected root URL.
+  app.get("/tiktokHneXL520kS7uOGdvMUO1qp4jZQmlfuiE.txt", (_req,res) => res.type("text/plain; charset=utf-8").send("tiktok-developers-site-verification=HneXL520kS7uOGdvMUO1qp4jZQmlfuiE\\n"));
 }
