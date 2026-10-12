@@ -1397,6 +1397,7 @@ app.post("/tasks/:id/retry", async (req, res) => {
   if (!retry.allowed) {
     return res.status(409).json({ ok: false, error: "only interrupted or failed tasks can be retried", task: current });
   }
+  appendTaskEvidence(task, { type: "retry-requested", source: "operator", detail: "Explicit retry request accepted; task returned to planned state." }, { now: nowIso });
   try {
     await persistTask(task);
     taskStore.set(task.id, task);
