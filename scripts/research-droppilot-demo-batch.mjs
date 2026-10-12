@@ -14,20 +14,27 @@ for (const p of batch) {
   const title = String(p.title || "").trim();
   if (!title) continue;
   try {
-    const requestBody = JSON.stringify({
-      productName: title.slice(0, 180),
-      brand: String(p.vendor || "").slice(0, 100),
-      category: String(p.productType || ""),
-      supplierUrl: String(p.supplierUrl || "")
-    });
+    const leadingPhrase = title.split(/\\s+[|–—,:]\\s+/)[0].trim();
+    let retryTitle = leadingPhrase.length >= 20 && leadingPhrase.length < title.length
+      ? leadingPhrase
+      : title.split(/\\s+/).slice(0, 8).join(" ");
+    retryTitle = retryTitle.slice(0, 120);
     let response;
     let research = {};
     let lastRequestError = null;
     let attempts = 0;
-    // Render cold starts and public search providers can transiently fail. Retry once,
-    // including valid-but-empty searches, while preserving every attempt's evidence.
+    let searchQueryUsed = title.slice(0, 180);
+    // Retry transient failures and empty searches once. The retry shortens long,
+    // noisy catalog titles to improve product-specific search recall.
     for (let attempt = 0; attempt < 2; attempt++) {
       attempts = attempt + 1;
+      searchQueryUsed = attempt === 0 ? title.slice(0, 180) : retryTitle;
+      const requestBody = JSON.stringify({
+        productName: searchQueryUsed,
+        brand: String(p.vendor || "").slice(0, 100),
+        category: String(p.productType || ""),
+        supplierUrl: String(p.supplierUrl || "")
+      });
       try {
         response = await fetch(base + "/product-demo/research", {
           method: "POST",
@@ -56,6 +63,7 @@ for (const p of batch) {
       title,
       productUrl: p.productUrl || null,
       vendor: p.vendor || null,
+      searchQueryUsed,
       // A generic web page is not the same as a video source. Keep these states distinct
       // so downstream automation cannot mistake search matches for usable demo footage.
       status: hasVideoPageLeads ? "video_page_leads_found" : hasSourceLeads ? "web_leads_only" : "research_failed",
@@ -78,6 +86,7 @@ for (const p of batch) {
       title,
       productUrl: p.productUrl || null,
       vendor: p.vendor || null,
+      searchQueryUsed,
       status: "research_failed",
       error: String(e?.message || e).slice(0, 240),
       videoWorkflowStatus: "not_rendered",
