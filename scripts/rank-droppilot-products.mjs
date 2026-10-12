@@ -46,6 +46,18 @@ const outputPath = arg("--out", "dist/droppilot-ranked-products.json");
 export const MIN_NET_PROFIT_PER_ORDER = 5;
 export const MIN_NET_MARGIN_PERCENT = 20;
 
+export const MAX_MANIFEST_AGE_HOURS = 24;
+
+export function evaluateManifestFreshness(manifest, now = Date.now()) {
+  const generatedAtMs = Date.parse(manifest?.generatedAt ?? "");
+  const ageMs = now - generatedAtMs;
+  const validAge = Number.isFinite(generatedAtMs) && ageMs >= 0;
+  return {
+    fresh: validAge && ageMs <= MAX_MANIFEST_AGE_HOURS * 60 * 60 * 1000,
+    ageHours: validAge ? Math.round((ageMs / 3600000) * 100) / 100 : null
+  };
+}
+
 export function normalizeCategory(title = "", productType = "") {
   const value = (String(title) + " " + String(productType)).toLowerCase();
   const groups = [
@@ -246,13 +258,25 @@ export async function run() {
     if (error.code !== "ENOENT") throw error;
   }
   const byId = new Map(enrichments.filter(x => x.shopifyProductId).map(x => [String(x.shopifyProductId), x]));
-  const ranked = products.map(product => evaluateProductVariants(product, byId.get(String(product.shopifyProductId)) ?? null));
+  const manifestFreshness = evaluateManifestFreshness(manifest);
+  const ranked = products.map(product => {
+    const result = evaluateProductVariants(product, byId.get(String(product.shopifyProductId)) ?? null);
+    if (manifestFreshness.fresh) return result;
+    const missing = [...new Set([...(result.missing ?? []), "manifestSnapshotFreshness (<=24 hours)"])];
+    const decision = ["REJECT_LOW_MARGIN", "HOLD_STOCK_CHECK"].includes(result.decision)
+      ? result.decision
+      : "HOLD_FOR_EVIDENCE";
+    return { ...result, eligibleForRanking: false, decision, missing, manifestAgeHours: manifestFreshness.ageHours };
+  });
   const eligible = ranked.filter(x => x.eligibleForRanking).sort((a, b) => b.prioritizationScore - a.prioritizationScore);
   const report = {
     schemaVersion: 1,
     generatedAt: new Date().toISOString(),
     store: manifest.store ?? "DropPilot",
     sourceManifest: path.basename(manifestPath),
+    sourceManifestGeneratedAt: manifest.generatedAt ?? null,
+    manifestFresh: manifestFreshness.fresh,
+    manifestAgeHours: manifestFreshness.ageHours,
     productCount: products.length,
     eligibleForRankingCount: eligible.length,
     heldForEvidenceCount: ranked.length - eligible.length,
