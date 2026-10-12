@@ -86,6 +86,23 @@ function money(value) {
 }
 
 export function evaluateProduct(product, enrichment) {
+  // A mathematically attractive margin is irrelevant if the catalog entry is
+  // inactive, archived, or its status is missing. Fail closed before ranking.
+  const productStatus = String(product?.status ?? "").trim().toUpperCase();
+  if (productStatus !== "ACTIVE") {
+    return {
+      shopifyProductId: product?.shopifyProductId ?? null,
+      title: product?.title ?? "",
+      productUrl: product?.productUrl ?? null,
+      category: normalizeCategory(product?.title, product?.productType),
+      price: Number.isFinite(Number(product?.minVariantPrice)) ? Number(product.minVariantPrice) : null,
+      status: productStatus || "UNKNOWN",
+      inventorySnapshot: Number.isFinite(Number(product?.totalInventory)) ? Number(product.totalInventory) : null,
+      eligibleForRanking: false,
+      missing: ["Shopify product status must be ACTIVE"],
+      decision: "HOLD_PRODUCT_STATUS"
+    };
+  }
   const price = Number(product.minVariantPrice);
   const costFields = ["supplierCost", "shippingCost", "otherPerOrderCosts"];
   const missing = [];
