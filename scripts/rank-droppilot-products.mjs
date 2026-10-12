@@ -82,7 +82,14 @@ export function evaluateProduct(product, enrichment) {
     if (!boundedScore(enrichment?.[key])) missing.push(key + " (0-100)");
   }
   if (!enrichment?.evidenceUrl || !/^https?:\/\//i.test(enrichment.evidenceUrl)) missing.push("evidenceUrl");
-  if (!enrichment?.evidenceCheckedAt || !Number.isFinite(Date.parse(enrichment.evidenceCheckedAt))) missing.push("evidenceCheckedAt");
+  const evidenceTime = Date.parse(enrichment?.evidenceCheckedAt ?? "");
+  if (!enrichment?.evidenceCheckedAt || !Number.isFinite(evidenceTime)) {
+    missing.push("evidenceCheckedAt");
+  } else {
+    const ageMs = Date.now() - evidenceTime;
+    if (ageMs < -5 * 60 * 1000) missing.push("evidenceCheckedAt (future timestamp)");
+    else if (ageMs > 7 * 24 * 60 * 60 * 1000) missing.push("evidenceCheckedAt (stale; refresh within 7 days)");
+  }
 
   const category = normalizeCategory(product.title, product.productType);
   const base = {
