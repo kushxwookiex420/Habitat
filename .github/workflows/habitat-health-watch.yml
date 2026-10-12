@@ -33,6 +33,19 @@ jobs:
             .brain == "ready"
           ' >/dev/null
 
+          brain="$("${CURL[@]}" "$BASE/brain/status")"
+          echo "$brain" | jq .
+          echo "$brain" | jq -e '.ok == true and .configured == true' >/dev/null
+
+          promotion="$("${CURL[@]}" "$BASE/promotion/status")"
+          echo "$promotion" | jq .
+          echo "$promotion" | jq -e '
+            .ok == true and
+            .feature == "multichannel-promotion-planner" and
+            .autoPublishing == false and
+            .requiresHumanReview == true
+          ' >/dev/null
+
           continuity="$("${CURL[@]}" "$BASE/continuity/status")"
           echo "$continuity" | jq .
           echo "$continuity" | jq -e '
