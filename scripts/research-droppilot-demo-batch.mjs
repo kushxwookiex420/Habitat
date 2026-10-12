@@ -63,8 +63,12 @@ for (const p of batch) {
     const candidateCount = Number(research.candidateCount || 0);
     const videoPageCandidateCount = Number(research.videoPageCandidateCount || 0);
     const directVideoCandidateCount = Number(research.directVideoCandidateCount || 0);
-    const hasSourceLeads = Boolean(response?.ok && research.ok && candidateCount > 0);
+    const searchCompleted = Boolean(response?.ok && research.ok);
+    const hasSourceLeads = searchCompleted && candidateCount > 0;
     const hasVideoPageLeads = hasSourceLeads && videoPageCandidateCount > 0;
+    const resultStatus = hasVideoPageLeads ? "video_page_leads_found"
+      : hasSourceLeads ? "web_leads_only"
+      : searchCompleted ? "no_relevant_results" : "research_failed";
     results.push({
       shopifyProductId: p.shopifyProductId || null,
       title,
@@ -73,7 +77,7 @@ for (const p of batch) {
       searchQueryUsed,
       // A generic web page is not the same as a video source. Keep these states distinct
       // so downstream automation cannot mistake search matches for usable demo footage.
-      status: hasVideoPageLeads ? "video_page_leads_found" : hasSourceLeads ? "web_leads_only" : "research_failed",
+      status: resultStatus,
       candidateCount,
       videoPageCandidateCount,
       directVideoCandidateCount,
@@ -81,7 +85,7 @@ for (const p of batch) {
       requestError: lastRequestError,
       attempts,
       research,
-      researchFailureReason: candidateCount === 0 ? "no candidate sources parsed after retry" : null,
+      researchFailureReason: resultStatus === "no_relevant_results" ? "search completed, but no sufficiently relevant source candidates passed filtering" : resultStatus === "research_failed" ? (lastRequestError || "search request or response failed") : null,
       videoWorkflowStatus: "not_rendered",
       rightsStatus: "unverified",
       qaStatus: "not_run",
@@ -121,6 +125,8 @@ const report = {
   videoPageLeadProductCount: results.filter(x => x.status === "video_page_leads_found").length,
   webLeadOnlyProductCount: results.filter(x => x.status === "web_leads_only").length,
   failedCount: results.filter(x => x.status === "research_failed").length,
+  noRelevantResultsCount: results.filter(x => x.status === "no_relevant_results").length,
+  successfulSearchCount: results.filter(x => ["video_page_leads_found", "web_leads_only", "no_relevant_results"].includes(x.status)).length,
   totalCandidateCount: results.reduce((sum, x) => sum + Number(x.candidateCount || 0), 0),
   totalVideoPageCandidateCount: results.reduce((sum, x) => sum + Number(x.videoPageCandidateCount || 0), 0),
   totalDirectVideoCandidateCount: results.reduce((sum, x) => sum + Number(x.directVideoCandidateCount || 0), 0),
@@ -129,4 +135,4 @@ const report = {
 };
 await fs.mkdir("dist", { recursive: true });
 await fs.writeFile("dist/droppilot-demo-research-batch.json", JSON.stringify(report, null, 2) + "\n");
-if (!report.researchedCount) process.exitCode = 1;
+if (report.successfulSearchCount === 0) process.exitCode = 1;
