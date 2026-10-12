@@ -38,6 +38,16 @@ test("holds products when supplier costs and evidence are missing", () => {
   assert.ok(result.missing.includes("evidenceUrl"));
 });
 
+test("holds inactive, archived, or unknown-status products before profitability ranking", () => {
+  for (const status of ["DRAFT", "ARCHIVED", "", undefined]) {
+    const candidate = { ...product, status };
+    const result = evaluateProduct(candidate, evidence);
+    assert.equal(result.eligibleForRanking, false);
+    assert.equal(result.decision, "HOLD_PRODUCT_STATUS");
+    assert.ok(result.missing.includes("Shopify product status must be ACTIVE"));
+  }
+});
+
 test("calculates estimated net profit and margin from supplied cost evidence", () => {
   const result = evaluateProduct(product, evidence);
   assert.equal(result.eligibleForRanking, true);
