@@ -1499,6 +1499,7 @@ app.post("/tasks/:id/delegate", async (req, res) => {
     if (!healthOk) {
       task.status = "failed";
       task.error = "Habitat backend health verification failed.";
+      appendTaskEvidence(task, { type: "failed", source: "system", detail: task.error }, { now: nowIso });
       task.result = JSON.stringify({ checks: { backendHealth: health } });
       task.updatedAt = nowIso();
       await persistTask(task);
@@ -1554,6 +1555,7 @@ app.post("/tasks/:id/delegate", async (req, res) => {
     if (!result.trim()) {
       task.status = "failed";
       task.error = "Worker returned an empty result after one real QA retry.";
+      appendTaskEvidence(task, { type: "failed", source: "worker", detail: task.error }, { now: nowIso });
       task.updatedAt = nowIso();
       await persistTask(task);
       return res.status(502).json({ ok: false, task });
