@@ -1,6 +1,6 @@
 # Habitat Ax — Durable Continuity Checkpoint
 
-**Last checkpoint:** 2026-10-09 07:57 UTC  
+**Last checkpoint:** 2026-10-12 05:35 UTC  
 **Repository:** https://github.com/kushxwookiex420/Habitat  
 **Live backend:** https://habitat-1-szzd.onrender.com  
 **Current rule:** Never claim a feature works until the live service or produced artifact has been tested.
@@ -198,3 +198,13 @@ Build Habitat into a dependable Android-first AI control center for DropPilot AI
 - Secret setup is no longer an open question: the GitHub Actions secret check passed in run 38085024117, and Render accepted the authenticated request. Do not send the user back through secret setup unless a new secret-specific error appears.
 - Public publishing remains approval-gated and TikTok OAuth/token connection has not been verified as connected. No public post is claimed.
 - DropPilot promotion remains on hold until supplier inventory and product-feed discrepancies are reconciled. Store baseline remains 56 sessions, 1 cart addition, 1 checkout started, 0 completed checkouts, 0 orders; no store prices, inventory, spending, or public posts changed.
+
+
+## Follow-up checkpoint — 2026-10-12 05:35 UTC
+
+- Updated `.github/workflows/ci.yml` in commit `702037d445cfb0a5c4949077955f9869ff011403` so CI runs `npm run check` (the same full syntax gate used by production startup) and explicitly checks that the DropPilot ranking script and its regression test file exist.
+- The workflow file was read back from GitHub after the commit. This confirms the repository write, **not** a passing Actions run. The available linked GitHub Actions status/run lookup did not return a run for this push commit, so CI success is still unverified.
+- The ranking script defaults to `data/droppilot-supplier-enrichment.json`; that path returned 404 on the current repository branch. Treat supplier-enrichment evidence as unavailable until its actual configured source is confirmed. The ranker is designed to hold products when cost/evidence is missing; do not bypass this gate or fabricate supplier quotes, fees, or demand scores.
+- Reviewed the current TikTok OAuth implementation and encrypted D1 vault code. The code requires durable vault readiness to begin OAuth and uses single-use state plus an HttpOnly/Secure/SameSite=Lax cookie. Live Render configuration, D1 connectivity, TikTok authorization, and a successful publish were **not** verified during this pass.
+- Shopify/PawCharm order #1001 remains a separate fulfillment and payout verification item; a paid order alone is not proof of shipment or realized net profit.
+- Next: verify Actions status with a source that exposes push-triggered runs; identify and wire the real supplier-enrichment data source; confirm Render deployment + D1 vault health before claiming durable OAuth is live; verify supplier fulfillment/tracking and actual payout before counting order profit.
