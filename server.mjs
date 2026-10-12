@@ -1340,10 +1340,11 @@ app.post("/tasks", async (req, res) => {
   const description = String(req.body?.description || title).trim();
   if (!title) return res.status(400).json({ ok: false, error: "title required" });
   const task = {
-    id: makeTaskId(), title, description, status: "planned", owner: "Ax", evidence: [],
+    id: makeTaskId(), title, description, status: "planned", owner: "Ax", evidence: [], evidence: [],
     worker: null, createdAt: nowIso(), updatedAt: nowIso(), delegatedAt: null,
     completedAt: null, verifiedAt: null, result: null, error: null
   };
+  appendTaskEvidence(task, { type: "created", source: "system", detail: "Task created; worker has not started." }, { now: nowIso });
   try {
     // Persist first; never acknowledge a durable task that failed to write.
     if (taskRepository && taskStorageReady) await taskRepository.create(task);
@@ -1472,6 +1473,7 @@ app.post("/tasks/:id/delegate", async (req, res) => {
     });
   }
   task.worker = workerRegistry.has("habitat-qa-worker") ? "habitat-qa-worker" : null;
+  appendTaskEvidence(task, { type: "dispatch-started", source: "system", detail: "Dispatch claim acquired; health and worker checks are pending." }, { now: nowIso });
   task.updatedAt = nowIso();
   try {
     await persistTask(task);
@@ -1582,6 +1584,7 @@ app.post("/tasks/:id/delegate", async (req, res) => {
       verification.taskCreation === "PASS" &&
       verification.storage === "PASS";
 
+    appendTaskEvidence(task, { type: "result-received", source: "worker", detail: "Worker returned a report; machine checks are recorded separately." }, { now: nowIso });
     task.result = JSON.stringify({
       verification,
       androidDevice: latestDevice,
@@ -1592,6 +1595,7 @@ app.post("/tasks/:id/delegate", async (req, res) => {
     // A task is only marked verified when every canonical machine check
     // passes. Never report a partial execution as verified.
     task.status = fullyVerified ? "verified" : "blocked";
+    appendTaskEvidence(task, { type: fullyVerified ? "verified" : "blocked", source: "system", detail: fullyVerified ? "All canonical machine checks passed." : "One or more canonical checks failed; result is not verified." }, { now: nowIso });
     task.completedAt = nowIso();
     if (fullyVerified) task.verifiedAt = nowIso();
     task.updatedAt = nowIso();
@@ -1601,6 +1605,7 @@ app.post("/tasks/:id/delegate", async (req, res) => {
   } catch (error) {
     task.status = "failed";
     task.error = String(error?.message || error);
+    appendTaskEvidence(task, { type: "failed", source: "system", detail: String(error?.message || "Task execution failed").slice(0, 1900) }, { now: nowIso });
     task.updatedAt = nowIso();
     try { await persistTask(task); } catch {
       return res.status(503).json({ ok: false, error: "task failed and its final state could not be persisted" });
