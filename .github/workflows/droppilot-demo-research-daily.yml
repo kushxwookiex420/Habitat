@@ -42,7 +42,7 @@ jobs:
           day_number=$((10#${day_of_year}))
           daily_capacity=4
           cycle_days=$(((batch_count + daily_capacity - 1) / daily_capacity))
-          day_slot=$(((day_number - 1) % cycle_days))
+          day_slot=$((day_number % cycle_days))
           start=$((day_slot * daily_capacity))
           batch_total=$((batch_count - start))
           if [[ "$batch_total" -gt "$daily_capacity" ]]; then batch_total="$daily_capacity"; fi
