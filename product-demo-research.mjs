@@ -141,10 +141,9 @@ function hostOf(raw) {
   try { return new URL(raw).hostname.replace(/^www\./, ""); } catch { return ""; }
 }
 
-export function buildResearchQueries({ productName, brand = "", model = "", category = "" }) {
+export function buildResearchQueries({ productName, brand = "", model = "" }) {
   // Shopify Collective productType is often a SKU/code or a broad misclassification.
   // Keep it as metadata, but don't inject it into search terms that must identify the product.
-  void category;
   const base = [brand, productName, model].filter(Boolean).join(" ");
   return [
     '"' + base + '" product demonstration video',
