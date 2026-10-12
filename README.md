@@ -22,6 +22,7 @@ Optional model overrides: `GEMINI_MODEL`, `GROQ_MODEL`, and `CEREBRAS_MODEL`. Ke
 
 ## Operational endpoints
 
+- `fulfillment-guard.mjs` provides a read-only, fail-closed preflight for paid/unfulfilled order state, supplier variant mapping, fresh supplier quote and shipping-cost parity, unresolved prior requests, and deterministic idempotency keys. It returns `READY_FOR_APPROVAL` only; it does not submit fulfillment.
 - `GET /` — basic backend status.
 - `GET /health` — basic health status.
 - `GET /diagnostics/providers` — shows which provider keys are configured and selected model names. It never returns secrets and does not spend model quota.
@@ -37,6 +38,7 @@ Provider fallbacks improve resilience only when another configured provider has 
 
 ## Ax continuity and free-first operation
 
+- [Habitat Operating System](docs/HABITAT_OPERATING_SYSTEM.md) — original architecture for evidence-backed task execution, approval gates, outcome measurement, and safe recovery.
 - [Durable Ax continuity checkpoint](AX_CONTINUITY.md) — read this first when resuming Habitat work in a new AI conversation.
 - [Free-first resources and persistent-memory options](docs/FREE_RESOURCES.md) — current options, official quota links, and limits.
 - [Mandatory Vice City Files video QA/release gate](docs/VICE_CITY_FILES_VIDEO_QA.md) — preserve the approved intro/outro, validate complete narration, inspect safe margins and scene changes, and reject failed renders before user review.

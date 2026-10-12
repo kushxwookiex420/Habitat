@@ -7,7 +7,7 @@ const base = {
   productUrl: "https://2tanuk-yx.myshopify.com/products/car-organizer",
   productActive: true,
   productAvailable: true,
-  profitCheck: { verified: true, sellingPrice: 24.99, supplierCost: 10, shippingCost: 3, otherPerOrderCosts: 0.5, platformFeeRate: 0.08, paymentFeeRate: 0.03, evidenceUrl: "https://supplier.example/quote", evidenceCheckedAt: new Date().toISOString() },
+  profitCheck: { verified: true, sellingPrice: 24.99, supplierCost: 10, shippingCost: 3, otherPerOrderCosts: 0.5, platformFeeRate: 0.08, paymentFeeRate: 0.03, evidenceUrl: "https://supplier.example/quote", evidenceCheckedAt: new Date().toISOString(), feeEvidenceUrl: "https://fees.example/schedule", feeEvidenceCheckedAt: new Date().toISOString(), otherCostsEvidenceUrl: "https://costs.example/estimate", otherCostsEvidenceCheckedAt: new Date().toISOString() },
   category: "Car organization",
   features: ["Multiple storage pockets", "Available in four colors"],
   networks: ["tiktok", "instagram", "facebook", "pinterest", "youtube", "x", "threads", "bluesky"]
@@ -43,7 +43,13 @@ test("rejects missing product name or URL and insecure destinations", () => {
 test("fails closed when supplier economics are missing, stale, or below margin floor", () => {
   assert.throws(() => buildPromotionPlan(({...base, profitCheck: undefined})), /PROFIT_GATE_HOLD: verified supplier economics/);
   assert.throws(() => buildPromotionPlan({...base, profitCheck: {...base.profitCheck, supplierCost: 23}}), /PROFIT_GATE_HOLD: estimated net margin/);
-  assert.throws(() => buildPromotionPlan({...base, profitCheck: {...base.profitCheck, evidenceCheckedAt: "2020-01-01T00:00:00Z"}}), /evidence must be valid and no older than 7 days/);
+  assert.throws(() => buildPromotionPlan({...base, profitCheck: {...base.profitCheck, evidenceCheckedAt: "2020-01-01T00:00:00Z"}}), /evidence must be HTTPS and no older than 7 days/);
+});
+
+test("fails closed when fee or other per-order cost evidence is missing or stale", () => {
+  assert.throws(() => buildPromotionPlan({ ...base, profitCheck: { ...base.profitCheck, feeEvidenceUrl: undefined } }), /platform.*evidence must be HTTPS/);
+  assert.throws(() => buildPromotionPlan({ ...base, profitCheck: { ...base.profitCheck, feeEvidenceCheckedAt: "2020-01-01T00:00:00Z" } }), /platform.*evidence must be HTTPS/);
+  assert.throws(() => buildPromotionPlan({ ...base, profitCheck: { ...base.profitCheck, otherCostsEvidenceUrl: "http://costs.example/estimate" } }), /other per-order costs.*evidence must be HTTPS/);
 });
 
 test("includes the computed unit-economics estimate in each plan", () => {

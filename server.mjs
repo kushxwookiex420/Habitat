@@ -3,14 +3,17 @@ import { claimTaskDispatch } from "./task-dispatch-guard.mjs";
 import { createD1TaskRepository } from "./d1-task-repository.mjs";
 import { createD1DispatchLeaseRepository } from "./d1-dispatch-lease-repository.mjs";
 import { markInterruptedTask, prepareTaskRetry } from "./task-recovery.mjs";
+import { appendTaskEvidence } from "./task-evidence.mjs";
 import { registerContentEngine } from "./content-engine.mjs";
 import { registerProductDemoResearch } from "./product-demo-research.mjs";
 import { registerPromotionEngine } from "./promotion-engine.mjs";
+import { registerMediaPreflight } from "./media-preflight.mjs";
 import { registerProductDemoRenderer } from "./product-demo-renderer.mjs";
 import { createD1ContentJobRepository } from "./d1-content-job-repository.mjs";
 import { createD1SecretVault } from "./d1-secret-vault.mjs";
 import { registerTikTokOAuth } from "./tiktok-oauth.mjs";
 import { registerPublicPages } from "./public-pages.mjs";
+import { createD1WorkspaceRepository, registerAxWorkspace } from "./ax-workspace.mjs";
 import { readFile } from "node:fs/promises";
 
 import express from "express";
@@ -22,7 +25,34 @@ app.use(express.json({ limit: "1mb" }));
 registerPublicPages(app);
 registerProductDemoResearch(app);
 registerPromotionEngine(app);
+registerMediaPreflight(app);
 registerProductDemoRenderer(app);
+
+// Ax Workspace uses D1 only when configured; never silently fall back to ephemeral memory.
+const workspaceStorageConfigured = Boolean(
+  String(process.env.CLOUDFLARE_ACCOUNT_ID || "").trim() &&
+  String(process.env.HABITAT_D1_DATABASE_ID || "").trim() &&
+  String(process.env.HABITAT_D1_API_TOKEN || "").trim()
+);
+const workspaceRepository = workspaceStorageConfigured ? createD1WorkspaceRepository({
+  accountId: process.env.CLOUDFLARE_ACCOUNT_ID,
+  databaseId: process.env.HABITAT_D1_DATABASE_ID,
+  apiToken: process.env.HABITAT_D1_API_TOKEN
+}) : null;
+let workspaceStorageReady = false;
+if (workspaceRepository) {
+  try {
+    await workspaceRepository.initialize();
+    workspaceStorageReady = true;
+    console.log("AX_WORKSPACE_STORAGE: ready — Cloudflare D1");
+  } catch (error) {
+    console.error("AX_WORKSPACE_STORAGE: unavailable — " + String(error?.message || error));
+  }
+}
+registerAxWorkspace(app, {
+  repository: workspaceStorageReady ? workspaceRepository : null,
+  writeToken: process.env.HABITAT_WORKSPACE_WRITE_TOKEN || ""
+});
 
 // Durable cross-session handoff: the checkpoint is committed with the source code,
 // not written to Render's ephemeral filesystem. Keep secrets out of AX_CONTINUITY.md.
@@ -1312,10 +1342,11 @@ app.post("/tasks", async (req, res) => {
   const description = String(req.body?.description || title).trim();
   if (!title) return res.status(400).json({ ok: false, error: "title required" });
   const task = {
-    id: makeTaskId(), title, description, status: "planned", owner: "Ax",
+    id: makeTaskId(), title, description, status: "planned", owner: "Ax", evidence: [], evidence: [],
     worker: null, createdAt: nowIso(), updatedAt: nowIso(), delegatedAt: null,
     completedAt: null, verifiedAt: null, result: null, error: null
   };
+  appendTaskEvidence(task, { type: "created", source: "system", detail: "Task created; worker has not started." }, { now: nowIso });
   try {
     // Persist first; never acknowledge a durable task that failed to write.
     if (taskRepository && taskStorageReady) await taskRepository.create(task);
@@ -1368,6 +1399,7 @@ app.post("/tasks/:id/retry", async (req, res) => {
   if (!retry.allowed) {
     return res.status(409).json({ ok: false, error: "only interrupted or failed tasks can be retried", task: current });
   }
+  appendTaskEvidence(task, { type: "retry-requested", source: "operator", detail: "Explicit retry request accepted; task returned to planned state." }, { now: nowIso });
   try {
     await persistTask(task);
     taskStore.set(task.id, task);
@@ -1444,6 +1476,7 @@ app.post("/tasks/:id/delegate", async (req, res) => {
     });
   }
   task.worker = workerRegistry.has("habitat-qa-worker") ? "habitat-qa-worker" : null;
+  appendTaskEvidence(task, { type: "dispatch-started", source: "system", detail: "Dispatch claim acquired; health and worker checks are pending." }, { now: nowIso });
   task.updatedAt = nowIso();
   try {
     await persistTask(task);
@@ -1468,6 +1501,7 @@ app.post("/tasks/:id/delegate", async (req, res) => {
     if (!healthOk) {
       task.status = "failed";
       task.error = "Habitat backend health verification failed.";
+      appendTaskEvidence(task, { type: "failed", source: "system", detail: task.error }, { now: nowIso });
       task.result = JSON.stringify({ checks: { backendHealth: health } });
       task.updatedAt = nowIso();
       await persistTask(task);
@@ -1523,6 +1557,7 @@ app.post("/tasks/:id/delegate", async (req, res) => {
     if (!result.trim()) {
       task.status = "failed";
       task.error = "Worker returned an empty result after one real QA retry.";
+      appendTaskEvidence(task, { type: "failed", source: "worker", detail: task.error }, { now: nowIso });
       task.updatedAt = nowIso();
       await persistTask(task);
       return res.status(502).json({ ok: false, task });
@@ -1554,6 +1589,7 @@ app.post("/tasks/:id/delegate", async (req, res) => {
       verification.taskCreation === "PASS" &&
       verification.storage === "PASS";
 
+    appendTaskEvidence(task, { type: "result-received", source: "worker", detail: "Worker returned a report; machine checks are recorded separately." }, { now: nowIso });
     task.result = JSON.stringify({
       verification,
       androidDevice: latestDevice,
@@ -1564,6 +1600,7 @@ app.post("/tasks/:id/delegate", async (req, res) => {
     // A task is only marked verified when every canonical machine check
     // passes. Never report a partial execution as verified.
     task.status = fullyVerified ? "verified" : "blocked";
+    appendTaskEvidence(task, { type: fullyVerified ? "verified" : "blocked", source: "system", detail: fullyVerified ? "All canonical machine checks passed." : "One or more canonical checks failed; result is not verified." }, { now: nowIso });
     task.completedAt = nowIso();
     if (fullyVerified) task.verifiedAt = nowIso();
     task.updatedAt = nowIso();
@@ -1573,6 +1610,7 @@ app.post("/tasks/:id/delegate", async (req, res) => {
   } catch (error) {
     task.status = "failed";
     task.error = String(error?.message || error);
+    appendTaskEvidence(task, { type: "failed", source: "system", detail: String(error?.message || "Task execution failed").slice(0, 1900) }, { now: nowIso });
     task.updatedAt = nowIso();
     try { await persistTask(task); } catch {
       return res.status(503).json({ ok: false, error: "task failed and its final state could not be persisted" });

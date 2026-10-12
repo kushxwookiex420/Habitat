@@ -16,6 +16,15 @@ const HASHTAGS = {
 function clean(value, max = 500) {
   return String(value ?? "").replace(/[<>]/g, "").replace(/\s+/g, " ").trim().slice(0, max);
 }
+function hasFreshHttpsEvidence(rawUrl, checkedAt) {
+  let url;
+  try { url = new URL(String(rawUrl || "")); } catch { return false; }
+  const timestamp = Date.parse(checkedAt);
+  return url.protocol === "https:" && !url.username && !url.password &&
+    Number.isFinite(timestamp) &&
+    Date.now() - timestamp <= 7 * 24 * 60 * 60 * 1000 &&
+    timestamp <= Date.now() + 5 * 60 * 1000;
+}
 function slug(value) {
   return clean(value, 100).toLowerCase().normalize("NFKD").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 60) || "product";
 }
@@ -91,11 +100,15 @@ export function buildPromotionPlan(input = {}) {
   if (economics.sellingPrice <= 0 || economics.platformFeeRate >= 1 || economics.paymentFeeRate >= 1) {
     throw new Error("PROFIT_GATE_HOLD: invalid price or fee rates");
   }
-  if (!economics.evidenceUrl || !/^https?:\/\//i.test(economics.evidenceUrl) ||
-      !economics.evidenceCheckedAt || !Number.isFinite(Date.parse(economics.evidenceCheckedAt)) ||
-      Date.now() - Date.parse(economics.evidenceCheckedAt) > 7 * 24 * 60 * 60 * 1000 ||
-      Date.parse(economics.evidenceCheckedAt) > Date.now() + 5 * 60 * 1000) {
-    throw new Error("PROFIT_GATE_HOLD: supplier cost evidence must be valid and no older than 7 days");
+  const evidenceRequirements = [
+    ["supplier cost", economics.evidenceUrl, economics.evidenceCheckedAt],
+    ["platform/payment fee schedule", economics.feeEvidenceUrl, economics.feeEvidenceCheckedAt],
+    ["other per-order costs including tax/returns/fulfillment", economics.otherCostsEvidenceUrl, economics.otherCostsEvidenceCheckedAt]
+  ];
+  for (const [label, url, checkedAt] of evidenceRequirements) {
+    if (!hasFreshHttpsEvidence(url, checkedAt)) {
+      throw new Error("PROFIT_GATE_HOLD: " + label + " evidence must be HTTPS and no older than 7 days");
+    }
   }
   const estimatedFees = economics.sellingPrice * (economics.platformFeeRate + economics.paymentFeeRate);
   const estimatedNetProfit = economics.sellingPrice - economics.supplierCost - economics.shippingCost - economics.otherPerOrderCosts - estimatedFees;
@@ -139,14 +152,14 @@ export function buildPromotionPlan(input = {}) {
     ok: true,
     campaign,
     product: { productName, category: category || null, productUrl: rawUrl, features },
-    profitCheck: { sellingPrice: economics.sellingPrice, supplierCost: economics.supplierCost, shippingCost: economics.shippingCost, otherPerOrderCosts: economics.otherPerOrderCosts, estimatedFees: Math.round(estimatedFees * 100) / 100, estimatedNetProfitPerOrder: Math.round(estimatedNetProfit * 100) / 100, estimatedNetMarginPercent: Math.round(estimatedNetMargin * 10000) / 100, evidenceUrl: economics.evidenceUrl, evidenceCheckedAt: economics.evidenceCheckedAt },
+    profitCheck: { sellingPrice: economics.sellingPrice, supplierCost: economics.supplierCost, shippingCost: economics.shippingCost, otherPerOrderCosts: economics.otherPerOrderCosts, estimatedFees: Math.round(estimatedFees * 100) / 100, estimatedNetProfitPerOrder: Math.round(estimatedNetProfit * 100) / 100, estimatedNetMarginPercent: Math.round(estimatedNetMargin * 10000) / 100, evidenceUrl: economics.evidenceUrl, evidenceCheckedAt: economics.evidenceCheckedAt, feeEvidenceUrl: economics.feeEvidenceUrl, feeEvidenceCheckedAt: economics.feeEvidenceCheckedAt, otherCostsEvidenceUrl: economics.otherCostsEvidenceUrl, otherCostsEvidenceCheckedAt: economics.otherCostsEvidenceCheckedAt },
     drafts,
     count: drafts.length,
     tracking: { utm: true, campaign },
     publishing: { status: "not_published", requiresConnectedAccount: true, requiresMediaWhenPlatformDemandsIt: true, humanReviewRequired: true },
     guardrails: [
       "Drafts only: this endpoint never publishes or schedules posts.",
-      "Profit gate: promotional drafts require supplier evidence no older than 7 days, positive estimated profit, and at least 20% estimated net margin.",
+      "Profit gate: supplier cost, platform/payment fees, and other per-order cost evidence must all use HTTPS and be no older than 7 days; estimated profit must be positive and net margin at least 20%.",
       "The estimate depends on the supplied cost and fee data; recheck live supplier pricing, shipping, marketplace fees, taxes, returns, and payment fees before publishing.",
       "Use media you own or have explicit commercial reuse permission to use."
     ]
