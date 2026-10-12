@@ -3,7 +3,7 @@ on:
   workflow_dispatch:
     inputs:
       batch_index:
-        description: Zero-based catalog batch from the 183-product snapshot
+        description: Zero-based batch of up to 10 products from the current active Shopify snapshot
         required: true
         default: '0'
 permissions:
