@@ -71,3 +71,19 @@ test("rejects PawCharm economics when selling price is below product plus suppli
   assert.ok(result.estimatedNetProfitPerOrder < 0);
   assert.ok(result.estimatedNetMarginPercent < 0);
 });
+
+test("holds products when supplier evidence is older than seven days", () => {
+  const staleEvidence = { ...evidence, evidenceCheckedAt: new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString() };
+  const result = evaluateProduct(product, staleEvidence);
+  assert.equal(result.eligibleForRanking, false);
+  assert.equal(result.decision, "HOLD_FOR_EVIDENCE");
+  assert.ok(result.missing.some(value => value.includes("stale")));
+});
+
+test("holds products when supplier evidence timestamp is too far in the future", () => {
+  const futureEvidence = { ...evidence, evidenceCheckedAt: new Date(Date.now() + 10 * 60 * 1000).toISOString() };
+  const result = evaluateProduct(product, futureEvidence);
+  assert.equal(result.eligibleForRanking, false);
+  assert.equal(result.decision, "HOLD_FOR_EVIDENCE");
+  assert.ok(result.missing.some(value => value.includes("future")));
+});
