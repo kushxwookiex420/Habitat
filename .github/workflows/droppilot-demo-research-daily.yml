@@ -1,7 +1,7 @@
 name: DropPilot Daily Demo Footage Research
 
-# Rotate through the 19 catalog batches in pairs. Research finds candidate media;
-# it does not assert commercial rights or download/publish third-party footage.
+# Four rotating batches per run improve catalog coverage while keeping only two
+# research batches in flight. Search results remain leads, never rights approval.
 on:
   schedule:
     - cron: "37 14 * * *"
@@ -15,7 +15,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: droppilot-demo-research-daily-v1
+  group: droppilot-demo-research-daily-v2
   cancel-in-progress: false
 
 jobs:
@@ -24,6 +24,7 @@ jobs:
     outputs:
       batches: ${{ steps.choose.outputs.batches }}
     steps:
+      - uses: actions/checkout@v4
       - id: choose
         shell: bash
         run: |
@@ -32,12 +33,24 @@ jobs:
             echo "Allowing the Render deployment to settle before demo research."
             sleep 75
           fi
+          batch_count="$(node --input-type=module -e 'import fs from "node:fs"; const m=JSON.parse(fs.readFileSync("data/droppilot-active-product-video-manifest.json","utf8")); console.log(Math.ceil((m.products ?? m).length / 10));')"
+          if [[ "$batch_count" -lt 1 ]]; then
+            echo "No products in the live catalog snapshot." >&2
+            exit 1
+          fi
           day_of_year="$(date -u +%j)"
           day_number=$((10#${day_of_year}))
-          first=$(((day_number - 1) * 2 % 19))
-          second=$(((first + 1) % 19))
-          printf 'batches=["%s","%s"]\n' "$first" "$second" >> "$GITHUB_OUTPUT"
-          echo "Rotating product demo research through batches $first and $second."
+          batch_total=4
+          if [[ "$batch_count" -lt "$batch_total" ]]; then batch_total="$batch_count"; fi
+          start=$(((day_number - 1) * batch_total % batch_count))
+          batches=()
+          for ((offset=0; offset<batch_total; offset++)); do
+            batches+=("$(((start + offset) % batch_count))")
+          done
+          batches_json="$(printf '"%s",' "${batches[@]}")"
+          batches_json="[ ${batches_json%,} ]"
+          printf 'batches=%s\n' "$batches_json" >> "$GITHUB_OUTPUT"
+          echo "Catalog has $batch_count batches; researching $batch_total batches: ${batches[*]}."
 
   research:
     needs: choose-batches
