@@ -17,16 +17,15 @@ jobs:
           node-version: 20
       - name: Install dependencies
         run: npm install
-      - name: Syntax check
-        run: |
-          node --check server.mjs
-          node --check content-engine.mjs
-          node --check visual-qa.mjs
+      - name: Run the same full syntax gate used by production startup
+        run: npm run check
       - name: Run regression tests
         run: npm test
-      - name: Verify required modules
+      - name: Verify required modules and profit-gate regression tests
         run: |
           test -f content-engine.mjs
           test -f visual-qa.mjs
           test -f product-demo-research.mjs
           test -f product-demo-renderer.mjs
+          test -f scripts/rank-droppilot-products.mjs
+          test -f tests/rank-droppilot-products.test.mjs
