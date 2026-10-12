@@ -76,7 +76,7 @@ export function buildPromotionPlan(input = {}) {
   const drafts = networks.map(network => {
     const url = trackedUrl(rawUrl, campaign, network);
     const hashtags = compactTags(network);
-    const caption = captionFor(network, productName, category, features, url) + "\\n\\n" + hashtags.join(" ");
+    const caption = captionFor(network, productName, category, features, url) + "\n\n" + hashtags.join(" ");
     if (caption.length > CAPTION_LIMITS[network]) {
       throw new Error("Caption exceeds " + network + " limit of " + CAPTION_LIMITS[network] + " characters");
     }
@@ -84,7 +84,7 @@ export function buildPromotionPlan(input = {}) {
       network,
       networkLabel: titleCaseNetwork(network),
       title: productName.length > 80 ? productName.slice(0, 77).trimEnd() + "..." : productName,
-      caption: caption + "\n\n" + hashtags.join(" "),
+      caption,
       trackedUrl: url,
       hashtags,
       mediaRequired: ["tiktok", "instagram", "pinterest", "youtube"].includes(network),
