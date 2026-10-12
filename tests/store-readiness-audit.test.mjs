@@ -30,6 +30,27 @@ test("holds active products with no inventory or unverified profit", () => {
   assert.ok(result.findings.some(f => f.code === "profitability_unverified"));
 });
 
+test("holds active products when inventory evidence is missing or invalid", () => {
+  for (const inventory of [undefined, "unknown", Number.NaN]) {
+    const result = auditStoreReadiness({
+      shop: { domain: "demo.myshopify.com" },
+      products: [{ ...product, inventory }]
+    });
+    assert.equal(result.decision, "HOLD");
+    assert.ok(result.findings.some(f => f.code === "active_inventory_unknown"));
+  }
+});
+
+test("holds when the catalog snapshot is empty", () => {
+  const result = auditStoreReadiness({
+    shop: { domain: "demo.myshopify.com" },
+    products: [],
+    collections: []
+  });
+  assert.equal(result.decision, "HOLD");
+  assert.ok(result.findings.some(f => f.code === "product_snapshot_empty"));
+});
+
 test("warns on duplicate handles and empty collections", () => {
   const result = auditStoreReadiness({
     shop: { domain: "demo.myshopify.com" },
