@@ -11,6 +11,8 @@ on:
     paths:
       - ".github/workflows/droppilot-demo-research-daily.yml"
       - "scripts/research-droppilot-demo-batch.mjs"
+      - "product-demo-research.mjs"
+      - "tests/product-demo-research.test.mjs"
       - "data/droppilot-active-product-video-manifest.json"
 
 permissions:
