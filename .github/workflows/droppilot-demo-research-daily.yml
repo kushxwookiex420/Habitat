@@ -40,12 +40,15 @@ jobs:
           fi
           day_of_year="$(date -u +%j)"
           day_number=$((10#${day_of_year}))
-          batch_total=4
-          if [[ "$batch_count" -lt "$batch_total" ]]; then batch_total="$batch_count"; fi
-          start=$(((day_number - 1) * batch_total % batch_count))
+          daily_capacity=4
+          cycle_days=$(((batch_count + daily_capacity - 1) / daily_capacity))
+          day_slot=$(((day_number - 1) % cycle_days))
+          start=$((day_slot * daily_capacity))
+          batch_total=$((batch_count - start))
+          if [[ "$batch_total" -gt "$daily_capacity" ]]; then batch_total="$daily_capacity"; fi
           batches=()
           for ((offset=0; offset<batch_total; offset++)); do
-            batches+=("$(((start + offset) % batch_count))")
+            batches+=("$((start + offset))")
           done
           batches_json="$(printf '"%s",' "${batches[@]}")"
           batches_json="[ ${batches_json%,} ]"
