@@ -24,6 +24,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
+      - name: Install dependencies
+        run: npm ci
       - name: Run regression tests
         run: npm test
       - name: Run economics ranker
