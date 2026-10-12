@@ -20,9 +20,12 @@ Set at least one provider key in the server environment. Provider keys are optio
 
 Optional model overrides: `GEMINI_MODEL`, `GROQ_MODEL`, and `CEREBRAS_MODEL`. Keep the defaults unless the selected provider's current model catalog confirms another model is available to your account.
 
-## Operational endpoints
+## Operational endpoints and safety gates
 
 - `fulfillment-guard.mjs` provides a read-only, fail-closed preflight for paid/unfulfilled order state, supplier variant mapping, fresh supplier quote and shipping-cost parity, unresolved prior requests, and deterministic idempotency keys. It returns `READY_FOR_APPROVAL` only; it does not submit fulfillment.
+- `media-preflight.mjs` validates public HTTPS image URLs, content bytes/signature, MIME, and dimensions. For its current TikTok image path, JPEG is required.
+- `scheduled-post-guard.mjs` evaluates provider status, draft state, media-preflight evidence, and recorded explicit approval. It fails closed and can only return `READY_FOR_HUMAN_REVIEW`; it never schedules or publishes. It is a reusable policy module, not yet connected to Metricool's live scheduled-post queue.
+- `GET /media/preflight/status` and `POST /media/preflight` expose the image check.
 - `GET /` — basic backend status.
 - `GET /health` — basic health status.
 - `GET /diagnostics/providers` — shows which provider keys are configured and selected model names. It never returns secrets and does not spend model quota.
