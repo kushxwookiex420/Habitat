@@ -209,6 +209,9 @@ test("DropPilot runs a bounded daily rotation of demo-source research without au
   assert.ok(workflow.includes('Math.ceil((m.products ?? m).length / 10)'));
   assert.ok(workflow.includes('cycle_days=$(((batch_count + daily_capacity - 1) / daily_capacity))'));
   assert.ok(workflow.includes('start=$((day_slot * daily_capacity))'));
+  assert.ok(workflow.includes('day_slot=$(((GITHUB_RUN_NUMBER + 1) % cycle_days))'));
+  assert.ok(workflow.includes('"scripts/research-droppilot-demo-batch.mjs"'));
+  assert.ok(workflow.includes('"data/droppilot-active-product-video-manifest.json"'));
   assert.ok(workflow.includes('max-parallel: 2'));
   assert.ok(!workflow.includes('first=$(((day_number - 1) * 2 % 19))'));
   assert.ok(!workflow.includes("second=$(((first + 1) % 19))"));

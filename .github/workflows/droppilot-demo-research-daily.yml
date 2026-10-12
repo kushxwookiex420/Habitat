@@ -10,6 +10,8 @@ on:
     branches: ["main"]
     paths:
       - ".github/workflows/droppilot-demo-research-daily.yml"
+      - "scripts/research-droppilot-demo-batch.mjs"
+      - "data/droppilot-active-product-video-manifest.json"
 
 permissions:
   contents: read
@@ -38,11 +40,9 @@ jobs:
             echo "No products in the live catalog snapshot." >&2
             exit 1
           fi
-          day_of_year="$(date -u +%j)"
-          day_number=$((10#${day_of_year}))
           daily_capacity=4
           cycle_days=$(((batch_count + daily_capacity - 1) / daily_capacity))
-          day_slot=$((day_number % cycle_days))
+          day_slot=$(((GITHUB_RUN_NUMBER + 1) % cycle_days))
           start=$((day_slot * daily_capacity))
           batch_total=$((batch_count - start))
           if [[ "$batch_total" -gt "$daily_capacity" ]]; then batch_total="$daily_capacity"; fi
