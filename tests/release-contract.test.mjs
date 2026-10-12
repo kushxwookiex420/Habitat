@@ -207,7 +207,8 @@ test("DropPilot runs a bounded daily rotation of demo-source research without au
   assert.ok(workflow.includes("max-parallel: 2"));
   assert.ok(workflow.includes('batch_total=4'));
   assert.ok(workflow.includes('Math.ceil((m.products ?? m).length / 10)'));
-  assert.ok(workflow.includes('start=$(((day_number - 1) * batch_total % batch_count))'));
+  assert.ok(workflow.includes('cycle_days=$(((batch_count + daily_capacity - 1) / daily_capacity))'));
+  assert.ok(workflow.includes('start=$((day_slot * daily_capacity))'));
   assert.ok(workflow.includes('max-parallel: 2'));
   assert.ok(!workflow.includes('first=$(((day_number - 1) * 2 % 19))'));
   assert.ok(!workflow.includes("second=$(((first + 1) % 19))"));
