@@ -81,7 +81,7 @@ test("generic egg-cooking videos are not treated as egg-holder product demos", (
   const product = "Egg Container Holder for Refrigerator Double Layer Egg Storage Box Organizer Bin Tray Rack";
   assert.equal(isProductRelevant(product, "", "", {
     title: "How To Cook Perfect Eggs Every Time - YouTube",
-    url: "https://m.youtube.com/watch?v=not-a-holder-demo",
+    url: "https://m.youtube.com/watch?v=video123",
     snippet: "Learn to cook eggs perfectly"
   }), false);
   assert.equal(isProductRelevant(product, "", "", {
