@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { normalizeCategory, evaluateProduct, MIN_NET_PROFIT_PER_ORDER } from "../scripts/rank-droppilot-products.mjs";
+import { normalizeCategory, evaluateProduct, evaluateProductVariants, MIN_NET_PROFIT_PER_ORDER } from "../scripts/rank-droppilot-products.mjs";
 
 const product = {
   shopifyProductId: "gid://shopify/Product/1",
@@ -100,4 +100,34 @@ test("holds products when supplier evidence timestamp is too far in the future",
   assert.equal(result.eligibleForRanking, false);
   assert.equal(result.decision, "HOLD_FOR_EVIDENCE");
   assert.ok(result.missing.some(value => value.includes("future")));
+});
+
+
+test("evaluates every sellable variant and rejects a product if one variant misses the profit floor", () => {
+  const variantsProduct = {
+    ...product,
+    variants: [
+      { shopifyVariantId: "variant-good", title: "Standard", price: 40, supplierCost: 10, inventoryQuantity: 10, availableForSale: true, inventoryPolicy: "DENY" },
+      { shopifyVariantId: "variant-bad", title: "Premium", price: 40, supplierCost: 35, inventoryQuantity: 10, availableForSale: true, inventoryPolicy: "DENY" }
+    ]
+  };
+  const result = evaluateProductVariants(variantsProduct, evidence);
+  assert.equal(result.decision, "REJECT_LOW_MARGIN");
+  assert.equal(result.eligibleForRanking, false);
+  assert.equal(result.variantDecisionCount, 2);
+  assert.equal(result.variantDecisions.find(v => v.shopifyVariantId === "variant-bad").decision, "REJECT_LOW_MARGIN");
+});
+
+test("holds a zero-stock variant if Shopify still marks it available for sale", () => {
+  const variantsProduct = {
+    ...product,
+    variants: [
+      { shopifyVariantId: "variant-good", title: "Black", price: 40, supplierCost: 10, inventoryQuantity: 10, availableForSale: true, inventoryPolicy: "DENY" },
+      { shopifyVariantId: "variant-zero", title: "Red", price: 40, supplierCost: 10, inventoryQuantity: 0, availableForSale: true, inventoryPolicy: "CONTINUE" }
+    ]
+  };
+  const result = evaluateProductVariants(variantsProduct, evidence);
+  assert.equal(result.decision, "HOLD_STOCK_CHECK");
+  assert.equal(result.eligibleForRanking, false);
+  assert.equal(result.variantDecisions.find(v => v.shopifyVariantId === "variant-zero").decision, "HOLD_STOCK_CHECK");
 });
