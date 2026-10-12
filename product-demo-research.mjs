@@ -141,6 +141,20 @@ function hostOf(raw) {
   try { return new URL(raw).hostname.replace(/^www\./, ""); } catch { return ""; }
 }
 
+export function buildResearchQueries({ productName, brand = "", model = "" }) {
+  // Shopify Collective productType is often a SKU/code or a broad misclassification.
+  // Keep it as metadata, but don't inject it into search terms that must identify the product.
+  const base = [brand, productName, model].filter(Boolean).join(" ");
+  return [
+    '"' + base + '" product demonstration video',
+    '"' + base + '" how to use video',
+    (brand ? brand + " " : "") + productName + " official product video",
+    (brand ? brand + " " : "") + productName + " supplier video commercial use",
+    '"' + productName + '" review demo hands-on',
+    (model ? '"' + model + '" ' : "") + productName + " video product demo"
+  ].map(q => clean(q, MAX_QUERY_LENGTH));
+}
+
 const RELEVANCE_STOP_WORDS = new Set([
   "product", "products", "video", "videos", "official", "review", "demo", "demonstration",
   "how", "use", "watch", "best", "new", "the", "and", "for", "with", "from", "pack",
@@ -177,15 +191,7 @@ export function registerProductDemoResearch(app) {
     const model = clean(req.body?.model || req.body?.sku, 100);
     if (!productName) return res.status(400).json({ ok: false, error: "productName is required" });
 
-    const base = [brand, productName, model, category].filter(Boolean).join(" ");
-    const queries = [
-      '"' + base + '" product demonstration video',
-      '"' + base + '" how to use video',
-      (brand ? brand + " " : "") + productName + " official product video",
-      (brand ? brand + " " : "") + productName + " supplier video commercial use",
-      '"' + productName + '" review demo hands-on',
-      (model ? '"' + model + '" ' : "") + productName + " video product demo"
-    ].map(q => clean(q, MAX_QUERY_LENGTH));
+    const queries = buildResearchQueries({ productName, brand, model, category });
 
     try {
       const settled = await Promise.allSettled(queries.map(searchWeb));

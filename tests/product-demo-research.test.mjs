@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { parseDuckDuckGo, parseBing, isProductRelevant } from "../product-demo-research.mjs";
+import { parseDuckDuckGo, parseBing, isProductRelevant, buildResearchQueries } from "../product-demo-research.mjs";
 
 test("parses standard DuckDuckGo result anchors and snippets", () => {
   const html = `
@@ -56,4 +56,22 @@ test("rejects unrelated search results as product evidence", () => {
   assert.equal(isProductRelevant("Silicone Sink Splash Guard", "DailySale", "", {
     title: "Silicone Sink Splash Guard Product Demo", url: "https://example.com/demo", snippet: "See it in use"
   }), true);
+});
+
+
+test("research queries exclude noisy Shopify productType categories", () => {
+  const queries = buildResearchQueries({
+    productName: "Bamboo Expandable Drawer Dividers",
+    brand: "",
+    model: "",
+    category: "ALUBK289ASX"
+  });
+  assert.equal(queries.length, 6);
+  assert.ok(queries.every(query => !query.includes("ALUBK289ASX")));
+  assert.ok(queries.some(query => query.includes("Bamboo Expandable Drawer Dividers")));
+  const broadCategory = buildResearchQueries({
+    productName: "The 5 Elements Bamboo Large Kitchen Utensils Set",
+    category: "Home Decor"
+  });
+  assert.ok(broadCategory.every(query => !query.includes("Home Decor")));
 });
