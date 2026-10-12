@@ -296,3 +296,12 @@ test("DropPilot demo searches do not mistake the supplier for the product brand 
   assert.ok(!batch.includes('brand: String(p.vendor || "")'));
   assert.ok(batch.includes('category,'));
 });
+
+
+test("DropPilot research distinguishes empty search results from actual request failures", async () => {
+  const batch = await fs.readFile(new URL("../scripts/research-droppilot-demo-batch.mjs", import.meta.url), "utf8");
+  assert.ok(batch.includes('searchCompleted ? "no_relevant_results" : "research_failed"'));
+  assert.ok(batch.includes('noRelevantResultsCount: results.filter(x => x.status === "no_relevant_results").length'));
+  assert.ok(batch.includes('successfulSearchCount: results.filter(x => ["video_page_leads_found", "web_leads_only", "no_relevant_results"].includes(x.status)).length'));
+  assert.ok(batch.includes('if (report.successfulSearchCount === 0) process.exitCode = 1'));
+});
