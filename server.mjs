@@ -7,6 +7,7 @@ import { appendTaskEvidence } from "./task-evidence.mjs";
 import { registerContentEngine } from "./content-engine.mjs";
 import { registerProductDemoResearch } from "./product-demo-research.mjs";
 import { registerPromotionEngine } from "./promotion-engine.mjs";
+import { registerMediaPreflight } from "./media-preflight.mjs";
 import { registerProductDemoRenderer } from "./product-demo-renderer.mjs";
 import { createD1ContentJobRepository } from "./d1-content-job-repository.mjs";
 import { createD1SecretVault } from "./d1-secret-vault.mjs";
@@ -24,6 +25,7 @@ app.use(express.json({ limit: "1mb" }));
 registerPublicPages(app);
 registerProductDemoResearch(app);
 registerPromotionEngine(app);
+registerMediaPreflight(app);
 registerProductDemoRenderer(app);
 
 // Ax Workspace uses D1 only when configured; never silently fall back to ephemeral memory.
