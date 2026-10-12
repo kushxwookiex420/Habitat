@@ -23,7 +23,7 @@ function money(value) {
 export function evaluateFulfillmentReadiness({
   order,
   supplierQuote,
-  priorRequests = [],
+  priorRequests,
   now = Date.now()
 } = {}) {
   const reasons = [];
