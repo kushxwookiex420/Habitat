@@ -54,6 +54,19 @@ test("holds any unresolved or potentially accepted prior supplier request", () =
   }
 });
 
+test("holds when prior supplier request history is missing or malformed", () => {
+  const { priorRequests: _ignored, ...withoutHistory } = base;
+  const omitted = evaluateFulfillmentReadiness(withoutHistory);
+  assert.equal(omitted.decision, "HOLD");
+  assert.ok(omitted.reasons.includes("prior_request_history_unavailable"));
+  const unavailable = evaluateFulfillmentReadiness({ ...base, priorRequests: null });
+  assert.equal(unavailable.decision, "HOLD");
+  assert.ok(unavailable.reasons.includes("prior_request_history_unavailable"));
+  const malformed = evaluateFulfillmentReadiness({ ...base, priorRequests: [null] });
+  assert.equal(malformed.decision, "HOLD");
+  assert.ok(malformed.reasons.includes("possible_duplicate_or_unresolved_supplier_request"));
+});
+
 test("allows retry only when prior requests are explicitly rejected or cancelled", () => {
   const result = evaluateFulfillmentReadiness({ ...base, priorRequests: [{ status: "rejected" }, { status: "cancelled" }] });
   assert.equal(result.ready, true);
