@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { normalizeCategory, evaluateProduct } from "../scripts/rank-droppilot-products.mjs";
+import { normalizeCategory, evaluateProduct, MIN_NET_PROFIT_PER_ORDER } from "../scripts/rank-droppilot-products.mjs";
 
 const product = {
   shopifyProductId: "gid://shopify/Product/1",
@@ -21,7 +21,7 @@ const evidence = {
   demoScore: 90,
   supplierReliabilityScore: 85,
   evidenceUrl: "https://supplier.example/quote",
-  evidenceCheckedAt: "2026-10-10T12:00:00Z"
+  evidenceCheckedAt: new Date().toISOString()
 };
 
 test("normalizes broad catalog categories without pretending unknown categories are known", () => {
@@ -70,6 +70,36 @@ test("rejects PawCharm economics when selling price is below product plus suppli
   assert.equal(result.decision, "REJECT_LOW_MARGIN");
   assert.ok(result.estimatedNetProfitPerOrder < 0);
   assert.ok(result.estimatedNetMarginPercent < 0);
+});
+
+test("rejects orders that clear a margin percentage but make less than the absolute minimum", () => {
+  const result = evaluateProduct({ ...product, minVariantPrice: "12.00" }, {
+    ...evidence,
+    supplierCost: 4,
+    shippingCost: 1,
+    otherPerOrderCosts: 0,
+    platformFeeRate: 0.03,
+    paymentFeeRate: 0.03
+  });
+  assert.ok(result.estimatedNetMarginPercent >= 20);
+  assert.ok(result.estimatedNetProfitPerOrder < MIN_NET_PROFIT_PER_ORDER);
+  assert.equal(result.decision, "REJECT_LOW_MARGIN");
+  assert.equal(result.minimumProfitThreshold, MIN_NET_PROFIT_PER_ORDER);
+});
+
+test("keeps PawCharm at the currently listed price above the minimum profit floor under verified cost assumptions", () => {
+  const charm = { ...product, minVariantPrice: "20.88", title: "PawCharm Keychain" };
+  const result = evaluateProduct(charm, {
+    ...evidence,
+    supplierCost: 6.88,
+    shippingCost: 5.49,
+    otherPerOrderCosts: 0,
+    platformFeeRate: 0.08,
+    paymentFeeRate: 0.03
+  });
+  assert.equal(result.decision, "REVIEW_FOR_LISTING");
+  assert.equal(result.estimatedNetProfitPerOrder, 6.21);
+  assert.ok(result.estimatedNetProfitPerOrder >= MIN_NET_PROFIT_PER_ORDER);
 });
 
 test("holds products when supplier evidence is older than seven days", () => {
