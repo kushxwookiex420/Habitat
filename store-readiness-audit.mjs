@@ -1,5 +1,4 @@
 const ACTIVE = "ACTIVE";
-const DRAFT = "DRAFT";
 
 function isPositiveMoney(value) {
   const n = Number(value);
@@ -25,6 +24,9 @@ export function auditStoreReadiness({ shop, products = [], collections = [] } = 
   if (!Array.isArray(collections)) {
     add("HOLD", "collection_snapshot_invalid", "Collection snapshot is not an array.");
     collections = [];
+  }
+  if (products.length === 0) {
+    add("HOLD", "product_snapshot_empty", "No products were supplied; catalog readiness cannot be verified.");
   }
 
   const handles = new Map();
@@ -54,7 +56,9 @@ export function auditStoreReadiness({ shop, products = [], collections = [] } = 
     if (!["ACTIVE", "DRAFT", "ARCHIVED"].includes(status)) {
       add("HOLD", "product_status_unknown", "Product status is missing or unsupported.", { productId: id, title });
     }
-    if (status === ACTIVE && Number.isFinite(inventory) && inventory <= 0) {
+    if (status === ACTIVE && !Number.isFinite(inventory)) {
+      add("HOLD", "active_inventory_unknown", "Active product inventory is missing or invalid; availability cannot be verified.", { productId: id, title });
+    } else if (status === ACTIVE && inventory <= 0) {
       add("HOLD", "active_product_no_stock", "Active product reports zero or negative inventory.", { productId: id, title });
     }
     if (!isPositiveMoney(price)) {
