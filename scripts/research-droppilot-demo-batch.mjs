@@ -14,10 +14,10 @@ for (const p of batch) {
   const title = String(p.title || "").trim();
   if (!title) continue;
   try {
-    const leadingPhrase = title.split(/\\s+[|–—,:]\\s+/)[0].trim();
+    const leadingPhrase = title.split(/\s+[|–—,:]\s+/)[0].trim();
     let retryTitle = leadingPhrase.length >= 20 && leadingPhrase.length < title.length
       ? leadingPhrase
-      : title.split(/\\s+/).slice(0, 8).join(" ");
+      : title.split(/\s+/).slice(0, 8).join(" ");
     retryTitle = retryTitle.slice(0, 120);
     let response;
     let research = {};
