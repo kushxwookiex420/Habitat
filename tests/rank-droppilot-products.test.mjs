@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { normalizeCategory, evaluateProduct, evaluateProductVariants, MIN_NET_PROFIT_PER_ORDER } from "../scripts/rank-droppilot-products.mjs";
+import { normalizeCategory, evaluateProduct, evaluateProductVariants, evaluateManifestFreshness, MAX_MANIFEST_AGE_HOURS, MIN_NET_PROFIT_PER_ORDER } from "../scripts/rank-droppilot-products.mjs";
 
 const product = {
   shopifyProductId: "gid://shopify/Product/1",
@@ -130,4 +130,14 @@ test("holds a zero-stock variant if Shopify still marks it available for sale", 
   assert.equal(result.decision, "HOLD_STOCK_CHECK");
   assert.equal(result.eligibleForRanking, false);
   assert.equal(result.variantDecisions.find(v => v.shopifyVariantId === "variant-zero").decision, "HOLD_STOCK_CHECK");
+});
+
+
+test("catalog snapshot freshness accepts at most 24 hours and rejects missing or future timestamps", () => {
+  const now = Date.parse("2026-10-12T12:00:00.000Z");
+  assert.equal(MAX_MANIFEST_AGE_HOURS, 24);
+  assert.deepEqual(evaluateManifestFreshness({ generatedAt: "2026-10-11T12:00:00.000Z" }, now), { fresh: true, ageHours: 24 });
+  assert.equal(evaluateManifestFreshness({ generatedAt: "2026-10-11T11:59:59.999Z" }, now).fresh, false);
+  assert.equal(evaluateManifestFreshness({ generatedAt: "2026-10-12T12:00:01.000Z" }, now).fresh, false);
+  assert.equal(evaluateManifestFreshness({}, now).fresh, false);
 });
