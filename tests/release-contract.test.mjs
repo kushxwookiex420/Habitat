@@ -280,3 +280,14 @@ test("DropPilot demo research retries empty searches with a shorter product-spec
   assert.ok(batch.includes("productName: searchQueryUsed"));
   assert.ok(batch.includes("searchQueryUsed,"));
 });
+
+
+test("DropPilot demo searches do not mistake the supplier for the product brand or send SKU-like categories", async () => {
+  const batch = await fs.readFile(new URL("../scripts/research-droppilot-demo-batch.mjs", import.meta.url), "utf8");
+  assert.ok(batch.includes('const rawCategory = String(p.productType || "").trim()'));
+  assert.ok(batch.includes('!/^\\d+$/.test(rawCategory)'));
+  assert.ok(batch.includes('!/^[A-Z0-9_-]{5,}$/.test(rawCategory)'));
+  assert.ok(batch.includes('const brand = String(p.brand || p.productBrand || "").trim().slice(0, 100)'));
+  assert.ok(!batch.includes('brand: String(p.vendor || "")'));
+  assert.ok(batch.includes('category,'));
+});
