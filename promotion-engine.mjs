@@ -91,7 +91,7 @@ export function buildPromotionPlan(input = {}) {
   if (economics.sellingPrice <= 0 || economics.platformFeeRate >= 1 || economics.paymentFeeRate >= 1) {
     throw new Error("PROFIT_GATE_HOLD: invalid price or fee rates");
   }
-  if (!economics.evidenceUrl || !/^https?:\\/\\//i.test(economics.evidenceUrl) ||
+  if (!economics.evidenceUrl || !/^https?:\/\//i.test(economics.evidenceUrl) ||
       !economics.evidenceCheckedAt || !Number.isFinite(Date.parse(economics.evidenceCheckedAt)) ||
       Date.now() - Date.parse(economics.evidenceCheckedAt) > 7 * 24 * 60 * 60 * 1000 ||
       Date.parse(economics.evidenceCheckedAt) > Date.now() + 5 * 60 * 1000) {
