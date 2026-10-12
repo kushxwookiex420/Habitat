@@ -13,6 +13,13 @@ const results = [];
 for (const p of batch) {
   const title = String(p.title || "").trim();
   if (!title) continue;
+  const rawCategory = String(p.productType || "").trim();
+  const category = rawCategory && rawCategory.length <= 60 &&
+    !/^\d+$/.test(rawCategory) && !/^[A-Z0-9_-]{5,}$/.test(rawCategory)
+    ? rawCategory : "";
+  // Shopify Collective's vendor is the supplier, not necessarily the consumer
+  // product brand. Do not contaminate searches with supplier names as brands.
+  const brand = String(p.brand || p.productBrand || "").trim().slice(0, 100);
   try {
     const leadingPhrase = title.split(/\s+[|–—,:]\s+/)[0].trim();
     let retryTitle = leadingPhrase.length >= 20 && leadingPhrase.length < title.length
@@ -31,8 +38,8 @@ for (const p of batch) {
       searchQueryUsed = attempt === 0 ? title.slice(0, 180) : retryTitle;
       const requestBody = JSON.stringify({
         productName: searchQueryUsed,
-        brand: String(p.vendor || "").slice(0, 100),
-        category: String(p.productType || ""),
+        brand,
+        category,
         supplierUrl: String(p.supplierUrl || "")
       });
       try {
