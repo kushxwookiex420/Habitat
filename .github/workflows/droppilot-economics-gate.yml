@@ -1,6 +1,10 @@
 name: DropPilot product economics gate
 
 on:
+  # Daily monitoring catches stale or missing supplier economics even when no
+  # code is changing. A failed gate is an alert, not a listing mutation.
+  schedule:
+    - cron: "17 13 * * *"
   workflow_dispatch:
   push:
     branches: ["main"]
@@ -44,7 +48,7 @@ jobs:
           console.log(JSON.stringify(counts, null, 2));
           fs.writeFileSync("dist/droppilot-economics-gate-summary.json", JSON.stringify({
             generatedAt: report.generatedAt,
-            policy: "No product is cleared for listing without verified supplier cost, supplier shipping, fees, evidence URL/date, stock, and at least 20% estimated net margin.",
+            policy: "No product is cleared for listing without verified supplier cost, supplier shipping, fees, evidence URL/date, stock, and at least $5 estimated net profit and 20% estimated net margin per order.",
             ...counts,
             products: report.products.map(p => ({
               title: p.title,
@@ -64,17 +68,19 @@ jobs:
           if (blocked.length) {
             console.error(`Economics gate blocked ${blocked.length}/${report.productCount} products.`);
             for (const p of blocked.slice(0, 30)) {
-              console.error(JSON.stringify({ title: p.title, decision: p.decision, missing: p.missing ?? [], estimatedNetMarginPercent: p.estimatedNetMarginPercent ?? null }));
+              console.error(JSON.stringify({ title: p.title, decision: p.decision, missing: p.missing ?? [], estimatedNetProfitPerOrder: p.estimatedNetProfitPerOrder ?? null, estimatedNetMarginPercent: p.estimatedNetMarginPercent ?? null }));
             }
             process.exit(1);
           }
-          console.log(`Economics gate passed: all ${report.productCount} products have evidence, stock, and at least 20% estimated net margin.`);
+          console.log(`Economics gate passed: all ${report.productCount} products have evidence, stock, at least $5 estimated net profit, and at least 20% estimated net margin.`);
           NODE
       - name: Upload economics decision report
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: DropPilot-Economics-Gate
-          path: dist/droppilot-*-products.json
+          path: |
+            dist/droppilot-ranked-products.json
+            dist/droppilot-economics-gate-summary.json
           if-no-files-found: warn
           retention-days: 30
