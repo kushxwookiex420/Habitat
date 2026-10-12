@@ -161,9 +161,16 @@ const RELEVANCE_STOP_WORDS = new Set([
   "set", "your", "this", "that", "store", "shop", "online", "buy", "sale", "brand", "container", "storage", "box", "organizer", "organizers", "bin", "tray", "rack", "accessory", "accessories", "tool", "tools", "kit", "kits", "piece", "pieces", "pcs"
 ]);
 
+function normalizeRelevanceToken(token) {
+  if (token.length > 4 && token.endsWith("ies")) return token.slice(0, -3) + "y";
+  if (token.length > 4 && /(?:ches|shes|xes|zes|ses)$/.test(token)) return token.slice(0, -2);
+  if (token.length > 3 && token.endsWith("s") && !token.endsWith("ss")) return token.slice(0, -1);
+  return token;
+}
+
 export function isProductRelevant(productName, brand, model, row) {
-  const terms = (String(productName || "") + " " + String(brand || "") + " " + String(model || ""))
-    .toLowerCase().match(/[a-z0-9]{3,}/g) || [];
+  const terms = ((String(productName || "") + " " + String(brand || "") + " " + String(model || ""))
+    .toLowerCase().match(/[a-z0-9]{3,}/g) || []).map(normalizeRelevanceToken);
   const productTerms = [...new Set(terms.filter(t => !RELEVANCE_STOP_WORDS.has(t)))];
   const haystack = (String(row?.title || "") + " " + String(row?.snippet || "") + " " + String(row?.url || ""))
     .toLowerCase();
