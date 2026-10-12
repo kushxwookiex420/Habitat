@@ -7,6 +7,9 @@ on:
     paths:
       - "visual-qa.mjs"
       - "product-demo-renderer.mjs"
+      - "tiktok-oauth.mjs"
+      - "d1-secret-vault.mjs"
+      - "tests/tiktok-oauth.test.mjs"
       - "server.mjs"
       - ".github/workflows/habitat-live-smoke.yml"
 
@@ -45,3 +48,6 @@ jobs:
           wait_json "/health"
           wait_json "/product-demo/render/status"
           wait_json "/content/publisher/status"
+          wait_json "/auth/tiktok/status"
+          curl --silent --show-error --max-time 20 "$BASE/auth/tiktok/status" | jq -e '.ok == true and has("configured") and has("connected") and has("tokenStorage")' >/dev/null
+          echo "PASS /auth/tiktok/status returned safe connection diagnostics"
