@@ -62,7 +62,8 @@ export function evaluateFulfillmentReadiness({
     reasons.push("prior_request_history_unavailable");
   } else {
     const unsafePrior = priorRequests.some(request =>
-      request && !SAFE_TERMINAL_REQUEST_STATES.has(String(request.status ?? "").toLowerCase())
+      !request || typeof request !== "object" ||
+      !SAFE_TERMINAL_REQUEST_STATES.has(String(request.status ?? "").toLowerCase())
     );
     if (unsafePrior) reasons.push("possible_duplicate_or_unresolved_supplier_request");
   }
