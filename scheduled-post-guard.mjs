@@ -1,5 +1,5 @@
 const PROVIDER_FAILURE_STATES = new Set(["error", "failed", "rejected", "blocked"]);
-const PROVIDER_READY_STATES = new Set(["ready", "accepted", "scheduled", "published"]);
+const PROVIDER_READY_STATES = new Set(["ready", "accepted", "scheduled"]);
 
 function hold(reason, details = {}) {
   return { ok: false, decision: "HOLD", reason, ...details };
@@ -11,15 +11,19 @@ function hold(reason, details = {}) {
  * querying the platform's live status.
  */
 export function evaluateScheduledPost({
+  postId,
   network,
   providerStatus,
   draft,
   autoPublish,
   mediaPreflight,
   explicitApproval,
+  approvedPostId,
   approvalRecordedAt
 } = {}) {
+  const id = String(postId || "").trim();
   const target = String(network || "").trim().toLowerCase();
+  if (!id) return hold("post_id_missing");
   if (!target) return hold("target_network_missing");
 
   const status = String(providerStatus || "").trim().toLowerCase();
@@ -41,16 +45,16 @@ export function evaluateScheduledPost({
     return hold("media_preflight_network_mismatch");
   }
 
-  // An approval must be an explicit, recorded decision for this specific post.
-  if (explicitApproval !== true || !String(approvalRecordedAt || "").trim()) {
+  const approvalTime = Date.parse(String(approvalRecordedAt || ""));
+  if (explicitApproval !== true || String(approvedPostId || "").trim() !== id ||
+      !Number.isFinite(approvalTime) || approvalTime > Date.now()) {
     return hold("explicit_post_approval_required");
   }
 
-  // Do not silently convert a draft into an automatically publishing post.
-  // A caller may proceed to a human-reviewed scheduling step only.
   return {
     ok: true,
     decision: "READY_FOR_HUMAN_REVIEW",
+    postId: id,
     network: target,
     providerStatus: status,
     autoPublishRequested: autoPublish === true,
