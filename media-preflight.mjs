@@ -19,9 +19,14 @@ export function isPrivateAddress(address) {
   }
   if (net.isIPv6(address)) {
     const value = address.toLowerCase();
+    if (value.startsWith("::ffff:")) {
+      const mapped = value.slice("::ffff:".length);
+      if (net.isIPv4(mapped)) return isPrivateAddress(mapped);
+      return true;
+    }
     return value === "::" || value === "::1" || value.startsWith("fc") ||
-      value.startsWith("fd") || /^fe[89ab]/.test(value) ||
-      value.startsWith("::ffff:127.") || value.startsWith("::ffff:10.");
+      value.startsWith("fd") || value.startsWith("ff") || /^fe[89ab]/.test(value) ||
+      value.startsWith("2001:db8:");
   }
   return true;
 }
