@@ -200,10 +200,10 @@ Build Habitat into a dependable Android-first AI control center for DropPilot AI
 - DropPilot promotion remains on hold until supplier inventory and product-feed discrepancies are reconciled. Store baseline remains 56 sessions, 1 cart addition, 1 checkout started, 0 completed checkouts, 0 orders; no store prices, inventory, spending, or public posts changed.
 
 
-## Follow-up checkpoint — 2026-10-12 05:35 UTC
+## Follow-up checkpoint — 2026-10-12 06:05 UTC
 
 - Updated `.github/workflows/ci.yml` in commit `702037d445cfb0a5c4949077955f9869ff011403` so CI runs `npm run check` (the same full syntax gate used by production startup) and explicitly checks that the DropPilot ranking script and its regression test file exist.
-- The workflow file was read back from GitHub after the commit. This confirms the repository write, **not** a passing Actions run. The available linked GitHub Actions status/run lookup did not return a run for this push commit, so CI success is still unverified.
+- The workflow file was read back from GitHub after the commit. The initial check lookup was incomplete; a direct Actions API read later confirmed `Habitat CI` run [38209874417](https://github.com/kushxwookiex420/Habitat/actions/runs/38209874417) on commit `1b7075e8de8403583aa8b7a752f91427676f630c` passed all steps: dependency install, full production syntax gate, regression tests, and required-module/profit-gate test-file checks. `Habitat release checks` run [38209874434](https://github.com/kushxwookiex420/Habitat/actions/runs/38209874434) also passed.
 - The ranking script defaults to `data/droppilot-supplier-enrichment.json`; that path returned 404 on the current repository branch. Treat supplier-enrichment evidence as unavailable until its actual configured source is confirmed. The ranker is designed to hold products when cost/evidence is missing; do not bypass this gate or fabricate supplier quotes, fees, or demand scores.
 - Reviewed the current TikTok OAuth implementation and encrypted D1 vault code. The code requires durable vault readiness to begin OAuth and uses single-use state plus an HttpOnly/Secure/SameSite=Lax cookie. Live Render configuration, D1 connectivity, TikTok authorization, and a successful publish were **not** verified during this pass.
 - Shopify/PawCharm order #1001 remains a separate fulfillment and payout verification item; a paid order alone is not proof of shipment or realized net profit.
