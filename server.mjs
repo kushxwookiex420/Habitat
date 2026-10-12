@@ -3,6 +3,7 @@ import { claimTaskDispatch } from "./task-dispatch-guard.mjs";
 import { createD1TaskRepository } from "./d1-task-repository.mjs";
 import { createD1DispatchLeaseRepository } from "./d1-dispatch-lease-repository.mjs";
 import { markInterruptedTask, prepareTaskRetry } from "./task-recovery.mjs";
+import { appendTaskEvidence } from "./task-evidence.mjs";
 import { registerContentEngine } from "./content-engine.mjs";
 import { registerProductDemoResearch } from "./product-demo-research.mjs";
 import { registerPromotionEngine } from "./promotion-engine.mjs";
@@ -1339,7 +1340,7 @@ app.post("/tasks", async (req, res) => {
   const description = String(req.body?.description || title).trim();
   if (!title) return res.status(400).json({ ok: false, error: "title required" });
   const task = {
-    id: makeTaskId(), title, description, status: "planned", owner: "Ax",
+    id: makeTaskId(), title, description, status: "planned", owner: "Ax", evidence: [],
     worker: null, createdAt: nowIso(), updatedAt: nowIso(), delegatedAt: null,
     completedAt: null, verifiedAt: null, result: null, error: null
   };
