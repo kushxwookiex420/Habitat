@@ -54,6 +54,12 @@ test("holds any unresolved or potentially accepted prior supplier request", () =
   }
 });
 
+test("holds on malformed prior supplier request records", () => {
+  const result = evaluateFulfillmentReadiness({ ...base, priorRequests: [null] });
+  assert.equal(result.decision, "HOLD");
+  assert.ok(result.reasons.includes("possible_duplicate_or_unresolved_supplier_request"));
+});
+
 test("holds when prior supplier request history is missing or malformed", () => {
   const { priorRequests: _ignored, ...withoutHistory } = base;
   const omitted = evaluateFulfillmentReadiness(withoutHistory);
