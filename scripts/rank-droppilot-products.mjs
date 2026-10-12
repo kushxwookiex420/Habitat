@@ -40,6 +40,12 @@ const manifestPath = arg("--manifest", "data/droppilot-active-product-video-mani
 const enrichmentPath = arg("--enrichment", "data/droppilot-supplier-enrichment.json");
 const outputPath = arg("--out", "dist/droppilot-ranked-products.json");
 
+// A positive order is not worth taking if the absolute return is too small to
+// absorb returns, discounts, fee variance, and support time. This is a minimum
+// screening threshold, not a promise of realized profit.
+export const MIN_NET_PROFIT_PER_ORDER = 5;
+export const MIN_NET_MARGIN_PERCENT = 20;
+
 export function normalizeCategory(title = "", productType = "") {
   const value = (String(title) + " " + String(productType)).toLowerCase();
   const groups = [
@@ -119,7 +125,7 @@ export function evaluateProduct(product, enrichment) {
     enrichment.supplierReliabilityScore * 0.20 +
     Math.max(0, Math.min(100, marginPercent * 2.5)) * 0.20;
   const decision = !inStock ? "HOLD_STOCK_CHECK"
-    : profit <= 0 || marginPercent < 20 ? "REJECT_LOW_MARGIN"
+    : profit < MIN_NET_PROFIT_PER_ORDER || marginPercent < MIN_NET_MARGIN_PERCENT ? "REJECT_LOW_MARGIN"
     : "REVIEW_FOR_LISTING";
   return {
     ...base,
@@ -132,6 +138,7 @@ export function evaluateProduct(product, enrichment) {
     otherPerOrderCosts: money(enrichment.otherPerOrderCosts),
     estimatedNetProfitPerOrder: money(profit),
     estimatedNetMarginPercent: money(marginPercent),
+    minimumProfitThreshold: MIN_NET_PROFIT_PER_ORDER,
     demandScore: enrichment.demandScore,
     demoScore: enrichment.demoScore,
     supplierReliabilityScore: enrichment.supplierReliabilityScore,
