@@ -148,6 +148,91 @@ export function evaluateProduct(product, enrichment) {
   };
 }
 
+export function evaluateProductVariants(product, enrichment) {
+  if (!Array.isArray(product.variants) || product.variants.length === 0) {
+    return evaluateProduct(product, enrichment);
+  }
+
+  const variantDecisions = product.variants.map(variant => {
+    const variantId = variant.shopifyVariantId ?? variant.id ?? null;
+    const price = Number(variant.price);
+    const inventory = Number(variant.inventoryQuantity);
+    const availableForSale = variant.availableForSale === true;
+    const base = {
+      shopifyVariantId: variantId,
+      title: variant.title ?? "Default variant",
+      price: Number.isFinite(price) ? price : null,
+      supplierCost: finite(variant.supplierCost) ? money(variant.supplierCost) : null,
+      inventorySnapshot: Number.isFinite(inventory) ? inventory : null,
+      availableForSale,
+      inventoryPolicy: variant.inventoryPolicy ?? null
+    };
+
+    // A zero-stock variant that Shopify still says is for sale is unsafe; do
+    // not let the product pass the economics gate until that mismatch is fixed.
+    if (!Number.isFinite(price) || price <= 0 || !Number.isFinite(inventory) || inventory <= 0 || !availableForSale) {
+      return { ...base, eligibleForRanking: false, missing: [], decision: "HOLD_STOCK_CHECK" };
+    }
+
+    const variantEvidence = Array.isArray(enrichment?.variants)
+      ? enrichment.variants.find(item => String(item.shopifyVariantId) === String(variantId))
+      : null;
+    const mergedEvidence = {
+      ...(enrichment ?? {}),
+      ...(variantEvidence ?? {}),
+      supplierCost: variantEvidence?.supplierCost ?? variant.supplierCost ?? enrichment?.supplierCost
+    };
+    const result = evaluateProduct({
+      ...product,
+      title: product.title ?? "",
+      minVariantPrice: String(price),
+      totalInventory: inventory,
+      shopifyVariantId: variantId
+    }, mergedEvidence);
+    return {
+      ...base,
+      eligibleForRanking: result.eligibleForRanking,
+      missing: result.missing ?? [],
+      decision: result.decision,
+      estimatedNetProfitPerOrder: result.estimatedNetProfitPerOrder ?? null,
+      estimatedNetMarginPercent: result.estimatedNetMarginPercent ?? null,
+      prioritizationScore: result.prioritizationScore ?? null,
+      minimumProfitThreshold: result.minimumProfitThreshold ?? MIN_NET_PROFIT_PER_ORDER
+    };
+  });
+
+  const stockRisk = variantDecisions.some(v =>
+    v.decision === "HOLD_STOCK_CHECK" && v.availableForSale === true &&
+    (v.inventorySnapshot === 0 || v.inventorySnapshot === null)
+  );
+  const saleable = variantDecisions.filter(v => v.decision !== "HOLD_STOCK_CHECK");
+  const decision = stockRisk ? "HOLD_STOCK_CHECK"
+    : saleable.length === 0 ? "HOLD_STOCK_CHECK"
+    : saleable.some(v => v.decision === "REJECT_LOW_MARGIN") ? "REJECT_LOW_MARGIN"
+    : saleable.some(v => v.decision === "HOLD_FOR_EVIDENCE") ? "HOLD_FOR_EVIDENCE"
+    : saleable.every(v => v.decision === "REVIEW_FOR_LISTING") ? "REVIEW_FOR_LISTING"
+    : "HOLD_STOCK_CHECK";
+  const scores = saleable.map(v => v.prioritizationScore).filter(finite);
+  const missing = [...new Set(saleable.flatMap(v => v.missing ?? []))];
+
+  return {
+    shopifyProductId: product.shopifyProductId ?? null,
+    title: product.title ?? "",
+    productUrl: product.productUrl ?? null,
+    category: normalizeCategory(product.title, product.productType),
+    status: product.status ?? "unknown",
+    inventorySnapshot: Number.isFinite(Number(product.totalInventory)) ? Number(product.totalInventory) : null,
+    minVariantPrice: Number.isFinite(Number(product.minVariantPrice)) ? Number(product.minVariantPrice) : null,
+    eligibleForRanking: decision === "REVIEW_FOR_LISTING",
+    missing,
+    decision,
+    minimumProfitThreshold: MIN_NET_PROFIT_PER_ORDER,
+    prioritizationScore: scores.length ? money(Math.min(...scores)) : null,
+    variantDecisionCount: variantDecisions.length,
+    variantDecisions
+  };
+}
+
 export async function run() {
   const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
   const products = Array.isArray(manifest) ? manifest : manifest.products;
@@ -161,7 +246,7 @@ export async function run() {
     if (error.code !== "ENOENT") throw error;
   }
   const byId = new Map(enrichments.filter(x => x.shopifyProductId).map(x => [String(x.shopifyProductId), x]));
-  const ranked = products.map(product => evaluateProduct(product, byId.get(String(product.shopifyProductId)) ?? null));
+  const ranked = products.map(product => evaluateProductVariants(product, byId.get(String(product.shopifyProductId)) ?? null));
   const eligible = ranked.filter(x => x.eligibleForRanking).sort((a, b) => b.prioritizationScore - a.prioritizationScore);
   const report = {
     schemaVersion: 1,
