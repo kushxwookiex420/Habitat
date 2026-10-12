@@ -75,3 +75,18 @@ test("research queries exclude noisy Shopify productType categories", () => {
   });
   assert.ok(broadCategory.every(query => !query.includes("Home Decor")));
 });
+
+
+test("generic egg-cooking videos are not treated as egg-holder product demos", () => {
+  const product = "Egg Container Holder for Refrigerator Double Layer Egg Storage Box Organizer Bin Tray Rack";
+  assert.equal(isProductRelevant(product, "", "", {
+    title: "How To Cook Perfect Eggs Every Time - YouTube",
+    url: "https://m.youtube.com/watch?v=not-a-holder-demo",
+    snippet: "Learn to cook eggs perfectly"
+  }), false);
+  assert.equal(isProductRelevant(product, "", "", {
+    title: "Double Layer Egg Holder Storage Rack Demo",
+    url: "https://www.youtube.com/watch?v=holder-demo",
+    snippet: "A refrigerator egg holder in use"
+  }), true);
+});
