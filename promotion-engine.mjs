@@ -78,6 +78,32 @@ export function buildPromotionPlan(input = {}) {
   if (!rawUrl) throw new Error("productUrl is required");
   if (input.productActive !== true) throw new Error("productActive must be true after verifying the Shopify product is active");
   if (input.productAvailable !== true) throw new Error("productAvailable must be true after verifying inventory or supplier availability");
+  // Fail closed: Habitat must not create promotional drafts for products whose unit
+  // economics are unknown, stale, non-positive, or below the 20% net-margin floor.
+  const economics = input.profitCheck;
+  if (!economics || economics.verified !== true) throw new Error("PROFIT_GATE_HOLD: verified supplier economics are required before promotion");
+  const numericFields = ["sellingPrice", "supplierCost", "shippingCost", "otherPerOrderCosts", "platformFeeRate", "paymentFeeRate"];
+  for (const key of numericFields) {
+    if (typeof economics[key] !== "number" || !Number.isFinite(economics[key]) || economics[key] < 0) {
+      throw new Error("PROFIT_GATE_HOLD: missing or invalid " + key);
+    }
+  }
+  if (economics.sellingPrice <= 0 || economics.platformFeeRate >= 1 || economics.paymentFeeRate >= 1) {
+    throw new Error("PROFIT_GATE_HOLD: invalid price or fee rates");
+  }
+  if (!economics.evidenceUrl || !/^https?:\\/\\//i.test(economics.evidenceUrl) ||
+      !economics.evidenceCheckedAt || !Number.isFinite(Date.parse(economics.evidenceCheckedAt)) ||
+      Date.now() - Date.parse(economics.evidenceCheckedAt) > 7 * 24 * 60 * 60 * 1000 ||
+      Date.parse(economics.evidenceCheckedAt) > Date.now() + 5 * 60 * 1000) {
+    throw new Error("PROFIT_GATE_HOLD: supplier cost evidence must be valid and no older than 7 days");
+  }
+  const estimatedFees = economics.sellingPrice * (economics.platformFeeRate + economics.paymentFeeRate);
+  const estimatedNetProfit = economics.sellingPrice - economics.supplierCost - economics.shippingCost - economics.otherPerOrderCosts - estimatedFees;
+  const estimatedNetMargin = estimatedNetProfit / economics.sellingPrice;
+  if (estimatedNetProfit <= 0 || estimatedNetMargin < 0.20) {
+    throw new Error("PROFIT_GATE_HOLD: estimated net margin must be at least 20%; calculated " +
+      (estimatedNetMargin * 100).toFixed(1) + "% and $" + estimatedNetProfit.toFixed(2) + " per order");
+  }
   const category = clean(input.category, 80);
   const features = Array.isArray(input.features)
     ? input.features.map(value => clean(value, 100)).filter(Boolean).slice(0, 5)
@@ -113,13 +139,15 @@ export function buildPromotionPlan(input = {}) {
     ok: true,
     campaign,
     product: { productName, category: category || null, productUrl: rawUrl, features },
+    profitCheck: { sellingPrice: economics.sellingPrice, supplierCost: economics.supplierCost, shippingCost: economics.shippingCost, otherPerOrderCosts: economics.otherPerOrderCosts, estimatedFees: Math.round(estimatedFees * 100) / 100, estimatedNetProfitPerOrder: Math.round(estimatedNetProfit * 100) / 100, estimatedNetMarginPercent: Math.round(estimatedNetMargin * 10000) / 100, evidenceUrl: economics.evidenceUrl, evidenceCheckedAt: economics.evidenceCheckedAt },
     drafts,
     count: drafts.length,
     tracking: { utm: true, campaign },
     publishing: { status: "not_published", requiresConnectedAccount: true, requiresMediaWhenPlatformDemandsIt: true, humanReviewRequired: true },
     guardrails: [
       "Drafts only: this endpoint never publishes or schedules posts.",
-      "Copy is based only on supplied product details; verify claims, stock, price, shipping and the destination before publishing.",
+      "Profit gate: promotional drafts require supplier evidence no older than 7 days, positive estimated profit, and at least 20% estimated net margin.",
+      "The estimate depends on the supplied cost and fee data; recheck live supplier pricing, shipping, marketplace fees, taxes, returns, and payment fees before publishing.",
       "Use media you own or have explicit commercial reuse permission to use."
     ]
   };
