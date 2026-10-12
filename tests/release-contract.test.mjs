@@ -270,3 +270,13 @@ test("APK release publishing is serialized and stale commits cannot replace the 
   assert.ok(workflow.includes('if [ "$CURRENT_MAIN" != "$GITHUB_SHA" ]'));
   assert.ok(workflow.includes("if: github.ref == 'refs/heads/main'"));
 });
+
+
+test("DropPilot demo research retries empty searches with a shorter product-specific query", async () => {
+  const batch = await fs.readFile(new URL("../scripts/research-droppilot-demo-batch.mjs", import.meta.url), "utf8");
+  assert.ok(batch.includes("const leadingPhrase = title.split("));
+  assert.ok(batch.includes("retryTitle = retryTitle.slice(0, 120)"));
+  assert.ok(batch.includes("searchQueryUsed = attempt === 0 ? title.slice(0, 180) : retryTitle"));
+  assert.ok(batch.includes("productName: searchQueryUsed"));
+  assert.ok(batch.includes("searchQueryUsed,"));
+});
