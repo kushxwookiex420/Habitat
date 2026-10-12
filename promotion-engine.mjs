@@ -1,4 +1,6 @@
 const ALLOWED_NETWORKS = new Set(["tiktok", "instagram", "facebook", "pinterest", "youtube", "x", "threads", "bluesky", "linkedin"]);
+const CAPTION_LIMITS = { tiktok: 2200, instagram: 2200, facebook: 63206, pinterest: 500, youtube: 5000, x: 280, threads: 500, bluesky: 300, linkedin: 3000 };
+const STORE_HOST = "2tanuk-yx.myshopify.com";
 const HASHTAGS = {
   tiktok: ["#DropPilotMarket", "#EverydayFinds", "#ProductFinds", "#ShopSmall", "#UsefulFinds"],
   instagram: ["#DropPilotMarket", "#EverydayFinds", "#HomeFinds", "#ProductFinds", "#ShopOnline", "#FindsOfTheDay"],
@@ -24,6 +26,8 @@ function trackedUrl(rawUrl, campaign, network) {
   let url;
   try { url = new URL(rawUrl); } catch { throw new Error("productUrl must be a valid HTTPS product URL"); }
   if (url.protocol !== "https:") throw new Error("productUrl must use HTTPS");
+  if (url.hostname.toLowerCase() !== STORE_HOST) throw new Error("productUrl must use the configured DropPilot Shopify store domain");
+  if (!/^\/products\/[a-z0-9][a-z0-9-]*\/?$/i.test(url.pathname)) throw new Error("productUrl must point to a Shopify product page");
   url.searchParams.set("utm_source", network);
   url.searchParams.set("utm_medium", "social");
   url.searchParams.set("utm_campaign", campaign);
@@ -55,6 +59,8 @@ export function buildPromotionPlan(input = {}) {
   const rawUrl = clean(input.productUrl, 1000);
   if (!productName) throw new Error("productName is required");
   if (!rawUrl) throw new Error("productUrl is required");
+  if (input.productStatus !== "active") throw new Error("productStatus must be verified as active before promotion");
+  if (input.availableForSale !== true) throw new Error("availableForSale must be verified true before promotion");
   const category = clean(input.category, 80);
   const features = Array.isArray(input.features)
     ? input.features.map(value => clean(value, 100)).filter(Boolean).slice(0, 5)
@@ -70,7 +76,10 @@ export function buildPromotionPlan(input = {}) {
   const drafts = networks.map(network => {
     const url = trackedUrl(rawUrl, campaign, network);
     const hashtags = compactTags(network);
-    const caption = captionFor(network, productName, category, features, url);
+    const caption = captionFor(network, productName, category, features, url) + "\\n\\n" + hashtags.join(" ");
+    if (caption.length > CAPTION_LIMITS[network]) {
+      throw new Error("Caption exceeds " + network + " limit of " + CAPTION_LIMITS[network] + " characters");
+    }
     return {
       network,
       networkLabel: titleCaseNetwork(network),
@@ -88,6 +97,13 @@ export function buildPromotionPlan(input = {}) {
     campaign,
     product: { productName, category: category || null, productUrl: rawUrl, features },
     drafts,
+    campaignSummary: drafts.map(draft => ({
+      campaign,
+      network: draft.network,
+      trackedUrl: draft.trackedUrl,
+      status: "draft",
+      requiresHumanApproval: true
+    })),
     count: drafts.length,
     tracking: { utm: true, campaign },
     publishing: { status: "not_published", requiresConnectedAccount: true, requiresMediaWhenPlatformDemandsIt: true, humanReviewRequired: true },
