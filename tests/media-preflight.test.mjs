@@ -46,6 +46,8 @@ test("holds private and unresolved media hosts before fetching", async () => {
   assert.equal(result.reason, "media_host_not_confirmed_public");
   assert.equal(deps.calls.length, 0);
   assert.equal(isPrivateAddress("10.1.2.3"), true);
+  assert.equal(isPrivateAddress("::ffff:192.168.1.5"), true);
+  assert.equal(isPrivateAddress("ff02::1"), true);
   assert.equal(isPrivateAddress("8.8.8.8"), false);
 });
 
