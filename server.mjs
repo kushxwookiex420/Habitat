@@ -11,6 +11,7 @@ import { createD1ContentJobRepository } from "./d1-content-job-repository.mjs";
 import { createD1SecretVault } from "./d1-secret-vault.mjs";
 import { registerTikTokOAuth } from "./tiktok-oauth.mjs";
 import { registerPublicPages } from "./public-pages.mjs";
+import { createD1WorkspaceRepository, registerAxWorkspace } from "./ax-workspace.mjs";
 import { readFile } from "node:fs/promises";
 
 import express from "express";
@@ -23,6 +24,32 @@ registerPublicPages(app);
 registerProductDemoResearch(app);
 registerPromotionEngine(app);
 registerProductDemoRenderer(app);
+
+// Ax Workspace uses D1 only when configured; never silently fall back to ephemeral memory.
+const workspaceStorageConfigured = Boolean(
+  String(process.env.CLOUDFLARE_ACCOUNT_ID || "").trim() &&
+  String(process.env.HABITAT_D1_DATABASE_ID || "").trim() &&
+  String(process.env.HABITAT_D1_API_TOKEN || "").trim()
+);
+const workspaceRepository = workspaceStorageConfigured ? createD1WorkspaceRepository({
+  accountId: process.env.CLOUDFLARE_ACCOUNT_ID,
+  databaseId: process.env.HABITAT_D1_DATABASE_ID,
+  apiToken: process.env.HABITAT_D1_API_TOKEN
+}) : null;
+let workspaceStorageReady = false;
+if (workspaceRepository) {
+  try {
+    await workspaceRepository.initialize();
+    workspaceStorageReady = true;
+    console.log("AX_WORKSPACE_STORAGE: ready — Cloudflare D1");
+  } catch (error) {
+    console.error("AX_WORKSPACE_STORAGE: unavailable — " + String(error?.message || error));
+  }
+}
+registerAxWorkspace(app, {
+  repository: workspaceStorageReady ? workspaceRepository : null,
+  writeToken: process.env.HABITAT_WORKSPACE_WRITE_TOKEN || ""
+});
 
 // Durable cross-session handoff: the checkpoint is committed with the source code,
 // not written to Render's ephemeral filesystem. Keep secrets out of AX_CONTINUITY.md.
