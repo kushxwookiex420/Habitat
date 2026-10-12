@@ -22,6 +22,7 @@ Optional model overrides: `GEMINI_MODEL`, `GROQ_MODEL`, and `CEREBRAS_MODEL`. Ke
 
 ## Operational endpoints
 
+- `fulfillment-guard.mjs` provides a read-only, fail-closed preflight for paid/unfulfilled order state, supplier variant mapping, fresh supplier quote and shipping-cost parity, unresolved prior requests, and deterministic idempotency keys. It returns `READY_FOR_APPROVAL` only; it does not submit fulfillment.
 - `GET /` — basic backend status.
 - `GET /health` — basic health status.
 - `GET /diagnostics/providers` — shows which provider keys are configured and selected model names. It never returns secrets and does not spend model quota.
