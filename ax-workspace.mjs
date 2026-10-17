@@ -99,12 +99,19 @@ function tokenMatches(expected, provided) {
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
+function workspaceAuthorization(req, token) {
+  const authorization = String(req.get("authorization") || "");
+  const supplied = authorization.startsWith("Bearer ") ? authorization.slice(7) : "";
+  return tokenMatches(token, supplied);
+}
+
 export function registerAxWorkspace(app, { repository, writeToken = "" } = {}) {
   app.get("/workspace/status", async (_req, res) => {
     if (!repository) return res.status(503).json({ ok: false, durable: false, error: "Ax Workspace durable storage is not configured or available." });
     try {
       const health = await repository.healthCheck();
-      return res.json({ ok: true, durable: health.durable === true, adapter: health.adapter, writeProtection: writeToken ? "token-required" : "writes-disabled" });
+      const protection = writeToken ? "token-required" : "disabled-until-token-configured";
+      return res.json({ ok: true, durable: health.durable === true, adapter: health.adapter, readProtection: protection, writeProtection: writeToken ? "token-required" : "writes-disabled" });
     } catch {
       return res.status(503).json({ ok: false, durable: false, error: "Ax Workspace storage health check failed." });
     }
@@ -112,6 +119,12 @@ export function registerAxWorkspace(app, { repository, writeToken = "" } = {}) {
 
   app.get("/workspace/memories", async (req, res) => {
     if (!repository) return res.status(503).json({ ok: false, error: "Ax Workspace durable storage is not configured or available." });
+    if (!workspaceAuthorization(req, writeToken)) {
+      return res.status(writeToken ? 401 : 503).json({
+        ok: false,
+        error: writeToken ? "A valid workspace token is required to read memories." : "Workspace memory reads are disabled until HABITAT_WORKSPACE_WRITE_TOKEN is configured."
+      });
+    }
     try {
       const project = String(req.query?.project || "").trim();
       const limit = Number(req.query?.limit || 100);
@@ -124,9 +137,7 @@ export function registerAxWorkspace(app, { repository, writeToken = "" } = {}) {
 
   app.post("/workspace/memories", async (req, res) => {
     if (!repository) return res.status(503).json({ ok: false, error: "Ax Workspace durable storage is not configured or available." });
-    const authorization = String(req.get("authorization") || "");
-    const supplied = authorization.startsWith("Bearer ") ? authorization.slice(7) : "";
-    if (!tokenMatches(writeToken, supplied)) return res.status(writeToken ? 401 : 503).json({ ok: false, error: writeToken ? "A valid workspace write token is required." : "Workspace writes are disabled until HABITAT_WORKSPACE_WRITE_TOKEN is configured." });
+    if (!workspaceAuthorization(req, writeToken)) return res.status(writeToken ? 401 : 503).json({ ok: false, error: writeToken ? "A valid workspace write token is required." : "Workspace writes are disabled until HABITAT_WORKSPACE_WRITE_TOKEN is configured." });
     try {
       const memory = await repository.upsert(req.body || {});
       return res.status(201).json({ ok: true, durable: true, memory });
