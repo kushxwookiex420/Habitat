@@ -104,3 +104,18 @@ test("TikTok callback rejects missing or mismatched OAuth state before token exc
   assert.equal(res.statusCode, 400);
   assert.match(String(res.body), /state check failed/i);
 });
+
+test("TikTok profile verification fails closed when the basic profile scope is absent", async () => {
+  const app = fakeApp();
+  const vault = fakeVault();
+  vault.records.set("tiktok_tokens", {
+    access_token: "private-access-token",
+    scope: "video.upload,video.publish"
+  });
+  registerTikTokOAuth(app, vault);
+  const res = fakeResponse();
+  await app.routes.get("/auth/tiktok/profile")({ headers: {}, query: {} }, res);
+  assert.equal(res.statusCode, 403);
+  assert.equal(res.body.missingScope, "user.info.basic");
+  assert.ok(!JSON.stringify(res.body).includes("private-access-token"));
+});
