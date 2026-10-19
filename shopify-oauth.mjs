@@ -225,6 +225,7 @@ export function registerShopifyOAuth(app, secretVault = null, { fetchImpl = fetc
       console.error("SHOPIFY_CATALOG_READ_ERROR", String(error?.message || error).slice(0, 180));
       return res.status(502).json({ ok: false, connected: true, error: "Habitat could not reach Shopify's catalog API. Retry after checking Render logs." });
     }
+  });
 
   app.get("/shopify/audit", async (req, res) => {
     const shop = normalizeShopDomain(req.query?.shop);
@@ -293,6 +294,5 @@ export function registerShopifyOAuth(app, secretVault = null, { fetchImpl = fetc
       console.error("SHOPIFY_CATALOG_AUDIT_ERROR", String(error?.message || error).slice(0, 180));
       return res.status(502).json({ ok: false, connected: true, error: "Habitat could not complete the Shopify catalog audit. Retry after checking Render logs." });
     }
-  });
   });
 }
