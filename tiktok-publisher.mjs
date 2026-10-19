@@ -74,6 +74,7 @@ export function buildTikTokPublisherStatus({ tokenPresent = false, mode = "direc
     readiness,
     directPostReady: creatorPreflightPassed === true,
     scopeRequired: "video.publish",
+    uploadScopeRequired: "video.upload",
     note: creatorPreflightPassed
       ? "Creator preflight passed, but each post still requires explicit user approval and a confirming platform response."
       : tokenPresent
@@ -87,7 +88,7 @@ export function tiktokConfig() {
     configured: Boolean(tokenFromEnv()),
     mode: String(process.env.TIKTOK_PUBLISH_MODE || "direct").trim().toLowerCase(),
     hasClientId: Boolean(String(process.env.TIKTOK_CLIENT_KEY || "").trim()),
-    scopeHint: "video.publish"
+    scopeHint: "video.publish, video.upload"
   };
 }
 
@@ -128,48 +129,7 @@ function captionFromScript(script = {}) {
   return [String(script.caption || script.title || "").trim(), hashtags].filter(Boolean).join(" ").slice(0, 2200);
 }
 
-export async function publishTikTokDirect({ artifactPath, bytes, durationSeconds, script = {}, privacyLevel, userConsent, allowComment, allowDuet, allowStitch }) {
-  if (userConsent !== true) { const error = new Error("explicit user consent is required before sending media to TikTok"); error.status = 409; throw error; }
-  if (!privacyLevel) { const error = new Error("privacyLevel must be explicitly selected by the user"); error.status = 400; throw error; }
-  const creator = await queryCreatorInfo();
-  const options = creator?.data?.privacy_level_options || [];
-  const privacy = privacyLevel || String(process.env.TIKTOK_PRIVACY_LEVEL || "SELF_ONLY");
-  const maxDuration = Number(creator?.data?.max_video_post_duration_sec || 0);
-  if (maxDuration && Number(durationSeconds || 0) > maxDuration) { const error = new Error("video exceeds TikTok creator max duration"); error.status = 400; error.payload = { durationSeconds, maxDuration }; throw error; }
-  if (creator?.data?.can_post === false) { const error = new Error("TikTok creator cannot post at this time"); error.status = 409; throw error; }
-  if (!options.includes(privacy)) {
-    const error = new Error("TikTok privacy level is not allowed for this creator");
-    error.status = 409;
-    error.payload = { privacyRequested: privacy, privacyLevelOptions: options };
-    throw error;
-  }
-
-  const size = Number(bytes || 0);
-  if (!size || !artifactPath) throw new Error("verified artifact path and size are required");
-
-  const chunkSize = Math.min(64 * 1024 * 1024, Math.max(5 * 1024 * 1024, Number(process.env.TIKTOK_CHUNK_SIZE_BYTES || 10 * 1024 * 1024)));
-  const totalChunkCount = Math.ceil(size / chunkSize);
-  const init = await tiktokJson("/v2/post/publish/video/init/", {
-    post_info: {
-      title: captionFromScript(script),
-      privacy_level: privacy,
-      disable_duet: allowDuet === true ? false : true,
-      disable_comment: allowComment === true ? false : true,
-      disable_stitch: allowStitch === true ? false : true,
-      is_aigc: true
-    },
-    source_info: {
-      source: "FILE_UPLOAD",
-      video_size: size,
-      chunk_size: chunkSize,
-      total_chunk_count: totalChunkCount
-    }
-  });
-
-  const publishId = init?.data?.publish_id;
-  const uploadUrl = init?.data?.upload_url;
-  if (!publishId || !uploadUrl) throw new Error("TikTok did not return publish_id and upload_url");
-
+async function uploadVideoFile(uploadUrl, artifactPath, size, chunkSize, totalChunkCount) {
   const fs = await import("node:fs/promises");
   const file = await fs.open(artifactPath, "r");
   try {
@@ -202,6 +162,91 @@ export async function publishTikTokDirect({ artifactPath, bytes, durationSeconds
   } finally {
     await file.close();
   }
+}
+
+function uploadChunkSettings(size) {
+  const minimumChunk = 5 * 1024 * 1024;
+  const chunkSize = size < minimumChunk
+    ? size
+    : Math.min(64 * 1024 * 1024, Math.max(minimumChunk, Number(process.env.TIKTOK_CHUNK_SIZE_BYTES || 10 * 1024 * 1024)));
+  return { chunkSize, totalChunkCount: Math.ceil(size / chunkSize) };
+}
+
+export async function uploadTikTokToInbox({ artifactPath, bytes, userConsent }) {
+  if (userConsent !== true) {
+    const error = new Error("explicit user consent is required before uploading media to TikTok");
+    error.status = 409;
+    throw error;
+  }
+  const size = Number(bytes || 0);
+  if (!size || !artifactPath) throw new Error("verified artifact path and size are required");
+  const { chunkSize, totalChunkCount } = uploadChunkSettings(size);
+  const init = await tiktokJson("/v2/post/publish/inbox/video/init/", {
+    source_info: {
+      source: "FILE_UPLOAD",
+      video_size: size,
+      chunk_size: chunkSize,
+      total_chunk_count: totalChunkCount
+    }
+  });
+  const publishId = init?.data?.publish_id;
+  const uploadUrl = init?.data?.upload_url;
+  if (!publishId || !uploadUrl) throw new Error("TikTok did not return publish_id and upload_url for inbox upload");
+  await uploadVideoFile(uploadUrl, artifactPath, size, chunkSize, totalChunkCount);
+  return {
+    publisher: "tiktok-content-upload-api",
+    mode: "upload_to_inbox",
+    publishId: String(publishId),
+    uploadedBytes: size,
+    totalChunkCount,
+    status: "uploaded_to_inbox",
+    confirmed: false,
+    nextStep: "Open the TikTok inbox notification to review and finish publishing. Uploading is not the same as publishing."
+  };
+}
+
+export async function publishTikTokDirect({ artifactPath, bytes, durationSeconds, script = {}, privacyLevel, userConsent, allowComment, allowDuet, allowStitch }) {
+  if (userConsent !== true) { const error = new Error("explicit user consent is required before sending media to TikTok"); error.status = 409; throw error; }
+  if (!privacyLevel) { const error = new Error("privacyLevel must be explicitly selected by the user"); error.status = 400; throw error; }
+  const creator = await queryCreatorInfo();
+  const options = creator?.data?.privacy_level_options || [];
+  const privacy = privacyLevel || String(process.env.TIKTOK_PRIVACY_LEVEL || "SELF_ONLY");
+  const maxDuration = Number(creator?.data?.max_video_post_duration_sec || 0);
+  if (maxDuration && Number(durationSeconds || 0) > maxDuration) { const error = new Error("video exceeds TikTok creator max duration"); error.status = 400; error.payload = { durationSeconds, maxDuration }; throw error; }
+  if (creator?.data?.can_post === false) { const error = new Error("TikTok creator cannot post at this time"); error.status = 409; throw error; }
+  if (!options.includes(privacy)) {
+    const error = new Error("TikTok privacy level is not allowed for this creator");
+    error.status = 409;
+    error.payload = { privacyRequested: privacy, privacyLevelOptions: options };
+    throw error;
+  }
+
+  const size = Number(bytes || 0);
+  if (!size || !artifactPath) throw new Error("verified artifact path and size are required");
+
+  const { chunkSize, totalChunkCount } = uploadChunkSettings(size);
+  const init = await tiktokJson("/v2/post/publish/video/init/", {
+    post_info: {
+      title: captionFromScript(script),
+      privacy_level: privacy,
+      disable_duet: allowDuet === true ? false : true,
+      disable_comment: allowComment === true ? false : true,
+      disable_stitch: allowStitch === true ? false : true,
+      is_aigc: true
+    },
+    source_info: {
+      source: "FILE_UPLOAD",
+      video_size: size,
+      chunk_size: chunkSize,
+      total_chunk_count: totalChunkCount
+    }
+  });
+
+  const publishId = init?.data?.publish_id;
+  const uploadUrl = init?.data?.upload_url;
+  if (!publishId || !uploadUrl) throw new Error("TikTok did not return publish_id and upload_url");
+
+  await uploadVideoFile(uploadUrl, artifactPath, size, chunkSize, totalChunkCount);
 
   return {
     publisher: "tiktok-content-posting-api",
@@ -270,6 +315,13 @@ export function registerTikTokPublisher(app, getJob, secretVault = null) {
         failReason: data.fail_reason || null,
         checkedAt: new Date().toISOString()
       };
+      if (publish.mode === "upload_to_inbox" && data.status === "SEND_TO_USER_INBOX") {
+        job.stages.publish.status = "uploaded_to_inbox";
+        job.stages.publish.result.status = "uploaded_to_inbox";
+        job.stages.publish.result.confirmed = false;
+        job.stages.publish.result.nextStep = "Open the TikTok inbox notification to review and finish publishing.";
+        return res.json({ ok:true, status:"UPLOADED_TO_INBOX", published:false, job });
+      }
       if (data.status === "PUBLISH_COMPLETE") {
         job.stages.publish.status = "completed";
         job.stages.publish.result.confirmed = true;
