@@ -12,7 +12,7 @@ const ffprobePath = ffprobeStatic.path;
 import { runVisualQA } from "./visual-qa.mjs";
 import { normalizeViceCityScript } from "./vice-city-script-fallback.mjs";
 import { DEJAVU_REGULAR, DEJAVU_BOLD } from "./font-paths.mjs";
-import { publishTikTokDirect, registerTikTokPublisher, tiktokConfig } from "./tiktok-publisher.mjs";
+import { publishTikTokDirect, uploadTikTokToInbox, registerTikTokPublisher, tiktokConfig } from "./tiktok-publisher.mjs";
 
 
 
@@ -1142,6 +1142,56 @@ export function registerContentEngine(app, deps) {
     } catch (error) {
       job.stages.publish.result={ ...(job.stages.publish.result || {}), status:"publisher_unreachable", error:String(error?.message||error), failedAt:nowIso() };
       res.status(502).json({ ok:false, error:"publisher bridge unreachable", job });
+    }
+  });
+
+  app.post("/content/jobs/:id/upload-to-inbox", async (req, res) => {
+    const job = contentJobs.get(req.params.id);
+    if (!job) return res.status(404).json({ ok:false, error:"content job not found" });
+    if (job.platform !== "tiktok") return res.status(400).json({ ok:false, error:"TikTok inbox upload is only available for TikTok jobs" });
+    if (job.stages.publish.status !== "approved")
+      return res.status(409).json({ ok:false, error:"publish approval required", job });
+    const artifact = job.stages.edit?.result?.artifact;
+    if (!artifact?.verified || artifact.status !== "verified")
+      return res.status(409).json({ ok:false, error:"verified artifact required", job });
+    if (!tiktokConfig().configured)
+      return res.status(503).json({ ok:false, error:"TikTok authorization required", job });
+    try {
+      const result = await uploadTikTokToInbox({
+        artifactPath: artifact.path,
+        bytes: artifact.bytes,
+        userConsent: req.body?.userConsent === true
+      });
+      job.stages.publish.status = "uploaded_to_inbox";
+      job.stages.publish.result = {
+        ...(job.stages.publish.result || {}),
+        ...result,
+        mode: "upload_to_inbox",
+        confirmed: false,
+        uploadedAt: nowIso()
+      };
+      job.updatedAt = nowIso();
+      return res.status(202).json({
+        ok:true,
+        status:"UPLOADED_TO_INBOX",
+        published:false,
+        next:"Open the TikTok inbox notification to review and finish publishing in TikTok.",
+        job,
+        publishId:result.publishId,
+        statusCheck:"POST /content/jobs/:id/publish-status"
+      });
+    } catch (error) {
+      job.stages.publish.result = {
+        ...(job.stages.publish.result || {}),
+        mode:"upload_to_inbox",
+        status:"tiktok_inbox_upload_failed",
+        error:String(error?.message || error),
+        response:error?.payload || null,
+        failedAt:nowIso()
+      };
+      return res.status(Number(error?.status) >= 400 ? Number(error.status) : 502).json({
+        ok:false, error:"TikTok inbox upload failed", job
+      });
     }
   });
 
