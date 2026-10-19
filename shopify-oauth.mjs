@@ -225,5 +225,74 @@ export function registerShopifyOAuth(app, secretVault = null, { fetchImpl = fetc
       console.error("SHOPIFY_CATALOG_READ_ERROR", String(error?.message || error).slice(0, 180));
       return res.status(502).json({ ok: false, connected: true, error: "Habitat could not reach Shopify's catalog API. Retry after checking Render logs." });
     }
+
+  app.get("/shopify/audit", async (req, res) => {
+    const shop = normalizeShopDomain(req.query?.shop);
+    if (!shop) return res.status(400).json({ ok: false, error: "A valid *.myshopify.com shop domain is required." });
+    if (!vaultReady) return res.status(503).json({ ok: false, error: "Encrypted durable token storage is unavailable." });
+    let token;
+    try { token = await secretVault.get("shopify_tokens:" + shop); }
+    catch (error) {
+      console.error("SHOPIFY_AUDIT_TOKEN_READ_FAILED", String(error?.message || error));
+      return res.status(503).json({ ok: false, error: "Shopify token storage could not be read." });
+    }
+    if (!token?.access_token) return res.status(401).json({ ok: false, connected: false, error: "Shopify is not connected for this store." });
+    try {
+      const products = [];
+      let cursor = null;
+      let hasNextPage = true;
+      let pageCount = 0;
+      while (hasNextPage && pageCount < 100) {
+        const response = await fetchImpl(`https://${shop}/admin/api/${API_VERSION}/graphql.json`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "X-Shopify-Access-Token": token.access_token },
+          body: JSON.stringify({
+            query: "query HabitatCatalogAudit($after: String) { products(first: 100, after: $after, sortKey: UPDATED_AT, reverse: true) { edges { node { id title handle vendor status totalInventory priceRangeV2 { minVariantPrice { amount currencyCode } } } } pageInfo { hasNextPage endCursor } } }",
+            variables: { after: cursor }
+          }),
+          signal: AbortSignal.timeout(20000)
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok || payload?.errors?.length || !Array.isArray(payload?.data?.products?.edges)) {
+          console.error("SHOPIFY_CATALOG_AUDIT_PAGE_FAILED", JSON.stringify({ shop, pageCount, httpStatus: response.status }));
+          return res.status(502).json({ ok: false, connected: true, error: "Catalog audit stopped because Shopify returned an incomplete page; no partial audit is reported." });
+        }
+        const connection = payload.data.products;
+        for (const edge of connection.edges) {
+          const node = edge.node;
+          products.push({
+            id: node.id, title: node.title, handle: node.handle, vendor: node.vendor,
+            status: String(node.status || "UNKNOWN").toUpperCase(),
+            inventory: Number.isFinite(Number(node.totalInventory)) ? Number(node.totalInventory) : null,
+            price: node.priceRangeV2?.minVariantPrice?.amount || null,
+            currency: node.priceRangeV2?.minVariantPrice?.currencyCode || null
+          });
+        }
+        hasNextPage = Boolean(connection.pageInfo?.hasNextPage);
+        cursor = connection.pageInfo?.endCursor || null;
+        pageCount += 1;
+        if (hasNextPage && !cursor) {
+          return res.status(502).json({ ok: false, connected: true, error: "Shopify pagination cursor was missing; no partial audit is reported." });
+        }
+      }
+      if (hasNextPage) return res.status(502).json({ ok: false, connected: true, error: "Catalog exceeds the safe audit page limit; no partial audit is reported." });
+      const count = status => products.filter(product => product.status === status).length;
+      const activeOutOfStock = products.filter(product => product.status === "ACTIVE" && product.inventory !== null && product.inventory <= 0);
+      const activeUnknownInventory = products.filter(product => product.status === "ACTIVE" && product.inventory === null);
+      return res.json({
+        ok: true, complete: true, shop, apiVersion: API_VERSION, pagesRead: pageCount,
+        totalProducts: products.length,
+        counts: { active: count("ACTIVE"), draft: count("DRAFT"), archived: count("ARCHIVED"), other: products.length - count("ACTIVE") - count("DRAFT") - count("ARCHIVED") },
+        activeOutOfStockCount: activeOutOfStock.length,
+        activeUnknownInventoryCount: activeUnknownInventory.length,
+        activeOutOfStock,
+        activeUnknownInventory,
+        note: "Inventory is the Shopify catalog snapshot, not a supplier fulfillment guarantee. Supplier cost, shipping, and fees require separate verification."
+      });
+    } catch (error) {
+      console.error("SHOPIFY_CATALOG_AUDIT_ERROR", String(error?.message || error).slice(0, 180));
+      return res.status(502).json({ ok: false, connected: true, error: "Habitat could not complete the Shopify catalog audit. Retry after checking Render logs." });
+    }
+  });
   });
 }
