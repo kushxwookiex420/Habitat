@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 
 export const TIKTOK_REDIRECT_URI = "https://habitat-1-szzd.onrender.com/auth/tiktok/callback";
-export const TIKTOK_SCOPES = ["user.info.basic", "video.publish"];
+export const TIKTOK_SCOPES = ["user.info.basic", "video.upload", "video.publish"];
 
 const AUTH_URL = "https://www.tiktok.com/v2/auth/authorize/";
 const TOKEN_URL = "https://open.tiktokapis.com/v2/oauth/token/";
