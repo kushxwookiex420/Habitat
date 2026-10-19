@@ -197,7 +197,7 @@ export function registerShopifyOAuth(app, secretVault = null, { fetchImpl = fetc
       const response = await fetchImpl(`https://${shop}/admin/api/${API_VERSION}/graphql.json`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-Shopify-Access-Token": token.access_token },
-        body: JSON.stringify({ query: "query HabitatCatalogRead { products(first: 25, sortKey: UPDATED_AT, reverse: true) { edges { node { id title handle vendor status totalInventory featuredImage { url altText } priceRangeV2 { minVariantPrice { amount currencyCode } } } } pageInfo { hasNextPage endCursor } } }" }),
+        body: JSON.stringify({ query: "query HabitatCatalogRead($after: String) { products(first: 100, after: $after, sortKey: UPDATED_AT, reverse: true) { edges { node { id title handle vendor status totalInventory featuredImage { url altText } priceRangeV2 { minVariantPrice { amount currencyCode } } } } pageInfo { hasNextPage endCursor } } }", variables: { after: typeof req.query?.cursor === "string" && req.query.cursor.length <= 2048 ? req.query.cursor : null } }),
         signal: AbortSignal.timeout(20000)
       });
       const payload = await response.json().catch(() => ({}));
