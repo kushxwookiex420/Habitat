@@ -62,6 +62,10 @@ test("TikTok status reports durable connection state without exposing tokens or 
   assert.equal(status.connected, true);
   assert.equal(status.tokenStorage, "cloudflare-d1-aes-256-gcm");
   assert.deepEqual(status.scopes, ["user.info.basic", "video.upload"]);
+  assert.deepEqual(status.requiredScopes, TIKTOK_SCOPES);
+  assert.deepEqual(status.missingScopes, ["video.publish"]);
+  assert.equal(status.scopesReady, false);
+  assert.match(status.note, /missing required scopes.*video\.publish/i);
   const serialized = JSON.stringify(status);
   assert.ok(!serialized.includes("private-access-token"));
   assert.ok(!serialized.includes("private-client-secret"));
