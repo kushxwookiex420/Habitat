@@ -42,7 +42,7 @@ test("rejects missing product name or URL and insecure destinations", () => {
 
 test("fails closed when supplier economics are missing, stale, or below margin floor", () => {
   assert.throws(() => buildPromotionPlan(({...base, profitCheck: undefined})), /PROFIT_GATE_HOLD: verified supplier economics/);
-  assert.throws(() => buildPromotionPlan({...base, profitCheck: {...base.profitCheck, supplierCost: 23}}), /PROFIT_GATE_HOLD: estimated net margin/);
+  assert.throws(() => buildPromotionPlan({...base, profitCheck: {...base.profitCheck, supplierCost: 23}}), /PROFIT_GATE_HOLD: requires at least \$5\.00 estimated net profit and 20% net margin/);
   assert.throws(() => buildPromotionPlan({...base, profitCheck: {...base.profitCheck, sellingPrice: 12, supplierCost: 4, shippingCost: 3, otherPerOrderCosts: 0}}), /requires at least \$5\.00 estimated net profit/);
   assert.throws(() => buildPromotionPlan({...base, profitCheck: {...base.profitCheck, evidenceCheckedAt: "2020-01-01T00:00:00Z"}}), /evidence must be valid and no older than 7 days/);
 });
