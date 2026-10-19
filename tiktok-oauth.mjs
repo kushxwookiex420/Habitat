@@ -40,6 +40,10 @@ export function buildTikTokAuthorizationUrl({ clientKey, state, redirectUri = TI
 export function buildTikTokOAuthStatus({ clientKey, clientSecret, tokens, vaultReady }) {
   const credentialsConfigured = Boolean(String(clientKey || "").trim() && String(clientSecret || "").trim());
   const tokenPresent = Boolean(tokens?.access_token || String(process.env.TIKTOK_ACCESS_TOKEN || "").trim());
+  const grantedScopes = tokens?.scope ? String(tokens.scope).split(/[ ,]+/).filter(Boolean) : [];
+  const missingScopes = tokenPresent
+    ? TIKTOK_SCOPES.filter(scope => !grantedScopes.includes(scope))
+    : [];
   return {
     ok: true,
     configured: credentialsConfigured,
@@ -48,7 +52,10 @@ export function buildTikTokOAuthStatus({ clientKey, clientSecret, tokens, vaultR
     canConnect: credentialsConfigured && vaultReady === true,
     connected: tokenPresent,
     redirectUri: TIKTOK_REDIRECT_URI,
-    scopes: tokens?.scope ? String(tokens.scope).split(/[ ,]+/).filter(Boolean) : TIKTOK_SCOPES,
+    scopes: tokenPresent ? grantedScopes : TIKTOK_SCOPES,
+    requiredScopes: TIKTOK_SCOPES,
+    missingScopes,
+    scopesReady: tokenPresent && missingScopes.length === 0,
     tokenStorage: vaultReady === true ? "cloudflare-d1-aes-256-gcm" : tokenPresent ? "environment-only" : "unavailable",
     connectedAt: tokens?.connected_at || null,
     accessTokenExpiresAt: tokens?.access_token_expires_at ? Number(tokens.access_token_expires_at) : null,
@@ -56,9 +63,11 @@ export function buildTikTokOAuthStatus({ clientKey, clientSecret, tokens, vaultR
       ? "TikTok client credentials are missing."
       : vaultReady !== true
         ? "Durable encrypted token storage is unavailable; connect is disabled."
-        : tokenPresent
-          ? "A token is present. Run creator-info preflight before attempting to publish."
-          : "Ready to begin TikTok authorization; provider approval and account eligibility still apply."
+        : tokenPresent && missingScopes.length > 0
+          ? "The saved TikTok authorization is missing required scopes: " + missingScopes.join(", ") + ". Reconnect after enabling every required scope in TikTok Developer settings."
+          : tokenPresent
+            ? "All required scopes are granted. Run creator-info preflight before attempting to publish."
+            : "Ready to begin TikTok authorization; provider approval and account eligibility still apply."
   };
 }
 
