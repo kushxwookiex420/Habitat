@@ -32,3 +32,28 @@ test("catalog route requests 100 products and forwards pagination cursor",async(
   assert.equal(r.body.hasNextPage,true);
   assert.equal(r.body.endCursor,"next-cursor");
 });
+
+
+test("catalog audit paginates the full catalog and reports active inventory exceptions",async()=>{
+  const a=app(),v=vault();
+  await v.set("shopify_tokens:drop-pilot.myshopify.com",{shop:"drop-pilot.myshopify.com",access_token:"token",scope:"read_products"});
+  const cursors=[];
+  registerShopifyOAuth(a,v,{fetchImpl:async(url,options)=>{
+    const body=JSON.parse(options.body);
+    cursors.push(body.variables.after);
+    const second=body.variables.after==="cursor-2";
+    const nodes=second
+      ? [{id:"p3",title:"Out of stock",handle:"out-of-stock",vendor:"Supplier",status:"ACTIVE",totalInventory:0,priceRangeV2:{minVariantPrice:{amount:"12.00",currencyCode:"USD"}}}]
+      : [{id:"p1",title:"Available",handle:"available",vendor:"Supplier",status:"ACTIVE",totalInventory:3,priceRangeV2:{minVariantPrice:{amount:"20.00",currencyCode:"USD"}}},{id:"p2",title:"Draft",handle:"draft",vendor:"Supplier",status:"DRAFT",totalInventory:0,priceRangeV2:{minVariantPrice:{amount:"8.00",currencyCode:"USD"}}}];
+    return {ok:true,status:200,json:async()=>({data:{products:{edges:nodes.map(node=>({node})),pageInfo:{hasNextPage:!second,endCursor:second?"cursor-3":"cursor-2"}}}})};
+  }});
+  const r=response();
+  await a.routes.get("/shopify/audit")({query:{shop:"drop-pilot.myshopify.com"}},r);
+  assert.equal(r.statusCode,200);
+  assert.equal(r.body.complete,true);
+  assert.equal(r.body.totalProducts,3);
+  assert.deepEqual(r.body.counts,{active:2,draft:1,archived:0,other:0});
+  assert.equal(r.body.activeOutOfStockCount,1);
+  assert.equal(r.body.activeOutOfStock[0].id,"p3");
+  assert.deepEqual(cursors,[null,"cursor-2"]);
+});
