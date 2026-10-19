@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 
 export const SHOPIFY_REDIRECT_URI = "https://habitat-1-szzd.onrender.com/auth/shopify/callback";
-export const SHOPIFY_SCOPES = ["read_products"];
+export const SHOPIFY_SCOPES = ["read_products", "write_products", "read_orders", "read_inventory", "write_inventory"];
 const STATE_TTL_MS = 10 * 60 * 1000;
 const API_VERSION = "2026-07";
 
@@ -70,21 +70,29 @@ function queryFromRequest(req) {
 
 export function buildShopifyStatus({ clientId, clientSecret, token, vaultReady }) {
   const credentialsConfigured = Boolean(String(clientId || "").trim() && String(clientSecret || "").trim());
+  const connected = Boolean(token?.access_token && normalizeShopDomain(token?.shop));
+  const grantedScopes = token?.scope ? String(token.scope).split(/[ ,]+/).filter(Boolean) : [];
+  const missingScopes = connected ? SHOPIFY_SCOPES.filter(scope => !grantedScopes.includes(scope)) : [];
+  const scopesReady = connected && missingScopes.length === 0;
   return {
     ok: true,
     configured: credentialsConfigured,
     credentialsConfigured,
     durableStorageReady: vaultReady === true,
     canConnect: credentialsConfigured && vaultReady === true,
-    connected: Boolean(token?.access_token && normalizeShopDomain(token?.shop)),
+    connected,
     shop: token?.shop || null,
-    scopes: token?.scope ? String(token.scope).split(/[ ,]+/).filter(Boolean) : SHOPIFY_SCOPES,
+    scopes: grantedScopes,
+    requiredScopes: SHOPIFY_SCOPES,
+    missingScopes,
+    scopesReady,
     tokenStorage: vaultReady === true ? "cloudflare-d1-aes-256-gcm" : "unavailable",
     connectedAt: token?.connected_at || null,
     note: !credentialsConfigured ? "Shopify client credentials are missing."
       : vaultReady !== true ? "Durable encrypted token storage is unavailable."
-      : token?.access_token ? "Shopify token is stored. Run the product catalog test to verify access."
-      : "Ready to authorize a Shopify store."
+      : !connected ? "Ready to authorize a Shopify store."
+      : missingScopes.length ? "The saved Shopify authorization is missing required scopes: " + missingScopes.join(", ") + ". Enable these scopes in Shopify app settings, then reconnect Habitat."
+      : "Required Shopify scopes are granted. Run a live catalog and write-permission preflight before enabling autonomous edits."
   };
 }
 
