@@ -10,6 +10,7 @@ import { registerProductDemoRenderer } from "./product-demo-renderer.mjs";
 import { createD1ContentJobRepository } from "./d1-content-job-repository.mjs";
 import { createD1SecretVault } from "./d1-secret-vault.mjs";
 import { registerTikTokOAuth } from "./tiktok-oauth.mjs";
+import { registerShopifyOAuth } from "./shopify-oauth.mjs";
 import { registerPublicPages } from "./public-pages.mjs";
 import { readFile } from "node:fs/promises";
 
@@ -1821,6 +1822,7 @@ const secretVault = secretVaultConfigured ? createD1SecretVault({
   encryptionKey: tokenEncryptionKey
 }) : null;
 registerTikTokOAuth(app, secretVault);
+registerShopifyOAuth(app, secretVault);
 const contentEngine = registerContentEngine(app, { nowIso, makeTaskId, taskStore, workerRegistry, brainChat, contentJobRepository, secretVault, getDispatchLeaseRepository: () => dispatchLeaseReady ? dispatchLeaseRepository : null });
 
 /*
