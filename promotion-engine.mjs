@@ -100,8 +100,10 @@ export function buildPromotionPlan(input = {}) {
   const estimatedFees = economics.sellingPrice * (economics.platformFeeRate + economics.paymentFeeRate);
   const estimatedNetProfit = economics.sellingPrice - economics.supplierCost - economics.shippingCost - economics.otherPerOrderCosts - estimatedFees;
   const estimatedNetMargin = estimatedNetProfit / economics.sellingPrice;
-  if (estimatedNetProfit <= 0 || estimatedNetMargin < 0.20) {
-    throw new Error("PROFIT_GATE_HOLD: estimated net margin must be at least 20%; calculated " +
+  const minimumNetProfit = 5;
+  if (estimatedNetProfit < minimumNetProfit || estimatedNetMargin < 0.20) {
+    throw new Error("PROFIT_GATE_HOLD: requires at least $" + minimumNetProfit.toFixed(2) +
+      " estimated net profit and 20% net margin; calculated " +
       (estimatedNetMargin * 100).toFixed(1) + "% and $" + estimatedNetProfit.toFixed(2) + " per order");
   }
   const category = clean(input.category, 80);
