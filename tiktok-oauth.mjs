@@ -98,6 +98,48 @@ export function registerTikTokOAuth(app, secretVault = null) {
     }
   });
 
+  app.get("/auth/tiktok/profile", async (_req, res) => {
+    if (!vaultReady) return res.status(503).json({ ok:false, error:"Encrypted TikTok token storage is unavailable." });
+    try {
+      const tokens = await secretVault.get("tiktok_tokens");
+      const token = String(tokens?.access_token || process.env.TIKTOK_ACCESS_TOKEN || "").trim();
+      if (!token) return res.status(401).json({ ok:false, error:"TikTok is not connected." });
+      const grantedScopes = String(tokens?.scope || "").split(/[ ,]+/).filter(Boolean);
+      if (!grantedScopes.includes("user.info.basic")) {
+        return res.status(403).json({ ok:false, error:"The saved TikTok authorization is missing user.info.basic. Reconnect after enabling that scope.", missingScope:"user.info.basic" });
+      }
+      const fields = "open_id,display_name,avatar_url";
+      const response = await fetch("https://open.tiktokapis.com/v2/user/info/?fields=" + encodeURIComponent(fields), {
+        method: "GET",
+        headers: { "Authorization": "Bearer " + token }
+      });
+      const raw = await response.text();
+      let payload = {};
+      try { payload = JSON.parse(raw); } catch {}
+      if (!response.ok || (payload?.error?.code && payload.error.code !== "ok")) {
+        const errorCode = payload?.error?.code || "http_error";
+        return res.status(response.status >= 400 ? response.status : 502).json({
+          ok:false,
+          error:"TikTok profile lookup failed",
+          code:errorCode,
+          detail:String(payload?.error?.message || raw || response.statusText).slice(0, 300)
+        });
+      }
+      const data = payload?.data?.user || {};
+      return res.json({
+        ok:true,
+        profile: {
+          displayName: data.display_name || null,
+          avatarUrl: data.avatar_url || null
+        },
+        scopeUsed:"user.info.basic"
+      });
+    } catch (error) {
+      console.error("TIKTOK_PROFILE_LOOKUP_FAILED", String(error?.message || error));
+      return res.status(502).json({ ok:false, error:"TikTok profile lookup failed. Check the live server logs." });
+    }
+  });
+
   app.get("/auth/tiktok", async (req, res) => {
     const clientKey = String(process.env.TIKTOK_CLIENT_KEY || "").trim();
     const clientSecret = String(process.env.TIKTOK_CLIENT_SECRET || "").trim();
