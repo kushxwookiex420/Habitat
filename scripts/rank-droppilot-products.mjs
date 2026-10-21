@@ -15,6 +15,7 @@
  *   "products": [{
  *     "shopifyProductId": "gid://shopify/Product/...",
  *     "supplierCost": 8.50,
+ *     "supplierStockQuantity": 25,
  *     "shippingCost": 2.00,
  *     "platformFeeRate": 0.08,
  *     "paymentFeeRate": 0.03,
@@ -104,12 +105,13 @@ export function evaluateProduct(product, enrichment) {
     };
   }
   const price = Number(product.minVariantPrice);
-  const costFields = ["supplierCost", "shippingCost", "otherPerOrderCosts"];
+  const costFields = ["supplierCost", "supplierStockQuantity", "shippingCost", "otherPerOrderCosts"];
   const missing = [];
   if (!Number.isFinite(price) || price <= 0) missing.push("verified selling price");
   for (const key of costFields) {
     if (!finite(enrichment?.[key]) || enrichment[key] < 0) missing.push(key);
   }
+  if (finite(enrichment?.supplierStockQuantity) && enrichment.supplierStockQuantity <= 0) missing.push("supplierStockQuantity (must be greater than zero)");
   for (const key of ["platformFeeRate", "paymentFeeRate"]) {
     if (!finite(enrichment?.[key]) || enrichment[key] < 0 || enrichment[key] >= 1) missing.push(key);
   }
@@ -146,7 +148,7 @@ export function evaluateProduct(product, enrichment) {
   const profit = price - totalCost;
   const marginPercent = (profit / price) * 100;
   const inventory = Number(product.totalInventory);
-  const inStock = Number.isFinite(inventory) && inventory > 0;
+  const inStock = Number.isFinite(inventory) && inventory > 0 && enrichment.supplierStockQuantity > 0;
   // A weighted prioritization score, not a prediction of sales.
   const qualityScore =
     enrichment.demandScore * 0.35 +
@@ -161,6 +163,7 @@ export function evaluateProduct(product, enrichment) {
     eligibleForRanking: true,
     missing: [],
     supplierCost: money(enrichment.supplierCost),
+    supplierStockQuantity: enrichment.supplierStockQuantity,
     shippingCost: money(enrichment.shippingCost),
     platformFees: money(platformFees),
     paymentFees: money(paymentFees),
@@ -192,6 +195,7 @@ export function evaluateProductVariants(product, enrichment) {
       title: variant.title ?? "Default variant",
       price: Number.isFinite(price) ? price : null,
       supplierCost: finite(variant.supplierCost) ? money(variant.supplierCost) : null,
+      supplierStockQuantity: finite(variant.supplierStockQuantity) ? variant.supplierStockQuantity : null,
       inventorySnapshot: Number.isFinite(inventory) ? inventory : null,
       availableForSale,
       inventoryPolicy: variant.inventoryPolicy ?? null
@@ -209,7 +213,9 @@ export function evaluateProductVariants(product, enrichment) {
     const mergedEvidence = {
       ...(enrichment ?? {}),
       ...(variantEvidence ?? {}),
-      supplierCost: variantEvidence?.supplierCost ?? variant.supplierCost ?? enrichment?.supplierCost
+      supplierCost: variantEvidence?.supplierCost ?? variant.supplierCost ?? enrichment?.supplierCost,
+      // Supplier availability must be evidenced per variant; Shopify inventory is not supplier stock.
+      supplierStockQuantity: variantEvidence?.supplierStockQuantity
     };
     const result = evaluateProduct({
       ...product,
