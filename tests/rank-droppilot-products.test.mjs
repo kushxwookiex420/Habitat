@@ -12,6 +12,7 @@ const product = {
   minVariantPrice: "40.00"
 };
 const evidence = {
+  verified: true,
   supplierCost: 10,
   supplierStockQuantity: 25,
   shippingCost: 3,
@@ -29,6 +30,20 @@ test("normalizes broad catalog categories without pretending unknown categories 
   assert.equal(normalizeCategory("Clear stackable storage drawers", ""), "home_storage");
   assert.equal(normalizeCategory("Silicone kitchen strainer", ""), "kitchen");
   assert.equal(normalizeCategory("Mystery item xyz", ""), "other_review_required");
+});
+
+test("holds apparently complete economics unless supplier evidence is explicitly verified", () => {
+  const result = evaluateProduct(product, { ...evidence, verified: false });
+  assert.equal(result.eligibleForRanking, false);
+  assert.equal(result.decision, "HOLD_FOR_EVIDENCE");
+  assert.ok(result.missing.includes("verified supplier economics (verified: true)"));
+});
+
+test("rejects non-HTTPS supplier evidence URLs", () => {
+  const result = evaluateProduct(product, { ...evidence, evidenceUrl: "http://supplier.example/quote" });
+  assert.equal(result.eligibleForRanking, false);
+  assert.equal(result.decision, "HOLD_FOR_EVIDENCE");
+  assert.ok(result.missing.includes("evidenceUrl (HTTPS source required)"));
 });
 
 test("holds products when supplier costs and evidence are missing", () => {
