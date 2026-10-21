@@ -17,6 +17,7 @@
  */
 import fs from "node:fs/promises";
 import path from "node:path";
+import { normalizeShopifyStoreDomain, validateShopifyApiVersion } from "../shopify-store-domain.mjs";
 
 function arg(name, fallback) {
   const i = process.argv.indexOf(name);
@@ -25,16 +26,20 @@ function arg(name, fallback) {
 
 const rawDomain = process.env.SHOPIFY_STORE_DOMAIN?.trim();
 const token = process.env.SHOPIFY_ADMIN_ACCESS_TOKEN?.trim();
-const apiVersion = process.env.SHOPIFY_API_VERSION?.trim() || "2026-07";
+const rawApiVersion = process.env.SHOPIFY_API_VERSION?.trim() || "2026-07";
 const outputPath = arg("--out", "data/droppilot-active-product-video-manifest.json");
 
 if (!rawDomain || !token) {
   console.error("Catalog refresh requires SHOPIFY_STORE_DOMAIN and SHOPIFY_ADMIN_ACCESS_TOKEN. No catalog file was changed.");
   process.exit(2);
 }
-const domain = rawDomain.replace(/^https?:\/\//i, "").replace(/\/$/, "");
-if (!/^[a-zA-Z0-9.-]+$/.test(domain)) {
-  console.error("SHOPIFY_STORE_DOMAIN must be a Shopify hostname, without a path. No catalog file was changed.");
+let domain;
+let apiVersion;
+try {
+  domain = normalizeShopifyStoreDomain(rawDomain);
+  apiVersion = validateShopifyApiVersion(rawApiVersion);
+} catch (error) {
+  console.error(String(error?.message || error));
   process.exit(2);
 }
 
