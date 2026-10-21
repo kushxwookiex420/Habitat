@@ -23,6 +23,11 @@
  *     "demandScore": 0-100,
  *     "demoScore": 0-100,
  *     "supplierReliabilityScore": 0-100,
+ *     "variants": [{
+ *       "shopifyVariantId": "gid://shopify/ProductVariant/...",
+ *       "supplierCost": 8.50,
+ *       "supplierStockQuantity": 25
+ *     }],
  *     "evidenceUrl": "https://...",
  *     "evidenceCheckedAt": "ISO-8601 timestamp"
  *   }]
