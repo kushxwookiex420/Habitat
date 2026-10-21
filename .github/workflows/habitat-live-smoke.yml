@@ -28,6 +28,16 @@ jobs:
         run: |
           set -euo pipefail
           BASE="https://habitat-1-szzd.onrender.com"
+          # TikTok app-review prerequisite: verify the external-facing site and
+          # its legal/support pages are reachable, not just the OAuth endpoints.
+          for path in / /features /workflow /demo /terms /privacy /support; do
+            code="$(curl --silent --show-error --connect-timeout 10 --max-time 30 -o /tmp/public-page.html -w '%{http_code}' "$BASE$path" || true)"
+            if [[ "$code" != "200" || ! -s /tmp/public-page.html ]]; then
+              echo "FAIL public page $path HTTP ${code:-network_error}"
+              exit 1
+            fi
+            echo "PASS public page $path HTTP $code"
+          done
           wait_json() {
             local path="$1"
             local output="/tmp/response.json"
