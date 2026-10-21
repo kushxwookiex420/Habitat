@@ -149,15 +149,33 @@ if len(lines)!=6 or any(len(line.strip())<8 for line in lines):
  raise RuntimeError("Dynamic scene plan must contain six meaningful narration segments")
 async def main():
     parts=[]
+    # Edge TTS can intermittently return NoAudioReceived for one voice/session.
+    # Retry transient failures and fall back across English voices rather than
+    # aborting the entire render on the first provider hiccup.
+    voices=["en-US-AndrewNeural","en-US-BrianNeural","en-US-GuyNeural","en-US-AriaNeural"]
     for i,line in enumerate(lines,1):
         path=os.path.join(root,f"voice{i}.mp3")
-        communicate=edge_tts.Communicate(line, "en-US-AndrewNeural", rate="-5%", volume="+0%", pitch="+0Hz")
-        await communicate.save(path)
-        if not os.path.exists(path) or os.path.getsize(path)<1000:
-            raise RuntimeError(f"Neural narration chunk {i} is missing or too small")
+        last_error=None
+        for attempt in range(1,9):
+            voice=voices[(attempt-1)//2]
+            try:
+                if os.path.exists(path): os.remove(path)
+                communicate=edge_tts.Communicate(line, voice, rate="-5%", volume="+0%", pitch="+0Hz")
+                await communicate.save(path)
+                if not os.path.exists(path) or os.path.getsize(path)<1000:
+                    raise RuntimeError(f"voice output missing or too small ({os.path.getsize(path) if os.path.exists(path) else 0} bytes)")
+                last_error=None
+                print(f"NARRATION_OK chunk={i} voice={voice} attempt={attempt} bytes={os.path.getsize(path)}",flush=True)
+                break
+            except Exception as exc:
+                last_error=exc
+                print(f"NARRATION_RETRY chunk={i} voice={voice} attempt={attempt} error={type(exc).__name__}: {str(exc)[:180]}",flush=True)
+                await asyncio.sleep(min(2*attempt,10))
+        if last_error is not None:
+            raise RuntimeError(f"Neural narration failed for chunk {i} after 8 attempts across four voices: {type(last_error).__name__}: {last_error}") from last_error
         parts.append(path)
     with open(os.path.join(root,"voice.txt"),"w") as f:
-        for p in parts: f.write("file '"+p.replace("'","'\\''")+"\n")
+        for p in parts: f.write("file '"+p.replace("'","'\\\\''")+"\\n")
 asyncio.run(main())
 PY
 ffmpeg -hide_banner -loglevel error -y -f concat -safe 0 -i "$TMP/voice.txt" -ac 2 -ar 48000 "$TMP/voice.mp3"
