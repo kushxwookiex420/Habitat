@@ -160,7 +160,10 @@ const RELEVANCE_STOP_WORDS = new Set([
   "how", "use", "watch", "best", "new", "the", "and", "for", "with", "from", "pack",
   "set", "your", "this", "that", "store", "shop", "online", "buy", "sale", "brand", "container", "storage", "box", "organizer", "organizers", "bin", "tray", "rack", "accessory", "accessories", "tool", "tools", "kit", "kits", "piece", "pieces", "pcs",
   // Generic words that caused unrelated content (e.g. lawn-care guides) to match products.
-  "make", "care", "skin", "cleaning", "cloth", "nursing", "complete", "guide", "grass", "thicker", "fuller"
+  "make", "care", "skin", "cleaning", "cloth", "nursing", "complete", "guide", "grass", "thicker", "fuller",
+  // Broad vehicle/pet terms must not make generic publishers look product-specific.
+  "car", "cars", "auto", "automobile", "automobiles", "vehicle", "vehicles", "driver", "drivers",
+  "seat", "seats", "rear", "back", "interior", "pet", "pets", "dog", "dogs", "cat", "cats"
 ]);
 
 function normalizeRelevanceToken(token) {
@@ -228,7 +231,9 @@ export function registerProductDemoResearch(app) {
           const host = hostOf(row.url);
           const officialOrSupplier = /manufacturer|official|supplier|wholesale/i.test(row.title + " " + host) ||
             (supplierUrl && host && host === hostOf(supplierUrl));
-          const videoSignal = /video|watch|demo|demonstrat|how.to|review|youtube|vimeo|tiktok|mp4/i.test(row.title + " " + row.url + " " + row.snippet);
+          const videoSignal = /\\b(?:video|watch|demo|demonstrat|how[\\s-]?to|youtube|vimeo|tiktok|mp4)\\b/i.test(row.title + " " + row.url + " " + row.snippet) ||
+            /(?:youtube\\.com|youtu\\.be|vimeo\\.com|tiktok\\.com)\\//i.test(row.url) ||
+            /\\/(?:video|videos|watch|reel|shorts?)(?:\\/|\\?|#|$)/i.test(new URL(row.url).pathname + new URL(row.url).search);
           const directVideo = /\.(?:mp4|webm|mov)(?:[?#]|$)/i.test(row.url);
           candidates.push({
             ...row, host, query: queries[i],
