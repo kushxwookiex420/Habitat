@@ -175,7 +175,7 @@ export function registerShopifyOAuth(app, secretVault = null, { fetchImpl = fetc
       const bundle = {
         shop,
         access_token: String(payload.access_token),
-        scope: String(payload.scope || SHOPIFY_SCOPES.join(",")),
+        scope: String(payload.scope || ""),
         expires_in: payload.expires_in ? Number(payload.expires_in) : null,
         refresh_token: payload.refresh_token ? String(payload.refresh_token) : null,
         refresh_token_expires_in: payload.refresh_token_expires_in ? Number(payload.refresh_token_expires_in) : null,
