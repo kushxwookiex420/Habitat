@@ -23,6 +23,7 @@
  *     "demandScore": 0-100,
  *     "demoScore": 0-100,
  *     "supplierReliabilityScore": 0-100,
+ *     "verified": true, // only after manually confirming the supplier quote and economics
  *     "variants": [{
  *       "shopifyVariantId": "gid://shopify/ProductVariant/...",
  *       "supplierCost": 8.50,
