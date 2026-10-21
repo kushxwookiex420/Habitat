@@ -105,6 +105,29 @@ test("TikTok callback rejects missing or mismatched OAuth state before token exc
   assert.match(String(res.body), /state check failed/i);
 });
 
+test("TikTok callback preserves missing granted scopes instead of assuming requested scopes were granted", async () => {
+  const oldKey=process.env.TIKTOK_CLIENT_KEY,oldSecret=process.env.TIKTOK_CLIENT_SECRET;
+  process.env.TIKTOK_CLIENT_KEY="test-client-key";process.env.TIKTOK_CLIENT_SECRET="test-client-secret";
+  try {
+    const app=fakeApp(),vault=fakeVault(),state="scope-state";
+    await vault.set("tiktok_oauth_state:"+state,{state,expiresAt:Date.now()+60000});
+    registerTikTokOAuth(app,vault);
+    const originalFetch=globalThis.fetch;
+    globalThis.fetch=async()=>({ok:true,status:200,json:async()=>({access_token:"private-access-token",refresh_token:"refresh",expires_in:3600})});
+    try {
+      const res=fakeResponse();
+      await app.routes.get("/auth/tiktok/callback")({headers:{cookie:"habitat_tiktok_state="+state},query:{code:"valid-code",state}},res);
+      assert.equal(res.statusCode,200);
+      const saved=await vault.get("tiktok_tokens");
+      assert.equal(saved.scope,"");
+      const status=buildTikTokOAuthStatus({clientKey:"test-client-key",clientSecret:"test-client-secret",tokens:saved,vaultReady:true});
+      assert.equal(status.connected,true);
+      assert.equal(status.scopesReady,false);
+      assert.deepEqual(status.missingScopes,TIKTOK_SCOPES);
+    } finally {globalThis.fetch=originalFetch;}
+  } finally {if(oldKey===undefined)delete process.env.TIKTOK_CLIENT_KEY;else process.env.TIKTOK_CLIENT_KEY=oldKey;if(oldSecret===undefined)delete process.env.TIKTOK_CLIENT_SECRET;else process.env.TIKTOK_CLIENT_SECRET=oldSecret;}
+});
+
 test("TikTok profile verification fails closed when the basic profile scope is absent", async () => {
   const app = fakeApp();
   const vault = fakeVault();
