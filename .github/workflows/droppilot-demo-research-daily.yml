@@ -103,7 +103,6 @@ jobs:
           pattern: DropPilot-Daily-Demo-Research-Batch-*
           path: dist/research
           merge-multiple: false
-          if-no-artifact-found: warn
       - name: Aggregate product-level research evidence
         run: node scripts/aggregate-droppilot-demo-research.mjs
       - name: Upload consolidated review report
