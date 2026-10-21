@@ -227,3 +227,24 @@ Build Habitat into a dependable Android-first AI control center for DropPilot AI
 - Shopify order #1001 is marked PAID for $12.37 total: $6.88 product subtotal plus $5.49 shipping. It remains UNFULFILLED, and its Shopify `fulfillmentOrders` connection returned zero records. No fulfillment or tracking record was found through the checked APIs. This means supplier shipment is not verified; do not count this as fulfilled or realized profit. Follow up in Shopify Collective / V.I.P Digital Presence to confirm whether a fulfillment request is accepted and tracking is issued.
 - The historical order price of $6.88 differs from the current $20.88 variant listing. Preserve the historical order; do not assume repricing changes an existing order. Actual supplier cost, supplier shipping charged to the merchant, marketplace/payment fees, payout, and net profit are still unknown. Do not label the order profitable without these values.
 - No order, price, inventory, refund, or fulfillment mutations were made during this check. Customer-identifying information is intentionally excluded from this checkpoint.
+
+
+## Verified checkpoint — 2026-10-21 00:50 UTC
+
+- Current main commit `cb52ef9c39d3a5b81bd41cb8ebc88d9b07f29084` fixes FFmpeg concat-manifest newline/escaping in `scripts/render-artifact-001.sh`; Render deployment `dep-dbc0kbu7bikc73fh2770` is confirmed `live` at `https://habitat-1-szzd.onrender.com`.
+- The latest Render build ran `npm test`: 136 passed, 0 failed. Build output also reports zero npm audit vulnerabilities for the installed dependency set at that build time.
+- Startup logs confirm D1 task storage restored 5 task records, D1 content storage restored 84 jobs, the cross-instance D1 dispatch lease guard is ready, and the encrypted D1 TikTok token vault initialized. These prove infrastructure initialization, not that the TikTok account is authorized.
+- Logs confirm OpenRouter runtime-key authorization passed and a real Groq inference succeeded during a content-job research stage. The service also received content job, research, script, and render-plan requests. No completed MP4, visual QA pass, or published post was verified in these logs.
+- The in-process scheduler explicitly remains disabled; Render says to use the external GitHub Actions scheduler so work survives free-instance sleep. A reliable scheduled publish workflow is not proven by the live service alone.
+- Product-demo renderer reports its hard requirements in source: direct HTTPS video files, confirmed commercial reuse permission for every source, at least two distinct real product actions, machine visual QA, human action review, and user approval before publishing. Generic B-roll or a slideshow cannot pass as a product demo.
+- Shopify analytics for the last 30 days returned 70 sessions, 3 cart additions, 2 checkout starts, 1 completed checkout, and 1.43% conversion. Sales analytics report one order but $0 total sales after a -$12.37 reversal; fulfillment analytics report 0 fulfilled, shipped, or delivered orders. Do not count the historical refunded PawCharm order as profit.
+- Shopify active zero-inventory search returned no active products; one known zero-stock kitchen sink holder was moved to Draft and verified. No additional low-stock products were changed without supplier verification.
+- TikTok production authorization, creator preflight, a completed rendering QA run, and a successful public post remain unverified. No product/video was published in this pass. Keep all publishing approval-gated.
+
+## Next actions
+
+1. Use the configured GitHub Actions workflow to run the manual Artifact 001 render, then inspect its output artifact and visual QA results; do not publish it.
+2. Inspect the external scheduler workflow and its latest run to confirm it actually triggers the required job endpoint and reports errors honestly; the Render in-process scheduler is intentionally disabled.
+3. Complete the Shopify app install/reauthorization with the declared scopes (`read_products`, `write_products`, `read_orders`, `read_inventory`, `write_inventory`) only through the authorized Shopify UI, then verify the callback and actual write/read behavior.
+4. Complete TikTok production app scope/site review and creator OAuth/preflight in the user-controlled UI. Do not treat a configured encrypted token vault as connected authorization.
+5. Verify product-specific commercial-use rights and supplier cost/shipping/platform fees before promoting any product; require at least $5 estimated net profit and 20% net margin as previously defined.
