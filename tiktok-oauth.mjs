@@ -52,7 +52,7 @@ export function buildTikTokOAuthStatus({ clientKey, clientSecret, tokens, vaultR
     canConnect: credentialsConfigured && vaultReady === true,
     connected: tokenPresent,
     redirectUri: TIKTOK_REDIRECT_URI,
-    scopes: tokenPresent ? grantedScopes : TIKTOK_SCOPES,
+    scopes: grantedScopes,
     requiredScopes: TIKTOK_SCOPES,
     missingScopes,
     scopesReady: tokenPresent && missingScopes.length === 0,
