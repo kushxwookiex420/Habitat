@@ -26,7 +26,7 @@ jobs:
         with:
           name: DropPilot-Car-Seat-Organizer-First-Product-Video
           path: |
-            dist/dropilot-hoto-first-look.mp4
+            dist/droppilot-car-seat-organizer-first-look.mp4
             dist/droppilot-car-seat-organizer-first-look-probe.json
           if-no-files-found: error
           retention-days: 14
