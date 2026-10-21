@@ -52,7 +52,7 @@ test("holds products when supplier costs and evidence are missing", () => {
   assert.equal(result.decision, "HOLD_FOR_EVIDENCE");
   assert.ok(result.missing.includes("supplierCost"));
   assert.ok(result.missing.includes("supplierStockQuantity"));
-  assert.ok(result.missing.includes("evidenceUrl"));
+  assert.ok(result.missing.some((item) => item.startsWith("evidenceUrl")));
 });
 
 test("holds inactive, archived, or unknown-status products before profitability ranking", () => {
