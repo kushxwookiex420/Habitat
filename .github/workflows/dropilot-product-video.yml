@@ -21,6 +21,18 @@ jobs:
           sudo apt-get install -y ffmpeg
       - name: Render first DropPilot product video
         run: bash scripts/render-dropilot-product-video.sh dist/droppilot-car-seat-organizer-first-look.mp4
+      - name: Verify review package contains the rendered video
+        run: |
+          set -euo pipefail
+          video=dist/droppilot-car-seat-organizer-first-look.mp4
+          probe=dist/droppilot-car-seat-organizer-first-look-probe.json
+          test -s "$video"
+          test -s "$probe"
+          bytes=$(stat -c%s "$video")
+          test "$bytes" -gt 100000
+          ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=s=x:p=0 "$video" | grep -qx '1080x1920'
+          ffprobe -v error -select_streams a:0 -show_entries stream=codec_type -of csv=p=0 "$video" | grep -qx 'audio'
+          echo "Verified video artifact: $bytes bytes, 1080x1920 with audio"
       - name: Upload review package
         uses: actions/upload-artifact@v4
         with:
