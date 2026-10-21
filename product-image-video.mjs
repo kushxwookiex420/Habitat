@@ -145,10 +145,10 @@ export function registerProductImageVideo(app) {
       const outputPath = path.join(dir, "droppilot-product-picture-video.mp4");
       const filter = [
         "scale=920:1120:force_original_aspect_ratio=decrease",
-        "pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=#0b1026",
-        "zoompan=z='min(zoom+0.00022,1.08)':d=360:s=1080x1920:fps=30",
-        "drawbox=x=0:y=0:w=iw:h=310:color=#07101f@0.78:t=fill",
-        "drawbox=x=0:y=ih-390:w=iw:h=390:color=#07101f@0.82:t=fill",
+        "pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=0x0b1026",
+        "zoompan=z='min(zoom+0.00022,1.08)':d=1:s=1080x1920:fps=30",
+        "drawbox=x=0:y=0:w=iw:h=310:color=0x07101f@0.78:t=fill",
+        "drawbox=x=0:y=ih-390:w=iw:h=390:color=0x07101f@0.82:t=fill",
         "drawtext=fontfile=" + DEJAVU_BOLD + ":textfile=" + brandPath + ":fontcolor=#62f5e7:fontsize=34:x=(w-text_w)/2:y=80",
         "drawtext=fontfile=" + DEJAVU_BOLD + ":textfile=" + titlePath + ":fontcolor=white:fontsize=48:line_spacing=8:box=1:boxcolor=black@0.0:boxborderw=10:x=(w-text_w)/2:y=145",
         ...(price ? ["drawtext=fontfile=" + DEJAVU_BOLD + ":textfile=" + pricePath + ":fontcolor=#62f5e7:fontsize=54:x=(w-text_w)/2:y=h-330"] : []),
