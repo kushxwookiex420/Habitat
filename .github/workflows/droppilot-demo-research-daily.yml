@@ -85,3 +85,33 @@ jobs:
           path: dist/droppilot-demo-research-batch.json
           if-no-files-found: warn
           retention-days: 30
+
+  aggregate:
+    name: Combine research batches into one review report
+    if: always()
+    needs: research
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Download research artifacts from this run
+        uses: actions/download-artifact@v4
+        with:
+          pattern: DropPilot-Daily-Demo-Research-Batch-*
+          path: dist/research
+          merge-multiple: false
+      - name: Aggregate product-level research evidence
+        run: node scripts/aggregate-droppilot-demo-research.mjs
+      - name: Upload consolidated review report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: DropPilot-Daily-Demo-Research-Aggregate
+          path: |
+            dist/droppilot-demo-research-aggregate.json
+            dist/droppilot-demo-research-aggregate.md
+          if-no-files-found: warn
+          retention-days: 30
