@@ -128,7 +128,8 @@ export function registerProductImageVideo(app) {
         chunks.push(Buffer.from(value));
       }
       if (bytes < 512) throw new Error("The product image is empty or too small.");
-      const imagePath = path.join(dir, "catalog-image");
+      const imageExtension = contentType === "image/png" ? ".png" : contentType === "image/webp" ? ".webp" : ".jpg";
+      const imagePath = path.join(dir, "catalog-image" + imageExtension);
       await fs.writeFile(imagePath, Buffer.concat(chunks));
       await execFileAsync(ffprobePath, ["-v", "error", "-select_streams", "v:0", "-show_entries", "stream=codec_type", "-of", "csv=p=0", imagePath], { timeout: 12000 });
 
