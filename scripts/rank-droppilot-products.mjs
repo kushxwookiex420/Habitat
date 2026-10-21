@@ -123,7 +123,10 @@ export function evaluateProduct(product, enrichment) {
   for (const key of ["demandScore", "demoScore", "supplierReliabilityScore"]) {
     if (!boundedScore(enrichment?.[key])) missing.push(key + " (0-100)");
   }
-  if (!enrichment?.evidenceUrl || !/^https?:\/\//i.test(enrichment.evidenceUrl)) missing.push("evidenceUrl");
+  // A URL and timestamp alone do not prove that anyone checked the supplier quote.
+  // Require an explicit verification attestation before economics can pass the gate.
+  if (enrichment?.verified !== true) missing.push("verified supplier economics (verified: true)");
+  if (!enrichment?.evidenceUrl || !/^https:\/\//i.test(enrichment.evidenceUrl)) missing.push("evidenceUrl (HTTPS source required)");
   const evidenceTime = Date.parse(enrichment?.evidenceCheckedAt ?? "");
   if (!enrichment?.evidenceCheckedAt || !Number.isFinite(evidenceTime)) {
     missing.push("evidenceCheckedAt");
