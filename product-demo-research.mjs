@@ -158,7 +158,9 @@ export function buildResearchQueries({ productName, brand = "", model = "" }) {
 const RELEVANCE_STOP_WORDS = new Set([
   "product", "products", "video", "videos", "official", "review", "demo", "demonstration",
   "how", "use", "watch", "best", "new", "the", "and", "for", "with", "from", "pack",
-  "set", "your", "this", "that", "store", "shop", "online", "buy", "sale", "brand", "container", "storage", "box", "organizer", "organizers", "bin", "tray", "rack", "accessory", "accessories", "tool", "tools", "kit", "kits", "piece", "pieces", "pcs"
+  "set", "your", "this", "that", "store", "shop", "online", "buy", "sale", "brand", "container", "storage", "box", "organizer", "organizers", "bin", "tray", "rack", "accessory", "accessories", "tool", "tools", "kit", "kits", "piece", "pieces", "pcs",
+  // Generic words that caused unrelated content (e.g. lawn-care guides) to match products.
+  "make", "care", "skin", "cleaning", "cloth", "nursing", "complete", "guide", "grass", "thicker", "fuller"
 ]);
 
 function normalizeRelevanceToken(token) {
