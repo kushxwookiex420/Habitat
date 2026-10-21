@@ -1,18 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-OUT="${1:-dist/dropilot-hoto-first-look.mp4}"
+OUT="${1:-dist/droppilot-car-seat-organizer-first-look.mp4}"
 mkdir -p "$(dirname "$OUT")" work
-IMAGE_URL="${PRODUCT_IMAGE_URL:-https://cdn.shopify.com/s/files/1/0973/7784/5535/files/HOTO-Autocare_Air-Duster-Vacuum-Main-New.png?v=1791518851}"
+IMAGE_URL="${PRODUCT_IMAGE_URL:-https://cdn.shopify.com/s/files/1/0973/7784/5535/files/car-organizer-storage-car-seat-slit-gap-pocket-multifunctional-driver-seat-catcher-cup-holder-car-accessories-pu-leather-car-seat-gap-organizer-universal-fit-storage-pockets-adjust-se_20fb261b-c662-49c9-ae24-654ee4413e01.jpg?v=1789937015}"
 curl -fL --retry 3 --connect-timeout 15 "$IMAGE_URL" -o work/product.png
 file work/product.png | grep -E 'PNG image|JPEG image|Web/P image' >/dev/null || { echo "Product image download is not a recognizable image"; exit 1; }
 
 # Original informational ad: product hero + captions. No simulated demonstration,
 # fabricated customer claims, or unverified performance promises.
-say1='Crumbs hiding in your car interior? Take a look at the HOTO AutoCare Air Duster and Vacuum.'
-say2='The listing describes a compact cleanup tool for car interiors and everyday dusty surfaces.'
-say3='Check the product page for the current price, specifications, attachments, availability, and shipping.'
-say4='Want the details? Tap the product link to check the HOTO AutoCare listing.'
+say1='Need a little more organization between the seat and console? Take a look at this universal car seat gap organizer.'
+say2='The listing presents a storage pocket designed for the gap beside a car seat. This video shows the listing image, not a hands-on test.'
+say3='Check the product page for current price, fit details, color options, availability, and shipping.'
+say4='Want the details? Tap the product link to review the organizer listing before you buy.'
 
 tts() {
   local text="$1" output="$2"
@@ -48,9 +48,9 @@ ffmpeg -hide_banner -loglevel error -y \
 [bg][product]overlay=(W-w)/2:360:shortest=1,
 drawbox=x=44:y=72:w=992:h=250:color=black@0.60:t=fill,
 drawbox=x=44:y=1470:w=992:h=340:color=black@0.68:t=fill,
-drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:text='CRUMBS IN HARD-TO-REACH SPOTS?':fontcolor=white:fontsize=48:line_spacing=8:x=(w-text_w)/2:y=116:enable='between(t,0,${T1})',
-drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:text='A CLOSER LOOK AT HOTO AUTOCARE':fontcolor=white:fontsize=43:x=(w-text_w)/2:y=166:enable='between(t,${T1},${T2})',
-drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:text='CHECK THE SPECS + ATTACHMENTS':fontcolor=white:fontsize=42:x=(w-text_w)/2:y=166:enable='between(t,${T2},${T3})',
+drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:text='NEED MORE IN-CAR STORAGE?':fontcolor=white:fontsize=48:line_spacing=8:x=(w-text_w)/2:y=116:enable='between(t,0,${T1})',
+drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:text='UNIVERSAL CAR SEAT GAP ORGANIZER':fontcolor=white:fontsize=43:x=(w-text_w)/2:y=166:enable='between(t,${T1},${T2})',
+drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:text='CHECK FIT + COLOR OPTIONS':fontcolor=white:fontsize=42:x=(w-text_w)/2:y=166:enable='between(t,${T2},${T3})',
 drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:text='CHECK PRICE + DETAILS':fontcolor=white:fontsize=48:x=(w-text_w)/2:y=1550:enable='between(t,${T3},${T4})',
 drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='Price and availability may change':fontcolor=white:fontsize=28:x=(w-text_w)/2:y=1630:enable='between(t,${T3},${T4})',
 drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='Tap the product link to learn more':fontcolor=white:fontsize=30:x=(w-text_w)/2:y=1690:enable='between(t,${T3},${T4})',
