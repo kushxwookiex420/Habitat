@@ -226,7 +226,7 @@ export function registerTikTokOAuth(app, secretVault = null) {
         access_token_expires_at: payload.expires_in ? String(now + Number(payload.expires_in) * 1000) : null,
         refresh_token_expires_at: payload.refresh_expires_in ? String(now + Number(payload.refresh_expires_in) * 1000) : null,
         open_id: payload.open_id ? String(payload.open_id) : null,
-        scope: payload.scope ? String(payload.scope) : TIKTOK_SCOPES.join(","),
+        scope: payload.scope ? String(payload.scope) : "",
         token_type: payload.token_type ? String(payload.token_type) : null,
         connected_at: new Date(now).toISOString()
       };
