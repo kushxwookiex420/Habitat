@@ -71,6 +71,15 @@ test("TikTok status reports durable connection state without exposing tokens or 
   assert.ok(!serialized.includes("private-client-secret"));
 });
 
+test("TikTok status does not label requested scopes as granted before connection", () => {
+  const status=buildTikTokOAuthStatus({clientKey:"private-client-key",clientSecret:"private-client-secret",tokens:null,vaultReady:true});
+  assert.equal(status.connected,false);
+  assert.deepEqual(status.scopes,[]);
+  assert.deepEqual(status.requiredScopes,TIKTOK_SCOPES);
+  assert.deepEqual(status.missingScopes,[]);
+  assert.equal(status.scopesReady,false);
+});
+
 test("Connect TikTok persists single-use OAuth state in the durable vault", async () => {
   const oldKey = process.env.TIKTOK_CLIENT_KEY;
   const oldSecret = process.env.TIKTOK_CLIENT_SECRET;
