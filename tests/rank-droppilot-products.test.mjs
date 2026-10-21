@@ -137,6 +137,22 @@ test("evaluates every sellable variant and rejects a product if one variant miss
   assert.equal(result.variantDecisions.find(v => v.shopifyVariantId === "variant-bad").decision, "REJECT_LOW_MARGIN");
 });
 
+test("holds a product when sellable variants lack their own supplier stock evidence", () => {
+  const variantsProduct = {
+    ...product,
+    variants: [
+      { shopifyVariantId: "variant-one", title: "Standard", price: 40, supplierCost: 10, inventoryQuantity: 10, availableForSale: true, inventoryPolicy: "DENY" }
+    ]
+  };
+  const result = evaluateProductVariants(variantsProduct, {
+    ...evidence,
+    supplierStockQuantity: 100
+  });
+  assert.equal(result.decision, "HOLD_FOR_EVIDENCE");
+  assert.ok(result.missing.includes("supplierStockQuantity"));
+  assert.equal(result.eligibleForRanking, false);
+});
+
 test("holds a zero-stock variant if Shopify still marks it available for sale", () => {
   const variantsProduct = {
     ...product,
