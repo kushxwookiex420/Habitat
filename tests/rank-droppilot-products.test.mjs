@@ -13,6 +13,7 @@ const product = {
 };
 const evidence = {
   supplierCost: 10,
+  supplierStockQuantity: 25,
   shippingCost: 3,
   otherPerOrderCosts: 1,
   platformFeeRate: 0.08,
@@ -35,6 +36,7 @@ test("holds products when supplier costs and evidence are missing", () => {
   assert.equal(result.eligibleForRanking, false);
   assert.equal(result.decision, "HOLD_FOR_EVIDENCE");
   assert.ok(result.missing.includes("supplierCost"));
+  assert.ok(result.missing.includes("supplierStockQuantity"));
   assert.ok(result.missing.includes("evidenceUrl"));
 });
 
@@ -53,6 +55,7 @@ test("calculates estimated net profit and margin from supplied cost evidence", (
   assert.equal(result.eligibleForRanking, true);
   // 40 - 10 - 3 - 1 - (40 * 0.08) - (40 * 0.03) = 21.60
   assert.equal(result.estimatedNetProfitPerOrder, 21.6);
+  assert.equal(result.supplierStockQuantity, 25);
   assert.equal(result.estimatedNetMarginPercent, 54);
   assert.equal(result.decision, "REVIEW_FOR_LISTING");
 });
@@ -117,8 +120,8 @@ test("evaluates every sellable variant and rejects a product if one variant miss
   const variantsProduct = {
     ...product,
     variants: [
-      { shopifyVariantId: "variant-good", title: "Standard", price: 40, supplierCost: 10, inventoryQuantity: 10, availableForSale: true, inventoryPolicy: "DENY" },
-      { shopifyVariantId: "variant-bad", title: "Premium", price: 40, supplierCost: 35, inventoryQuantity: 10, availableForSale: true, inventoryPolicy: "DENY" }
+      { shopifyVariantId: "variant-good", title: "Standard", price: 40, supplierCost: 10, supplierStockQuantity: 25, inventoryQuantity: 10, availableForSale: true, inventoryPolicy: "DENY" },
+      { shopifyVariantId: "variant-bad", title: "Premium", price: 40, supplierCost: 35, supplierStockQuantity: 25, inventoryQuantity: 10, availableForSale: true, inventoryPolicy: "DENY" }
     ]
   };
   const result = evaluateProductVariants(variantsProduct, evidence);
