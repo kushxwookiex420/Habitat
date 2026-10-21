@@ -175,7 +175,7 @@ async def main():
             raise RuntimeError(f"Neural narration failed for chunk {i} after 8 attempts across four voices: {type(last_error).__name__}: {last_error}") from last_error
         parts.append(path)
     with open(os.path.join(root,"voice.txt"),"w") as f:
-        for p in parts: f.write("file '"+p.replace("'","'\\\\''")+"\\n")
+        for p in parts: f.write("file '"+p.replace("'","'\\''")+"\n")
 asyncio.run(main())
 PY
 ffmpeg -hide_banner -loglevel error -y -f concat -safe 0 -i "$TMP/voice.txt" -ac 2 -ar 48000 "$TMP/voice.mp3"
