@@ -13,6 +13,7 @@ async function findReports(dir) {
     if (error?.code === "ENOENT") return found;
     throw error;
   }
+  entries.sort((a, b) => a.name.localeCompare(b.name));
   for (const entry of entries) {
     const full = path.join(dir, entry.name);
     if (entry.isDirectory()) found.push(...await findReports(full));
@@ -46,8 +47,14 @@ for (const { file, report } of reports) {
       continue;
     }
     const previous = productsById.get(id);
-    if (!previous || String(product.createdAt || report.createdAt || "") > String(previous.createdAt || "")) {
-      productsById.set(id, { ...product, researchReportCreatedAt: report.createdAt || null, sourceArtifact: path.basename(path.dirname(file)) });
+    const candidateTimestamp = String(report.createdAt || product.createdAt || "");
+    const previousTimestamp = String(previous?.researchReportCreatedAt || "");
+    if (!previous || candidateTimestamp > previousTimestamp) {
+      productsById.set(id, {
+        ...product,
+        researchReportCreatedAt: candidateTimestamp || null,
+        sourceArtifact: path.basename(path.dirname(file))
+      });
     }
   }
 }
