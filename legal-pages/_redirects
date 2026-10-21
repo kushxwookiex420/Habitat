@@ -1,2 +1,7 @@
-/privacy.html/ /privacy-verification.txt 200
-/privacy.html/* /privacy-verification.txt 200
+/privacy.html /privacy-policy.html 200
+/privacy.html/ /privacy-policy.html 200
+/privacy.html/* /privacy-policy.html 200
+/privacy /privacy-policy.html 200
+/terms /terms.html/index.html 200
+/terms.html /terms.html/index.html 200
+/terms.html/ /terms.html/index.html 200
