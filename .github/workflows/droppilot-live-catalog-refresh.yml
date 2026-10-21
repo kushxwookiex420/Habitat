@@ -1,0 +1,53 @@
+name: DropPilot live catalog refresh
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "7 13 * * *"
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  refresh-catalog:
+    name: Refresh read-only Shopify catalog and open review PR
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Check Shopify credentials
+        id: credentials
+        env:
+          SHOPIFY_STORE_DOMAIN: ${{ secrets.SHOPIFY_STORE_DOMAIN }}
+          SHOPIFY_ADMIN_ACCESS_TOKEN: ${{ secrets.SHOPIFY_ADMIN_ACCESS_TOKEN }}
+        run: |
+          if [ -z "$SHOPIFY_STORE_DOMAIN" ] || [ -z "$SHOPIFY_ADMIN_ACCESS_TOKEN" ]; then
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Catalog refresh skipped: add SHOPIFY_STORE_DOMAIN and SHOPIFY_ADMIN_ACCESS_TOKEN repository secrets. No files were changed."
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Refresh active product catalog
+        if: steps.credentials.outputs.configured == 'true'
+        env:
+          SHOPIFY_STORE_DOMAIN: ${{ secrets.SHOPIFY_STORE_DOMAIN }}
+          SHOPIFY_ADMIN_ACCESS_TOKEN: ${{ secrets.SHOPIFY_ADMIN_ACCESS_TOKEN }}
+          SHOPIFY_API_VERSION: ${{ vars.SHOPIFY_API_VERSION }}
+        run: node scripts/refresh-droppilot-catalog.mjs
+      - name: Open catalog snapshot review PR
+        if: steps.credentials.outputs.configured == 'true'
+        uses: peter-evans/create-pull-request@v7
+        with:
+          branch: automation/droppilot-catalog-refresh
+          delete-branch: true
+          commit-message: "chore: refresh live DropPilot catalog snapshot"
+          title: "chore: refresh live DropPilot catalog snapshot"
+          body: |
+            Automated read-only snapshot from Shopify Admin GraphQL.
+
+            This updates catalog status, prices, and inventory data only. It does not publish products or videos, and does not infer supplier shipping, fees, demand, demo potential, or supplier reliability. The separate economics gate must still pass before a product can enter the approval queue.
+          add-paths: data/droppilot-active-product-video-manifest.json
