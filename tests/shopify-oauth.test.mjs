@@ -11,6 +11,26 @@ test("authorization URL requests required catalog, order, and inventory scopes a
 test("callback HMAC rejects tampering",()=>{const q={code:"abc",shop:"drop-pilot.myshopify.com",state:"nonce",timestamp:"123"};q.hmac=sign(q,"secret");assert.equal(verifyShopifyCallbackHmac(q,"secret"),true);assert.equal(verifyShopifyCallbackHmac({...q,code:"tampered"},"secret"),false);});
 test("status does not expose tokens or secrets",()=>{const s=buildShopifyStatus({clientId:"private-id",clientSecret:"private-secret",token:{shop:"drop-pilot.myshopify.com",access_token:"private-token",scope:"read_products,write_products,read_orders,read_inventory,write_inventory"},vaultReady:true});assert.equal(s.connected,true);assert.equal(JSON.stringify(s).includes("private-secret"),false);assert.equal(JSON.stringify(s).includes("private-token"),false);});
 test("connect route saves state before redirect",async()=>{const oldK=process.env.SHOPIFY_API_KEY,oldS=process.env.SHOPIFY_API_SECRET;process.env.SHOPIFY_API_KEY="test-client";process.env.SHOPIFY_API_SECRET="test-secret";try{const a=app(),v=vault();registerShopifyOAuth(a,v);const r=response();await a.routes.get("/auth/shopify")({headers:{},query:{shop:"drop-pilot.myshopify.com"}},r);assert.equal(r.statusCode,302);assert.match(r.headers["Set-Cookie"],/HttpOnly; Secure; SameSite=Lax/);const state=new URL(r.redirectUrl).searchParams.get("state");assert.ok(v.records.has("shopify_oauth_state:"+state));}finally{if(oldK===undefined)delete process.env.SHOPIFY_API_KEY;else process.env.SHOPIFY_API_KEY=oldK;if(oldS===undefined)delete process.env.SHOPIFY_API_SECRET;else process.env.SHOPIFY_API_SECRET=oldS;}});
+test("callback preserves missing granted scopes instead of assuming requested scopes were granted",async()=>{
+  const oldK=process.env.SHOPIFY_API_KEY,oldS=process.env.SHOPIFY_API_SECRET;
+  process.env.SHOPIFY_API_KEY="test-client";process.env.SHOPIFY_API_SECRET="test-secret";
+  try {
+    const a=app(),v=vault();
+    const state="scope-state";
+    await v.set("shopify_oauth_state:"+state,{state,shop:"drop-pilot.myshopify.com",expiresAt:Date.now()+60000});
+    const q={code:"valid-code",shop:"drop-pilot.myshopify.com",state,timestamp:"123"};q.hmac=sign(q,"test-secret");
+    const r=response();
+    registerShopifyOAuth(a,v,{fetchImpl:async()=>({ok:true,status:200,json:async()=>({access_token:"token"})})});
+    await a.routes.get("/auth/shopify/callback")({headers:{cookie:"habitat_shopify_state="+state},originalUrl:"/auth/shopify/callback?"+new URLSearchParams(q).toString(),query:q},r);
+    assert.equal(r.statusCode,200);
+    const saved=await v.get("shopify_tokens:drop-pilot.myshopify.com");
+    assert.equal(saved.scope,"");
+    const status=buildShopifyStatus({clientId:"test-client",clientSecret:"test-secret",token:saved,vaultReady:true});
+    assert.equal(status.scopesReady,false);
+    assert.deepEqual(status.missingScopes,SHOPIFY_SCOPES);
+  } finally {if(oldK===undefined)delete process.env.SHOPIFY_API_KEY;else process.env.SHOPIFY_API_KEY=oldK;if(oldS===undefined)delete process.env.SHOPIFY_API_SECRET;else process.env.SHOPIFY_API_SECRET=oldS;}
+});
+
 test("callback rejects invalid signature before token exchange",async()=>{const a=app();registerShopifyOAuth(a,vault(),{fetchImpl:async()=>{throw Error("must not call");}});const r=response();await a.routes.get("/auth/shopify/callback")({headers:{cookie:"habitat_shopify_state=wrong"},query:{code:"x",shop:"drop-pilot.myshopify.com",state:"wrong"}},r);assert.equal(r.statusCode,400);assert.match(String(r.body),/signature check failed/i);});
 
 
