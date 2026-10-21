@@ -20,13 +20,13 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y ffmpeg
       - name: Render first DropPilot product video
-        run: bash scripts/render-dropilot-product-video.sh dist/dropilot-hoto-first-look.mp4
+        run: bash scripts/render-dropilot-product-video.sh dist/droppilot-car-seat-organizer-first-look.mp4
       - name: Upload review package
         uses: actions/upload-artifact@v4
         with:
-          name: DropPilot-HOTO-First-Product-Video
+          name: DropPilot-Car-Seat-Organizer-First-Product-Video
           path: |
             dist/dropilot-hoto-first-look.mp4
-            dist/dropilot-hoto-first-look-probe.json
+            dist/droppilot-car-seat-organizer-first-look-probe.json
           if-no-files-found: error
           retention-days: 14
