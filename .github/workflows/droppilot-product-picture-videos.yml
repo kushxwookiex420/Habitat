@@ -9,6 +9,7 @@ on:
     paths:
       - ".github/workflows/droppilot-product-picture-videos.yml"
       - "scripts/render-droppilot-product-picture-videos.mjs"
+      - "scripts/refresh-droppilot-catalog.mjs"
       - "product-image-video.mjs"
       - "data/droppilot-active-product-video-manifest.json"
 
