@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { parseDuckDuckGo, parseBing, isProductRelevant, buildResearchQueries } from "../product-demo-research.mjs";
+import { parseDuckDuckGo, parseBing, isProductRelevant, buildResearchQueries, hasVideoSignal } from "../product-demo-research.mjs";
 
 test("parses standard DuckDuckGo result anchors and snippets", () => {
   const html = `
@@ -98,4 +98,34 @@ test("generic egg-cooking videos are not treated as egg-holder product demos", (
     url: "https://www.youtube.com/watch?v=holder-demo",
     snippet: "A refrigerator egg holder in use"
   }), true);
+});
+
+
+test("generic publisher homepages are not product-specific video leads", () => {
+  const trashCan = "Car Trash Can Organizer Garbage Holder Automobiles Storage Bag Accessories Auto Door Seat Back Visor Trash Bin Paper Dustbin Mini Bins Storage Bag Accessories Auto";
+  const row = {
+    title: "Car and Driver: New Car Reviews, Buying Advice and News",
+    url: "https://www.caranddriver.com/",
+    snippet: "Car reviews and automotive news"
+  };
+  assert.equal(isProductRelevant(trashCan, "", "", row), false);
+  assert.equal(hasVideoSignal(row), false);
+});
+
+test("video classification requires an actual video signal rather than generic review wording", () => {
+  assert.equal(hasVideoSignal({
+    title: "Car and Driver: New Car Reviews, Buying Advice and News",
+    url: "https://www.caranddriver.com/",
+    snippet: "Read reviews"
+  }), false);
+  assert.equal(hasVideoSignal({
+    title: "Trash can organizer product demo",
+    url: "https://www.youtube.com/watch?v=example",
+    snippet: "Watch the organizer in use"
+  }), true);
+  assert.equal(hasVideoSignal({
+    title: "Product review",
+    url: "https://example.com/blog/product-review",
+    snippet: "A written review of the product"
+  }), false);
 });
