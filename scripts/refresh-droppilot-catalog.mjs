@@ -67,6 +67,7 @@ query ActiveProducts($cursor: String) {
   products(first: 100, after: $cursor, query: "status:active", sortKey: TITLE) {
     nodes {
       id title handle vendor status productType tags totalInventory
+      featuredImage { url }
       variants(first: 250) {
         nodes { id title price inventoryQuantity inventoryPolicy sku }
         pageInfo { hasNextPage }
@@ -101,6 +102,7 @@ do {
       title: p.title,
       handle: p.handle,
       productUrl: `https://${domain}/products/${p.handle}`,
+      featuredImageUrl: p.featuredImage?.url || null,
       vendor: p.vendor,
       status: p.status,
       productType: p.productType || "",
@@ -116,7 +118,7 @@ do {
   pages += 1;
   cursor = connection.pageInfo.endCursor;
   if (!connection.pageInfo.hasNextPage) break;
-  if (!cursor) throw new Error("Shopify reported another product page but supplied no cursor; refusing to write an incomplete snapshot.");
+  if (!cursor) throw new Error("Shopify reported another product page but supplied no cursor; refusing to write an incomplete catalog snapshot.");
 } while (pages < 100);
 
 if (pages >= 100) throw new Error("Catalog pagination safety limit reached; refusing to write a potentially incomplete snapshot.");
