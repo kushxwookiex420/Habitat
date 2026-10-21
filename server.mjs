@@ -7,6 +7,7 @@ import { registerContentEngine } from "./content-engine.mjs";
 import { registerProductDemoResearch } from "./product-demo-research.mjs";
 import { registerPromotionEngine } from "./promotion-engine.mjs";
 import { registerProductDemoRenderer } from "./product-demo-renderer.mjs";
+import { registerProductImageVideo } from "./product-image-video.mjs";
 import { createD1ContentJobRepository } from "./d1-content-job-repository.mjs";
 import { createD1SecretVault } from "./d1-secret-vault.mjs";
 import { registerTikTokOAuth } from "./tiktok-oauth.mjs";
@@ -24,6 +25,7 @@ registerPublicPages(app);
 registerProductDemoResearch(app);
 registerPromotionEngine(app);
 registerProductDemoRenderer(app);
+registerProductImageVideo(app);
 
 // Durable cross-session handoff: the checkpoint is committed with the source code,
 // not written to Render's ephemeral filesystem. Keep secrets out of AX_CONTINUITY.md.
