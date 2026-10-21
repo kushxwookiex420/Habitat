@@ -124,7 +124,13 @@ test("evaluates every sellable variant and rejects a product if one variant miss
       { shopifyVariantId: "variant-bad", title: "Premium", price: 40, supplierCost: 35, supplierStockQuantity: 25, inventoryQuantity: 10, availableForSale: true, inventoryPolicy: "DENY" }
     ]
   };
-  const result = evaluateProductVariants(variantsProduct, evidence);
+  const result = evaluateProductVariants(variantsProduct, {
+    ...evidence,
+    variants: [
+      { shopifyVariantId: "variant-good", supplierStockQuantity: 25 },
+      { shopifyVariantId: "variant-bad", supplierStockQuantity: 25 }
+    ]
+  });
   assert.equal(result.decision, "REJECT_LOW_MARGIN");
   assert.equal(result.eligibleForRanking, false);
   assert.equal(result.variantDecisionCount, 2);
