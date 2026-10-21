@@ -69,6 +69,55 @@ test("aggregates product research while preserving unverified rights and publish
   }
 });
 
+
+test("keeps the newest report when the same Shopify product appears in multiple batches", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "habitat-demo-aggregate-dedupe-"));
+  try {
+    const research = path.join(root, "research");
+    const output = path.join(root, "out");
+    const oldDir = path.join(research, "batch-00");
+    const newDir = path.join(research, "batch-01");
+    await fs.mkdir(oldDir, { recursive: true });
+    await fs.mkdir(newDir, { recursive: true });
+    const id = "gid://shopify/Product/duplicate";
+    const makeReport = (createdAt, title, status) => ({
+      schemaVersion: 1,
+      createdAt,
+      products: [{
+        shopifyProductId: id,
+        title,
+        status,
+        candidateCount: 0,
+        videoPageCandidateCount: 0,
+        directVideoCandidateCount: 0,
+        rightsStatus: "unverified",
+        qaStatus: "not_run",
+        publishStatus: "not_approved"
+      }]
+    });
+    await fs.writeFile(path.join(oldDir, "droppilot-demo-research-batch.json"),
+      JSON.stringify(makeReport("2026-10-20T10:00:00.000Z", "Older result", "research_failed")));
+    await fs.writeFile(path.join(newDir, "droppilot-demo-research-batch.json"),
+      JSON.stringify(makeReport("2026-10-21T10:00:00.000Z", "Newest result", "no_relevant_results")));
+    const result = spawnSync(process.execPath, [script], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        RESEARCH_ARTIFACTS_DIR: research,
+        RESEARCH_AGGREGATE_DIR: output
+      }
+    });
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    const report = JSON.parse(await fs.readFile(path.join(output, "droppilot-demo-research-aggregate.json"), "utf8"));
+    assert.equal(report.productRecordCount, 1);
+    assert.equal(report.products[0].title, "Newest result");
+    assert.equal(report.products[0].researchReportCreatedAt, "2026-10-21T10:00:00.000Z");
+    assert.equal(report.products[0].status, "no_relevant_results");
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
 test("fails clearly when no research artifacts are available", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "habitat-demo-aggregate-empty-"));
   try {
