@@ -77,6 +77,15 @@ test("research queries exclude noisy Shopify productType categories", () => {
 });
 
 
+test("generic lawn-care guides are not treated as reusable makeup-pad demos", () => {
+  const product = "12PC Reusable Cotton Pads Makeup Remover Pads Washable Round Bamboo Make Up Pads Cloth Nursing Pads Skin Care Tool Skin Cleaning";
+  assert.equal(isProductRelevant(product, "", "", {
+    title: "How to Make Grass Thicker & Fuller (Complete Guide)",
+    url: "https://yardthyme.com/lawn-care/how-to-make-grass-thicker-greener-and-fuller/",
+    snippet: "Tips for a greener lawn"
+  }), false);
+});
+
 test("generic egg-cooking videos are not treated as egg-holder product demos", () => {
   const product = "Egg Container Holder for Refrigerator Double Layer Egg Storage Box Organizer Bin Tray Rack";
   assert.equal(isProductRelevant(product, "", "", {
