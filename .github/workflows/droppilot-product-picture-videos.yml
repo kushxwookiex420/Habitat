@@ -1,0 +1,47 @@
+name: DropPilot Product Picture Videos
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "11 16 * * *"
+  push:
+    branches: ["main"]
+    paths:
+      - ".github/workflows/droppilot-product-picture-videos.yml"
+      - "scripts/render-droppilot-product-picture-videos.mjs"
+      - "product-image-video.mjs"
+      - "data/droppilot-active-product-video-manifest.json"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: droppilot-product-picture-videos
+  cancel-in-progress: false
+
+jobs:
+  render:
+    name: Render and QA product-picture videos
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Wait for the Habitat renderer after a deploy
+        if: github.event_name == 'push'
+        run: sleep 90
+      - name: Render first three active catalog products
+        env:
+          HABITAT_BASE_URL: https://habitat-1-szzd.onrender.com
+          VIDEO_BATCH_LIMIT: "3"
+        run: node scripts/render-droppilot-product-picture-videos.mjs
+      - name: Upload verified product-picture videos
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: DropPilot-Product-Picture-Videos
+          path: dist/product-picture-videos/
+          if-no-files-found: warn
+          retention-days: 14
