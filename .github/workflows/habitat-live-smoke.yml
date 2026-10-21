@@ -11,6 +11,8 @@ on:
       - "d1-secret-vault.mjs"
       - "tests/tiktok-oauth.test.mjs"
       - "server.mjs"
+      - "package.json"
+      - "scripts/refresh-droppilot-catalog.mjs"
       - ".github/workflows/habitat-live-smoke.yml"
 
 permissions:
