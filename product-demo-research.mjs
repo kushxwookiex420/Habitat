@@ -231,9 +231,9 @@ export function registerProductDemoResearch(app) {
           const host = hostOf(row.url);
           const officialOrSupplier = /manufacturer|official|supplier|wholesale/i.test(row.title + " " + host) ||
             (supplierUrl && host && host === hostOf(supplierUrl));
-          const videoSignal = /\\b(?:video|watch|demo|demonstrat|how[\\s-]?to|youtube|vimeo|tiktok|mp4)\\b/i.test(row.title + " " + row.url + " " + row.snippet) ||
-            /(?:youtube\\.com|youtu\\.be|vimeo\\.com|tiktok\\.com)\\//i.test(row.url) ||
-            /\\/(?:video|videos|watch|reel|shorts?)(?:\\/|\\?|#|$)/i.test(new URL(row.url).pathname + new URL(row.url).search);
+          const videoSignal = /\b(?:video|watch|demo|demonstrat|how[\s-]?to|youtube|vimeo|tiktok|mp4)\b/i.test(row.title + " " + row.url + " " + row.snippet) ||
+            /(?:youtube\.com|youtu\.be|vimeo\.com|tiktok\.com)\//i.test(row.url) ||
+            /\/(?:video|videos|watch|reel|shorts?)(?:\/|\?|#|$)/i.test(new URL(row.url).pathname + new URL(row.url).search);
           const directVideo = /\.(?:mp4|webm|mov)(?:[?#]|$)/i.test(row.url);
           candidates.push({
             ...row, host, query: queries[i],
