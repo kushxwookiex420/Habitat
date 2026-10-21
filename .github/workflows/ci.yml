@@ -29,5 +29,6 @@ jobs:
           test -f product-demo-renderer.mjs
           test -f product-image-video.mjs
           test -f tests/product-image-video.test.mjs
+          test -f scripts/render-droppilot-product-picture-videos.mjs
           test -f scripts/rank-droppilot-products.mjs
           test -f tests/rank-droppilot-products.test.mjs
