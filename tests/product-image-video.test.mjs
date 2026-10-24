@@ -61,14 +61,14 @@ test("product-picture renderer registers status, render, and artifact routes", (
 test("renderer errors expose bounded sanitized stderr diagnostics", () => {
   const result = formatRenderError({
     message: "Command failed: /opt/render/project/src/node_modules/ffmpeg-static/ffmpeg -i /tmp/habitat-product-image-video-a1b2/output.mp4",
-    stderr: "[Parsed_drawtext] Font not found \\u001b[31m",
+    stderr: "[Parsed_drawtext] Font not found " + String.fromCharCode(27) + "[31m",
     code: 1
   });
   assert.match(result, /stderr:.*Font not found/);
   assert.match(result, /code: 1/);
   assert.doesNotMatch(result, /\\/tmp\\/habitat-product-image-video/);
   assert.doesNotMatch(result, /\\/opt\\/render\\/project\\/src/);
-  assert.doesNotMatch(result, /\\u001b/);
+  assert.equal(result.includes(String.fromCharCode(27)), false);
   assert.ok(result.length <= 600);
 });
 
