@@ -66,8 +66,8 @@ test("renderer errors expose bounded sanitized stderr diagnostics", () => {
   });
   assert.match(result, /stderr:.*Font not found/);
   assert.match(result, /code: 1/);
-  assert.doesNotMatch(result, /\\/tmp\\/habitat-product-image-video/);
-  assert.doesNotMatch(result, /\\/opt\\/render\\/project\\/src/);
+  assert.equal(result.includes("/tmp/habitat-product-image-video"), false);
+  assert.equal(result.includes("/opt/render/project/src"), false);
   assert.equal(result.includes(String.fromCharCode(27)), false);
   assert.ok(result.length <= 600);
 });
@@ -77,6 +77,6 @@ test("renderer error diagnostics redact URL query strings", () => {
     message: "fetch failed https://cdn.example.test/image.jpg?token=secret&sig=abc",
     code: "ERR_FETCH"
   });
-  assert.match(result, /https:\\/\\/cdn\\.example\\.test\\/image\\.jpg/);
+  assert.equal(result.includes("https://cdn.example.test/image.jpg"), true);
   assert.doesNotMatch(result, /token=secret|sig=abc/);
 });
