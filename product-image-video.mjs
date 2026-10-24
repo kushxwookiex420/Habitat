@@ -69,7 +69,37 @@ export async function validatePublicImageUrl(raw) {
 }
 
 function sendError(res, status, error) {
-  return res.status(status).json({ ok: false, error: String(error?.message || error).slice(0, 300) });
+  return res.status(status).json({ ok: false, error: String(error?.message || error).slice(0, 600) });
+}
+
+function diagnosticText(value, max = 240) {
+  let text = String(value ?? "")
+    .replace(/\u001b\[[0-9;]*m/g, "")
+    .replace(/[\u0000-\u001f\u007f]/g, " ")
+    .replace(/\/tmp\/habitat-product-image-video-[^\s/]+/g, "<temp>")
+    .replace(/\/opt\/render\/project\/src\//g, "<app>/");
+  text = text.replace(/https?:\/\/[^\s)]+/g, raw => {
+    try {
+      const url = new URL(raw);
+      return url.origin + url.pathname;
+    } catch {
+      return "[url]";
+    }
+  });
+  return text.replace(/\s+/g, " ").trim().slice(0, max);
+}
+
+export function formatRenderError(error) {
+  const parts = [];
+  const stderr = diagnosticText(error?.stderr, 300);
+  const code = diagnosticText(error?.code, 32);
+  const signal = diagnosticText(error?.signal, 32);
+  const message = diagnosticText(error?.message || error, 220);
+  if (stderr) parts.push("stderr: " + stderr);
+  if (code) parts.push("code: " + code);
+  if (signal) parts.push("signal: " + signal);
+  if (message) parts.push("message: " + message);
+  return parts.join(" | ").slice(0, 600);
 }
 
 export function registerProductImageVideo(app) {
@@ -195,7 +225,7 @@ export function registerProductImageVideo(app) {
       });
     } catch (error) {
       if (dir) await fs.rm(dir, { recursive: true, force: true }).catch(() => {});
-      return sendError(res, 502, error);
+      return sendError(res, 502, formatRenderError(error));
     }
   });
 
