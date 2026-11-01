@@ -1,5 +1,6 @@
 import { buildCapabilityStatus } from "./capability-status.mjs";
 import { claimTaskDispatch } from "./task-dispatch-guard.mjs";
+import { verifyTaskStorage } from "./task-storage-verification.mjs";
 import { createD1TaskRepository } from "./d1-task-repository.mjs";
 import { createD1DispatchLeaseRepository } from "./d1-dispatch-lease-repository.mjs";
 import { markInterruptedTask, prepareTaskRetry } from "./task-recovery.mjs";
@@ -1538,7 +1539,8 @@ app.post("/tasks/:id/delegate", async (req, res) => {
       : null;
     const androidHeartbeat = latestDevice && heartbeatAgeMs <= ANDROID_HEARTBEAT_TTL_MS ? "PASS" : "FAIL";
     const taskCreation = taskStore.has(task.id) ? "PASS" : "FAIL";
-    const storage = storageSelfTest() ? "PASS" : "FAIL";
+    const storageCheck = await verifyTaskStorage({ taskRepository, taskStorageReady });
+    const storage = storageCheck.status;
 
     const verification = {
       backendHealth: "PASS",
@@ -1559,6 +1561,7 @@ app.post("/tasks/:id/delegate", async (req, res) => {
 
     task.result = JSON.stringify({
       verification,
+      storageDetail: storageCheck.detail,
       androidDevice: latestDevice,
       heartbeatAgeMs,
       workerReport: result
