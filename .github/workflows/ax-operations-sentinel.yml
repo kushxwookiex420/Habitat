@@ -1,0 +1,49 @@
+name: Ax Operations Sentinel
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/ax-operations-sentinel.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ax-operations-sentinel
+  cancel-in-progress: true
+
+jobs:
+  inspect-live-service:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Check live Habitat health
+        id: health
+        shell: bash
+        run: |
+          set -euo pipefail
+          body="$(mktemp)"
+          code="$(curl --silent --show-error --location --max-time 25 --retry 2 --retry-delay 3 --output "$body" --write-out '%{http_code}' https://habitat-1-szzd.onrender.com/health)"
+          cat "$body"
+          test "$code" = "200"
+          jq -e '.habitat == "online" and .backend == "ready"' "$body" >/dev/null
+          if ! jq -e '.brain == "ready"' "$body" >/dev/null; then
+            echo "::error title=Habitat AI provider unavailable::Health endpoint is reachable, but the brain is not ready."
+            exit 1
+          fi
+      - name: Check durable continuity endpoint and report runtime persistence
+        shell: bash
+        run: |
+          set -euo pipefail
+          body="$(mktemp)"
+          code="$(curl --silent --show-error --location --max-time 25 --retry 2 --retry-delay 3 --output "$body" --write-out '%{http_code}' https://habitat-1-szzd.onrender.com/continuity/status)"
+          cat "$body"
+          test "$code" = "200"
+          jq -e '.ok == true and .durableAcrossConversations == true' "$body" >/dev/null
+          persistence="$(jq -r '.runtimeJobPersistence // "unknown"' "$body")"
+          if [ "$persistence" != "cloudflare-d1" ]; then
+            echo "::warning title=Habitat runtime state is not durable::Continuity checkpoint is available, but runtimeJobPersistence=$persistence. Tasks/jobs may be lost across restarts; configure and verify durable storage."
+          fi
