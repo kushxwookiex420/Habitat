@@ -1,1 +1,5 @@
-<resources><string name="app_name">Spark Quick View</string><string name="widget_description">Shows the latest Spark Driver notification details.</string></resources>
+<resources>
+ <string name="app_name">Spark Quick View</string>
+ <string name="widget_description">Shows the latest Spark Driver notification and visible offer details.</string>
+ <string name="accessibility_description">Reads visible text from Spark Driver to display offer payout and mileage in the widget. Does not interact with offers.</string>
+</resources>
