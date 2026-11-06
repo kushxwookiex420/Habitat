@@ -1,0 +1,6 @@
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android" android:id="@+id/widget_root" android:layout_width="match_parent" android:layout_height="match_parent" android:orientation="vertical" android:padding="14dp" android:background="#171D27">
+    <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="SPARK QUICK VIEW" android:textColor="#65D6C5" android:textStyle="bold" android:textSize="12sp"/>
+    <TextView android:id="@+id/widget_title" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Waiting for Spark offers" android:textColor="#FFFFFF" android:textStyle="bold" android:textSize="17sp" android:maxLines="2" android:paddingTop="8dp"/>
+    <TextView android:id="@+id/widget_body" android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1" android:text="Enable notification access to show offer alerts here." android:textColor="#E4EAF2" android:textSize="14sp" android:maxLines="4" android:paddingTop="5dp"/>
+    <TextView android:id="@+id/widget_time" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="No offer captured yet" android:textColor="#AAB6C5" android:textSize="11sp" android:paddingTop="5dp"/>
+</LinearLayout>
