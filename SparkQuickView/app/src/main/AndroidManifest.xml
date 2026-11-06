@@ -1,14 +1,18 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-    <application android:allowBackup="false" android:label="Spark Quick View" android:theme="@android:style/Theme.Material.Light.NoActionBar">
-        <activity android:name=".MainActivity" android:exported="true">
-            <intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter>
-        </activity>
-        <service android:name=".SparkNotificationListener" android:label="Spark Quick View notification reader" android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE" android:exported="true">
-            <intent-filter><action android:name="android.service.notification.NotificationListenerService"/></intent-filter>
-        </service>
-        <receiver android:name=".SparkWidgetProvider" android:exported="true">
-            <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE"/><action android:name="com.example.sparkquickview.REFRESH"/></intent-filter>
-            <meta-data android:name="android.appwidget.provider" android:resource="@xml/spark_widget_info"/>
-        </receiver>
-    </application>
+ <application android:allowBackup="false" android:label="Spark Quick View" android:theme="@android:style/Theme.Material.Light.NoActionBar">
+  <activity android:name=".MainActivity" android:exported="true">
+   <intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter>
+  </activity>
+  <service android:name=".SparkNotificationListener" android:label="Spark Quick View notification reader" android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE" android:exported="true">
+   <intent-filter><action android:name="android.service.notification.NotificationListenerService"/></intent-filter>
+  </service>
+  <service android:name=".SparkOfferAccessibilityService" android:label="Spark Quick View offer reader" android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE" android:exported="true">
+   <intent-filter><action android:name="android.accessibilityservice.AccessibilityService"/></intent-filter>
+   <meta-data android:name="android.accessibilityservice" android:resource="@xml/spark_accessibility_service"/>
+  </service>
+  <receiver android:name=".SparkWidgetProvider" android:exported="true">
+   <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE"/><action android:name="com.example.sparkquickview.REFRESH"/></intent-filter>
+   <meta-data android:name="android.appwidget.provider" android:resource="@xml/spark_widget_info"/>
+  </receiver>
+ </application>
 </manifest>
