@@ -1,0 +1,33 @@
+name: Build Spark Quick View APK
+on:
+  workflow_dispatch:
+  push:
+    branches: [ spark-quick-view-build ]
+    paths:
+      - 'SparkQuickView/**'
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: spark-quick-view-build
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: 'platform-tools'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+      - name: Install Android SDK platform
+        run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
+      - name: Build debug APK
+        working-directory: SparkQuickView
+        run: gradle assembleDebug
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SparkQuickView-debug-apk
+          path: SparkQuickView/app/build/outputs/apk/debug/app-debug.apk
