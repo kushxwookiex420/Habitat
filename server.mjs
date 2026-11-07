@@ -51,7 +51,13 @@ app.get("/continuity/status", async (_req, res) => {
       source:"committed repository checkpoint",
       checkpointDate,
       durableAcrossConversations:true,
-      runtimeJobPersistence: process.env.HABITAT_D1_DATABASE_ID && process.env.HABITAT_D1_API_TOKEN ? "cloudflare-d1" : "memory-only",
+      runtimeJobPersistence: Boolean(taskRepository && taskStorageReady && contentJobRepository && contentStorageReady && secretVault && dispatchLeaseRepository && dispatchLeaseReady) ? "cloudflare-d1" : "not-fully-durable",
+      runtimeStorageComponents: {
+        tasks: Boolean(taskRepository && taskStorageReady),
+        contentJobs: Boolean(contentJobRepository && contentStorageReady),
+        encryptedTikTokVault: Boolean(secretVault),
+        dispatchLease: Boolean(dispatchLeaseRepository && dispatchLeaseReady)
+      },
       sourceUrl:"https://github.com/kushxwookiex420/Habitat/blob/main/AX_CONTINUITY.md"
     });
   } catch (error) {
