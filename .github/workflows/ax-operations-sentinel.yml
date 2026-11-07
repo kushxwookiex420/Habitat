@@ -1,0 +1,71 @@
+name: Ax Operations Sentinel
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/ax-operations-sentinel.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ax-operations-sentinel
+  cancel-in-progress: true
+
+jobs:
+  inspect-live-service:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - name: Check live Habitat health
+        shell: bash
+        run: |
+          set -euo pipefail
+          body="$(mktemp)"
+          code="$(curl --silent --show-error --location --max-time 25 --retry 2 --retry-delay 3 --output "$body" --write-out '%{http_code}' https://habitat-1-szzd.onrender.com/health)"
+          cat "$body"
+          test "$code" = "200"
+          jq -e '.habitat == "online" and .backend == "ready"' "$body" >/dev/null
+          jq -e '.brain == "ready"' "$body" >/dev/null
+
+      - name: Check runtime storage, encrypted vault, and dispatch lease
+        shell: bash
+        run: |
+          set -euo pipefail
+          body="$(mktemp)"
+          code="$(curl --silent --show-error --location --max-time 25 --retry 2 --retry-delay 3 --output "$body" --write-out '%{http_code}' https://habitat-1-szzd.onrender.com/storage/check)"
+          cat "$body"
+          if [ "$code" != "200" ]; then
+            echo "::error title=Habitat durable storage check failed::/storage/check returned HTTP $code. Runtime recovery must not be considered healthy."
+            exit 1
+          fi
+          jq -e '.ok == true and .durable == true and .contentJobPersistence.ready == true and .encryptedTikTokVault.ready == true and .encryptedTikTokVault.encryptedAtRest == true and .dispatchLease.ready == true and .dispatchLease.durable == true' "$body" >/dev/null
+
+      - name: Check continuity and report runtime persistence separately
+        shell: bash
+        run: |
+          set -euo pipefail
+          body="$(mktemp)"
+          code="$(curl --silent --show-error --location --max-time 25 --retry 2 --retry-delay 3 --output "$body" --write-out '%{http_code}' https://habitat-1-szzd.onrender.com/continuity/status)"
+          cat "$body"
+          test "$code" = "200"
+          jq -e '.ok == true and .durableAcrossConversations == true' "$body" >/dev/null
+          persistence="$(jq -r '.runtimeJobPersistence // "unknown"' "$body")"
+          if [ "$persistence" != "cloudflare-d1" ]; then
+            echo "::warning title=Runtime persistence needs investigation::Continuity is available, but runtimeJobPersistence=$persistence. The authoritative /storage/check must pass before declaring runtime storage healthy."
+          fi
+
+      - name: Check capability disclosure
+        shell: bash
+        run: |
+          set -euo pipefail
+          body="$(mktemp)"
+          code="$(curl --silent --show-error --location --max-time 25 --retry 2 --retry-delay 3 --output "$body" --write-out '%{http_code}' https://habitat-1-szzd.onrender.com/capabilities)"
+          cat "$body"
+          test "$code" = "200"
+          jq -e '.ok == true and .secretsExposed == false' "$body" >/dev/null
+          jq -e '.capabilities.externalPublishing.status == "approval_gated_unverified"' "$body" >/dev/null
+          echo "::notice::Capability status is configuration disclosure, not proof of a successful end-to-end content or publishing run."
