@@ -1086,7 +1086,7 @@ async function androidAccessStatus() {
       const deviceModel = [details.manufacturer, details.model].filter(Boolean).join(" ") || "Paired Habitat Android device";
       return {
         deviceId: row.device_id,
-        packageName: "com.habitat",
+        packageName: "com.habitat.axbridge",
         deviceModel,
         appVersion: details.appVersion || "device-bridge",
         androidSdk: details.androidSdk || null,
