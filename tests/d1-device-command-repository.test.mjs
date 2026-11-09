@@ -35,11 +35,14 @@ function fakeD1() {
     } else if (sql.startsWith("SELECT device_id FROM habitat_paired_devices")) {
       const row = devices.get(params[0]);
       result = [{ results: row && !row.revoked_at ? [{ device_id: row.device_id }] : [] }];
+    } else if (sql.startsWith("UPDATE habitat_paired_devices SET last_seen_at = ?, device_json = ?")) {
+      const row = devices.get(params[2]);
+      if (row && !row.revoked_at) { row.last_seen_at = params[0]; row.device_json = params[1]; }
     } else if (sql.startsWith("UPDATE habitat_paired_devices SET last_seen_at")) {
       const row = devices.get(params[1]);
       if (row && !row.revoked_at) row.last_seen_at = params[0];
-    } else if (sql.startsWith("SELECT device_id, created_at, last_seen_at, revoked_at")) {
-      result = [{ results: [...devices.values()].map(({device_id,created_at,last_seen_at,revoked_at}) => ({device_id,created_at,last_seen_at,revoked_at})) }];
+    } else if (sql.startsWith("SELECT device_id, created_at, last_seen_at, device_json, revoked_at")) {
+      result = [{ results: [...devices.values()].map(({device_id,created_at,last_seen_at,device_json,revoked_at}) => ({device_id,created_at,last_seen_at,device_json,revoked_at})) }];
     } else if (sql.startsWith("UPDATE habitat_paired_devices SET revoked_at")) {
       const row = devices.get(params[1]);
       if (row) row.revoked_at = params[0];
@@ -81,7 +84,10 @@ test("D1 device repository stores only hashes, supports one-time bootstrap pairi
   assert.equal(await repo.verifyDeviceToken("wrong-token", "s26-ultra"), false);
 
   await repo.touchDevice("s26-ultra", now);
-  assert.equal((await repo.listDevices())[0].last_seen_at, now);
+  await repo.updateDeviceInfo("s26-ultra", now, { model: "Galaxy S26 Ultra", batteryPercent: 83 });
+  const listed = (await repo.listDevices())[0];
+  assert.equal(listed.last_seen_at, now);
+  assert.deepEqual(JSON.parse(listed.device_json), { model: "Galaxy S26 Ultra", batteryPercent: 83 });
   assert.equal(await repo.isDevicePaired("s26-ultra"), true);
 
   await repo.revokeDevice("s26-ultra", now);
