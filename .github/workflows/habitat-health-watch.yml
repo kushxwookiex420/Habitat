@@ -43,7 +43,7 @@ jobs:
           ax_token_configured="$(echo "$device_bridge" | jq -r '.deviceBridge.axTokenConfigured // false')"
           if [ "$bridge_ready" = "true" ] && [ "$ax_token_configured" = "true" ]; then
             device_status="$("${CURL[@]}" "$BASE/device/status")"
-            echo "$device_status" | jq '{androidDeviceAccess, detail, deviceCount: (.devices | length)}'
+            echo "$device_status" | jq '{androidDeviceAccess, detail, deviceCount}'
             if [ "$(echo "$device_status" | jq -r '.androidDeviceAccess')" = "PASS" ]; then
               phone_state="paired phone checked in within its heartbeat window"
             else
