@@ -590,7 +590,7 @@ class MainActivity : Activity() {
     private fun showDeviceBridgeDialog() {
         val panel = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(28, 18, 28, 8) }
         val device = TextView(this).apply {
-            text = "This phone's device ID:\\n" + deviceBridge.deviceId
+            text = "This phone's device ID:\n" + deviceBridge.deviceId
             textSize = 14f
             setTextColor(Color.DKGRAY)
         }
