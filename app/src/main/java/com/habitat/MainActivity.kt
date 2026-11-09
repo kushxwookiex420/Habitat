@@ -430,7 +430,10 @@ class MainActivity : Activity() {
             }
         }
         heartbeatHandler.postDelayed(heartbeatRunnable, heartbeatIntervalMs)
-        if (deviceBridge.isConfigured()) deviceBridge.start()
+        if (deviceBridge.isConfigured()) {
+            deviceBridge.start()
+            DeviceBridgeScheduler.schedule(this)
+        }
         ensureSystemCheckTask()
     }
 
@@ -628,7 +631,8 @@ class MainActivity : Activity() {
                         if (success) {
                             deviceBridgeButton?.text = "AX SET"
                             deviceBridge.start()
-                            Toast.makeText(this, "Phone paired. AX read-only diagnostics are connected while Habitat is open.", Toast.LENGTH_LONG).show()
+                            DeviceBridgeScheduler.schedule(this)
+                            Toast.makeText(this, "Phone paired. AX checks in while Habitat is open and periodically in the background.", Toast.LENGTH_LONG).show()
                             dialog.dismiss()
                         } else {
                             dialog.getButton(AlertDialog.BUTTON_POSITIVE).isEnabled = true
@@ -640,6 +644,7 @@ class MainActivity : Activity() {
             }
             dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener {
                 deviceBridge.clearCredentials()
+                DeviceBridgeScheduler.cancel(this)
                 deviceBridgeButton?.text = "LINK"
                 Toast.makeText(this, "AX phone link disconnected.", Toast.LENGTH_SHORT).show()
                 dialog.dismiss()
@@ -714,7 +719,10 @@ class MainActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
-        if (::deviceBridge.isInitialized && deviceBridge.isConfigured()) deviceBridge.start()
+        if (::deviceBridge.isInitialized && deviceBridge.isConfigured()) {
+            deviceBridge.start()
+            DeviceBridgeScheduler.schedule(this)
+        }
     }
 
     override fun onPause() {
