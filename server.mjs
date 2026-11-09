@@ -1303,8 +1303,8 @@ async function runSystemCheck() {
   return { task, checks, report, overall };
 }
 
-app.get("/capabilities", (_req, res) => {
-  const device = androidAccessStatus();
+app.get("/capabilities", async (_req, res) => {
+  const device = await androidAccessStatus();
   return res.json(buildCapabilityStatus({
     aiProviderConfigured: hasAnyAiProviderKey(),
     workerRegistered: workerRegistry.has("habitat-qa-worker"),
@@ -1585,12 +1585,14 @@ app.post("/tasks/:id/delegate", async (req, res) => {
       return res.status(502).json({ ok: false, task });
     }
 
-    const androidAccess = androidAccessStatus();
-    const latestDevice = androidAccess.devices[0] || null;
+    const androidAccess = await androidAccessStatus();
+    const latestDevice = androidAccess.devices.find(device =>
+      Date.now() - new Date(device.lastSeenAt).getTime() <= (device.heartbeatTtlMs || ANDROID_HEARTBEAT_TTL_MS)
+    ) || null;
     const heartbeatAgeMs = latestDevice?.lastSeenAt
       ? Math.max(0, Date.now() - new Date(latestDevice.lastSeenAt).getTime())
       : null;
-    const androidHeartbeat = latestDevice && heartbeatAgeMs <= ANDROID_HEARTBEAT_TTL_MS ? "PASS" : "FAIL";
+    const androidHeartbeat = latestDevice ? "PASS" : "FAIL";
     const taskCreation = taskStore.has(task.id) ? "PASS" : "FAIL";
     const storage = storageSelfTest() ? "PASS" : "FAIL";
 
