@@ -10,7 +10,6 @@ function responseRecorder() {
     json(body) { this.body = body; return this; }
   };
 }
-
 function makeApp() {
   const routes = new Map();
   return {
@@ -19,7 +18,6 @@ function makeApp() {
     get(path, ...handlers) { routes.set("GET " + path, handlers); }
   };
 }
-
 async function invoke(app, key, req) {
   const handlers = app.routes.get(key);
   assert.ok(handlers, "route exists: " + key);
@@ -28,65 +26,110 @@ async function invoke(app, key, req) {
   const next = () => { index += 1; };
   while (index < handlers.length) {
     let called = false;
-    const handler = handlers[index];
-    await handler(req, res, () => { called = true; next(); });
+    await handlers[index](req, res, () => { called = true; next(); });
     if (!called) break;
   }
   return res;
 }
-
-test("bridge rejects missing credentials and only queues allowlisted read-only commands", async () => {
-  const app = makeApp();
-  const rows = new Map();
-  const repository = {
+function memoryRepository() {
+  const commands = new Map();
+  const pairings = new Map();
+  const devices = new Map();
+  return {
     durable: true,
     async initialize() {},
-    async enqueue(row) { rows.set(row.id, structuredClone(row)); },
+    async createPairing(row) { pairings.set(row.codeHash, { ...row, consumedAt: null }); },
+    async consumePairing({ codeHash, deviceId, consumedAt }) {
+      const row = pairings.get(codeHash);
+      if (!row || row.deviceId !== deviceId || row.consumedAt || row.expiresAt <= consumedAt) return false;
+      row.consumedAt = consumedAt;
+      return true;
+    },
+    async registerDevice({ deviceId, tokenHash }) { devices.set(deviceId, { tokenHash, revoked: false }); },
+    async verifyDeviceToken(token, deviceId) {
+      const row = devices.get(deviceId);
+      return Boolean(row && !row.revoked && row.tokenHash === token);
+    },
+    async isDevicePaired(deviceId) { const row=devices.get(deviceId); return Boolean(row && !row.revoked); },
+    async revokeDevice(deviceId) { const row=devices.get(deviceId); if(row) row.revoked=true; },
+    async enqueue(row) { commands.set(row.id, structuredClone(row)); },
     async claimNext(deviceId) {
-      const row = [...rows.values()].find(x => x.deviceId === deviceId && x.status === "queued");
+      const row = [...commands.values()].find(x => x.deviceId === deviceId && x.status === "queued");
       if (!row) return null;
       row.status = "claimed";
       return structuredClone(row);
     },
     async complete({ id, deviceId, result, completedAt }) {
-      const row = rows.get(id);
+      const row = commands.get(id);
       if (!row || row.deviceId !== deviceId || row.status !== "claimed") return false;
       Object.assign(row, { status: "completed", result, completedAt });
       return true;
     },
-    async get(id) { return rows.get(id) || null; }
+    async get(id) { return commands.get(id) || null; }
   };
+}
+
+test("pairing codes are one-time and issue individual phone credentials", async () => {
+  const app = makeApp();
+  const repository = memoryRepository();
   const bridge = registerDeviceCommandBridge(app, {
-    env: { HABITAT_AX_BRIDGE_TOKEN: "ax-secret", HABITAT_DEVICE_BRIDGE_TOKEN: "phone-secret" },
+    env: { HABITAT_AX_BRIDGE_TOKEN: "ax-secret" },
     repository
   });
   await bridge.initialize();
 
-  const unauthorized = await invoke(app, "POST /ax/device/commands", {
-    headers: {}, body: { deviceId: "s26", type: "device.status" }
+  const unauthorized = await invoke(app, "POST /ax/device/pairings", {
+    headers: {}, body: { deviceId: "s26" }
   });
   assert.equal(unauthorized.statusCode, 401);
 
+  const pairing = await invoke(app, "POST /ax/device/pairings", {
+    headers: { authorization: "Bearer ax-secret" }, body: { deviceId: "s26" }
+  });
+  assert.equal(pairing.statusCode, 201);
+  assert.equal(pairing.body.pairing.singleUse, true);
+  const code = pairing.body.pairing.code;
+
+  const paired = await invoke(app, "POST /device/pair", {
+    headers: {}, body: { deviceId: "s26", code }
+  });
+  assert.equal(paired.statusCode, 200);
+  const token = paired.body.device.token;
+  assert.ok(token.length >= 40);
+
+  const replay = await invoke(app, "POST /device/pair", {
+    headers: {}, body: { deviceId: "s26", code }
+  });
+  assert.equal(replay.statusCode, 401);
+
+  const noSharedToken = await invoke(app, "GET /device/commands/next", {
+    headers: { authorization: "Bearer phone-secret" }, query: { deviceId: "s26" }
+  });
+  assert.equal(noSharedToken.statusCode, 401);
+
+  const unpairedQueue = await invoke(app, "POST /ax/device/commands", {
+    headers: { authorization: "Bearer ax-secret" }, body: { deviceId: "other-phone", type: "device.status" }
+  });
+  assert.equal(unpairedQueue.statusCode, 404);
+
   const forbidden = await invoke(app, "POST /ax/device/commands", {
-    headers: { authorization: "Bearer ax-secret" },
-    body: { deviceId: "s26", type: "shell.exec" }
+    headers: { authorization: "Bearer ax-secret" }, body: { deviceId: "s26", type: "shell.exec" }
   });
   assert.equal(forbidden.statusCode, 400);
 
   const queued = await invoke(app, "POST /ax/device/commands", {
-    headers: { authorization: "Bearer ax-secret" },
-    body: { deviceId: "s26", type: "device.status" }
+    headers: { authorization: "Bearer ax-secret" }, body: { deviceId: "s26", type: "device.status" }
   });
   assert.equal(queued.statusCode, 202);
   const id = queued.body.command.id;
 
   const claimed = await invoke(app, "GET /device/commands/next", {
-    headers: { authorization: "Bearer phone-secret" }, query: { deviceId: "s26" }
+    headers: { authorization: "Bearer " + token }, query: { deviceId: "s26" }
   });
   assert.equal(claimed.body.command.id, id);
 
   const completed = await invoke(app, "POST /device/commands/:id/result", {
-    headers: { authorization: "Bearer phone-secret" }, params: { id },
+    headers: { authorization: "Bearer " + token }, params: { id },
     body: { deviceId: "s26", result: { ok: true, summary: "Device diagnostics collected." } }
   });
   assert.equal(completed.body.status, "completed");
@@ -96,4 +139,14 @@ test("bridge rejects missing credentials and only queues allowlisted read-only c
   });
   assert.equal(readback.body.command.status, "completed");
   assert.equal(readback.body.command.result.ok, true);
+
+  const revoked = await invoke(app, "POST /ax/device/:deviceId/revoke", {
+    headers: { authorization: "Bearer ax-secret" }, params: { deviceId: "s26" }
+  });
+  assert.equal(revoked.body.revoked, true);
+
+  const afterRevoke = await invoke(app, "GET /device/commands/next", {
+    headers: { authorization: "Bearer " + token }, query: { deviceId: "s26" }
+  });
+  assert.equal(afterRevoke.statusCode, 401);
 });
