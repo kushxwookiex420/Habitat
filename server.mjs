@@ -537,7 +537,12 @@ app.post("/device/heartbeat", (req, res) => {
 
 app.get("/device/status", async (req, res) => {
   const access = await androidAccessStatus();
-  return res.json({ ok: access.status === "PASS", androidDeviceAccess: access.status, detail: access.detail, devices: access.devices });
+  return res.json({
+    ok: access.status === "PASS",
+    androidDeviceAccess: access.status,
+    detail: access.detail,
+    deviceCount: access.devices.length
+  });
 });
 
 app.get("/health", (req, res) => {
