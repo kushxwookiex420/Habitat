@@ -44,7 +44,7 @@ class MainActivity : Activity() {
         brain = BrainAdapter(this)
         deviceBridge = AndroidDeviceBridge(this) { status ->
             runOnUiThread {
-                deviceBridgeButton?.text = if (deviceBridge.isConfigured()) "AX ✓" else "LINK"
+                deviceBridgeButton?.text = if (deviceBridge.isConfigured()) "AX SET" else "LINK"
                 if (status.contains("authentication failed") || status.contains("command completed")) {
                     Toast.makeText(this, status, Toast.LENGTH_SHORT).show()
                 }
@@ -102,7 +102,7 @@ class MainActivity : Activity() {
         val tiktok = Button(this).apply { text = "TT"; textSize = 15f; setTextColor(Color.WHITE); setBackgroundColor(Color.rgb(28, 28, 36)); isAllCaps = false; setOnClickListener { showTikTokPublisherDialog() } }
         composer.addView(tiktok, LinearLayout.LayoutParams(58, 82).apply { leftMargin = 8 })
         val bridgeButton = Button(this).apply {
-            text = if (deviceBridge.isConfigured()) "AX ✓" else "LINK"
+            text = if (deviceBridge.isConfigured()) "AX SET" else "LINK"
             textSize = 13f
             setTextColor(Color.WHITE)
             setBackgroundColor(Color.rgb(5, 92, 105))
@@ -625,7 +625,7 @@ class MainActivity : Activity() {
                     Toast.makeText(this, "A server-issued device token is required.", Toast.LENGTH_LONG).show()
                     return@setOnClickListener
                 }
-                deviceBridgeButton?.text = "AX ✓"
+                deviceBridgeButton?.text = "AX SET"
                 deviceBridge.start()
                 Toast.makeText(this, "Secure AX phone link configured. It polls only while Habitat is open.", Toast.LENGTH_LONG).show()
                 dialog.dismiss()
