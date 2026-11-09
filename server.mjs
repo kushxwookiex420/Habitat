@@ -1,4 +1,5 @@
 import { buildCapabilityStatus } from "./capability-status.mjs";
+import { registerDeviceCommandBridge } from "./device-command-bridge.mjs";
 import { claimTaskDispatch } from "./task-dispatch-guard.mjs";
 import { createD1TaskRepository } from "./d1-task-repository.mjs";
 import { createD1DispatchLeaseRepository } from "./d1-dispatch-lease-repository.mjs";
@@ -20,6 +21,8 @@ import express from "express";
 const app = express();
 
 app.use(express.json({ limit: "1mb" }));
+
+const deviceCommandBridge = registerDeviceCommandBridge(app);
 
 registerPublicPages(app);
 registerProductDemoResearch(app);
@@ -1871,6 +1874,8 @@ if (secretVault) {
   console.warn("TIKTOK_TOKEN_VAULT: unavailable — OAuth cannot be marked connected until D1 and HABITAT_TOKEN_ENCRYPTION_KEY are configured");
 }
 const contentStorageInit = await contentEngine.initialize();
+const deviceCommandBridgeInit = await deviceCommandBridge.initialize();
+console.log("DEVICE_COMMAND_BRIDGE_STATUS", JSON.stringify({ ...deviceCommandBridge.status(), initialized: deviceCommandBridgeInit.ok }));
 contentStorageReady = contentStorageInit?.durable === true;
 
 app.listen(
