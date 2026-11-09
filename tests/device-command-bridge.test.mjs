@@ -55,7 +55,8 @@ function memoryRepository() {
     },
     async isDevicePaired(deviceId) { const row=devices.get(deviceId); return Boolean(row && !row.revoked); },
     async touchDevice(deviceId, seenAt) { const row=devices.get(deviceId); if(row && !row.revoked) row.lastSeenAt=seenAt; },
-    async listDevices() { return [...devices.entries()].map(([device_id,row]) => ({device_id,created_at:row.createdAt,last_seen_at:row.lastSeenAt,revoked_at:row.revoked ? "revoked" : null})); },
+    async updateDeviceInfo(deviceId, seenAt, details) { const row=devices.get(deviceId); if(row && !row.revoked) { row.lastSeenAt=seenAt; row.deviceInfo=details; } },
+    async listDevices() { return [...devices.entries()].map(([device_id,row]) => ({device_id,created_at:row.createdAt,last_seen_at:row.lastSeenAt,device_json:row.deviceInfo ? JSON.stringify(row.deviceInfo) : null,revoked_at:row.revoked ? "revoked" : null})); },
     async revokeDevice(deviceId) { const row=devices.get(deviceId); if(row) row.revoked=true; },
     async enqueue(row) { commands.set(row.id, structuredClone(row)); },
     async claimNext(deviceId) {
@@ -161,11 +162,20 @@ test("pairing codes are one-time and issue individual phone credentials", async 
   });
   assert.equal(claimed.body.command.id, id);
 
+  const heartbeat = await invoke(app, "POST /device/heartbeat", {
+    headers: { authorization: "Bearer " + token },
+    body: { deviceId: "s26", details: { manufacturer: "Samsung", model: "Galaxy S26 Ultra", batteryPercent: 83, charging: true, ignoredField: "must-not-be-stored" } }
+  });
+  assert.equal(heartbeat.body.ok, true);
+
   const inventory = await invoke(app, "GET /ax/device/devices", {
     headers: { authorization: "Bearer ax-secret" }
   });
   assert.equal(inventory.body.devices[0].deviceId, "s26");
   assert.ok(inventory.body.devices[0].lastSeenAt);
+  assert.deepEqual(inventory.body.devices[0].deviceInfo, {
+    manufacturer: "Samsung", model: "Galaxy S26 Ultra", batteryPercent: 83, charging: true
+  });
   assert.equal(JSON.stringify(inventory.body).includes(token), false);
 
   const completed = await invoke(app, "POST /device/commands/:id/result", {
