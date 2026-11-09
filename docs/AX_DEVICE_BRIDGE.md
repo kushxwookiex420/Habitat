@@ -15,6 +15,7 @@ This branch adds a D1-backed command queue, one-time device pairing, per-device 
 - Pairing codes are high-entropy, single-use, expire after 10 minutes, and are stored only as SHA-256 digests.
 - Device revocation invalidates the device token and any outstanding pairing codes for that device.
 - HTTPS only. Phone polls outbound; no open port on Android.
+- Foreground polling is 20 seconds; background check-ins use Android JobScheduler at a 15-minute interval and may be deferred by the OS.
 - Commands are allowlisted. Arbitrary shell, file access, app interaction, accessibility gestures, purchases, messages, and publishing are excluded.
 - Every command is scoped to one registered device, expires after five minutes, and records a structured result.
 - D1 is mandatory for command storage. If D1 is unavailable, the bridge fails closed instead of silently using process memory.
