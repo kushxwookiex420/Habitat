@@ -45,7 +45,7 @@ class MainActivity : Activity() {
         deviceBridge = AndroidDeviceBridge(this) { status ->
             runOnUiThread {
                 deviceBridgeButton?.text = if (deviceBridge.isConfigured()) "AX SET" else "LINK"
-                if (status.contains("authentication failed") || status.contains("command completed")) {
+                if (status.contains("authentication failed") || status.contains("command completed") || status.contains("revoked")) {
                     Toast.makeText(this, status, Toast.LENGTH_SHORT).show()
                 }
             }
