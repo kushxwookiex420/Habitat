@@ -59,6 +59,7 @@ export function registerDeviceCommandBridge(app, {
       if (!validDeviceId(deviceId) || !token || !await store.verifyDeviceToken(token, deviceId)) {
         return res.status(401).json({ ok: false, error: "Paired device authentication required." });
       }
+      await store.touchDevice(deviceId, new Date().toISOString());
       req.habitatDeviceId = deviceId;
       next();
     } catch (error) {
@@ -105,6 +106,21 @@ export function registerDeviceCommandBridge(app, {
     } catch (error) {
       console.error("DEVICE_PAIRING_EXCHANGE_FAILED", String(error?.message || error));
       return res.status(500).json({ ok: false, error: "Unable to complete device pairing." });
+    }
+  });
+
+  app.get("/ax/device/devices", requireAx, requireStore, async (_req, res) => {
+    try {
+      const devices = await store.listDevices();
+      return res.json({ ok: true, devices: devices.map(row => ({
+        deviceId: row.device_id,
+        pairedAt: row.created_at,
+        lastSeenAt: row.last_seen_at || null,
+        revoked: Boolean(row.revoked_at)
+      })) });
+    } catch (error) {
+      console.error("DEVICE_LIST_FAILED", String(error?.message || error));
+      return res.status(500).json({ ok: false, error: "Unable to read paired devices." });
     }
   });
 
