@@ -40,9 +40,11 @@ function memoryRepository() {
     durable: true,
     async initialize() {},
     async createPairing(row) { pairings.set(row.codeHash, { ...row, consumedAt: null }); },
+    async seedBootstrapPairing(row) { if (!pairings.has(row.codeHash)) pairings.set(row.codeHash, { ...row, deviceId: "*", consumedAt: null }); },
     async consumePairing({ codeHash, deviceId, consumedAt }) {
       const row = pairings.get(codeHash);
-      if (!row || row.deviceId !== deviceId || row.consumedAt || row.expiresAt <= consumedAt) return false;
+      if (!row || (row.deviceId !== deviceId && row.deviceId !== "*") || row.consumedAt || row.expiresAt <= consumedAt) return false;
+      row.deviceId = deviceId;
       row.consumedAt = consumedAt;
       return true;
     },
@@ -71,6 +73,34 @@ function memoryRepository() {
     async get(id) { return commands.get(id) || null; }
   };
 }
+
+
+test("bootstrap pairing is short-lived, single-use, and never exposes an Ax token", async () => {
+  const app = makeApp();
+  const repository = memoryRepository();
+  const code = "habitat-bootstrap-" + "x".repeat(32);
+  const codeHash = createHash("sha256").update(code).digest("hex");
+  const bridge = registerDeviceCommandBridge(app, {
+    env: {
+      HABITAT_DEVICE_PAIRING_BOOTSTRAP_CODE_HASH: codeHash,
+      HABITAT_DEVICE_PAIRING_BOOTSTRAP_EXPIRES_AT: new Date(Date.now() + 10 * 60 * 1000).toISOString()
+    },
+    repository
+  });
+  await bridge.initialize();
+
+  const paired = await invoke(app, "POST /device/pair", {
+    headers: {}, body: { deviceId: "s26-ultra", code }
+  });
+  assert.equal(paired.statusCode, 200);
+  assert.equal(paired.body.device.deviceId, "s26-ultra");
+  assert.ok(paired.body.device.token);
+
+  const replay = await invoke(app, "POST /device/pair", {
+    headers: {}, body: { deviceId: "another-device", code }
+  });
+  assert.equal(replay.statusCode, 401);
+});
 
 test("pairing codes are one-time and issue individual phone credentials", async () => {
   const app = makeApp();
