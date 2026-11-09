@@ -101,7 +101,7 @@ class MainActivity : Activity() {
         composer.addView(send, LinearLayout.LayoutParams(70, 82).apply { leftMargin = 8 })
         val tiktok = Button(this).apply { text = "TT"; textSize = 15f; setTextColor(Color.WHITE); setBackgroundColor(Color.rgb(28, 28, 36)); isAllCaps = false; setOnClickListener { showTikTokPublisherDialog() } }
         composer.addView(tiktok, LinearLayout.LayoutParams(58, 82).apply { leftMargin = 8 })
-        deviceBridgeButton = Button(this).apply {
+        val bridgeButton = Button(this).apply {
             text = if (deviceBridge.isConfigured()) "AX ✓" else "LINK"
             textSize = 13f
             setTextColor(Color.WHITE)
@@ -109,7 +109,8 @@ class MainActivity : Activity() {
             isAllCaps = false
             setOnClickListener { showDeviceBridgeDialog() }
         }
-        composer.addView(deviceBridgeButton, LinearLayout.LayoutParams(62, 82).apply { leftMargin = 8 })
+        deviceBridgeButton = bridgeButton
+        composer.addView(bridgeButton, LinearLayout.LayoutParams(62, 82).apply { leftMargin = 8 })
 
         // The command composer lives above the Samsung navigation area and above
         // the bottom navigation rail instead of being pinned to the screen bottom.
