@@ -22,6 +22,8 @@ class MainActivity : Activity() {
     private lateinit var input: EditText
     private lateinit var ui: HabitatOverlay
     private lateinit var brain: BrainAdapter
+    private lateinit var deviceBridge: AndroidDeviceBridge
+    private var deviceBridgeButton: Button? = null
     private val voiceCode = 700
     private var lastTaskId: String? = null
     private val taskPrefs by lazy { getSharedPreferences("habitat_tasks", MODE_PRIVATE) }
@@ -40,6 +42,14 @@ class MainActivity : Activity() {
         window.setFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN, WindowManager.LayoutParams.FLAG_FULLSCREEN)
         window.navigationBarColor = Color.BLACK
         brain = BrainAdapter(this)
+        deviceBridge = AndroidDeviceBridge(this) { status ->
+            runOnUiThread {
+                deviceBridgeButton?.text = if (deviceBridge.isConfigured()) "AX SET" else "LINK"
+                if (status.contains("authentication failed") || status.contains("command completed") || status.contains("revoked")) {
+                    Toast.makeText(this, status, Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
         lastTaskId = taskPrefs.getString("live_system_check_task_id", null)
 
         val root = FrameLayout(this)
@@ -91,6 +101,16 @@ class MainActivity : Activity() {
         composer.addView(send, LinearLayout.LayoutParams(70, 82).apply { leftMargin = 8 })
         val tiktok = Button(this).apply { text = "TT"; textSize = 15f; setTextColor(Color.WHITE); setBackgroundColor(Color.rgb(28, 28, 36)); isAllCaps = false; setOnClickListener { showTikTokPublisherDialog() } }
         composer.addView(tiktok, LinearLayout.LayoutParams(58, 82).apply { leftMargin = 8 })
+        val bridgeButton = Button(this).apply {
+            text = if (deviceBridge.isConfigured()) "AX SET" else "LINK"
+            textSize = 13f
+            setTextColor(Color.WHITE)
+            setBackgroundColor(Color.rgb(5, 92, 105))
+            isAllCaps = false
+            setOnClickListener { showDeviceBridgeDialog() }
+        }
+        deviceBridgeButton = bridgeButton
+        composer.addView(bridgeButton, LinearLayout.LayoutParams(62, 82).apply { leftMargin = 8 })
 
         // The command composer lives above the Samsung navigation area and above
         // the bottom navigation rail instead of being pinned to the screen bottom.
@@ -410,6 +430,10 @@ class MainActivity : Activity() {
             }
         }
         heartbeatHandler.postDelayed(heartbeatRunnable, heartbeatIntervalMs)
+        if (deviceBridge.isConfigured()) {
+            deviceBridge.start()
+            DeviceBridgeScheduler.schedule(this)
+        }
         ensureSystemCheckTask()
     }
 
@@ -566,6 +590,69 @@ class MainActivity : Activity() {
         }
     }
 
+    private fun showDeviceBridgeDialog() {
+        val panel = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(28, 18, 28, 8) }
+        val device = TextView(this).apply {
+            text = "This phone's device ID:\n" + deviceBridge.deviceId
+            textSize = 14f
+            setTextColor(Color.DKGRAY)
+        }
+        val help = TextView(this).apply {
+            text = "Create a one-time pairing code with Ax, then paste it here. The code expires after 10 minutes and can only be used once. Your phone receives its own revocable credential, encrypted with Android Keystore."
+            textSize = 13f
+            setTextColor(Color.DKGRAY)
+        }
+        val code = EditText(this).apply {
+            hint = "One-time AX pairing code"
+            inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
+            textSize = 15f
+        }
+        panel.addView(device)
+        panel.addView(help)
+        panel.addView(code)
+        val dialog = AlertDialog.Builder(this)
+            .setTitle("AX • Secure phone pairing")
+            .setView(panel)
+            .setNegativeButton("Close", null)
+            .setNeutralButton("Disconnect", null)
+            .setPositiveButton("Pair phone", null)
+            .create()
+        dialog.setOnShowListener {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                val value = code.text.toString().trim()
+                if (value.length < 20) {
+                    code.error = "Paste the one-time pairing code from Ax"
+                    return@setOnClickListener
+                }
+                dialog.getButton(AlertDialog.BUTTON_POSITIVE).isEnabled = false
+                dialog.getButton(AlertDialog.BUTTON_POSITIVE).text = "Pairing…"
+                deviceBridge.pair(value) { success ->
+                    runOnUiThread {
+                        if (success) {
+                            deviceBridgeButton?.text = "AX SET"
+                            deviceBridge.start()
+                            DeviceBridgeScheduler.schedule(this)
+                            Toast.makeText(this, "Phone paired. AX checks in while Habitat is open and periodically in the background.", Toast.LENGTH_LONG).show()
+                            dialog.dismiss()
+                        } else {
+                            dialog.getButton(AlertDialog.BUTTON_POSITIVE).isEnabled = true
+                            dialog.getButton(AlertDialog.BUTTON_POSITIVE).text = "Pair phone"
+                            code.error = "Pairing failed or code expired. Ask Ax for a new code."
+                        }
+                    }
+                }
+            }
+            dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener {
+                deviceBridge.clearCredentials()
+                DeviceBridgeScheduler.cancel(this)
+                deviceBridgeButton?.text = "LINK"
+                Toast.makeText(this, "AX phone link disconnected.", Toast.LENGTH_SHORT).show()
+                dialog.dismiss()
+            }
+        }
+        dialog.show()
+    }
+
     private fun showTikTokPublisherDialog() {
         val panel = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(32, 24, 32, 8) }
         val account = TextView(this).apply { text = "Loading TikTok creator…"; textSize = 17f; setTextColor(Color.DKGRAY) }
@@ -630,8 +717,22 @@ class MainActivity : Activity() {
         }
     }
 
+    override fun onResume() {
+        super.onResume()
+        if (::deviceBridge.isInitialized && deviceBridge.isConfigured()) {
+            deviceBridge.start()
+            DeviceBridgeScheduler.schedule(this)
+        }
+    }
+
+    override fun onPause() {
+        if (::deviceBridge.isInitialized) deviceBridge.stop()
+        super.onPause()
+    }
+
     override fun onDestroy() {
         heartbeatHandler.removeCallbacks(heartbeatRunnable)
+        if (::deviceBridge.isInitialized) deviceBridge.stop()
         brain.shutdown()
         super.onDestroy()
     }

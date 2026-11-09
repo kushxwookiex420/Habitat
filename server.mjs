@@ -1,4 +1,5 @@
 import { buildCapabilityStatus } from "./capability-status.mjs";
+import { registerDeviceCommandBridge } from "./device-command-bridge.mjs";
 import { claimTaskDispatch } from "./task-dispatch-guard.mjs";
 import { createD1TaskRepository } from "./d1-task-repository.mjs";
 import { createD1DispatchLeaseRepository } from "./d1-dispatch-lease-repository.mjs";
@@ -20,6 +21,8 @@ import express from "express";
 const app = express();
 
 app.use(express.json({ limit: "1mb" }));
+
+const deviceCommandBridge = registerDeviceCommandBridge(app);
 
 registerPublicPages(app);
 registerProductDemoResearch(app);
@@ -532,16 +535,28 @@ app.post("/device/heartbeat", (req, res) => {
   return res.json({ ok: true, androidDeviceAccess: "PASS", device });
 });
 
-app.get("/device/status", (req, res) => {
-  const access = androidAccessStatus();
-  return res.json({ ok: access.status === "PASS", androidDeviceAccess: access.status, detail: access.detail, devices: access.devices });
+app.get("/device/status", async (req, res) => {
+  const access = await androidAccessStatus();
+  return res.json({
+    ok: access.status === "PASS",
+    androidDeviceAccess: access.status,
+    detail: access.detail,
+    deviceCount: access.devices.length
+  });
 });
 
 app.get("/health", (req, res) => {
+  const deviceBridge = deviceCommandBridge.status();
   res.json({
     habitat: "online",
     brain: hasAnyAiProviderKey() ? "ready" : "missing_api_key",
     backend: "ready",
+    deviceBridge: {
+      ready: deviceBridge.ready,
+      durable: deviceBridge.durable,
+      axTokenConfigured: deviceBridge.axTokenConfigured,
+      perDeviceTokens: deviceBridge.perDeviceTokens
+    },
     provider: "multi-provider",
     model,
     free_brain: true
@@ -1041,6 +1056,7 @@ function nowIso() { return new Date().toISOString(); }
 // system checks can verify that the Android client actually reached the backend.
 const androidDevices = new Map();
 const ANDROID_HEARTBEAT_TTL_MS = 120000;
+const DEVICE_BRIDGE_HEARTBEAT_TTL_MS = 45 * 60 * 1000;
 
 function pruneAndroidDevices() {
   const cutoff = Date.now() - ANDROID_HEARTBEAT_TTL_MS;
@@ -1049,14 +1065,50 @@ function pruneAndroidDevices() {
   }
 }
 
-function androidAccessStatus() {
+async function androidAccessStatus() {
   pruneAndroidDevices();
-  const devices = Array.from(androidDevices.values());
+  const legacyDevices = Array.from(androidDevices.values()).map(device => ({
+    ...device,
+    source: "legacy-heartbeat",
+    heartbeatTtlMs: ANDROID_HEARTBEAT_TTL_MS
+  }));
+  let pairedDevices = [];
+  try {
+    pairedDevices = await deviceCommandBridge.listDevices();
+  } catch (error) {
+    console.warn("DEVICE_BRIDGE_INVENTORY_UNAVAILABLE", String(error?.message || error));
+  }
+  const bridgeDevices = pairedDevices
+    .filter(row => !row.revoked_at && row.last_seen_at)
+    .map(row => {
+      let details = {};
+      try { details = row.device_json ? JSON.parse(row.device_json) : {}; } catch {}
+      const deviceModel = [details.manufacturer, details.model].filter(Boolean).join(" ") || "Paired Habitat Android device";
+      return {
+        deviceId: row.device_id,
+        packageName: "com.habitat",
+        deviceModel,
+        appVersion: details.appVersion || "device-bridge",
+        androidSdk: details.androidSdk || null,
+        androidRelease: details.androidRelease || null,
+        batteryPercent: Number.isInteger(details.batteryPercent) ? details.batteryPercent : null,
+        charging: typeof details.charging === "boolean" ? details.charging : null,
+        interactive: typeof details.interactive === "boolean" ? details.interactive : null,
+        lastSeenAt: row.last_seen_at,
+        source: "secure-device-bridge",
+        heartbeatTtlMs: DEVICE_BRIDGE_HEARTBEAT_TTL_MS
+      };
+    });
+  const devices = [...legacyDevices, ...bridgeDevices]
+    .sort((a, b) => new Date(b.lastSeenAt).getTime() - new Date(a.lastSeenAt).getTime());
+  const active = devices.filter(device =>
+    Date.now() - new Date(device.lastSeenAt).getTime() <= (device.heartbeatTtlMs || ANDROID_HEARTBEAT_TTL_MS)
+  );
   return {
-    status: devices.length > 0 ? "PASS" : "UNVERIFIED",
-    detail: devices.length > 0
-      ? "Live Habitat Android heartbeat received within the last 120 seconds."
-      : "No live Habitat Android heartbeat has been received within the last 120 seconds.",
+    status: active.length > 0 ? "PASS" : "UNVERIFIED",
+    detail: active.length > 0
+      ? "A Habitat Android device checked in recently (" + active[0].source + ")."
+      : "No Habitat Android device has checked in within its heartbeat window.",
     devices
   };
 }
@@ -1149,13 +1201,15 @@ async function runSystemCheck() {
       detail: "HTTP " + healthResponse.status + " in " + (Date.now() - healthStartedAt) + "ms; " + JSON.stringify(health)
     };
 
-    const androidAccess = androidAccessStatus();
-    const latestDevice = androidAccess.devices[0] || null;
+    const androidAccess = await androidAccessStatus();
+    const latestDevice = androidAccess.devices.find(device =>
+      Date.now() - new Date(device.lastSeenAt).getTime() <= (device.heartbeatTtlMs || ANDROID_HEARTBEAT_TTL_MS)
+    ) || null;
     const heartbeatAgeMs = latestDevice?.lastSeenAt
       ? Math.max(0, Date.now() - new Date(latestDevice.lastSeenAt).getTime())
       : null;
     checks.androidHeartbeat = {
-      status: latestDevice && heartbeatAgeMs <= ANDROID_HEARTBEAT_TTL_MS ? "PASS" : "FAIL",
+      status: latestDevice ? "PASS" : "FAIL",
       detail: latestDevice
         ? "Last heartbeat " + latestDevice.lastSeenAt + " (" + heartbeatAgeMs + "ms ago)."
         : "No Android heartbeat is currently registered."
@@ -1249,8 +1303,8 @@ async function runSystemCheck() {
   return { task, checks, report, overall };
 }
 
-app.get("/capabilities", (_req, res) => {
-  const device = androidAccessStatus();
+app.get("/capabilities", async (_req, res) => {
+  const device = await androidAccessStatus();
   return res.json(buildCapabilityStatus({
     aiProviderConfigured: hasAnyAiProviderKey(),
     workerRegistered: workerRegistry.has("habitat-qa-worker"),
@@ -1531,12 +1585,14 @@ app.post("/tasks/:id/delegate", async (req, res) => {
       return res.status(502).json({ ok: false, task });
     }
 
-    const androidAccess = androidAccessStatus();
-    const latestDevice = androidAccess.devices[0] || null;
+    const androidAccess = await androidAccessStatus();
+    const latestDevice = androidAccess.devices.find(device =>
+      Date.now() - new Date(device.lastSeenAt).getTime() <= (device.heartbeatTtlMs || ANDROID_HEARTBEAT_TTL_MS)
+    ) || null;
     const heartbeatAgeMs = latestDevice?.lastSeenAt
       ? Math.max(0, Date.now() - new Date(latestDevice.lastSeenAt).getTime())
       : null;
-    const androidHeartbeat = latestDevice && heartbeatAgeMs <= ANDROID_HEARTBEAT_TTL_MS ? "PASS" : "FAIL";
+    const androidHeartbeat = latestDevice ? "PASS" : "FAIL";
     const taskCreation = taskStore.has(task.id) ? "PASS" : "FAIL";
     const storage = storageSelfTest() ? "PASS" : "FAIL";
 
@@ -1871,6 +1927,8 @@ if (secretVault) {
   console.warn("TIKTOK_TOKEN_VAULT: unavailable — OAuth cannot be marked connected until D1 and HABITAT_TOKEN_ENCRYPTION_KEY are configured");
 }
 const contentStorageInit = await contentEngine.initialize();
+const deviceCommandBridgeInit = await deviceCommandBridge.initialize();
+console.log("DEVICE_COMMAND_BRIDGE_STATUS", JSON.stringify({ ...deviceCommandBridge.status(), initialized: deviceCommandBridgeInit.ok }));
 contentStorageReady = contentStorageInit?.durable === true;
 
 app.listen(

@@ -37,6 +37,22 @@ jobs:
           echo "$brain" | jq .
           echo "$brain" | jq -e '.ok == true and .configured == true' >/dev/null
 
+          device_bridge="$("${CURL[@]}" "$BASE/health")"
+          echo "$device_bridge" | jq '{deviceBridge: .deviceBridge}'
+          bridge_ready="$(echo "$device_bridge" | jq -r '.deviceBridge.ready // false')"
+          ax_token_configured="$(echo "$device_bridge" | jq -r '.deviceBridge.axTokenConfigured // false')"
+          if [ "$bridge_ready" = "true" ] && [ "$ax_token_configured" = "true" ]; then
+            device_status="$("${CURL[@]}" "$BASE/device/status")"
+            echo "$device_status" | jq '{androidDeviceAccess, detail, deviceCount}'
+            if [ "$(echo "$device_status" | jq -r '.androidDeviceAccess')" = "PASS" ]; then
+              phone_state="paired phone checked in within its heartbeat window"
+            else
+              phone_state="bridge configured; no recent phone check-in yet"
+            fi
+          else
+            phone_state="device bridge is not fully configured yet"
+          fi
+
           promotion="$("${CURL[@]}" "$BASE/promotion/status")"
           echo "$promotion" | jq .
           echo "$promotion" | jq -e '
@@ -61,6 +77,7 @@ jobs:
             echo "- AI provider configuration is present (this does not prove every model call succeeds)."
             echo "- Continuity checkpoint and Cloudflare D1 persistence are reported ready."
             echo "- Transient network/cold-start failures are retried before reporting failure."
+            echo "- AX phone bridge: $phone_state."
             echo "- Checked at: $(date -u +'%Y-%m-%d %H:%M:%S UTC')"
           } >> "$GITHUB_STEP_SUMMARY"
 
