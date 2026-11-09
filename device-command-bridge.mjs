@@ -62,7 +62,7 @@ export function registerDeviceCommandBridge(app, {
         return res.status(400).json({ ok: false, error: "A valid deviceId and allowlisted command type are required." });
       }
       const command = {
-        id: "dc_" + crypto.randomUUID(),
+        id: "dc_" + randomUUID(),
         deviceId,
         type,
         payload: {},
