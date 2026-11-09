@@ -103,6 +103,28 @@ test("bootstrap pairing is short-lived, single-use, and never exposes an Ax toke
   assert.equal(replay.statusCode, 401);
 });
 
+test("Bridge APK field aliases receive the same one-time credential response", async () => {
+  const app = makeApp();
+  const repository = memoryRepository();
+  const bridge = registerDeviceCommandBridge(app, { env: { HABITAT_AX_BRIDGE_TOKEN: "ax-secret" }, repository });
+  await bridge.initialize();
+  const issued = await invoke(app, "POST /ax/device/pairings", {
+    headers: { authorization: "Bearer ax-secret" }, body: { deviceId: "android-s26" }
+  });
+  assert.equal(issued.statusCode, 201);
+  const code = issued.body.pairing.code;
+  const paired = await invoke(app, "POST /device/pair", {
+    headers: { "content-type": "application/json" },
+    body: { phoneId: "android-s26", pairingCode: code }
+  });
+  assert.equal(paired.statusCode, 200);
+  assert.equal(paired.body.ok, true);
+  assert.equal(paired.body.deviceId, "android-s26");
+  assert.equal(paired.body.device.deviceId, "android-s26");
+  assert.equal(paired.body.token, paired.body.device.token);
+  assert.equal(paired.body.deviceToken, paired.body.device.token);
+});
+
 test("pairing codes are one-time and issue individual phone credentials", async () => {
   const app = makeApp();
   const repository = memoryRepository();
