@@ -1,4 +1,4 @@
-import { timingSafeEqual } from "node:crypto";
+import { randomUUID, timingSafeEqual } from "node:crypto";
 import { createD1DeviceCommandRepository } from "./d1-device-command-repository.mjs";
 
 const SAFE_COMMANDS = new Set(["device.status"]);
