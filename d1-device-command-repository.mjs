@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, timingSafeEqual } from "node:crypto";
 
 const API = "https://api.cloudflare.com/client/v4";
 
@@ -73,7 +73,7 @@ export function createD1DeviceCommandRepository({ accountId, databaseId, apiToke
       const supplied = hash(token);
       const a = Buffer.from(stored);
       const b = Buffer.from(supplied);
-      return a.length === b.length && a.length > 0 && require("node:crypto").timingSafeEqual(a, b);
+      return a.length === b.length && a.length > 0 && timingSafeEqual(a, b);
     },
     async isDevicePaired(deviceId) {
       const result = await query(
