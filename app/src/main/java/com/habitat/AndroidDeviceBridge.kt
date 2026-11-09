@@ -55,17 +55,26 @@ class AndroidDeviceBridge(
             return
         }
         Thread {
+            var failureReason = "Pairing failed. Check the code and phone ID."
             val success = try {
                 val response = request(
                     "POST", "/device/pair", null,
                     JSONObject().put("deviceId", deviceId).put("code", clean)
                 )
                 val token = response.optJSONObject("device")?.optString("token").orEmpty()
-                if (!response.optBoolean("ok") || token.length < 40) false else storeToken(token)
-            } catch (_: Exception) {
+                if (!response.optBoolean("ok") || token.length < 40) {
+                    failureReason = response.optString("error").ifBlank { "Server returned an invalid pairing response." }
+                    false
+                } else {
+                    val stored = storeToken(token)
+                    if (!stored) failureReason = "Android Keystore could not save the phone credential."
+                    stored
+                }
+            } catch (error: Exception) {
+                failureReason = error.message?.take(180) ?: failureReason
                 false
             }
-            onComplete(success)
+            onComplete(success, if (success) "Paired" else failureReason)
         }.start()
     }
 
