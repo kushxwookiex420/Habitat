@@ -144,6 +144,9 @@ class AndroidDeviceBridge(
                 onStatus("AX bridge rejected the phone request")
                 return
             }
+            // A successful authenticated poll proves this phone can reach the
+            // durable command queue with its paired device credential.
+            onStatus("AX LINK LIVE")
             sendHeartbeat(token)
             val command = next.optJSONObject("command") ?: return
             val id = command.optString("id")
