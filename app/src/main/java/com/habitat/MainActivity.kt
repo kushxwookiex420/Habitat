@@ -44,7 +44,12 @@ class MainActivity : Activity() {
         brain = BrainAdapter(this)
         deviceBridge = AndroidDeviceBridge(this) { status ->
             runOnUiThread {
-                deviceBridgeButton?.text = if (deviceBridge.isConfigured()) "AX SET" else "LINK"
+                deviceBridgeButton?.text = when {
+                    !deviceBridge.isConfigured() -> "LINK"
+                    status == "AX LINK LIVE" -> "LIVE"
+                    status.contains("temporarily unavailable") || status.contains("rejected") -> "OFF"
+                    else -> "AX SET"
+                }
                 if (status.contains("authentication failed") || status.contains("command completed") || status.contains("revoked")) {
                     Toast.makeText(this, status, Toast.LENGTH_SHORT).show()
                 }
