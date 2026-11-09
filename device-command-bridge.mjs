@@ -20,6 +20,19 @@ function validDeviceId(value) {
   const id = String(value || "").trim();
   return id.length > 0 && id.length <= 128 && /^[A-Za-z0-9._:-]+$/.test(id);
 }
+function sanitizeDeviceDetails(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const details = {};
+  for (const key of ["manufacturer", "model", "androidRelease", "appVersion"]) {
+    if (typeof value[key] === "string") details[key] = value[key].trim().slice(0, 100);
+  }
+  if (Number.isInteger(value.androidSdk) && value.androidSdk >= 1 && value.androidSdk <= 100) details.androidSdk = value.androidSdk;
+  if (Number.isInteger(value.batteryPercent) && value.batteryPercent >= 0 && value.batteryPercent <= 100) details.batteryPercent = value.batteryPercent;
+  for (const key of ["charging", "interactive"]) {
+    if (typeof value[key] === "boolean") details[key] = value[key];
+  }
+  return details;
+}
 
 export function registerDeviceCommandBridge(app, {
   env = process.env,
@@ -90,6 +103,19 @@ export function registerDeviceCommandBridge(app, {
 
   // The phone exchanges the one-time code for a per-device bearer token.
   // The raw token is returned once and never stored server-side.
+  app.post("/device/heartbeat", requireStore, requireDevice, async (req, res) => {
+    const details = sanitizeDeviceDetails(req.body?.details);
+    if (!details) return res.status(400).json({ ok: false, error: "A structured device status object is required." });
+    try {
+      const seenAt = new Date().toISOString();
+      await store.updateDeviceInfo(req.habitatDeviceId, seenAt, details);
+      return res.json({ ok: true, deviceId: req.habitatDeviceId, lastSeenAt: seenAt });
+    } catch (error) {
+      console.error("DEVICE_HEARTBEAT_FAILED", String(error?.message || error));
+      return res.status(500).json({ ok: false, error: "Unable to record device status." });
+    }
+  });
+
   app.post("/device/pair", requireStore, async (req, res) => {
     try {
       const deviceId = String(req.body?.deviceId || "").trim();
@@ -116,6 +142,7 @@ export function registerDeviceCommandBridge(app, {
         deviceId: row.device_id,
         pairedAt: row.created_at,
         lastSeenAt: row.last_seen_at || null,
+        deviceInfo: (() => { try { return row.device_json ? JSON.parse(row.device_json) : null; } catch { return null; } })(),
         revoked: Boolean(row.revoked_at)
       })) });
     } catch (error) {
