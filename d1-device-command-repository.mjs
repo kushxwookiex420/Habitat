@@ -39,7 +39,7 @@ export function createD1DeviceCommandRepository({ accountId, databaseId, apiToke
       await query("CREATE INDEX IF NOT EXISTS habitat_device_commands_queue ON habitat_device_commands(device_id, status, created_at)");
       await query("CREATE TABLE IF NOT EXISTS habitat_device_pairings (code_hash TEXT PRIMARY KEY NOT NULL, device_id TEXT NOT NULL, created_at TEXT NOT NULL, expires_at TEXT NOT NULL, consumed_at TEXT)");
       await query("CREATE INDEX IF NOT EXISTS habitat_device_pairings_expiry ON habitat_device_pairings(expires_at, consumed_at)");
-      await query("CREATE TABLE IF NOT EXISTS habitat_paired_devices (device_id TEXT PRIMARY KEY NOT NULL, token_hash TEXT NOT NULL, created_at TEXT NOT NULL, last_seen_at TEXT, revoked_at TEXT)");
+      await query("CREATE TABLE IF NOT EXISTS habitat_paired_devices (device_id TEXT PRIMARY KEY NOT NULL, token_hash TEXT NOT NULL, created_at TEXT NOT NULL, last_seen_at TEXT, device_json TEXT, revoked_at TEXT)");
       return { ok: true, adapter: "cloudflare-d1", durable: true };
     },
     async createPairing({ codeHash, deviceId, createdAt, expiresAt }) {
@@ -65,8 +65,8 @@ export function createD1DeviceCommandRepository({ accountId, databaseId, apiToke
     },
     async registerDevice({ deviceId, tokenHash, createdAt }) {
       await query(
-        "INSERT INTO habitat_paired_devices (device_id, token_hash, created_at, last_seen_at, revoked_at) VALUES (?, ?, ?, NULL, NULL) " +
-        "ON CONFLICT(device_id) DO UPDATE SET token_hash = excluded.token_hash, created_at = excluded.created_at, last_seen_at = NULL, revoked_at = NULL",
+        "INSERT INTO habitat_paired_devices (device_id, token_hash, created_at, last_seen_at, device_json, revoked_at) VALUES (?, ?, ?, NULL, NULL, NULL) " +
+        "ON CONFLICT(device_id) DO UPDATE SET token_hash = excluded.token_hash, created_at = excluded.created_at, last_seen_at = NULL, device_json = NULL, revoked_at = NULL",
         [deviceId, tokenHash, createdAt]
       );
       return true;
@@ -96,9 +96,16 @@ export function createD1DeviceCommandRepository({ accountId, databaseId, apiToke
       );
       return true;
     },
+    async updateDeviceInfo(deviceId, seenAt, details) {
+      await query(
+        "UPDATE habitat_paired_devices SET last_seen_at = ?, device_json = ? WHERE device_id = ? AND revoked_at IS NULL",
+        [seenAt, JSON.stringify(details || {}), deviceId]
+      );
+      return true;
+    },
     async listDevices() {
       const result = await query(
-        "SELECT device_id, created_at, last_seen_at, revoked_at FROM habitat_paired_devices ORDER BY created_at DESC LIMIT 50"
+        "SELECT device_id, created_at, last_seen_at, device_json, revoked_at FROM habitat_paired_devices ORDER BY created_at DESC LIMIT 50"
       );
       return result[0]?.results || [];
     },
