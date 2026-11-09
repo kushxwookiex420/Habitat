@@ -217,6 +217,10 @@ export function registerDeviceCommandBridge(app, {
       console.log("DEVICE_COMMAND_BRIDGE: durable D1 queue ready");
       return { ok: true, durable: true };
     },
+    async listDevices() {
+      if (!store || !ready) return [];
+      return store.listDevices();
+    },
     status() {
       return { ready, durable: Boolean(store?.durable), axTokenConfigured: Boolean(axToken), perDeviceTokens: true };
     }
