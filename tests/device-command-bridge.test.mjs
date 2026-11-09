@@ -166,6 +166,7 @@ test("pairing codes are one-time and issue individual phone credentials", async 
   });
   assert.equal(inventory.body.devices[0].deviceId, "s26");
   assert.ok(inventory.body.devices[0].lastSeenAt);
+  assert.equal(JSON.stringify(inventory.body).includes(token), false);
 
   const completed = await invoke(app, "POST /device/commands/:id/result", {
     headers: { authorization: "Bearer " + token }, params: { id },
