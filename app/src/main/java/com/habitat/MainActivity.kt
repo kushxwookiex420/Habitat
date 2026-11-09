@@ -595,40 +595,48 @@ class MainActivity : Activity() {
             setTextColor(Color.DKGRAY)
         }
         val help = TextView(this).apply {
-            text = "Paste the device bridge token configured in Habitat's secure server environment. It is encrypted with Android Keystore on this phone."
+            text = "Create a one-time pairing code with Ax, then paste it here. The code expires after 10 minutes and can only be used once. Your phone receives its own revocable credential, encrypted with Android Keystore."
             textSize = 13f
             setTextColor(Color.DKGRAY)
         }
-        val token = EditText(this).apply {
-            hint = if (deviceBridge.isConfigured()) "Enter replacement token (leave blank to keep current)" else "Device bridge token"
+        val code = EditText(this).apply {
+            hint = "One-time AX pairing code"
             inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
             textSize = 15f
         }
         panel.addView(device)
         panel.addView(help)
-        panel.addView(token)
+        panel.addView(code)
         val dialog = AlertDialog.Builder(this)
-            .setTitle("AX • Secure phone link")
+            .setTitle("AX • Secure phone pairing")
             .setView(panel)
             .setNegativeButton("Close", null)
             .setNeutralButton("Disconnect", null)
-            .setPositiveButton("Save & connect", null)
+            .setPositiveButton("Pair phone", null)
             .create()
         dialog.setOnShowListener {
             dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
-                val value = token.text.toString().trim()
-                if (value.isNotBlank() && !deviceBridge.configure(value)) {
-                    token.error = "Token must be valid and at least 32 characters"
+                val value = code.text.toString().trim()
+                if (value.length < 20) {
+                    code.error = "Paste the one-time pairing code from Ax"
                     return@setOnClickListener
                 }
-                if (!deviceBridge.isConfigured()) {
-                    Toast.makeText(this, "A server-issued device token is required.", Toast.LENGTH_LONG).show()
-                    return@setOnClickListener
+                dialog.getButton(AlertDialog.BUTTON_POSITIVE).isEnabled = false
+                dialog.getButton(AlertDialog.BUTTON_POSITIVE).text = "Pairing…"
+                deviceBridge.pair(value) { success ->
+                    runOnUiThread {
+                        if (success) {
+                            deviceBridgeButton?.text = "AX SET"
+                            deviceBridge.start()
+                            Toast.makeText(this, "Phone paired. AX read-only diagnostics are connected while Habitat is open.", Toast.LENGTH_LONG).show()
+                            dialog.dismiss()
+                        } else {
+                            dialog.getButton(AlertDialog.BUTTON_POSITIVE).isEnabled = true
+                            dialog.getButton(AlertDialog.BUTTON_POSITIVE).text = "Pair phone"
+                            code.error = "Pairing failed or code expired. Ask Ax for a new code."
+                        }
+                    }
                 }
-                deviceBridgeButton?.text = "AX SET"
-                deviceBridge.start()
-                Toast.makeText(this, "Secure AX phone link configured. It polls only while Habitat is open.", Toast.LENGTH_LONG).show()
-                dialog.dismiss()
             }
             dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener {
                 deviceBridge.clearCredentials()
