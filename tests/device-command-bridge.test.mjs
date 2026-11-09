@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { registerDeviceCommandBridge } from "../device-command-bridge.mjs";
 
 function responseRecorder() {
@@ -48,7 +49,7 @@ function memoryRepository() {
     async registerDevice({ deviceId, tokenHash }) { devices.set(deviceId, { tokenHash, revoked: false }); },
     async verifyDeviceToken(token, deviceId) {
       const row = devices.get(deviceId);
-      return Boolean(row && !row.revoked && row.tokenHash === token);
+      return Boolean(row && !row.revoked && row.tokenHash === createHash("sha256").update(token).digest("hex"));
     },
     async isDevicePaired(deviceId) { const row=devices.get(deviceId); return Boolean(row && !row.revoked); },
     async revokeDevice(deviceId) { const row=devices.get(deviceId); if(row) row.revoked=true; },
