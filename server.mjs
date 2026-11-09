@@ -1075,15 +1075,25 @@ async function androidAccessStatus() {
   }
   const bridgeDevices = pairedDevices
     .filter(row => !row.revoked_at && row.last_seen_at)
-    .map(row => ({
-      deviceId: row.device_id,
-      packageName: "com.habitat",
-      deviceModel: "Paired Habitat Android device",
-      appVersion: "device-bridge",
-      lastSeenAt: row.last_seen_at,
-      source: "secure-device-bridge",
-      heartbeatTtlMs: DEVICE_BRIDGE_HEARTBEAT_TTL_MS
-    }));
+    .map(row => {
+      let details = {};
+      try { details = row.device_json ? JSON.parse(row.device_json) : {}; } catch {}
+      const deviceModel = [details.manufacturer, details.model].filter(Boolean).join(" ") || "Paired Habitat Android device";
+      return {
+        deviceId: row.device_id,
+        packageName: "com.habitat",
+        deviceModel,
+        appVersion: details.appVersion || "device-bridge",
+        androidSdk: details.androidSdk || null,
+        androidRelease: details.androidRelease || null,
+        batteryPercent: Number.isInteger(details.batteryPercent) ? details.batteryPercent : null,
+        charging: typeof details.charging === "boolean" ? details.charging : null,
+        interactive: typeof details.interactive === "boolean" ? details.interactive : null,
+        lastSeenAt: row.last_seen_at,
+        source: "secure-device-bridge",
+        heartbeatTtlMs: DEVICE_BRIDGE_HEARTBEAT_TTL_MS
+      };
+    });
   const devices = [...legacyDevices, ...bridgeDevices]
     .sort((a, b) => new Date(b.lastSeenAt).getTime() - new Date(a.lastSeenAt).getTime());
   const active = devices.filter(device =>
