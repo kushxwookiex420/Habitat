@@ -2,6 +2,8 @@ package com.habitat
 
 import android.content.Context
 import android.os.Build
+import android.os.BatteryManager
+import android.os.PowerManager
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
@@ -106,6 +108,34 @@ class AndroidDeviceBridge(
 
     fun pollOnceNow() = pollOnce()
 
+    private fun sendHeartbeat(token: String) {
+        val now = System.currentTimeMillis()
+        val last = prefs.getLong("last_heartbeat_at", 0L)
+        if (now - last < 60_000L) return
+
+        val battery = appContext.getSystemService(Context.BATTERY_SERVICE) as? BatteryManager
+        val power = appContext.getSystemService(Context.POWER_SERVICE) as? PowerManager
+        val details = JSONObject().apply {
+            put("manufacturer", Build.MANUFACTURER)
+            put("model", Build.MODEL)
+            put("androidSdk", Build.VERSION.SDK_INT)
+            put("androidRelease", Build.VERSION.RELEASE)
+            put("appVersion", try {
+                appContext.packageManager.getPackageInfo(appContext.packageName, 0).versionName.orEmpty()
+            } catch (_: Exception) { "unknown" })
+            val capacity = battery?.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY) ?: -1
+            if (capacity in 0..100) put("batteryPercent", capacity)
+            put("charging", try {
+                val intent = appContext.registerReceiver(null, android.content.IntentFilter(android.content.Intent.ACTION_BATTERY_CHANGED))
+                val status = intent?.getIntExtra(BatteryManager.EXTRA_STATUS, -1) ?: -1
+                status == BatteryManager.BATTERY_STATUS_CHARGING || status == BatteryManager.BATTERY_STATUS_FULL
+            } catch (_: Exception) { false })
+            put("interactive", power?.isInteractive ?: false)
+        }
+        request("POST", "/device/heartbeat", token, JSONObject().put("deviceId", deviceId).put("details", details))
+        prefs.edit().putLong("last_heartbeat_at", now).apply()
+    }
+
     private fun pollOnce() {
         val token = readToken() ?: return
         try {
@@ -114,6 +144,7 @@ class AndroidDeviceBridge(
                 onStatus("AX bridge rejected the phone request")
                 return
             }
+            sendHeartbeat(token)
             val command = next.optJSONObject("command") ?: return
             val id = command.optString("id")
             val type = command.optString("type")
