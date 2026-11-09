@@ -6,7 +6,7 @@ android {
     namespace = "com.habitat"
     compileSdk = 35
     defaultConfig {
-        applicationId = "com.habitat"
+        applicationId = "com.habitat.axbridge"
         minSdk = 26
         targetSdk = 35
         versionCode = 83
