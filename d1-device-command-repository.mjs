@@ -87,6 +87,10 @@ export function createD1DeviceCommandRepository({ accountId, databaseId, apiToke
         "UPDATE habitat_paired_devices SET revoked_at = ? WHERE device_id = ? AND revoked_at IS NULL",
         [revokedAt, deviceId]
       );
+      await query(
+        "UPDATE habitat_device_pairings SET consumed_at = ? WHERE device_id = ? AND consumed_at IS NULL",
+        [revokedAt, deviceId]
+      );
       return true;
     },
     async enqueue(command) {
