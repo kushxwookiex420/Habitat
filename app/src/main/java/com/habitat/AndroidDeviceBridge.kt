@@ -86,6 +86,7 @@ class AndroidDeviceBridge(
     @Synchronized
     fun clearCredentials() {
         stop()
+        DeviceBridgeScheduler.cancel(appContext)
         prefs.edit().remove("encrypted_token").apply()
     }
 
@@ -141,7 +142,12 @@ class AndroidDeviceBridge(
             onStatus("AX device bridge: command completed")
         } catch (e: Exception) {
             val message = e.message.orEmpty()
-            onStatus(if (message.contains("401")) "AX bridge authentication failed" else "AX bridge temporarily unavailable")
+            if (message.contains("401")) {
+                clearCredentials()
+                onStatus("AX phone link revoked; credentials cleared")
+            } else {
+                onStatus("AX bridge temporarily unavailable")
+            }
         }
     }
 
