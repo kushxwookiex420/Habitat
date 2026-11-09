@@ -590,12 +590,12 @@ app.post("/chat", async (req, res) => {
 
     // Explicit device.status requests must execute through the paired Android command
     // queue. Never ask the language model to pretend it ran a device command.
-    if (/\\bdevice\\.status\\b|\\bphone\\s+(?:connection\\s+)?diagnostic\\b|\\bdevice\\s+connection\\s+diagnostic\\b/i.test(message)) {
+    if (/\bdevice\.status\b|\bphone\s+(?:connection\s+)?diagnostic\b|\bdevice\s+connection\s+diagnostic\b/i.test(message)) {
       try {
         const queued = await deviceCommandBridge.requestDeviceStatus();
         if (!queued.ok) {
           return res.json({
-            response: "PHONE DEVICE STATUS\\nStatus: UNVERIFIED\\n" + queued.error,
+            response: "PHONE DEVICE STATUS\nStatus: UNVERIFIED\n" + queued.error,
             androidDeviceAccess: "UNVERIFIED",
             deviceCommand: "not_queued",
             deterministic: true,
@@ -613,8 +613,8 @@ app.post("/chat", async (req, res) => {
           const details = command.result.details || {};
           const deviceLabel = [details.manufacturer, details.model].filter(Boolean).join(" ") || "Paired Android device";
           return res.json({
-            response: "PHONE DEVICE STATUS\\nStatus: PASS\\nDevice: " + deviceLabel +
-              "\\nCommand: device.status\\nExecution: completed by the paired Android app\\nDetails: " +
+            response: "PHONE DEVICE STATUS\nStatus: PASS\nDevice: " + deviceLabel +
+              "\nCommand: device.status\nExecution: completed by the paired Android app\nDetails: " +
               JSON.stringify(details),
             androidDeviceAccess: "PASS",
             deviceCommand: command,
@@ -623,7 +623,7 @@ app.post("/chat", async (req, res) => {
           });
         }
         return res.json({
-          response: "PHONE DEVICE STATUS\\nStatus: PENDING / UNVERIFIED\\nThe command was queued for the paired phone, but no completed device response arrived within 25 seconds. Keep Habitat open and try again.",
+          response: "PHONE DEVICE STATUS\nStatus: PENDING / UNVERIFIED\nThe command was queued for the paired phone, but no completed device response arrived within 25 seconds. Keep Habitat open and try again.",
           androidDeviceAccess: "UNVERIFIED",
           deviceCommand: command || { id: queued.commandId, status: "queued" },
           deterministic: true,
@@ -632,7 +632,7 @@ app.post("/chat", async (req, res) => {
       } catch (error) {
         console.error("AX DEVICE STATUS COMMAND FAILED", String(error?.message || error));
         return res.status(502).json({
-          response: "PHONE DEVICE STATUS\\nStatus: ERROR\\nThe device command could not be dispatched or read.",
+          response: "PHONE DEVICE STATUS\nStatus: ERROR\nThe device command could not be dispatched or read.",
           androidDeviceAccess: "ERROR",
           error: String(error?.message || error),
           deterministic: true
@@ -663,7 +663,7 @@ app.post("/chat", async (req, res) => {
       });
     }
     // Android connectivity is a deterministic backend/device check. Never send this to the LLM.
-    if (/^(?:ax[,:]?\\s*)?(?:check|verify|test)\\s+(?:android\\s+)?(?:device\\s+)?(?:connectivity|connection|heartbeat|device\\s+access)|^(?:ax[,:]?\\s*)?check\\s+android\\s+(?:device\\s+)?(?:connectivity|connection|heartbeat|access)/i.test(message)) {
+    if (/^(?:ax[,:]?\s*)?(?:check|verify|test)\s+(?:android\s+)?(?:device\s+)?(?:connectivity|connection|heartbeat|device\s+access)|^(?:ax[,:]?\s*)?check\s+android\s+(?:device\s+)?(?:connectivity|connection|heartbeat|access)/i.test(message)) {
       try {
         const statusResponse = await fetch("http://127.0.0.1:" + port + "/device/status");
         const statusText = await statusResponse.text();
@@ -672,7 +672,7 @@ app.post("/chat", async (req, res) => {
         const access = status.androidDeviceAccess || "UNVERIFIED";
         const latest = Array.isArray(status.devices) ? status.devices[0] : null;
         return res.json({
-          response: "ANDROID DEVICE CHECK\\nStatus: " + access + "\\n" + (status.detail || "No device status detail.") + (latest?.lastSeenAt ? "\\nLast heartbeat: " + latest.lastSeenAt : ""),
+          response: "ANDROID DEVICE CHECK\nStatus: " + access + "\n" + (status.detail || "No device status detail.") + (latest?.lastSeenAt ? "\nLast heartbeat: " + latest.lastSeenAt : ""),
           androidDeviceAccess: access,
           deviceStatus: status,
           habitat: "online",
@@ -729,12 +729,12 @@ app.post("/chat", async (req, res) => {
           }
           task = delegated.task;
           return res.json({
-            response: "TASK CREATED AND EXECUTED\\nTask ID: " + task.id + "\\nStatus: " + task.status + "\\nWorker: " + (task.worker || "unknown") + "\\nResult:\\n" + canonicalTaskReport(task),
+            response: "TASK CREATED AND EXECUTED\nTask ID: " + task.id + "\nStatus: " + task.status + "\nWorker: " + (task.worker || "unknown") + "\nResult:\n" + canonicalTaskReport(task),
             task, taskEngine: "connected", model, provider: "openrouter", habitat: "online", free_brain: true, deterministic: true
           });
         }
         return res.json({
-          response: "TASK CREATED\\nTask ID: " + task.id + "\\nStatus: " + task.status,
+          response: "TASK CREATED\nTask ID: " + task.id + "\nStatus: " + task.status,
           task, taskEngine: "connected", model, provider: "openrouter", habitat: "online", free_brain: true, deterministic: true
         });
       } catch (error) {
