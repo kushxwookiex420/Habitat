@@ -541,10 +541,17 @@ app.get("/device/status", (req, res) => {
 });
 
 app.get("/health", (req, res) => {
+  const deviceBridge = deviceCommandBridge.status();
   res.json({
     habitat: "online",
     brain: hasAnyAiProviderKey() ? "ready" : "missing_api_key",
     backend: "ready",
+    deviceBridge: {
+      ready: deviceBridge.ready,
+      durable: deviceBridge.durable,
+      axTokenConfigured: deviceBridge.axTokenConfigured,
+      perDeviceTokens: deviceBridge.perDeviceTokens
+    },
     provider: "multi-provider",
     model,
     free_brain: true
