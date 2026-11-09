@@ -6,13 +6,13 @@ Create a secure, phone-initiated command channel so Habitat can receive a small 
 
 ## Current phase
 
-This branch adds a D1-backed command queue, one-time device pairing, per-device revocable credentials, and an Android foreground polling agent. Ax creates a high-entropy pairing code that expires after 10 minutes and can be used once. The phone exchanges it for a per-device bearer token; D1 stores only the token hash, and Android encrypts the raw token with an Android Keystore AES-GCM key. The Android agent supports only the read-only `device.status` command and polls outbound over HTTPS every 20 seconds only while Habitat is foregrounded. This remains a development integration: backend secrets/configuration, an Ax/MCP connector, and a real Galaxy round trip are still outstanding.
+This branch adds a D1-backed command queue, one-time device pairing, per-device revocable credentials, and an Android foreground polling agent. Ax can create a high-entropy pairing code that expires after 10 minutes and can be used once; an optional server-seeded bootstrap code supports the first phone pairing without placing the Ax credential on the phone. The phone exchanges it for a per-device bearer token; D1 stores only the token hash, and Android encrypts the raw token with an Android Keystore AES-GCM key. The Android agent supports only the read-only `device.status` command and polls outbound over HTTPS every 20 seconds only while Habitat is foregrounded. This remains a development integration: backend secrets/configuration, an Ax/MCP connector, and a real Galaxy round trip are still outstanding.
 
 ## Security model
 
 - `HABITAT_AX_BRIDGE_TOKEN` authenticates the trusted Ax/MCP caller and remains server-side.
 - Each paired Android device receives its own random 256-bit bearer token. D1 stores only its SHA-256 digest; Android stores the raw token encrypted with Android Keystore.
-- Pairing codes are high-entropy, single-use, expire after 10 minutes, and are stored only as SHA-256 digests.
+- Pairing codes are high-entropy, single-use, expire after 10 minutes, and are stored only as SHA-256 digests. The initial bootstrap code is supplied as a server-side hash plus expiry and bound to the first device that redeems it.
 - Device revocation invalidates the device token and any outstanding pairing codes for that device.
 - HTTPS only. Phone polls outbound; no open port on Android.
 - Foreground polling is 20 seconds; background check-ins use Android JobScheduler at a 15-minute interval and may be deferred by the OS.
@@ -38,7 +38,7 @@ Android side:
 
 ## Remaining integration steps
 
-1. Configure the Ax bridge secret in the intended Render service without exposing it in chat; verify the existing D1 credentials and runtime deployment.
+1. Configure the Ax bridge secret and, for first-time setup, a short-lived bootstrap-code hash plus expiry in the intended Render service without exposing the Ax credential; verify existing D1 credentials and runtime deployment.
 2. Implement or connect a supported authenticated Ax/MCP connector that can create pairing codes, queue commands, and poll results. This ChatGPT conversation cannot call an arbitrary private phone URL directly.
 3. Add rate limiting and operational audit visibility for pairing and command routes.
 4. Expand read-only diagnostics beyond model/OS identification, then add separately permission-gated and user-approved phone actions.
