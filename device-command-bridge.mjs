@@ -118,8 +118,9 @@ export function registerDeviceCommandBridge(app, {
 
   app.post("/device/pair", requireStore, async (req, res) => {
     try {
-      const deviceId = String(req.body?.deviceId || "").trim();
-      const code = String(req.body?.code || "").trim();
+      // Accept the field names used by both the regular Habitat app and Bridge APK.
+      const deviceId = String(req.body?.deviceId || req.body?.phoneId || req.body?.device_id || "").trim();
+      const code = String(req.body?.code || req.body?.pairingCode || req.body?.pairing_code || "").trim();
       if (!validDeviceId(deviceId) || code.length < 20 || code.length > 128) {
         return res.status(400).json({ ok: false, error: "A valid deviceId and pairing code are required." });
       }
@@ -128,7 +129,15 @@ export function registerDeviceCommandBridge(app, {
       if (!paired) return res.status(401).json({ ok: false, error: "Pairing code is invalid, expired, or already used." });
       const deviceToken = randomBytes(32).toString("base64url");
       await store.registerDevice({ deviceId, tokenHash: digest(deviceToken), createdAt: now });
-      return res.status(200).json({ ok: true, device: { deviceId, token: deviceToken } });
+      // Keep the canonical nested object and expose top-level aliases for older Bridge APK parsers.
+      // The raw credential is returned only in this one-time exchange response.
+      return res.status(200).json({
+        ok: true,
+        deviceId,
+        token: deviceToken,
+        deviceToken,
+        device: { deviceId, token: deviceToken, deviceToken }
+      });
     } catch (error) {
       console.error("DEVICE_PAIRING_EXCHANGE_FAILED", String(error?.message || error));
       return res.status(500).json({ ok: false, error: "Unable to complete device pairing." });
