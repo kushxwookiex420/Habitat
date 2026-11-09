@@ -631,7 +631,7 @@ class MainActivity : Activity() {
                 }
                 dialog.getButton(AlertDialog.BUTTON_POSITIVE).isEnabled = false
                 dialog.getButton(AlertDialog.BUTTON_POSITIVE).text = "Pairing…"
-                deviceBridge.pair(value) { success ->
+                deviceBridge.pair(value) { success, reason ->
                     runOnUiThread {
                         if (success) {
                             deviceBridgeButton?.text = "AX SET"
@@ -642,7 +642,7 @@ class MainActivity : Activity() {
                         } else {
                             dialog.getButton(AlertDialog.BUTTON_POSITIVE).isEnabled = true
                             dialog.getButton(AlertDialog.BUTTON_POSITIVE).text = "Pair phone"
-                            code.error = "Pairing failed or code expired. Ask Ax for a new code."
+                            code.error = reason.take(160)
                         }
                     }
                 }
