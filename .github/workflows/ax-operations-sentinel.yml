@@ -69,3 +69,22 @@ jobs:
           jq -e '.ok == true and .secretsExposed == false' "$body" >/dev/null
           jq -e '.capabilities.externalPublishing.status == "approval_gated_unverified"' "$body" >/dev/null
           echo "::notice::Capability status is configuration disclosure, not proof of a successful end-to-end content or publishing run."
+      - name: Run real machine-derived system check (PR update only)
+        if: github.event_name == 'pull_request' && github.event.action == 'synchronize'
+        shell: bash
+        run: |
+          set -euo pipefail
+          body="$(mktemp)"
+          code="$(curl --silent --show-error --location --connect-timeout 10 --max-time 180 --output "$body" --write-out '%{http_code}' -X POST -H "Content-Type: application/json" -d '{}' https://habitat-1-szzd.onrender.com/system-check)"
+          echo "HTTP $code"
+          cat "$body"
+          jq -e '(.overall | type == "string") and (.checks | type == "object") and (.report | type == "string")' "$body" >/dev/null
+          {
+            echo "## Real Habitat system-check"
+            echo ""
+            echo "- HTTP: $code"
+            echo "- Overall: $(jq -r '.overall' "$body")"
+            echo "- Task: $(jq -r '.task.id // "not-created"' "$body")"
+            echo "- Machine checks:"
+            jq -r '.checks | to_entries[] | "- " + .key + ": " + .value.status + " — " + .value.detail' "$body"
+          } >> "$GITHUB_STEP_SUMMARY"
