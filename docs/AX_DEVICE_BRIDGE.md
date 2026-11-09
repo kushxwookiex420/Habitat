@@ -6,7 +6,7 @@ Create a secure, phone-initiated command channel so Habitat can receive a small 
 
 ## Current phase
 
-This branch adds the server-side durable queue and API boundary. It is deliberately limited to the read-only `device.status` command. It does not yet claim remote control is active.
+This branch adds the server-side durable queue and API boundary plus an Android foreground polling agent. The Android agent supports only the read-only `device.status` command and stores the configured device bearer token encrypted with an Android Keystore AES-GCM key. It polls outbound over HTTPS every 20 seconds only while Habitat is foregrounded. This is a development integration, not a verified end-to-end connection: the backend secret still needs configuration, the Ax/MCP connector is not implemented, and a real Galaxy round trip has not been tested.
 
 ## Security model
 
@@ -31,10 +31,10 @@ Android side (device bearer token):
 ## Remaining integration steps
 
 1. Configure two independent high-entropy Render secrets; never reuse the AI provider key.
-2. Build Android pairing/provisioning so the device token is stored in Android Keystore-backed encrypted preferences and the device polls only while Habitat is active.
-3. Add read-only device diagnostics, then explicit user-approved app launching and accessibility actions as separate permission-gated capabilities.
+2. Replace the initial manually configured shared device token with one-time pairing and per-device token revocation; the current Android UI encrypts the token at rest but does not itself issue or exchange pairing codes.
+3. Add read-only diagnostics beyond basic model/OS identification, then explicit user-approved app launching and accessibility actions as separate permission-gated capabilities.
 4. Expose the Ax-side API through a private authenticated MCP connector. This ChatGPT conversation cannot call an arbitrary private phone URL directly; a supported connector must be connected before ChatGPT can issue bridge commands.
-5. Verify the complete round trip on the user's Galaxy S26 Ultra before describing the feature as working.
+5. Configure backend secrets, test unauthorized requests, expiry, duplicate claims and result ownership, then verify the complete round trip on the user's Galaxy S26 Ultra before describing the feature as working.
 
 ## Verification
 
