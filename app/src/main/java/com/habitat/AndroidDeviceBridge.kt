@@ -48,10 +48,10 @@ class AndroidDeviceBridge(
 
     fun isConfigured(): Boolean = !readToken().isNullOrBlank()
 
-    fun pair(code: String, onComplete: (Boolean) -> Unit) {
+    fun pair(code: String, onComplete: (Boolean, String) -> Unit) {
         val clean = code.trim()
         if (clean.length < 20 || clean.length > 128) {
-            onComplete(false)
+            onComplete(false, "Pairing code format is invalid. Request a fresh code.")
             return
         }
         Thread {
@@ -201,7 +201,12 @@ class AndroidDeviceBridge(
             val code = connection.responseCode
             val stream = if (code in 200..299) connection.inputStream else connection.errorStream
             val raw = stream?.bufferedReader()?.use { it.readText() }.orEmpty()
-            if (code !in 200..299) throw IllegalStateException("HTTP $code")
+            if (code !in 200..299) {
+                val reason = try {
+                    JSONObject(raw).optString("error").takeIf { it.isNotBlank() } ?: raw.take(180)
+                } catch (_: Exception) { raw.take(180) }
+                throw IllegalStateException("HTTP $code: " + reason)
+            }
             return JSONObject(raw)
         } finally {
             connection.disconnect()
