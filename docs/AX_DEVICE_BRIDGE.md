@@ -18,6 +18,7 @@ This branch adds a D1-backed command queue, one-time device pairing, per-device 
 - Foreground polling is 20 seconds; background check-ins use Android JobScheduler at a 15-minute interval and may be deferred by the OS.
 - Commands are allowlisted. Arbitrary shell, file access, app interaction, accessibility gestures, purchases, messages, and publishing are excluded.
 - Every command is scoped to one registered device, expires after five minutes, and records a structured result.
+- Successful phone polls update a durable last-seen timestamp so Ax can distinguish a paired device from an online device.
 - D1 is mandatory for command storage. If D1 is unavailable, the bridge fails closed instead of silently using process memory.
 - Public publishing, purchases, destructive changes, and permission changes remain user-approval gated.
 
@@ -28,6 +29,7 @@ Ax/MCP side (Ax bearer token):
 - `POST /ax/device/commands` — enqueue an allowlisted command for a paired device.
 - `GET /ax/device/commands/:id` — read its status and result.
 - `POST /ax/device/:deviceId/revoke` — revoke one device credential and outstanding pairing codes.
+- `GET /ax/device/devices` — list paired devices and their last authenticated check-in.
 
 Android side:
 - `POST /device/pair` with `deviceId` and one-time `code` — exchange pairing code for a per-device token.
