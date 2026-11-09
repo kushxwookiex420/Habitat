@@ -22,6 +22,8 @@ class MainActivity : Activity() {
     private lateinit var input: EditText
     private lateinit var ui: HabitatOverlay
     private lateinit var brain: BrainAdapter
+    private lateinit var deviceBridge: AndroidDeviceBridge
+    private var deviceBridgeButton: Button? = null
     private val voiceCode = 700
     private var lastTaskId: String? = null
     private val taskPrefs by lazy { getSharedPreferences("habitat_tasks", MODE_PRIVATE) }
@@ -40,6 +42,14 @@ class MainActivity : Activity() {
         window.setFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN, WindowManager.LayoutParams.FLAG_FULLSCREEN)
         window.navigationBarColor = Color.BLACK
         brain = BrainAdapter(this)
+        deviceBridge = AndroidDeviceBridge(this) { status ->
+            runOnUiThread {
+                deviceBridgeButton?.text = if (deviceBridge.isConfigured()) "AX ✓" else "LINK"
+                if (status.contains("authentication failed") || status.contains("command completed")) {
+                    Toast.makeText(this, status, Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
         lastTaskId = taskPrefs.getString("live_system_check_task_id", null)
 
         val root = FrameLayout(this)
@@ -91,6 +101,15 @@ class MainActivity : Activity() {
         composer.addView(send, LinearLayout.LayoutParams(70, 82).apply { leftMargin = 8 })
         val tiktok = Button(this).apply { text = "TT"; textSize = 15f; setTextColor(Color.WHITE); setBackgroundColor(Color.rgb(28, 28, 36)); isAllCaps = false; setOnClickListener { showTikTokPublisherDialog() } }
         composer.addView(tiktok, LinearLayout.LayoutParams(58, 82).apply { leftMargin = 8 })
+        deviceBridgeButton = Button(this).apply {
+            text = if (deviceBridge.isConfigured()) "AX ✓" else "LINK"
+            textSize = 13f
+            setTextColor(Color.WHITE)
+            setBackgroundColor(Color.rgb(5, 92, 105))
+            isAllCaps = false
+            setOnClickListener { showDeviceBridgeDialog() }
+        }
+        composer.addView(deviceBridgeButton, LinearLayout.LayoutParams(62, 82).apply { leftMargin = 8 })
 
         // The command composer lives above the Samsung navigation area and above
         // the bottom navigation rail instead of being pinned to the screen bottom.
@@ -410,6 +429,7 @@ class MainActivity : Activity() {
             }
         }
         heartbeatHandler.postDelayed(heartbeatRunnable, heartbeatIntervalMs)
+        if (deviceBridge.isConfigured()) deviceBridge.start()
         ensureSystemCheckTask()
     }
 
@@ -566,6 +586,59 @@ class MainActivity : Activity() {
         }
     }
 
+    private fun showDeviceBridgeDialog() {
+        val panel = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(28, 18, 28, 8) }
+        val device = TextView(this).apply {
+            text = "This phone's device ID:\\n" + deviceBridge.deviceId
+            textSize = 14f
+            setTextColor(Color.DKGRAY)
+        }
+        val help = TextView(this).apply {
+            text = "Paste the device bridge token configured in Habitat's secure server environment. It is encrypted with Android Keystore on this phone."
+            textSize = 13f
+            setTextColor(Color.DKGRAY)
+        }
+        val token = EditText(this).apply {
+            hint = if (deviceBridge.isConfigured()) "Enter replacement token (leave blank to keep current)" else "Device bridge token"
+            inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
+            textSize = 15f
+        }
+        panel.addView(device)
+        panel.addView(help)
+        panel.addView(token)
+        val dialog = AlertDialog.Builder(this)
+            .setTitle("AX • Secure phone link")
+            .setView(panel)
+            .setNegativeButton("Close", null)
+            .setNeutralButton("Disconnect", null)
+            .setPositiveButton("Save & connect", null)
+            .create()
+        dialog.setOnShowListener {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                val value = token.text.toString().trim()
+                if (value.isNotBlank() && !deviceBridge.configure(value)) {
+                    token.error = "Token must be valid and at least 32 characters"
+                    return@setOnClickListener
+                }
+                if (!deviceBridge.isConfigured()) {
+                    Toast.makeText(this, "A server-issued device token is required.", Toast.LENGTH_LONG).show()
+                    return@setOnClickListener
+                }
+                deviceBridgeButton?.text = "AX ✓"
+                deviceBridge.start()
+                Toast.makeText(this, "Secure AX phone link configured. It polls only while Habitat is open.", Toast.LENGTH_LONG).show()
+                dialog.dismiss()
+            }
+            dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener {
+                deviceBridge.clearCredentials()
+                deviceBridgeButton?.text = "LINK"
+                Toast.makeText(this, "AX phone link disconnected.", Toast.LENGTH_SHORT).show()
+                dialog.dismiss()
+            }
+        }
+        dialog.show()
+    }
+
     private fun showTikTokPublisherDialog() {
         val panel = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(32, 24, 32, 8) }
         val account = TextView(this).apply { text = "Loading TikTok creator…"; textSize = 17f; setTextColor(Color.DKGRAY) }
@@ -630,8 +703,19 @@ class MainActivity : Activity() {
         }
     }
 
+    override fun onResume() {
+        super.onResume()
+        if (::deviceBridge.isInitialized && deviceBridge.isConfigured()) deviceBridge.start()
+    }
+
+    override fun onPause() {
+        if (::deviceBridge.isInitialized) deviceBridge.stop()
+        super.onPause()
+    }
+
     override fun onDestroy() {
         heartbeatHandler.removeCallbacks(heartbeatRunnable)
+        if (::deviceBridge.isInitialized) deviceBridge.stop()
         brain.shutdown()
         super.onDestroy()
     }
