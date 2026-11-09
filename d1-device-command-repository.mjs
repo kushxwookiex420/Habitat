@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 const API = "https://api.cloudflare.com/client/v4";
 
 export function createD1DeviceCommandRepository({ accountId, databaseId, apiToken, fetchImpl = fetch }) {
@@ -19,12 +21,14 @@ export function createD1DeviceCommandRepository({ accountId, databaseId, apiToke
     }
     return payload.result || [];
   }
-
   function decode(row) {
     try {
       const command = JSON.parse(row.record_json);
       return command && typeof command.id === "string" ? command : null;
     } catch { return null; }
+  }
+  function hash(value) {
+    return createHash("sha256").update(String(value), "utf8").digest("hex");
   }
 
   return Object.freeze({
@@ -33,7 +37,57 @@ export function createD1DeviceCommandRepository({ accountId, databaseId, apiToke
     async initialize() {
       await query("CREATE TABLE IF NOT EXISTS habitat_device_commands (id TEXT PRIMARY KEY NOT NULL, device_id TEXT NOT NULL, record_json TEXT NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL, expires_at TEXT NOT NULL)");
       await query("CREATE INDEX IF NOT EXISTS habitat_device_commands_queue ON habitat_device_commands(device_id, status, created_at)");
+      await query("CREATE TABLE IF NOT EXISTS habitat_device_pairings (code_hash TEXT PRIMARY KEY NOT NULL, device_id TEXT NOT NULL, created_at TEXT NOT NULL, expires_at TEXT NOT NULL, consumed_at TEXT)");
+      await query("CREATE INDEX IF NOT EXISTS habitat_device_pairings_expiry ON habitat_device_pairings(expires_at, consumed_at)");
+      await query("CREATE TABLE IF NOT EXISTS habitat_paired_devices (device_id TEXT PRIMARY KEY NOT NULL, token_hash TEXT NOT NULL, created_at TEXT NOT NULL, revoked_at TEXT)");
       return { ok: true, adapter: "cloudflare-d1", durable: true };
+    },
+    async createPairing({ codeHash, deviceId, createdAt, expiresAt }) {
+      await query(
+        "INSERT INTO habitat_device_pairings (code_hash, device_id, created_at, expires_at, consumed_at) VALUES (?, ?, ?, ?, NULL)",
+        [codeHash, deviceId, createdAt, expiresAt]
+      );
+      return true;
+    },
+    async consumePairing({ codeHash, deviceId, consumedAt }) {
+      const result = await query(
+        "UPDATE habitat_device_pairings SET consumed_at = ? WHERE code_hash = ? AND device_id = ? AND consumed_at IS NULL AND expires_at > ? RETURNING device_id",
+        [consumedAt, codeHash, deviceId, consumedAt]
+      );
+      return Boolean(result[0]?.results?.length);
+    },
+    async registerDevice({ deviceId, tokenHash, createdAt }) {
+      await query(
+        "INSERT INTO habitat_paired_devices (device_id, token_hash, created_at, revoked_at) VALUES (?, ?, ?, NULL) " +
+        "ON CONFLICT(device_id) DO UPDATE SET token_hash = excluded.token_hash, created_at = excluded.created_at, revoked_at = NULL",
+        [deviceId, tokenHash, createdAt]
+      );
+      return true;
+    },
+    async verifyDeviceToken(token, deviceId) {
+      const result = await query(
+        "SELECT token_hash FROM habitat_paired_devices WHERE device_id = ? AND revoked_at IS NULL LIMIT 1",
+        [deviceId]
+      );
+      const stored = String(result[0]?.results?.[0]?.token_hash || "");
+      const supplied = hash(token);
+      const a = Buffer.from(stored);
+      const b = Buffer.from(supplied);
+      return a.length === b.length && a.length > 0 && require("node:crypto").timingSafeEqual(a, b);
+    },
+    async isDevicePaired(deviceId) {
+      const result = await query(
+        "SELECT device_id FROM habitat_paired_devices WHERE device_id = ? AND revoked_at IS NULL LIMIT 1",
+        [deviceId]
+      );
+      return Boolean(result[0]?.results?.length);
+    },
+    async revokeDevice(deviceId, revokedAt) {
+      await query(
+        "UPDATE habitat_paired_devices SET revoked_at = ? WHERE device_id = ? AND revoked_at IS NULL",
+        [revokedAt, deviceId]
+      );
+      return true;
     },
     async enqueue(command) {
       if (!command?.id || !command?.deviceId || !command?.type) throw new Error("A complete device command is required.");
