@@ -258,6 +258,32 @@ export function registerDeviceCommandBridge(app, {
       if (!store || !ready) return [];
       return store.listDevices();
     },
+    async requestDeviceStatus() {
+      if (!store || !ready) return { ok: false, error: "Device command bridge is not ready." };
+      const rows = await store.listDevices();
+      const now = Date.now();
+      const device = rows
+        .filter(row => !row.revoked_at && row.last_seen_at && validDeviceId(row.device_id))
+        .filter(row => now - Date.parse(row.last_seen_at) <= 45 * 60 * 1000)
+        .sort((a, b) => Date.parse(b.last_seen_at) - Date.parse(a.last_seen_at))[0];
+      if (!device) return { ok: false, error: "No paired device has checked in within the last 45 minutes." };
+      const createdAt = new Date().toISOString();
+      const command = {
+        id: "dc_" + randomUUID(),
+        deviceId: device.device_id,
+        type: "device.status",
+        payload: {},
+        status: "queued",
+        createdAt,
+        expiresAt: new Date(now + 2 * 60 * 1000).toISOString()
+      };
+      await store.enqueue(command);
+      return { ok: true, deviceId: device.device_id, commandId: command.id, status: command.status };
+    },
+    async getCommand(id) {
+      if (!store || !ready) return null;
+      return store.get(String(id || ""));
+    },
     status() {
       return { ready, durable: Boolean(store?.durable), axTokenConfigured: Boolean(axToken), perDeviceTokens: true };
     }
