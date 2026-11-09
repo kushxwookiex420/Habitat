@@ -103,6 +103,8 @@ class AndroidDeviceBridge(
         executor = null
     }
 
+    fun pollOnceNow() = pollOnce()
+
     private fun pollOnce() {
         val token = readToken() ?: return
         try {
