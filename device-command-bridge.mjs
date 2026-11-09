@@ -213,6 +213,16 @@ export function registerDeviceCommandBridge(app, {
         return { ok: false, durable: false };
       }
       await store.initialize();
+      const bootstrapHash = String(env.HABITAT_DEVICE_PAIRING_BOOTSTRAP_CODE_HASH || "").trim().toLowerCase();
+      const bootstrapExpiresAt = String(env.HABITAT_DEVICE_PAIRING_BOOTSTRAP_EXPIRES_AT || "").trim();
+      const bootstrapExpiryMs = Date.parse(bootstrapExpiresAt);
+      if (/^[a-f0-9]{64}$/.test(bootstrapHash) && Number.isFinite(bootstrapExpiryMs) && bootstrapExpiryMs > Date.now()) {
+        await store.seedBootstrapPairing({
+          codeHash: bootstrapHash,
+          createdAt: new Date().toISOString(),
+          expiresAt: new Date(bootstrapExpiryMs).toISOString()
+        });
+      }
       ready = true;
       console.log("DEVICE_COMMAND_BRIDGE: durable D1 queue ready");
       return { ok: true, durable: true };
