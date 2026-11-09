@@ -611,11 +611,18 @@ app.post("/chat", async (req, res) => {
         }
         if (command?.status === "completed" && command.result?.ok === true) {
           const details = command.result.details || {};
+          const publicDetails = {
+            manufacturer: details.manufacturer || undefined,
+            model: details.model || undefined,
+            androidSdk: details.androidSdk || undefined,
+            androidRelease: details.androidRelease || undefined,
+            app: details.app || undefined
+          };
           const deviceLabel = [details.manufacturer, details.model].filter(Boolean).join(" ") || "Paired Android device";
           return res.json({
             response: "PHONE DEVICE STATUS\nStatus: PASS\nDevice: " + deviceLabel +
               "\nCommand: device.status\nExecution: completed by the paired Android app\nDetails: " +
-              JSON.stringify(details),
+              JSON.stringify(publicDetails),
             androidDeviceAccess: "PASS",
             deviceCommand: command,
             deterministic: true,
