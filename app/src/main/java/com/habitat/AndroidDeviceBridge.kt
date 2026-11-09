@@ -46,10 +46,31 @@ class AndroidDeviceBridge(
 
     fun isConfigured(): Boolean = !readToken().isNullOrBlank()
 
+    fun pair(code: String, onComplete: (Boolean) -> Unit) {
+        val clean = code.trim()
+        if (clean.length < 20 || clean.length > 128) {
+            onComplete(false)
+            return
+        }
+        Thread {
+            val success = try {
+                val response = request(
+                    "POST", "/device/pair", null,
+                    JSONObject().put("deviceId", deviceId).put("code", clean)
+                )
+                val token = response.optJSONObject("device")?.optString("token").orEmpty()
+                if (!response.optBoolean("ok") || token.length < 40) false else storeToken(token)
+            } catch (_: Exception) {
+                false
+            }
+            onComplete(success)
+        }.start()
+    }
+
     @Synchronized
-    fun configure(token: String): Boolean {
+    private fun storeToken(token: String): Boolean {
         val clean = token.trim()
-        if (clean.length < 32 || clean.length > 512) return false
+        if (clean.length < 40 || clean.length > 512) return false
         return try {
             val cipher = Cipher.getInstance("AES/GCM/NoPadding")
             cipher.init(Cipher.ENCRYPT_MODE, getOrCreateKey())
@@ -122,13 +143,13 @@ class AndroidDeviceBridge(
         }
     }
 
-    private fun request(method: String, path: String, token: String, body: JSONObject? = null): JSONObject {
+    private fun request(method: String, path: String, token: String?, body: JSONObject? = null): JSONObject {
         val connection = HabitatNetwork.openConnection(BASE_URL + path)
         try {
             connection.requestMethod = method
             connection.connectTimeout = 12000
             connection.readTimeout = 12000
-            connection.setRequestProperty("Authorization", "Bearer $token")
+            if (!token.isNullOrBlank()) connection.setRequestProperty("Authorization", "Bearer $token")
             connection.setRequestProperty("Accept", "application/json")
             if (body != null) {
                 connection.doOutput = true
