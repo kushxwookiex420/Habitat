@@ -575,12 +575,6 @@ app.post("/chat", async (req, res) => {
       });
     }
 
-    if (!hasAnyAiProviderKey()) {
-      return res.status(503).json({
-        error: "No AI provider key is configured. Set CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID, GEMINI_API_KEY, GROQ_API_KEY, or OPENROUTER_API_KEY. Cerebras requires CEREBRAS_API_KEY and HABITAT_ALLOW_PAID_PROVIDERS=true."
-      });
-    }
-
     const history = Array.isArray(
       req.body?.history
     )
@@ -593,6 +587,58 @@ app.post("/chat", async (req, res) => {
     const normalizedMessage = message.toLowerCase().replace(/[^a-z0-9? ]/g, " ").replace(/\s+/g, " ").trim();
     const isCoreStatusQuestion =
       /^(is ax (online|there)|are you (online|there)|ax (online|there)|are you up|status|habitat status|check status)[? ]*$/.test(normalizedMessage);
+
+    // Explicit device.status requests must execute through the paired Android command
+    // queue. Never ask the language model to pretend it ran a device command.
+    if (/\\bdevice\\.status\\b|\\bphone\\s+(?:connection\\s+)?diagnostic\\b|\\bdevice\\s+connection\\s+diagnostic\\b/i.test(message)) {
+      try {
+        const queued = await deviceCommandBridge.requestDeviceStatus();
+        if (!queued.ok) {
+          return res.json({
+            response: "PHONE DEVICE STATUS\\nStatus: UNVERIFIED\\n" + queued.error,
+            androidDeviceAccess: "UNVERIFIED",
+            deviceCommand: "not_queued",
+            deterministic: true,
+            habitat: "online"
+          });
+        }
+        const deadline = Date.now() + 25000;
+        let command = null;
+        while (Date.now() < deadline) {
+          command = await deviceCommandBridge.getCommand(queued.commandId);
+          if (command?.status === "completed" || command?.status === "failed" || command?.status === "cancelled") break;
+          await new Promise(resolve => setTimeout(resolve, 500));
+        }
+        if (command?.status === "completed" && command.result?.ok === true) {
+          const details = command.result.details || {};
+          const deviceLabel = [details.manufacturer, details.model].filter(Boolean).join(" ") || "Paired Android device";
+          return res.json({
+            response: "PHONE DEVICE STATUS\\nStatus: PASS\\nDevice: " + deviceLabel +
+              "\\nCommand: device.status\\nExecution: completed by the paired Android app\\nDetails: " +
+              JSON.stringify(details),
+            androidDeviceAccess: "PASS",
+            deviceCommand: command,
+            deterministic: true,
+            habitat: "online"
+          });
+        }
+        return res.json({
+          response: "PHONE DEVICE STATUS\\nStatus: PENDING / UNVERIFIED\\nThe command was queued for the paired phone, but no completed device response arrived within 25 seconds. Keep Habitat open and try again.",
+          androidDeviceAccess: "UNVERIFIED",
+          deviceCommand: command || { id: queued.commandId, status: "queued" },
+          deterministic: true,
+          habitat: "online"
+        });
+      } catch (error) {
+        console.error("AX DEVICE STATUS COMMAND FAILED", String(error?.message || error));
+        return res.status(502).json({
+          response: "PHONE DEVICE STATUS\\nStatus: ERROR\\nThe device command could not be dispatched or read.",
+          androidDeviceAccess: "ERROR",
+          error: String(error?.message || error),
+          deterministic: true
+        });
+      }
+    }
 
     if (/system\s*check/i.test(message)) {
       const check = await runSystemCheck();
@@ -903,6 +949,12 @@ Be direct, natural, practical, detailed when the task warrants it, and honest ab
       role: "user",
       content: message
     });
+
+    if (!hasAnyAiProviderKey()) {
+      return res.status(503).json({
+        error: "No AI provider key is configured. Set CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID, GEMINI_API_KEY, GROQ_API_KEY, or OPENROUTER_API_KEY. Cerebras requires CEREBRAS_API_KEY and HABITAT_ALLOW_PAID_PROVIDERS=true."
+      });
+    }
 
     const response =
       await brainChat({
