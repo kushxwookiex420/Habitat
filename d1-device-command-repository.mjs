@@ -49,10 +49,17 @@ export function createD1DeviceCommandRepository({ accountId, databaseId, apiToke
       );
       return true;
     },
+    async seedBootstrapPairing({ codeHash, createdAt, expiresAt }) {
+      await query(
+        "INSERT OR IGNORE INTO habitat_device_pairings (code_hash, device_id, created_at, expires_at, consumed_at) VALUES (?, '*', ?, ?, NULL)",
+        [codeHash, createdAt, expiresAt]
+      );
+      return true;
+    },
     async consumePairing({ codeHash, deviceId, consumedAt }) {
       const result = await query(
-        "UPDATE habitat_device_pairings SET consumed_at = ? WHERE code_hash = ? AND device_id = ? AND consumed_at IS NULL AND expires_at > ? RETURNING device_id",
-        [consumedAt, codeHash, deviceId, consumedAt]
+        "UPDATE habitat_device_pairings SET consumed_at = ?, device_id = ? WHERE code_hash = ? AND (device_id = ? OR device_id = '*') AND consumed_at IS NULL AND expires_at > ? RETURNING device_id",
+        [consumedAt, deviceId, codeHash, deviceId, consumedAt]
       );
       return Boolean(result[0]?.results?.length);
     },
