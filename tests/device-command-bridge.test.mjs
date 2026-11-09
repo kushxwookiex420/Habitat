@@ -46,12 +46,14 @@ function memoryRepository() {
       row.consumedAt = consumedAt;
       return true;
     },
-    async registerDevice({ deviceId, tokenHash }) { devices.set(deviceId, { tokenHash, revoked: false }); },
+    async registerDevice({ deviceId, tokenHash, createdAt }) { devices.set(deviceId, { tokenHash, createdAt, lastSeenAt: null, revoked: false }); },
     async verifyDeviceToken(token, deviceId) {
       const row = devices.get(deviceId);
       return Boolean(row && !row.revoked && row.tokenHash === createHash("sha256").update(token).digest("hex"));
     },
     async isDevicePaired(deviceId) { const row=devices.get(deviceId); return Boolean(row && !row.revoked); },
+    async touchDevice(deviceId, seenAt) { const row=devices.get(deviceId); if(row && !row.revoked) row.lastSeenAt=seenAt; },
+    async listDevices() { return [...devices.entries()].map(([device_id,row]) => ({device_id,created_at:row.createdAt,last_seen_at:row.lastSeenAt,revoked_at:row.revoked ? "revoked" : null})); },
     async revokeDevice(deviceId) { const row=devices.get(deviceId); if(row) row.revoked=true; },
     async enqueue(row) { commands.set(row.id, structuredClone(row)); },
     async claimNext(deviceId) {
@@ -128,6 +130,12 @@ test("pairing codes are one-time and issue individual phone credentials", async 
     headers: { authorization: "Bearer " + token }, query: { deviceId: "s26" }
   });
   assert.equal(claimed.body.command.id, id);
+
+  const inventory = await invoke(app, "GET /ax/device/devices", {
+    headers: { authorization: "Bearer ax-secret" }
+  });
+  assert.equal(inventory.body.devices[0].deviceId, "s26");
+  assert.ok(inventory.body.devices[0].lastSeenAt);
 
   const completed = await invoke(app, "POST /device/commands/:id/result", {
     headers: { authorization: "Bearer " + token }, params: { id },
