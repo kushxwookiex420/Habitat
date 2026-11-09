@@ -96,7 +96,7 @@ class AndroidDeviceBridge(
     fun start() {
         if (!isConfigured() || executor != null) return
         executor = Executors.newSingleThreadScheduledExecutor()
-        executor?.scheduleWithFixedDelay({ pollOnce() }, 0, 20, TimeUnit.SECONDS)
+        executor?.scheduleWithFixedDelay({ pollOnce() }, 0, 5, TimeUnit.SECONDS)
         onStatus("AX device bridge polling started")
     }
 
@@ -180,7 +180,7 @@ class AndroidDeviceBridge(
                 clearCredentials()
                 onStatus("AX phone link revoked; credentials cleared")
             } else {
-                onStatus("AX bridge temporarily unavailable")
+                onStatus("AX bridge temporarily unavailable: " + message.take(100))
             }
         }
     }
