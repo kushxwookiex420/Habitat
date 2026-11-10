@@ -88,3 +88,5 @@ jobs:
             echo "- Machine checks:"
             jq -r '.checks | to_entries[] | "- " + .key + ": " + .value.status + " — " + .value.detail' "$body"
           } >> "$GITHUB_STEP_SUMMARY"
+
+# 2026-11-10 operations audit: comment-only touch to request a fresh PR-only system-check run; no production behavior changed.
