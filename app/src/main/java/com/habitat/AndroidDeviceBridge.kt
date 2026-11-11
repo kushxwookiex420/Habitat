@@ -54,7 +54,7 @@ class AndroidDeviceBridge(
             onComplete(false, "Pairing code format is invalid. Request a fresh code.")
             return
         }
-        Thread {
+        Thread({
             var failureReason = "Pairing failed. Check the code and phone ID."
             val success = try {
                 val response = request(
@@ -70,12 +70,19 @@ class AndroidDeviceBridge(
                     if (!stored) failureReason = "Android Keystore could not save the phone credential."
                     stored
                 }
-            } catch (error: Exception) {
-                failureReason = error.message?.take(180) ?: failureReason
+            } catch (error: Throwable) {
+                failureReason = (error.message ?: error.javaClass.simpleName).take(180)
                 false
             }
-            onComplete(success, if (success) "Paired" else failureReason)
-        }.start()
+            try {
+                onComplete(success, if (success) "Paired" else failureReason)
+            } catch (_: Throwable) {
+                // A destroyed Activity must not crash the pairing worker.
+            }
+        }, "Habitat-Phone-Pair").apply {
+            isDaemon = true
+            start()
+        }
     }
 
     @Synchronized
