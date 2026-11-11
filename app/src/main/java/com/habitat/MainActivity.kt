@@ -87,35 +87,44 @@ class MainActivity : Activity() {
         }
         composer.addView(input, LinearLayout.LayoutParams(0, 82, 1f))
 
+        // Compact, explicitly labeled controls keep SEND visible on narrow Android
+        // layouts instead of allowing the weighted message field to crowd it out.
         val voice = Button(this).apply {
             text = "◉"
             textSize = 18f
             setTextColor(Color.WHITE)
             setBackgroundColor(Color.rgb(7, 79, 108))
             isAllCaps = false
+            minWidth = 0
+            setPadding(0, 0, 0, 0)
         }
-        composer.addView(voice, LinearLayout.LayoutParams(64, 82).apply { leftMargin = 8 })
+        composer.addView(voice, LinearLayout.LayoutParams(48, 82).apply { leftMargin = 4 })
 
         val send = Button(this).apply {
-            text = "➤"
-            textSize = 22f
+            text = "SEND"
+            textSize = 12f
             setTextColor(Color.WHITE)
             setBackgroundColor(Color.rgb(8, 122, 154))
             isAllCaps = false
+            minWidth = 0
+            setPadding(0, 0, 0, 0)
+            contentDescription = "Send message to Ax"
         }
-        composer.addView(send, LinearLayout.LayoutParams(70, 82).apply { leftMargin = 8 })
-        val tiktok = Button(this).apply { text = "TT"; textSize = 15f; setTextColor(Color.WHITE); setBackgroundColor(Color.rgb(28, 28, 36)); isAllCaps = false; setOnClickListener { showTikTokPublisherDialog() } }
-        composer.addView(tiktok, LinearLayout.LayoutParams(58, 82).apply { leftMargin = 8 })
+        composer.addView(send, LinearLayout.LayoutParams(58, 82).apply { leftMargin = 4 })
+        val tiktok = Button(this).apply { text = "TT"; textSize = 14f; setTextColor(Color.WHITE); setBackgroundColor(Color.rgb(28, 28, 36)); isAllCaps = false; minWidth = 0; setPadding(0, 0, 0, 0); setOnClickListener { showTikTokPublisherDialog() } }
+        composer.addView(tiktok, LinearLayout.LayoutParams(44, 82).apply { leftMargin = 4 })
         val bridgeButton = Button(this).apply {
             text = if (deviceBridge.isConfigured()) "AX SET" else "LINK"
-            textSize = 13f
+            textSize = 12f
             setTextColor(Color.WHITE)
             setBackgroundColor(Color.rgb(5, 92, 105))
             isAllCaps = false
+            minWidth = 0
+            setPadding(0, 0, 0, 0)
             setOnClickListener { showDeviceBridgeDialog() }
         }
         deviceBridgeButton = bridgeButton
-        composer.addView(bridgeButton, LinearLayout.LayoutParams(62, 82).apply { leftMargin = 8 })
+        composer.addView(bridgeButton, LinearLayout.LayoutParams(52, 82).apply { leftMargin = 4 })
 
         // The command composer lives above the Samsung navigation area and above
         // the bottom navigation rail instead of being pinned to the screen bottom.

@@ -3,7 +3,7 @@ run-name: Habitat APK Build — ${{ github.ref_name }} / ${{ github.sha }}
 
 on:
   push:
-    branches: [ main, ax-v0.6-real-brain, ax-v0.6-brain-identity, ax-v0.7-droppilot-operator, ax-task-orchestration-fix, ax/quality-gate-first-artifact, ax/device-bridge-v1, ax/dual-habitat-packages ]
+    branches: [ main, ax-v0.6-real-brain, ax-v0.6-brain-identity, ax-v0.7-droppilot-operator, ax-task-orchestration-fix, ax/quality-gate-first-artifact, ax/device-bridge-v1, ax/dual-habitat-packages, ax/fix-regular-085-send-control ]
     paths:
       - "app/**"
       - "gradle/**"
@@ -18,6 +18,7 @@ on:
 # Ax build trigger verified: every main push packages a fresh debug APK.
 # Ax artifact verification: upload the APK and publish the latest release on every build.
 # Canonical System Check Android display patch build trigger.
+# Triggered after main enabled this branch in the Android APK workflow.
 permissions:
   contents: write
 
