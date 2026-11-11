@@ -616,7 +616,7 @@ class MainActivity : Activity() {
             hint = "One-time AX pairing code"
             inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
             textSize = 15f
-            singleLine = true
+            setSingleLine(true)
         }
         val status = TextView(this).apply {
             text = "Ready. Waiting for a pairing code."
