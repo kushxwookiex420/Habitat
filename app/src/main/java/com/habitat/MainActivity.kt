@@ -596,14 +596,19 @@ class MainActivity : Activity() {
     }
 
     private fun showDeviceBridgeDialog() {
-        val panel = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(28, 18, 28, 8) }
+        // Keep pairing inside a stable dialog and never let a network callback
+        // touch a dismissed Activity/dialog. Failures stay visible for diagnosis.
+        val panel = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(28, 18, 28, 8)
+        }
         val device = TextView(this).apply {
-            text = "This phone's device ID:\n" + deviceBridge.deviceId
+            text = "This phone's device ID:\\n" + deviceBridge.deviceId
             textSize = 14f
             setTextColor(Color.DKGRAY)
         }
         val help = TextView(this).apply {
-            text = "Create a one-time pairing code with Ax, then paste it here. The code expires after 10 minutes and can only be used once. Your phone receives its own revocable credential, encrypted with Android Keystore."
+            text = "Create a one-time pairing code with Ax, then paste it here. The code expires after 10 minutes and can only be used once. Your phone credential is encrypted with Android Keystore."
             textSize = 13f
             setTextColor(Color.DKGRAY)
         }
@@ -611,10 +616,19 @@ class MainActivity : Activity() {
             hint = "One-time AX pairing code"
             inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
             textSize = 15f
+            singleLine = true
+        }
+        val status = TextView(this).apply {
+            text = "Ready. Waiting for a pairing code."
+            textSize = 12f
+            setTextColor(Color.DKGRAY)
+            setPadding(0, 10, 0, 0)
         }
         panel.addView(device)
         panel.addView(help)
         panel.addView(code)
+        panel.addView(status)
+
         val dialog = AlertDialog.Builder(this)
             .setTitle("AX • Secure phone pairing")
             .setView(panel)
@@ -622,36 +636,64 @@ class MainActivity : Activity() {
             .setNeutralButton("Disconnect", null)
             .setPositiveButton("Pair phone", null)
             .create()
+
         dialog.setOnShowListener {
-            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
-                val value = code.text.toString().trim()
-                if (value.length < 20) {
-                    code.error = "Paste the one-time pairing code from Ax"
+            val pairButton = dialog.getButton(AlertDialog.BUTTON_POSITIVE)
+            val disconnectButton = dialog.getButton(AlertDialog.BUTTON_NEUTRAL)
+
+            pairButton.setOnClickListener {
+                val value = code.text?.toString()?.trim().orEmpty()
+                if (value.length !in 20..128) {
+                    code.error = "Pairing code must be 20–128 characters"
                     return@setOnClickListener
                 }
-                dialog.getButton(AlertDialog.BUTTON_POSITIVE).isEnabled = false
-                dialog.getButton(AlertDialog.BUTTON_POSITIVE).text = "Pairing…"
-                deviceBridge.pair(value) { success, reason ->
-                    runOnUiThread {
-                        if (success) {
-                            deviceBridgeButton?.text = "AX SET"
-                            deviceBridge.start()
-                            DeviceBridgeScheduler.schedule(this)
-                            Toast.makeText(this, "Phone paired. AX checks in while Habitat is open and periodically in the background.", Toast.LENGTH_LONG).show()
-                            dialog.dismiss()
-                        } else {
-                            dialog.getButton(AlertDialog.BUTTON_POSITIVE).isEnabled = true
-                            dialog.getButton(AlertDialog.BUTTON_POSITIVE).text = "Pair phone"
-                            code.error = reason.take(160)
+                pairButton.isEnabled = false
+                pairButton.text = "Connecting…"
+                status.text = "Contacting Habitat securely. Keep this screen open…"
+                code.error = null
+
+                try {
+                    deviceBridge.pair(value) { success, reason ->
+                        runOnUiThread {
+                            // Activity can be recreated while the request is in flight.
+                            if (isFinishing || isDestroyed || !dialog.isShowing) return@runOnUiThread
+                            try {
+                                if (success) {
+                                    deviceBridgeButton?.text = "AX SET"
+                                    deviceBridge.start()
+                                    DeviceBridgeScheduler.schedule(this)
+                                    status.text = "Phone credential saved. Starting secure check-in…"
+                                    Toast.makeText(this, "Phone paired successfully.", Toast.LENGTH_LONG).show()
+                                    dialog.dismiss()
+                                } else {
+                                    pairButton.isEnabled = true
+                                    pairButton.text = "Pair phone"
+                                    status.text = "Pairing did not complete. The screen is still open."
+                                    code.error = reason.take(180)
+                                }
+                            } catch (uiError: Throwable) {
+                                pairButton.isEnabled = true
+                                pairButton.text = "Pair phone"
+                                status.text = "Pairing UI error: " + (uiError.message ?: uiError.javaClass.simpleName).take(140)
+                            }
                         }
                     }
+                } catch (error: Throwable) {
+                    pairButton.isEnabled = true
+                    pairButton.text = "Pair phone"
+                    status.text = "Could not start pairing: " + (error.message ?: error.javaClass.simpleName).take(140)
                 }
             }
-            dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener {
-                deviceBridge.clearCredentials()
-                DeviceBridgeScheduler.cancel(this)
-                deviceBridgeButton?.text = "LINK"
-                Toast.makeText(this, "AX phone link disconnected.", Toast.LENGTH_SHORT).show()
+
+            disconnectButton.setOnClickListener {
+                try {
+                    deviceBridge.clearCredentials()
+                    DeviceBridgeScheduler.cancel(this)
+                    deviceBridgeButton?.text = "LINK"
+                    Toast.makeText(this, "AX phone link disconnected.", Toast.LENGTH_SHORT).show()
+                } catch (error: Throwable) {
+                    Toast.makeText(this, "Disconnect error: " + (error.message ?: "unknown"), Toast.LENGTH_LONG).show()
+                }
                 dialog.dismiss()
             }
         }
