@@ -18,8 +18,8 @@ function fakeD1() {
     const { sql, params = [] } = JSON.parse(options.body);
     calls.push({ sql, params });
     let result = [];
-    if (sql.startsWith("INSERT OR IGNORE INTO habitat_device_pairings")) {
-      if (!pairings.has(params[0])) pairings.set(params[0], { device_id: "*", created_at: params[1], expires_at: params[2], consumed_at: null });
+    if (sql.startsWith("INSERT INTO habitat_device_pairings")) {
+      pairings.set(params[0], { device_id: "*", created_at: params[1], expires_at: params[2], consumed_at: null });
     } else if (sql.startsWith("UPDATE habitat_device_pairings SET consumed_at = ?, device_id = ?")) {
       const row = pairings.get(params[2]);
       if (row && (row.device_id === params[1] || row.device_id === "*") && !row.consumed_at && row.expires_at > params[4]) {
@@ -74,6 +74,14 @@ test("D1 device repository stores only hashes, supports one-time bootstrap pairi
 
   assert.equal(await repo.consumePairing({ codeHash, deviceId: "s26-ultra", consumedAt: now }), true);
   assert.equal(await repo.consumePairing({ codeHash, deviceId: "other-device", consumedAt: now }), false);
+
+  // Re-seeding the same bootstrap digest must restore a fresh, unused wildcard record.
+  const renewedAt = new Date(Date.now() + 1000).toISOString();
+  const renewedExpiry = new Date(Date.now() + 11 * 60 * 1000).toISOString();
+  await repo.seedBootstrapPairing({ codeHash, createdAt: renewedAt, expiresAt: renewedExpiry });
+  assert.equal(fake.pairings.get(codeHash).consumed_at, null);
+  assert.equal(fake.pairings.get(codeHash).expires_at, renewedExpiry);
+  assert.equal(await repo.consumePairing({ codeHash, deviceId: "s26-ultra", consumedAt: renewedAt }), true);
 
   const token = "device-token-value-not-persisted-raw";
   const tokenHash = createHash("sha256").update(token).digest("hex");
