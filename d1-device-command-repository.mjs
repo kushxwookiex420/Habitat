@@ -51,7 +51,8 @@ export function createD1DeviceCommandRepository({ accountId, databaseId, apiToke
     },
     async seedBootstrapPairing({ codeHash, createdAt, expiresAt }) {
       await query(
-        "INSERT OR IGNORE INTO habitat_device_pairings (code_hash, device_id, created_at, expires_at, consumed_at) VALUES (?, '*', ?, ?, NULL)",
+        "INSERT INTO habitat_device_pairings (code_hash, device_id, created_at, expires_at, consumed_at) VALUES (?, '*', ?, ?, NULL) " +
+        "ON CONFLICT(code_hash) DO UPDATE SET device_id = '*', created_at = excluded.created_at, expires_at = excluded.expires_at, consumed_at = NULL",
         [codeHash, createdAt, expiresAt]
       );
       return true;
