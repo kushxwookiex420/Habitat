@@ -90,3 +90,4 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
 # 2026-11-10 operations audit: comment-only touch to request a fresh PR-only system-check run; no production behavior changed.
+# 2026-11-11 operations audit: request a fresh PR-only live endpoint and system-check run; no production behavior changed.
