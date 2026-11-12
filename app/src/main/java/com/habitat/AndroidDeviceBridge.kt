@@ -48,25 +48,41 @@ class AndroidDeviceBridge(
 
     fun isConfigured(): Boolean = !readToken().isNullOrBlank()
 
-    fun pair(code: String, onComplete: (Boolean) -> Unit) {
+    fun pair(code: String, onComplete: (Boolean, String) -> Unit) {
         val clean = code.trim()
-        if (clean.length < 20 || clean.length > 128) {
-            onComplete(false)
+        if (clean.length !in 20..128) {
+            onComplete(false, "Pairing code format is invalid. Request a fresh code.")
             return
         }
-        Thread {
+        Thread({
+            var failureReason = "Pairing failed. Check the code and phone ID."
             val success = try {
                 val response = request(
                     "POST", "/device/pair", null,
                     JSONObject().put("deviceId", deviceId).put("code", clean)
                 )
                 val token = response.optJSONObject("device")?.optString("token").orEmpty()
-                if (!response.optBoolean("ok") || token.length < 40) false else storeToken(token)
-            } catch (_: Exception) {
+                if (!response.optBoolean("ok") || token.length < 40) {
+                    failureReason = response.optString("error").ifBlank { "Server returned an invalid pairing response." }
+                    false
+                } else {
+                    val stored = storeToken(token)
+                    if (!stored) failureReason = "Android Keystore could not save the phone credential."
+                    stored
+                }
+            } catch (error: Throwable) {
+                failureReason = (error.message ?: error.javaClass.simpleName).take(180)
                 false
             }
-            onComplete(success)
-        }.start()
+            try {
+                onComplete(success, if (success) "Paired" else failureReason)
+            } catch (_: Throwable) {
+                // The Activity may have been destroyed while the request was in flight.
+            }
+        }, "Habitat-Phone-Pair").apply {
+            isDaemon = true
+            start()
+        }
     }
 
     @Synchronized
