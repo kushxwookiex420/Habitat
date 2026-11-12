@@ -620,10 +620,18 @@ class MainActivity : Activity() {
             hint = "One-time AX pairing code"
             inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
             textSize = 15f
+            setSingleLine(true)
+        }
+        val status = TextView(this).apply {
+            text = "Ready. Waiting for a pairing code."
+            textSize = 12f
+            setTextColor(Color.DKGRAY)
+            setPadding(0, 10, 0, 0)
         }
         panel.addView(device)
         panel.addView(help)
         panel.addView(code)
+        panel.addView(status)
         val dialog = AlertDialog.Builder(this)
             .setTitle("AX • Secure phone pairing")
             .setView(panel)
@@ -632,35 +640,65 @@ class MainActivity : Activity() {
             .setPositiveButton("Pair phone", null)
             .create()
         dialog.setOnShowListener {
-            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
-                val value = code.text.toString().trim()
-                if (value.length < 20) {
-                    code.error = "Paste the one-time pairing code from Ax"
+            val pairButton = dialog.getButton(AlertDialog.BUTTON_POSITIVE)
+            pairButton.setOnClickListener {
+                val value = code.text?.toString()?.trim().orEmpty()
+                if (value.length !in 20..128) {
+                    code.error = "Pairing code must be 20–128 characters"
                     return@setOnClickListener
                 }
-                dialog.getButton(AlertDialog.BUTTON_POSITIVE).isEnabled = false
-                dialog.getButton(AlertDialog.BUTTON_POSITIVE).text = "Pairing…"
-                deviceBridge.pair(value) { success ->
-                    runOnUiThread {
-                        if (success) {
-                            deviceBridgeButton?.text = "AX SET"
-                            deviceBridge.start()
-                            DeviceBridgeScheduler.schedule(this)
-                            Toast.makeText(this, "Phone paired. AX checks in while Habitat is open and periodically in the background.", Toast.LENGTH_LONG).show()
-                            dialog.dismiss()
-                        } else {
-                            dialog.getButton(AlertDialog.BUTTON_POSITIVE).isEnabled = true
-                            dialog.getButton(AlertDialog.BUTTON_POSITIVE).text = "Pair phone"
-                            code.error = "Pairing failed or code expired. Ask Ax for a new code."
+                pairButton.isEnabled = false
+                pairButton.text = "Connecting…"
+                status.text = "Contacting Habitat securely. Keep this screen open…"
+                try {
+                    deviceBridge.pair(value) { success, reason ->
+                        runOnUiThread {
+                            if (isFinishing || isDestroyed || !dialog.isShowing) return@runOnUiThread
+                            try {
+                                if (success) {
+                                    deviceBridgeButton?.text = "AX SET"
+                                    var backgroundStatus = ""
+                                    try {
+                                        deviceBridge.start()
+                                    } catch (error: Throwable) {
+                                        backgroundStatus = " Live polling could not start: " + (error.message ?: error.javaClass.simpleName).take(100)
+                                    }
+                                    try {
+                                        DeviceBridgeScheduler.schedule(this)
+                                    } catch (error: Throwable) {
+                                        backgroundStatus += " Background schedule unavailable: " + (error.message ?: error.javaClass.simpleName).take(100)
+                                    }
+                                    status.text = "Phone credential saved." + backgroundStatus
+                                    Toast.makeText(this, if (backgroundStatus.isBlank()) "Phone paired successfully." else "Phone paired; background check-in needs attention.", Toast.LENGTH_LONG).show()
+                                    dialog.dismiss()
+                                } else {
+                                    pairButton.isEnabled = true
+                                    pairButton.text = "Pair phone"
+                                    status.text = "Pairing did not complete. The screen is still open."
+                                    code.error = reason.take(180)
+                                }
+                            } catch (uiError: Throwable) {
+                                pairButton.isEnabled = true
+                                pairButton.text = "Pair phone"
+                                status.text = "Pairing UI error: " + (uiError.message ?: uiError.javaClass.simpleName).take(140)
+                            }
                         }
                     }
+                } catch (error: Throwable) {
+                    pairButton.isEnabled = true
+                    pairButton.text = "Pair phone"
+                    status.text = "Could not start pairing: " + (error.message ?: error.javaClass.simpleName).take(140)
                 }
             }
             dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener {
-                deviceBridge.clearCredentials()
-                DeviceBridgeScheduler.cancel(this)
-                deviceBridgeButton?.text = "LINK"
-                Toast.makeText(this, "AX phone link disconnected.", Toast.LENGTH_SHORT).show()
+                try {
+                    deviceBridge.clearCredentials()
+                    DeviceBridgeScheduler.cancel(this)
+                    deviceBridgeButton?.text = "LINK"
+                    Toast.makeText(this, "AX phone link disconnected.", Toast.LENGTH_SHORT).show()
+                } catch (error: Throwable) {
+                    Toast.makeText(this, "Disconnect error: " + (error.message ?: "unknown"), Toast.LENGTH_LONG).show()
+                }
                 dialog.dismiss()
             }
         }
@@ -734,8 +772,16 @@ class MainActivity : Activity() {
     override fun onResume() {
         super.onResume()
         if (::deviceBridge.isInitialized && deviceBridge.isConfigured()) {
-            deviceBridge.start()
-            DeviceBridgeScheduler.schedule(this)
+            try {
+                deviceBridge.start()
+            } catch (error: Throwable) {
+                Toast.makeText(this, "AX polling start failed: " + (error.message ?: error.javaClass.simpleName).take(100), Toast.LENGTH_LONG).show()
+            }
+            try {
+                DeviceBridgeScheduler.schedule(this)
+            } catch (error: Throwable) {
+                Toast.makeText(this, "AX background schedule failed: " + (error.message ?: error.javaClass.simpleName).take(100), Toast.LENGTH_LONG).show()
+            }
         }
     }
 
