@@ -69,6 +69,7 @@ jobs:
           jq -e '.ok == true and .secretsExposed == false' "$body" >/dev/null
           jq -e '.capabilities.externalPublishing.status == "approval_gated_unverified"' "$body" >/dev/null
           echo "::notice::Capability status is configuration disclosure, not proof of a successful end-to-end content or publishing run."
+
       - name: Run real machine-derived system check (PR update only)
         if: github.event_name == 'pull_request' && github.event.action == 'synchronize'
         shell: bash
@@ -78,17 +79,25 @@ jobs:
           code="$(curl --silent --show-error --location --connect-timeout 10 --max-time 180 --output "$body" --write-out '%{http_code}' -X POST -H "Content-Type: application/json" -d '{}' https://habitat-1-szzd.onrender.com/system-check)"
           echo "HTTP $code"
           cat "$body"
+
+          if [ "$code" != "200" ]; then
+            echo "::error title=Habitat system check failed::POST /system-check returned HTTP $code."
+            exit 1
+          fi
+
           jq -e '(.overall | type == "string") and (.checks | type == "object") and (.report | type == "string")' "$body" >/dev/null
+          overall="$(jq -r '.overall' "$body")"
+          if [ "$overall" != "PASS" ]; then
+            echo "::error title=Habitat system check blocked::Machine-derived overall result is $overall; inspect the task and individual checks above."
+            exit 1
+          fi
+
           {
             echo "## Real Habitat system-check"
             echo ""
             echo "- HTTP: $code"
-            echo "- Overall: $(jq -r '.overall' "$body")"
+            echo "- Overall: $overall"
             echo "- Task: $(jq -r '.task.id // "not-created"' "$body")"
             echo "- Machine checks:"
             jq -r '.checks | to_entries[] | "- " + .key + ": " + .value.status + " — " + .value.detail' "$body"
           } >> "$GITHUB_STEP_SUMMARY"
-
-# 2026-11-10 operations audit: comment-only touch to request a fresh PR-only system-check run; no production behavior changed.
-# 2026-11-11 operations audit: request a fresh PR-only live endpoint and system-check run; no production behavior changed.
-# 2026-11-12 operations audit: comment-only trigger for fresh live endpoint and system-check verification; no production behavior changed.
