@@ -557,6 +557,10 @@ app.get("/health", (req, res) => {
       axTokenConfigured: deviceBridge.axTokenConfigured,
       perDeviceTokens: deviceBridge.perDeviceTokens
     },
+    // Read-only worker status. `nexus.configured=false` means the optional command worker is not
+    // mounted; `configured=true, started=false` means it is mounted but has not started. Neither
+    // changes the health response, so Render readiness never depends on the worker.
+    nexus: deviceBridge.nexus || null,
     provider: "multi-provider",
     model,
     free_brain: true

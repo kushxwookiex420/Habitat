@@ -3,9 +3,14 @@ import { createD1DeviceCommandRepository } from "./d1-device-command-repository.
 import { registerHomeBridgeConsole } from "./home-bridge-console.mjs";
 import { registerDeviceHabitat } from "./device-habitat.mjs";
 import { registerUniversalCommandRoutes } from "./command-routes.mjs";
+import { createD1Query, registerNexusRuntime } from "./nexus-runtime.mjs";
+import { buildReadOnlyNexusAdapters } from "./nexus-adapter-registration.mjs";
 
 const SAFE_COMMANDS = new Set(["device.status"]);
 const PAIRING_TTL_MS = 10 * 60 * 1000;
+// repository-relative paths the read-only repo.inspect adapter may read. It resolves symlinks and
+// refuses anything outside these prefixes, so a command objective cannot read the host filesystem.
+const NEXUS_ADAPTER_PREFIXES = Object.freeze(["src", "tests", "docs", "app/src", "README.md", "package.json"]);
 
 function digest(value) {
   return createHash("sha256").update(String(value), "utf8").digest("hex");
@@ -40,7 +45,16 @@ function sanitizeDeviceDetails(value) {
 export function registerDeviceCommandBridge(app, {
   env = process.env,
   fetchImpl = fetch,
-  repository = null
+  repository = null,
+  // Optional injection points for tests and embedded use. In a deployment every one of these is
+  // derived from the same env object, so /ax/command and the Nexus worker can only ever address
+  // one database: the D1 id named by HABITAT_D1_DATABASE_ID.
+  taskRepository = null,
+  query = null,
+  adapters = null,
+  handleSignals = false,
+  exitOnSignal = false,
+  log = console
 } = {}) {
   const hasD1 = ["CLOUDFLARE_ACCOUNT_ID", "HABITAT_D1_DATABASE_ID", "HABITAT_D1_API_TOKEN"]
     .every(key => String(env[key] || "").trim());
@@ -327,17 +341,102 @@ export function registerDeviceCommandBridge(app, {
 
   // Universal command engine (AX/NEXUS/ORION/SENTINEL/ATLAS). Additive: /ax/command routes only,
   // its own ax-token guard and its own durable table, so worker-task routes are untouched.
+  //
+  // Owner-only actions (approve/deny/complete/fail/cancel/retry) are verified against the DEVICE
+  // repository, never the command-task repository: only the device store holds token hashes. When
+  // no device verifier is available those routes answer 503 instead of trusting the caller.
+  let commandApi = null;
   try {
-    registerUniversalCommandRoutes(app, { env, fetchImpl });
+    commandApi = registerUniversalCommandRoutes(app, {
+      env,
+      fetchImpl,
+      repository: taskRepository,
+      deviceRepository: store,
+      ownerDeviceId: env.HABITAT_OWNER_DEVICE_ID,
+      ownerDeviceIds: env.HABITAT_OWNER_DEVICE_IDS
+    });
   } catch (error) {
     console.error("UNIVERSAL_COMMAND_MOUNT_FAILED", String(error?.message || error));
   }
 
+  // Nexus runtime — the executor for the SAME habitat_command_tasks rows /ax/command writes. It
+  // never touches habitat_tasks or the device command queue. Mounting is fail-closed on three
+  // independent conditions:
+  //   1. NEXUS_RUNTIME_ENABLED is exactly "true". Off by default: an unproven worker must not
+  //      start itself on a live service.
+  //   2. a command task store exists (D1 configured, or injected by an embedder).
+  //   3. the atomic claim query exists, built from the same account/database/token as that store.
+  // The worker is constructed here; it starts from initialize(), after storage is ready.
+  const nexusRequested = String(env.NEXUS_RUNTIME_ENABLED || "").trim().toLowerCase() === "true";
+  let nexusRuntime = null;
+  let nexusMount = { configured: false, reason: "command_store_unavailable" };
+  try {
+    const commandStore = commandApi?.store?.() || null;
+    const accountId = String(env.CLOUDFLARE_ACCOUNT_ID || "").trim();
+    const databaseId = String(env.HABITAT_D1_DATABASE_ID || "").trim();
+    const apiToken = String(env.HABITAT_D1_API_TOKEN || "").trim();
+    const hasCommandD1 = Boolean(accountId && databaseId && apiToken);
+    const runtimeQuery = query || (hasCommandD1 ? createD1Query({ accountId, databaseId, apiToken, fetchImpl }) : null);
+    if (!nexusRequested) {
+      nexusMount = { configured: false, reason: "disabled_by_config" };
+      log.warn?.("NEXUS_RUNTIME: disabled — NEXUS_RUNTIME_ENABLED is not true");
+    } else if (!commandStore || !runtimeQuery) {
+      nexusMount = { configured: false, reason: "command_store_unavailable" };
+      log.warn?.("NEXUS_RUNTIME: disabled — no D1 command task store is configured");
+    } else {
+      const adapterMap = adapters || buildReadOnlyNexusAdapters({
+        rootDir: process.cwd(),
+        allowedPrefixes: NEXUS_ADAPTER_PREFIXES,
+        taskRepository: commandStore,
+        d1Query: runtimeQuery
+      });
+      nexusRuntime = registerNexusRuntime(app, {
+        env,
+        fetchImpl,
+        repository: commandStore,
+        query: runtimeQuery,
+        engine: commandApi.engine,
+        registry: commandApi.registry,
+        adapters: adapterMap,
+        deviceRepository: store,
+        ownerDeviceId: env.HABITAT_OWNER_DEVICE_ID,
+        ownerDeviceIds: env.HABITAT_OWNER_DEVICE_IDS,
+        handleSignals,
+        exitOnSignal,
+        log
+      });
+      nexusMount = { configured: true, reason: null };
+    }
+  } catch (error) {
+    nexusMount = { configured: false, reason: "mount_failed" };
+    console.error("NEXUS_RUNTIME_MOUNT_FAILED", String(error?.message || error));
+  }
+
+  let initialized = false;
+  let nexusInit = null;
+
   return Object.freeze({
-    async initialize() {
+    async initialize({ startWorker = true } = {}) {
+      if (initialized) {
+        // A deferred or failed Nexus startup is retryable without restarting the process.
+        if (nexusRuntime && nexusInit && nexusInit.started !== true) {
+          try {
+            nexusInit = await nexusRuntime.initialize({ startWorker });
+          } catch (error) {
+            nexusInit = { ok: false, durable: false, started: false, reason: "initialize_failed" };
+            console.error("NEXUS_RUNTIME_INIT_FAILED", String(error?.message || error));
+          }
+        }
+        return {
+          ok: true,
+          durable: Boolean(store?.durable),
+          alreadyInitialized: true,
+          nexus: nexusRuntime ? { configured: true, ...nexusInit } : nexusMount
+        };
+      }
       if (!store) {
         console.warn("DEVICE_COMMAND_BRIDGE: disabled — D1 credentials are not configured");
-        return { ok: false, durable: false };
+        return { ok: false, durable: false, nexus: nexusMount };
       }
       await store.initialize();
       const bootstrapHash = String(env.HABITAT_DEVICE_PAIRING_BOOTSTRAP_CODE_HASH || "").trim().toLowerCase();
@@ -352,7 +451,25 @@ export function registerDeviceCommandBridge(app, {
       }
       ready = true;
       console.log("DEVICE_COMMAND_BRIDGE: durable D1 queue ready");
-      return { ok: true, durable: true };
+      // Storage is ready, so the worker may claim. A failure here leaves the device bridge usable
+      // and the worker unstarted, and is reported instead of being assumed healthy.
+      if (nexusRuntime) {
+        try {
+          nexusInit = await nexusRuntime.initialize({ startWorker });
+          console.log("NEXUS_RUNTIME_MOUNT", JSON.stringify({
+            started: Boolean(nexusInit?.started),
+            worker: Boolean(nexusInit?.worker),
+            alreadyRunning: Boolean(nexusInit?.alreadyRunning),
+            reason: nexusInit?.reason || null
+          }));
+        } catch (error) {
+          nexusInit = { ok: false, durable: false, started: false, reason: "initialize_failed" };
+          console.error("NEXUS_RUNTIME_INIT_FAILED", String(error?.message || error));
+        }
+      }
+      initialized = true;
+      // Same shape as status().nexus in every case: {configured, ...runtime state} or the mount refusal.
+      return { ok: true, durable: true, nexus: nexusRuntime ? { configured: true, ...nexusInit } : nexusMount };
     },
     async listDevices() {
       if (!store || !ready) return [];
@@ -385,7 +502,38 @@ export function registerDeviceCommandBridge(app, {
       return store.get(String(id || ""));
     },
     status() {
-      return { ready, durable: Boolean(store?.durable), axTokenConfigured: Boolean(axToken), perDeviceTokens: true };
+      return {
+        ready,
+        durable: Boolean(store?.durable),
+        axTokenConfigured: Boolean(axToken),
+        perDeviceTokens: true,
+        // Read-only: whether the worker is mounted, initialized and started. Never part of the
+        // HTTP success condition, so a Render health check stays up while an optional worker is off.
+        nexus: nexusRuntime ? { configured: true, ...nexusRuntime.status() } : nexusMount
+      };
+    },
+    nexus() {
+      return nexusRuntime;
+    },
+    async startNexusWorker() {
+      if (!nexusRuntime) return { ok: false, started: false, reason: nexusMount.reason || "not_mounted" };
+      try {
+        if (!ready || !nexusInit || nexusInit.ok === false) {
+          nexusInit = await nexusRuntime.initialize({ startWorker: true });
+          return { ok: Boolean(nexusInit?.started), started: Boolean(nexusInit?.started), ...nexusInit };
+        }
+        const result = await nexusRuntime.startWorker();
+        nexusInit = { ...(nexusInit || {}), ...result };
+        return { ok: true, ...result };
+      } catch (error) {
+        console.error("NEXUS_RUNTIME_START_FAILED", String(error?.message || error));
+        return { ok: false, started: false, reason: "start_failed" };
+      }
+    },
+    async shutdown(reason = "shutdown") {
+      if (!nexusRuntime) return { ok: false, reason: "not_mounted" };
+      await nexusRuntime.shutdown(reason);
+      return { ok: true, reason };
     }
   });
 }
