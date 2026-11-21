@@ -2,6 +2,7 @@ import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import { createD1CommandTaskRepository, d1DatabaseEndpoint } from "./d1-command-task-repository.mjs";
 import { createUniversalCommandEngine, TASK_STATES } from "./universal-command-engine.mjs";
 import { createToolRegistry } from "./tool-registry.mjs";
+import { READ_ONLY_ADAPTER_NAMES } from "./nexus-adapter-registration.mjs";
 
 /**
  * NEXUS RUNTIME — the executor behind habitat_command_tasks.
@@ -42,6 +43,104 @@ const HEARTBEAT_TABLE = `CREATE TABLE IF NOT EXISTS habitat_nexus_workers (
   failed INTEGER NOT NULL DEFAULT 0,
   detail TEXT
 )`;
+
+/** Exported so a one-shot tick can create the table without mounting the runtime. */
+export const NEXUS_HEARTBEAT_TABLE_SQL = HEARTBEAT_TABLE;
+
+/**
+ * Heartbeat retention. Bounded, additive and never touches this worker's own row. It runs at most
+ * once per `pruneIntervalMs`, so a crash-looping service cannot turn retention into write pressure.
+ */
+export const NEXUS_PRUNE_SQL =
+  "DELETE FROM habitat_nexus_workers WHERE worker_id <> ? AND heartbeat_at < ? RETURNING worker_id";
+
+/**
+ * One query for queue health. `eligible` counts queued rows that name an adapter (the only rows a
+ * worker may claim), `blocked` counts queued rows that name none and therefore wait for a human,
+ * and `oldest` is the `updated_at` of the oldest eligible row — the age of the backlog.
+ */
+export const NEXUS_QUEUE_SQL =
+  "SELECT " +
+  "SUM(CASE WHEN status = 'queued' AND json_extract(record_json, '$.adapter') IS NOT NULL " +
+  "AND json_extract(record_json, '$.adapter') <> '' THEN 1 ELSE 0 END) AS eligible, " +
+  "SUM(CASE WHEN status = 'queued' AND (json_extract(record_json, '$.adapter') IS NULL " +
+  "OR json_extract(record_json, '$.adapter') = '') THEN 1 ELSE 0 END) AS blocked, " +
+  "MIN(CASE WHEN status = 'queued' AND json_extract(record_json, '$.adapter') IS NOT NULL " +
+  "AND json_extract(record_json, '$.adapter') <> '' THEN updated_at END) AS oldest " +
+  "FROM habitat_command_tasks";
+
+function configInteger(env, name, fallback, min, max) {
+  const raw = String(env?.[name] ?? "").trim();
+  if (!raw) return fallback;
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < min || value > max) {
+    throw new Error(name + " must be an integer between " + min + " and " + max + " (received " + JSON.stringify(raw) + ").");
+  }
+  return value;
+}
+
+/**
+ * One resolver for every worker knob, used by the mounted runtime and by the one-shot tick, so a
+ * scheduled run and an in-process run can never disagree about lease length or retry limits.
+ *
+ * Heartbeat intervals below 30 s are rejected rather than clamped: the point of the floor is to
+ * keep D1 writes bounded, and silently accepting a smaller number would defeat it.
+ */
+export function resolveNexusConfig(env = {}) {
+  return Object.freeze({
+    pollMs: configInteger(env, "NEXUS_POLL_MS", 5000, 50, 3_600_000),
+    leaseMs: configInteger(env, "NEXUS_LEASE_MS", 300_000, 200, 86_400_000),
+    maxAttempts: configInteger(env, "NEXUS_MAX_ATTEMPTS", 3, 1, 100),
+    adapterTimeoutMs: configInteger(env, "NEXUS_ADAPTER_TIMEOUT_MS", 120_000, 100, 86_400_000),
+    shutdownTimeoutMs: configInteger(env, "NEXUS_SHUTDOWN_TIMEOUT_MS", 15_000, 0, 600_000),
+    // Stored as seconds in the environment; the floor of 30 is the write budget guard.
+    heartbeatMs: configInteger(env, "NEXUS_HEARTBEAT_SECONDS", 30, 30, 3_600) * 1000,
+    retentionDays: configInteger(env, "NEXUS_RETENTION_DAYS", 7, 1, 365),
+    staleQueueMs: configInteger(env, "NEXUS_STALE_QUEUE_SECONDS", 600, 60, 86_400) * 1000
+  });
+}
+
+/**
+ * Side-effecting adapters stay disabled until idempotency protection exists and is tested.
+ * The worker retries an expired lease, so an adapter that cannot prove it is idempotent must never
+ * be mounted: this guard turns that policy into a boot failure instead of a comment.
+ */
+export const SIDE_EFFECTING_ADAPTERS_ENABLED = false;
+
+export function assertReadOnlyAdapters(adapters = {}) {
+  const names = Object.keys(adapters || {});
+  if (SIDE_EFFECTING_ADAPTERS_ENABLED) return names;
+  const offending = names.filter(name => !READ_ONLY_ADAPTER_NAMES.includes(name));
+  if (offending.length) {
+    throw new Error(
+      "Side-effecting adapters are disabled until idempotency protection is implemented and tested; refused: " +
+      offending.join(", ") + ". Allowed read-only adapters: " + READ_ONLY_ADAPTER_NAMES.join(", ") + "."
+    );
+  }
+  return names;
+}
+
+/** Queue depth and backlog age, from one query, for the runtime endpoint and the tick report. */
+export async function readQueueHealth(query, { now = Date.now(), staleAfterMs = 600_000 } = {}) {
+  const rows = await query(NEXUS_QUEUE_SQL);
+  const row = rows?.[0]?.results?.[0] || {};
+  const eligible = Number(row.eligible || 0);
+  const blocked = Number(row.blocked || 0);
+  const oldest = row.oldest || null;
+  const parsed = oldest ? Date.parse(oldest) : NaN;
+  const ageMs = Number.isFinite(parsed) ? Math.max(0, now - parsed) : null;
+  return {
+    eligible,
+    blocked,
+    claimable: eligible > 0,
+    oldestEligibleAt: oldest,
+    oldestEligibleAgeSeconds: ageMs === null ? null : Math.round(ageMs / 1000),
+    staleAfterSeconds: Math.round(staleAfterMs / 1000),
+    // Stale means eligible work has been waiting longer than the operator's deadline. It is an
+    // alarm about throughput, not about correctness.
+    stale: eligible > 0 && ageMs !== null && ageMs >= staleAfterMs
+  };
+}
 
 export const NEXUS_HEARTBEAT_SQL =
   "INSERT INTO habitat_nexus_workers (worker_id, started_at, heartbeat_at, state, claimed, completed, failed, detail) " +
@@ -190,6 +289,10 @@ export function createNexusWorker({
   adapterTimeoutMs = 120_000,
   maxAttempts = 3,
   shutdownTimeoutMs = 15_000,
+  // Routine liveness beats are throttled to this interval; lifecycle transitions are not.
+  heartbeatMs = 30_000,
+  retentionDays = 7,
+  pruneIntervalMs = 60 * 60 * 1000,
   renewLease = true,
   now = () => new Date().toISOString(),
   log = console
@@ -203,6 +306,9 @@ export function createNexusWorker({
   requireInteger("adapterTimeoutMs", adapterTimeoutMs, 100, 86_400_000);
   requireInteger("maxAttempts", maxAttempts, 1, 100);
   requireInteger("shutdownTimeoutMs", shutdownTimeoutMs, 0, 600_000);
+  requireInteger("heartbeatMs", heartbeatMs, 30_000, 3_600_000);
+  requireInteger("retentionDays", retentionDays, 1, 365);
+  requireInteger("pruneIntervalMs", pruneIntervalMs, 60_000, 86_400_000);
 
   let stopped = false;
   let aborted = false;
@@ -211,8 +317,46 @@ export function createNexusWorker({
   const counters = { claimed: 0, completed: 0, failed: 0, recovered: 0, exhausted: 0, stale: 0, renewals: 0 };
   const renewals = new Map();
 
+  // Lifecycle and execution transitions are written immediately; routine liveness beats are
+  // written at most once per heartbeatMs. `polling` and `idle` are the same routine state, so an
+  // idle tick does not write twice just by naming itself differently — which is what made the old
+  // policy cost two D1 writes every five seconds.
+  const IMMEDIATE_HEARTBEAT_STATES = new Set(["starting", "executing", "stopped", "error"]);
+  const ROUTINE_HEARTBEAT_STATES = new Set(["polling", "idle"]);
+  let lastHeartbeat = { at: 0, state: null };
+  let lastPruneAt = 0;
+  let lastTick = null;
+
   async function heartbeat(state, detail = null) {
+    const sameRoutineState = ROUTINE_HEARTBEAT_STATES.has(state) &&
+      ROUTINE_HEARTBEAT_STATES.has(String(lastHeartbeat.state || ""));
+    if (!IMMEDIATE_HEARTBEAT_STATES.has(state) && sameRoutineState && Date.now() - lastHeartbeat.at < heartbeatMs) {
+      return false;
+    }
     await query(NEXUS_HEARTBEAT_SQL, [workerId, now(), now(), state, counters.claimed, counters.completed, counters.failed, detail]);
+    lastHeartbeat = { at: Date.now(), state };
+    return true;
+  }
+
+  /**
+   * Delete heartbeat rows for workers that stopped reporting long ago. Never deletes this worker's
+   * row, never runs more than once per pruneIntervalMs, and never fails a tick: retention is
+   * housekeeping, not execution.
+   */
+  async function pruneWorkerHeartbeats({ olderThanDays = retentionDays, force = false } = {}) {
+    if (!force && Date.now() - lastPruneAt < pruneIntervalMs) return { pruned: false, reason: "not_due" };
+    lastPruneAt = Date.now();
+    const cutoff = new Date(Date.now() - Math.max(1, olderThanDays) * 86_400_000).toISOString();
+    try {
+      const rows = await query(NEXUS_PRUNE_SQL, [workerId, cutoff]);
+      const removed = (rows?.[0]?.results || []).length;
+      if (removed) log.log?.("NEXUS_WORKER: pruned " + removed + " heartbeat row(s) older than " + cutoff);
+      return { pruned: true, cutoff, removed };
+    } catch (error) {
+      // A missing RETURNING support or a transient D1 failure must not break execution.
+      log.warn?.("NEXUS_WORKER: heartbeat retention failed: " + String(error?.message || error));
+      return { pruned: false, reason: "error", error: String(error?.message || error) };
+    }
   }
 
   /** Re-read the row and confirm this worker still owns the fence. */
@@ -463,11 +607,26 @@ export function createNexusWorker({
     return { ok: true, outcome };
   }
 
+  /**
+   * One unit of work. Returns a result instead of swallowing it, so a one-shot runner can choose an
+   * exit code and an operator can tell "nothing to do" from "could not talk to D1".
+   */
   async function tick() {
-    if (stopped || running) return;
+    if (stopped || running) {
+      return { ok: false, skipped: true, reason: stopped ? "stopped" : "already_running" };
+    }
     running = true;
+    const at = now();
+    const before = { ...counters };
+    const delta = () => ({
+      claimed: Math.max(0, counters.claimed - before.claimed),
+      completed: Math.max(0, counters.completed - before.completed),
+      failed: Math.max(0, counters.failed - before.failed),
+      recovered: Math.max(0, counters.recovered - before.recovered)
+    });
     try {
-      await heartbeat("polling");
+      await heartbeat("idle");
+      await pruneWorkerHeartbeats();
       await recoverExpired();
       const task = await claim();
       if (task) {
@@ -475,12 +634,16 @@ export function createNexusWorker({
         await execute(task);
       }
       await heartbeat(stopped ? "stopped" : "idle");
+      lastTick = { ok: true, at, finishedAt: now(), ...delta(), error: null, stage: "complete" };
     } catch (error) {
-      log.error?.("NEXUS_WORKER_TICK_FAILED", String(error?.message || error));
-      try { await heartbeat("error", String(error?.message || error).slice(0, 200)); } catch {}
+      const message = String(error?.message || error).slice(0, 300);
+      lastTick = { ok: false, at, finishedAt: now(), ...delta(), error: message, stage: "tick" };
+      log.error?.("NEXUS_WORKER_TICK_FAILED", message);
+      try { await heartbeat("error", message.slice(0, 200)); } catch {}
     } finally {
       running = false;
     }
+    return lastTick;
   }
 
   /** Idempotent: a second start on a running worker leaves the existing timer alone. */
@@ -523,6 +686,9 @@ export function createNexusWorker({
     claim,
     recoverExpired,
     execute,
+    pruneWorkerHeartbeats,
+    lastTick: () => lastTick,
+    heartbeat: () => ({ ...lastHeartbeat }),
     counters: () => ({ ...counters }),
     isRunning: () => running,
     isStarted: () => timer !== null,
@@ -530,7 +696,9 @@ export function createNexusWorker({
     maxAttempts,
     leaseMs,
     adapterTimeoutMs,
-    shutdownTimeoutMs
+    shutdownTimeoutMs,
+    heartbeatMs,
+    retentionDays
   });
 }
 
@@ -555,6 +723,9 @@ export function registerNexusRuntime(app, {
   ownerDeviceId = null,
   ownerDeviceIds = null,
   audit = null,
+  // Refuse to mount an adapter that is not in the read-only set. Side-effecting adapters stay off
+  // until idempotency protection exists; an embedder may only lower this after that work lands.
+  enforceReadOnlyAdapters = true,
   handleSignals = true,
   exitOnSignal = true,
   exit = code => process.exit(code),
@@ -576,8 +747,16 @@ export function registerNexusRuntime(app, {
   }) : null);
   const toolRegistry = registry || createToolRegistry({ env });
   const engine = engineOverride || (store ? createUniversalCommandEngine({ repository: store, registry: toolRegistry }) : null);
+  // Resolve knobs and the adapter policy before construction: an invalid value or a
+  // side-effecting adapter disables the mount with a stated reason instead of running with
+  // silently different semantics.
+  const config = resolveNexusConfig(env);
+  // An injected worker already owns its adapters, so the policy applies only to a worker this call
+  // constructs from the supplied adapter map.
+  if (!worker && adapters && enforceReadOnlyAdapters) assertReadOnlyAdapters(adapters);
   const runtime = worker || (store && d1Query ? createNexusWorker({
     repository: store, engine, query: d1Query, log,
+    ...config,
     ...(adapters ? { adapters } : {})
   }) : null);
 
@@ -758,6 +937,21 @@ export function registerNexusRuntime(app, {
         stale: Date.now() - Date.parse(row.heartbeat_at) > 120_000
       }));
       const live = workers.filter(entry => !entry.stale && entry.state !== "stopped");
+      // Queue health is additive: if this read fails, the heartbeat answer is still useful and the
+      // queue is reported as unavailable rather than being guessed at.
+      let queue = { ok: false, error: "unavailable" };
+      try {
+        queue = { ok: true, ...(await readQueueHealth(d1Query, { staleAfterMs: config.staleQueueMs })) };
+      } catch (error) {
+        console.error("NEXUS_QUEUE_READ_FAILED", String(error?.message || error));
+      }
+      const state = !runtime
+        ? "not_mounted"
+        : !started
+          ? "mounted_not_started"
+          : live.length
+            ? "running"
+            : "started_no_live_heartbeat";
       return res.json({
         ok: true,
         runtime: {
@@ -768,8 +962,16 @@ export function registerNexusRuntime(app, {
           databaseFingerprint,
           liveWorkers: live.length,
           heartbeatVerified: live.length > 0,
+          // `asleep` is the honest reading of no live heartbeat: nothing is executing, which is not
+          // the same as nothing failed and not the same as everything succeeded.
+          asleep: live.length === 0,
+          state,
+          lastHeartbeatAgeSeconds: workers[0]?.ageSeconds ?? null,
           stoppedWorkers: workers.filter(entry => entry.state === "stopped").length,
-          sleepingNote: "On Render Free the dyno sleeps when idle; no heartbeat means nothing is executing, not that work succeeded.",
+          queue,
+          staleQueue: queue.ok === true && queue.stale === true,
+          heartbeatSeconds: config.heartbeatMs / 1000,
+          sleepingNote: "No live heartbeat means nothing is executing. On a service that sleeps, that is a pause, not evidence that work succeeded.",
           workers
         }
       });
@@ -856,7 +1058,17 @@ export function registerNexusRuntime(app, {
       return {
         ready, started, worker: Boolean(runtime), approvalsEndpoint: true, runtimeEndpoint: true,
         deviceVerifier: typeof verify === "function",
-        ownerAuthorization: owners.size > 0, ownerDevices: owners.size
+        ownerAuthorization: owners.size > 0, ownerDevices: owners.size,
+        state: !runtime
+          ? "not_mounted"
+          : !ready
+            ? "mounted_not_ready"
+            : started
+              ? "running"
+              : "mounted_not_started",
+        heartbeatSeconds: config.heartbeatMs / 1000,
+        retentionDays: config.retentionDays,
+        lastTick: runtime?.lastTick?.() || null
       };
     }
   });

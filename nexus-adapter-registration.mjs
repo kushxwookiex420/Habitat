@@ -23,6 +23,19 @@ export const READ_ONLY_ADAPTER_NAMES = Object.freeze([
 ]);
 export const DISABLED_ADAPTER_NAMES = Object.freeze(["repo.test"]);
 
+/**
+ * Repository-relative prefixes the read-only adapters may read. Exported so the mounted runtime and
+ * the one-shot tick use one allowlist instead of two copies that could drift.
+ */
+export const READ_ONLY_ADAPTER_PREFIXES = Object.freeze([
+  "src",
+  "tests",
+  "docs",
+  "app/src",
+  "README.md",
+  "package.json"
+]);
+
 /** Machine-readable contract for review and for the registration documentation. */
 export const READ_ONLY_ADAPTER_SPECS = Object.freeze({
   "repo.inspect": Object.freeze({

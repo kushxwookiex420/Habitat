@@ -218,7 +218,10 @@ async function setup({ withVerifier = true, startWorker = false, owners = [DEVIC
   const runtime = registerNexusRuntime(app, {
     env: { HABITAT_AX_BRIDGE_TOKEN: AX_TOKEN },
     repository, registry: fakeRegistry(), query: d1.query, engine: engineOverride || engine,
-    adapters, verifyDevice, ownerDeviceId: owners.join(","), handleSignals: false, log: quiet
+    adapters, verifyDevice, ownerDeviceId: owners.join(","), handleSignals: false, log: quiet,
+    // These doubles are deliberately not in the read-only set; the production mount keeps the
+    // guard on and is covered by tests/nexus-autonomous-foundation.test.mjs.
+    enforceReadOnlyAdapters: false
   });
   const init = await runtime.initialize({ startWorker });
   return { app, d1, repository, engine, runtime, init };
@@ -890,7 +893,8 @@ async function approvalFixture(decision) {
     repository, registry: fakeRegistry(), query: d1.query, engine,
     adapters: TEST_ADAPTERS,
     verifyDevice: async (token, deviceId) => deviceId === DEVICE && token === DEVICE_TOKEN,
-    ownerDeviceId: DEVICE, handleSignals: false, log: quiet
+    ownerDeviceId: DEVICE, handleSignals: false, log: quiet,
+    enforceReadOnlyAdapters: false
   });
   await runtime.initialize({ startWorker: false });
   await repository.create(task("cmd_ap", { adapter: "task.ok" }));
@@ -925,7 +929,8 @@ test("a worker-parks a pending task without a fence so the owner can then approv
     repository, registry: fakeRegistry(), query: d1.query, engine,
     adapters: TEST_ADAPTERS,
     verifyDevice: async (token, deviceId) => deviceId === DEVICE && token === DEVICE_TOKEN,
-    ownerDeviceId: DEVICE, handleSignals: false, log: quiet
+    ownerDeviceId: DEVICE, handleSignals: false, log: quiet,
+    enforceReadOnlyAdapters: false
   });
   await runtime.initialize({ startWorker: false });
   await repository.create(task("cmd_park", {

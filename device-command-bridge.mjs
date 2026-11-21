@@ -4,13 +4,13 @@ import { registerHomeBridgeConsole } from "./home-bridge-console.mjs";
 import { registerDeviceHabitat } from "./device-habitat.mjs";
 import { registerUniversalCommandRoutes } from "./command-routes.mjs";
 import { createD1Query, registerNexusRuntime } from "./nexus-runtime.mjs";
-import { buildReadOnlyNexusAdapters } from "./nexus-adapter-registration.mjs";
+import { buildReadOnlyNexusAdapters, READ_ONLY_ADAPTER_PREFIXES } from "./nexus-adapter-registration.mjs";
 
 const SAFE_COMMANDS = new Set(["device.status"]);
 const PAIRING_TTL_MS = 10 * 60 * 1000;
-// repository-relative paths the read-only repo.inspect adapter may read. It resolves symlinks and
-// refuses anything outside these prefixes, so a command objective cannot read the host filesystem.
-const NEXUS_ADAPTER_PREFIXES = Object.freeze(["src", "tests", "docs", "app/src", "README.md", "package.json"]);
+// The read-only adapter path allowlist lives in nexus-adapter-registration so the mounted runtime
+// and the one-shot tick cannot drift apart. It resolves symlinks and refuses anything outside these
+// prefixes, so a command objective cannot read the host filesystem.
 
 function digest(value) {
   return createHash("sha256").update(String(value), "utf8").digest("hex");
@@ -386,7 +386,7 @@ export function registerDeviceCommandBridge(app, {
     } else {
       const adapterMap = adapters || buildReadOnlyNexusAdapters({
         rootDir: process.cwd(),
-        allowedPrefixes: NEXUS_ADAPTER_PREFIXES,
+        allowedPrefixes: READ_ONLY_ADAPTER_PREFIXES,
         taskRepository: commandStore,
         d1Query: runtimeQuery
       });
