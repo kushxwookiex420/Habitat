@@ -352,6 +352,15 @@ export function createD1DeviceCommandRepository({ accountId, databaseId, apiToke
       if (!validBackfillDeviceId(targetId) || !validBackfillDeviceId(ownerId)) {
         return { ok: false, code: "invalid_mapping", error: "A valid device and owner id are required." };
       }
+      if (targetId === ownerId) {
+        return {
+          ok: false,
+          code: "self_ownership",
+          deviceId: targetId,
+          ownerDeviceId: ownerId,
+          error: "A device cannot be its own owner; ownership must name a different, authorized device."
+        };
+      }
       const allowed = normalizeAuthorizedOwnerIds(authorizedOwnerIds);
       if (allowed.size === 0) {
         return { ok: false, code: "owner_authorization_required", error: "An explicit owner allowlist is required." };

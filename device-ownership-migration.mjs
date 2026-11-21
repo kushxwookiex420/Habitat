@@ -37,6 +37,9 @@ export function validateBackfillInput(input) {
     if (!validBackfillDeviceId(deviceId) || !validBackfillDeviceId(ownerDeviceId)) {
       return { ok: false, code: "invalid_id", error: `Row ${index + 1} needs valid deviceId and ownerDeviceId values.` };
     }
+    if (deviceId === ownerDeviceId) {
+      return { ok: false, code: "self_ownership", error: `Row ${index + 1} cannot make device ${deviceId} its own owner.` };
+    }
     if (seen.has(deviceId)) {
       return { ok: false, code: "duplicate_device", error: `Device ${deviceId} appears more than once.` };
     }

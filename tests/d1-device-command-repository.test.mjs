@@ -303,6 +303,10 @@ test("ownership preflight validates owner existence, activity, revocation, autho
   assert.equal(unpairedTarget.code, "device_not_paired");
   const invalid = await repo.preflightOwnership({ deviceId: "bad id", ownerDeviceId: "owner-phone", authorizedOwnerIds: ["owner-phone"] });
   assert.equal(invalid.code, "invalid_mapping");
+
+  const self = await repo.preflightOwnership({ deviceId: "owner-phone", ownerDeviceId: "owner-phone", authorizedOwnerIds: ["owner-phone"] });
+  assert.equal(self.code, "self_ownership");
+  assert.equal(fake.owners.has("owner-phone"), false, "self-ownership preflight writes nothing");
 });
 
 test("a failed ownership write compensates the pairing insert instead of leaving an orphan code", async () => {

@@ -27,7 +27,7 @@ D1 data.
 | H3 pairing replay | A code is consumed with a conditional update. A lost first response can be recovered once, only by the same device, within 60 seconds, using a conditional `recovery_at` claim. Later replays and other devices are refused. |
 | H4 bootstrap reactivation | `seedBootstrapPairing` preserves `consumed_at` and the bound device; it never restores a wildcard or makes a consumed code usable on restart. A revoked bootstrap owner is skipped. |
 | H5 revoked-owner codes | Pairing codes record their issuer in `habitat_pairing_owners`. Revoking a device deletes every code it issued. Redemption requires an active, non-revoked owner; enrolling a non-owner target requires the owner to be actively paired. |
-| H6 legacy ownership | No legacy owner is inferred. `device-ownership-migration.mjs` accepts only an explicit operator mapping. Backfill preflight requires the proposed owner to be in the configured owner allowlist, exist as a paired device, be unrevoked, and hold an active credential; missing, inactive, revoked, or unauthorized owners are rejected. The target must exist and no different ownership may already exist. |
+| H6 legacy ownership | No legacy owner is inferred. `device-ownership-migration.mjs` accepts only an explicit operator mapping. Backfill preflight requires the proposed owner to be in the configured owner allowlist, exist as a paired device, be unrevoked, and hold an active credential; missing, inactive, revoked, or unauthorized owners are rejected. A device may not own itself. The target must exist and no different ownership may already exist. |
 | H7 owner lockout | Owner recovery requires the target's recorded owner and destroys old credentials/codes. If the owner itself is revoked, a separate break-glass route requires `HABITAT_BREAK_GLASS_TOKEN`, audits the action, and leaves the device requiring a fresh pairing. |
 | Atomic ownership | Ownership is claimed with a conditional `INSERT ... ON CONFLICT DO NOTHING` before the token write; the loser cannot overwrite the winner's owner or credential. |
 | Task approval policy | Global-owner approval is deliberate: any configured owner device may approve any command task. The policy is audited. Per-owner task ownership was not added because Revision 4 tasks are operational queues, not tenant data. |
@@ -40,7 +40,7 @@ D1 data.
 
 ## Deliberate global-owner task approval policy
 
-An authenticated configured owner device may request, approve, deny, complete, fail, or retry any
+An authenticated configured owner device may request, approve, deny, complete, fail, cancel, or retry any
 command task. This is intentional for the current single-operator deployment. Task records are not
 multi-tenant data and do not carry an owner column. Authorization is still fail-closed: the device
 token must verify and the device ID must be in the configured owner set. The Ax bridge token cannot
@@ -61,7 +61,8 @@ global-owner policy for tenant data.
 4. Write an explicit JSON mapping:
    `{ "devices": [ { "deviceId": "existing-phone", "ownerDeviceId": "owner-phone" } ] }`.
    Every mapping must be reviewed by the owner; the tool refuses duplicates, invalid IDs, missing
-   targets, existing ownership, and owners that are not authorized, paired, active, or unrevoked.
+   targets, self-ownership (`deviceId === ownerDeviceId`), existing ownership, and owners that are not
+   authorized, paired, active, or unrevoked.
 5. Export the same explicit owner allowlist used by the runtime, for example
    `HABITAT_OWNER_DEVICE_IDS=owner-phone`. There is no implicit owner allowlist and no arbitrary
    CLI override: the mapping must use an owner the service actually authorizes.
@@ -82,10 +83,33 @@ global-owner policy for tenant data.
 ## Required environment (non-production)
 
 `HABITAT_RUNTIME_ENV=nonproduction`, `HABITAT_OWNER_DEVICE_ID` (exactly one owner for bootstrap
-minting), `HABITAT_AX_BRIDGE_TOKEN`, D1 credentials, and — when the Home Bridge console is used —
+minting), `HABITAT_OWNER_DEVICE_IDS` (the runtime owner allowlist used for owner authentication),
+`HABITAT_AX_BRIDGE_TOKEN`, D1 credentials, and — when the Home Bridge console is used —
 `HOME_BRIDGE_URL`, `HOME_BRIDGE_AX_TOKEN`, `HOME_BRIDGE_BUFF_TOKEN`, and a separate
 `HABITAT_BREAK_GLASS_TOKEN`. Do not set production credentials. Do not enable these features in a
 production runtime.
+
+## Legacy task and chat execution authorization (Revision 4.2)
+
+`POST /tasks`, `GET /tasks`, `POST /tasks/:id/delegate`, `POST /tasks/:id/retry`, and
+`POST /system-check` can create or execute model work. They are no longer public:
+
+- `/chat`'s own loopback task calls use a per-process random internal token that is never returned
+  by an endpoint or logged.
+- An operator may use `HABITAT_AX_BRIDGE_TOKEN` as a bearer token.
+- The Android app sends its paired `x-owner-device-id` and device bearer token. The server verifies
+  the token through the same durable device store used for commands and requires the device to be
+  in `HABITAT_OWNER_DEVICE_IDS`.
+- `/chat` also requires that verified owner identity before it will service a system check,
+  operational-task intent, or explicit task-creation intent. Ordinary chat remains available but
+  cannot create or execute tasks without authorization.
+
+The unauthenticated legacy `POST /device/heartbeat` route was removed. Android presence is now
+reported only by the authenticated device bridge, so a spoofed heartbeat cannot make an arbitrary
+device appear online or satisfy the system check.
+
+`HABITAT_OWNER_DEVICE_IDS` must match the deployment's real owner allowlist. If it is missing, task
+creation and device-scoped chat operations fail closed with `503 owner_unconfigured`.
 
 ## Verification limits
 

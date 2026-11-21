@@ -88,6 +88,19 @@ export async function runBackfill({
       });
       continue;
     }
+    if (preflight.action === "already_assigned") {
+      // The read-only preflight already proved the row is correct. Do not perform a redundant
+      // conditional write or emit another audit row on a rerun.
+      results.push({
+        ...assignment,
+        ok: true,
+        assigned: false,
+        code: "already_owned_same",
+        existingOwnerDeviceId: assignment.ownerDeviceId,
+        targetRevoked: Boolean(preflight.targetRevoked)
+      });
+      continue;
+    }
     const outcome = await repository.backfillOwnership({
       ...assignment,
       assignedAt,
@@ -106,6 +119,7 @@ export async function runBackfill({
 
   const summary = {
     mode: apply ? "apply" : "dry-run",
+    assignedAt,
     requested: validation.assignments.length,
     assigned: results.filter(row => row.assigned === true).length,
     wouldAssign: results.filter(row => row.wouldAssign === true).length,

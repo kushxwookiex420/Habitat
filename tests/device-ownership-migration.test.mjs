@@ -15,6 +15,14 @@ test("ownership backfill accepts only an explicit, complete mapping", () => {
   assert.deepEqual(valid.assignments, [{ deviceId: "existing-phone", ownerDeviceId: "owner-phone" }]);
 });
 
+test("ownership backfill rejects a device that would own itself", () => {
+  const result = validateBackfillInput({
+    devices: [{ deviceId: "same-phone", ownerDeviceId: "same-phone" }]
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.code, "self_ownership");
+});
+
 test("ownership backfill refuses duplicate devices instead of choosing one", () => {
   const result = validateBackfillInput([
     { deviceId: "existing-phone", ownerDeviceId: "owner-a" },
