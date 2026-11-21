@@ -411,6 +411,28 @@ test("manual close-out fails closed when no device verifier is configured", asyn
   assert.equal(repository.rows.get("cmd_noverify").status, "working");
 });
 
+test("a verified device with no configured owner is a 503 misconfiguration, not a 403 decision", async () => {
+  const app = makeApp();
+  const repository = memoryRepository();
+  const at = new Date().toISOString();
+  repository.rows.set("cmd_noowner", {
+    id: "cmd_noowner", objective: "x", status: "working", createdAt: at, updatedAt: at, attempts: 0, approvals: [], statusHistory: []
+  });
+  // The device credential is valid, but HABITAT_OWNER_DEVICE_ID(S) is unset on this process.
+  registerUniversalCommandRoutes(app, {
+    env: { HABITAT_AX_BRIDGE_TOKEN: "ax-test-secret" },
+    repository, registry: registry(), verifyDevice: ownerVerifier
+  });
+  const res = await invoke(app, "POST /ax/command/tasks/:id/complete", {
+    headers: ownerAuth, params: { id: "cmd_noowner" },
+    body: { result: { summary: "should not work", evidence: ["x"] } }
+  });
+  assert.equal(res.statusCode, 503);
+  assert.equal(res.body.code, "owner_unconfigured");
+  assert.match(res.body.error, /HABITAT_OWNER_DEVICE_IDS/);
+  assert.equal(repository.rows.get("cmd_noowner").status, "working", "nothing was modified");
+});
+
 test("Ax routes cannot plan, checkpoint or request approval on a worker-owned task", async () => {
   const cases = [
     ["plan", { steps: [{ step: "hijack", role: "ax" }] }],

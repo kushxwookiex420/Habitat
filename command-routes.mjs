@@ -142,6 +142,17 @@ export function registerUniversalCommandRoutes(app, {
       res.status(401).json({ ok: false, code: "owner_invalid", error: "The owner device credential is not valid." });
       return null;
     }
+    // A valid device with no configured owner is a misconfiguration, not an authorization
+    // decision. Report 503 like the /device/command routes do, so an operator fixes the variable
+    // instead of hunting a device that is actually fine.
+    if (owners.size === 0) {
+      res.status(503).json({
+        ok: false,
+        code: "owner_unconfigured",
+        error: label + " requires an owner device: set HABITAT_OWNER_DEVICE_IDS on this service."
+      });
+      return null;
+    }
     if (!owners.has(deviceId)) {
       res.status(403).json({ ok: false, code: "not_owner", error: "This device is not the configured owner and cannot perform " + label.toLowerCase() + "." });
       return null;
