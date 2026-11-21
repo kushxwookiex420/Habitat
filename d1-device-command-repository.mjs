@@ -1,6 +1,12 @@
 import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
+import { validBackfillDeviceId } from "./device-ownership-migration.mjs";
 
 const API = "https://api.cloudflare.com/client/v4";
+
+function normalizeAuthorizedOwnerIds(value) {
+  const raw = value instanceof Set ? [...value] : Array.isArray(value) ? value : String(value || "").split(",");
+  return new Set(raw.map(item => String(item || "").trim()).filter(Boolean));
+}
 
 export function createD1DeviceCommandRepository({ accountId, databaseId, apiToken, fetchImpl = fetch }) {
   if (![accountId, databaseId, apiToken].every(value => String(value || "").trim())) {
@@ -327,24 +333,91 @@ export function createD1DeviceCommandRepository({ accountId, databaseId, apiToke
       );
       return { ok: true, id, occurredAt };
     },
+    async getDeviceRecord(deviceId) {
+      const result = await query(
+        "SELECT device_id, token_hash, revoked_at FROM habitat_paired_devices WHERE device_id = ? LIMIT 1",
+        [deviceId]
+      );
+      return result[0]?.results?.[0] || null;
+    },
+    /**
+     * Read-only ownership preflight. This performs the same checks used before an apply write:
+     * the proposed owner must be explicitly authorized, exist, be unrevoked, and hold an active
+     * paired credential; the target must exist; and ownership must be absent or already the same.
+     * It never writes a row and is safe for dry-run callers.
+     */
+    async preflightOwnership({ deviceId, ownerDeviceId, authorizedOwnerIds = [] } = {}) {
+      const targetId = String(deviceId || "").trim();
+      const ownerId = String(ownerDeviceId || "").trim();
+      if (!validBackfillDeviceId(targetId) || !validBackfillDeviceId(ownerId)) {
+        return { ok: false, code: "invalid_mapping", error: "A valid device and owner id are required." };
+      }
+      const allowed = normalizeAuthorizedOwnerIds(authorizedOwnerIds);
+      if (allowed.size === 0) {
+        return { ok: false, code: "owner_authorization_required", error: "An explicit owner allowlist is required." };
+      }
+      if (!allowed.has(ownerId)) {
+        return { ok: false, code: "owner_unauthorized", ownerDeviceId: ownerId, error: "The proposed owner is not in the authorized owner allowlist." };
+      }
+      const owner = await this.getDeviceRecord(ownerId);
+      if (!owner) return { ok: false, code: "owner_missing", ownerDeviceId: ownerId, error: "The proposed owner device does not exist." };
+      if (owner.revoked_at) return { ok: false, code: "owner_revoked", ownerDeviceId: ownerId, error: "The proposed owner device is revoked." };
+      if (!String(owner.token_hash || "").trim()) {
+        return { ok: false, code: "owner_inactive", ownerDeviceId: ownerId, error: "The proposed owner device has no active credential." };
+      }
+      const target = await this.getDeviceRecord(targetId);
+      if (!target) return { ok: false, code: "device_not_paired", deviceId: targetId, error: "The target device does not exist." };
+      const existing = await this.getDeviceOwner(targetId);
+      if (existing && existing !== ownerId) {
+        return { ok: false, code: "already_owned", deviceId: targetId, existingOwnerDeviceId: existing, error: "The target device already has a different owner." };
+      }
+      if (existing === ownerId) {
+        return {
+          ok: true,
+          action: "already_assigned",
+          assigned: false,
+          deviceId: targetId,
+          ownerDeviceId: ownerId,
+          targetRevoked: Boolean(target.revoked_at)
+        };
+      }
+      return {
+        ok: true,
+        action: "assign",
+        assigned: true,
+        deviceId: targetId,
+        ownerDeviceId: ownerId,
+        targetRevoked: Boolean(target.revoked_at)
+      };
+    },
     /**
      * Controlled legacy backfill. The caller supplies an explicit deviceId -> owner mapping; this
-     * method never infers an owner. It only assigns an existing paired device that has no ownership
-     * row, and it never overwrites an existing owner.
+     * method never infers an owner. Preflight validates the owner and target. The insert itself
+     * rechecks owner activity and absence of ownership so a concurrent revocation cannot attach a
+     * device to an unusable owner.
      */
-    async backfillOwnership({ deviceId, ownerDeviceId, assignedAt = new Date().toISOString() }) {
-      if (!deviceId || !ownerDeviceId) return { ok: false, code: "invalid_mapping" };
+    async backfillOwnership({ deviceId, ownerDeviceId, assignedAt = new Date().toISOString(), authorizedOwnerIds = [] }) {
+      const preflight = await this.preflightOwnership({ deviceId, ownerDeviceId, authorizedOwnerIds });
+      if (!preflight.ok) return preflight;
+      if (preflight.action === "already_assigned") {
+        return { ok: true, assigned: false, code: "already_owned_same", existingOwnerDeviceId: ownerDeviceId };
+      }
       const result = await query(
         "INSERT INTO habitat_device_ownership (device_id, owner_device_id, assigned_at) " +
         "SELECT ?, ?, ? WHERE EXISTS (SELECT 1 FROM habitat_paired_devices WHERE device_id = ?) " +
+        "AND EXISTS (SELECT 1 FROM habitat_paired_devices WHERE device_id = ? AND revoked_at IS NULL AND token_hash <> '') " +
         "AND NOT EXISTS (SELECT 1 FROM habitat_device_ownership WHERE device_id = ?) " +
         "RETURNING device_id",
-        [deviceId, ownerDeviceId, assignedAt, deviceId, deviceId]
+        [deviceId, ownerDeviceId, assignedAt, deviceId, ownerDeviceId, deviceId]
       );
       if (result[0]?.results?.length) return { ok: true, assigned: true };
-      const existing = await this.getDeviceOwner(deviceId);
-      if (existing) return { ok: false, code: "already_owned", existingOwnerDeviceId: existing };
-      return { ok: false, code: "device_not_paired" };
+      // The conditional write lost a race (owner revoked, target removed, or another mapping won).
+      // Re-run the read-only preflight so the caller gets the precise current reason.
+      const after = await this.preflightOwnership({ deviceId, ownerDeviceId, authorizedOwnerIds });
+      if (after.ok && after.action === "already_assigned") {
+        return { ok: true, assigned: false, code: "already_owned_same", existingOwnerDeviceId: ownerDeviceId };
+      }
+      return after.ok ? { ok: false, code: "assignment_conflict", error: "Ownership changed during the backfill." } : after;
     },
     async healthCheck() {
       await query("SELECT 1 AS ok");

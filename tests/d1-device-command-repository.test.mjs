@@ -44,7 +44,9 @@ function fakeD1() {
       if (sql.includes("DO NOTHING")) {
         if (!owners.has(params[0])) owners.set(params[0], params[1]);
       } else if (sql.includes("WHERE EXISTS")) {
-        if (devices.has(params[3]) && !owners.has(params[4])) {
+        const target = devices.get(params[3]);
+        const owner = devices.get(params[4]);
+        if (target && owner && !owner.revoked_at && owner.token_hash && !owners.has(params[5])) {
           owners.set(params[0], params[1]);
           result = [{ results: [{ device_id: params[0] }] }];
         } else result = [{ results: [] }];
@@ -102,6 +104,9 @@ function fakeD1() {
     } else if (sql.startsWith("SELECT token_hash FROM habitat_paired_devices")) {
       const row = devices.get(params[0]);
       result = [{ results: row && !row.revoked_at ? [{ token_hash: row.token_hash }] : [] }];
+    } else if (sql.startsWith("SELECT device_id, token_hash, revoked_at FROM habitat_paired_devices")) {
+      const row = devices.get(params[0]);
+      result = [{ results: row ? [{ device_id: row.device_id, token_hash: row.token_hash, revoked_at: row.revoked_at }] : [] }];
     } else if (sql.startsWith("SELECT device_id FROM habitat_paired_devices")) {
       const row = devices.get(params[0]);
       result = [{ results: row && !row.revoked_at && row.token_hash ? [{ device_id: row.device_id }] : [] }];
@@ -206,13 +211,15 @@ test("D1 device repository stores only hashes, supports one-time bootstrap pairi
   // H6: explicit legacy ownership backfill never guesses and never overwrites an owner.
   fake.devices.set("legacy-phone", { device_id: "legacy-phone", token_hash: "legacy-hash", created_at: now, last_seen_at: null, revoked_at: null });
   assert.equal(await repo.getDeviceOwner("legacy-phone"), null);
-  assert.deepEqual(await repo.backfillOwnership({ deviceId: "legacy-phone", ownerDeviceId, assignedAt: now }), { ok: true, assigned: true });
+  fake.devices.set(ownerDeviceId, { device_id: ownerDeviceId, token_hash: "owner-active-hash", created_at: now, last_seen_at: null, revoked_at: null });
+  fake.devices.set("different-owner", { device_id: "different-owner", token_hash: "different-owner-hash", created_at: now, last_seen_at: null, revoked_at: null });
+  assert.deepEqual(await repo.backfillOwnership({ deviceId: "legacy-phone", ownerDeviceId, assignedAt: now, authorizedOwnerIds: [ownerDeviceId] }), { ok: true, assigned: true });
   assert.equal(await repo.getDeviceOwner("legacy-phone"), ownerDeviceId);
-  const again = await repo.backfillOwnership({ deviceId: "legacy-phone", ownerDeviceId: "different-owner", assignedAt: now });
+  const again = await repo.backfillOwnership({ deviceId: "legacy-phone", ownerDeviceId: "different-owner", assignedAt: now, authorizedOwnerIds: [ownerDeviceId, "different-owner"] });
   assert.equal(again.ok, false);
   assert.equal(again.code, "already_owned");
   assert.equal(again.existingOwnerDeviceId, ownerDeviceId);
-  const unpaired = await repo.backfillOwnership({ deviceId: "never-paired", ownerDeviceId, assignedAt: now });
+  const unpaired = await repo.backfillOwnership({ deviceId: "never-paired", ownerDeviceId, assignedAt: now, authorizedOwnerIds: [ownerDeviceId] });
   assert.equal(unpaired.ok, false);
   assert.equal(unpaired.code, "device_not_paired");
 
@@ -243,6 +250,59 @@ test("concurrent ownership registration keeps the first owner and first credenti
   assert.equal(await repo.getDeviceOwner("raced"), "owner-a");
   assert.equal(await repo.verifyDeviceToken("first-owner-token", "raced"), true);
   assert.equal(await repo.verifyDeviceToken("second-owner-token", "raced"), false);
+});
+
+test("ownership preflight validates owner existence, activity, revocation, authorization, and targets", async () => {
+  const fake = fakeD1();
+  const repo = createD1DeviceCommandRepository({
+    accountId: "account", databaseId: "database", apiToken: "test-only-d1-token", fetchImpl: fake.fetchImpl
+  });
+  await repo.initialize();
+  const now = new Date().toISOString();
+  const active = { created_at: now, last_seen_at: null, revoked_at: null };
+  fake.devices.set("target", { device_id: "target", token_hash: "target-hash", ...active });
+  fake.devices.set("owner-phone", { device_id: "owner-phone", token_hash: "owner-hash", ...active });
+
+  const missing = await repo.preflightOwnership({ deviceId: "target", ownerDeviceId: "missing-owner", authorizedOwnerIds: ["missing-owner"] });
+  assert.equal(missing.code, "owner_missing");
+
+  fake.devices.set("inactive-owner", { device_id: "inactive-owner", token_hash: "", ...active });
+  const inactive = await repo.preflightOwnership({ deviceId: "target", ownerDeviceId: "inactive-owner", authorizedOwnerIds: ["inactive-owner"] });
+  assert.equal(inactive.code, "owner_inactive");
+
+  fake.devices.set("revoked-owner", { device_id: "revoked-owner", token_hash: "revoked-hash", ...active, revoked_at: now });
+  const revoked = await repo.preflightOwnership({ deviceId: "target", ownerDeviceId: "revoked-owner", authorizedOwnerIds: ["revoked-owner"] });
+  assert.equal(revoked.code, "owner_revoked");
+
+  const unauthorized = await repo.preflightOwnership({ deviceId: "target", ownerDeviceId: "owner-phone", authorizedOwnerIds: ["another-owner"] });
+  assert.equal(unauthorized.code, "owner_unauthorized");
+  const noAllowlist = await repo.preflightOwnership({ deviceId: "target", ownerDeviceId: "owner-phone", authorizedOwnerIds: [] });
+  assert.equal(noAllowlist.code, "owner_authorization_required");
+
+  const valid = await repo.preflightOwnership({ deviceId: "target", ownerDeviceId: "owner-phone", authorizedOwnerIds: ["owner-phone"] });
+  assert.deepEqual(valid, {
+    ok: true,
+    action: "assign",
+    assigned: true,
+    deviceId: "target",
+    ownerDeviceId: "owner-phone",
+    targetRevoked: false
+  });
+
+  fake.owners.set("target", "owner-phone");
+  const same = await repo.preflightOwnership({ deviceId: "target", ownerDeviceId: "owner-phone", authorizedOwnerIds: ["owner-phone"] });
+  assert.equal(same.action, "already_assigned");
+  assert.equal(same.assigned, false);
+
+  fake.owners.set("target", "another-owner");
+  const different = await repo.preflightOwnership({ deviceId: "target", ownerDeviceId: "owner-phone", authorizedOwnerIds: ["owner-phone", "another-owner"] });
+  assert.equal(different.code, "already_owned");
+  assert.equal(different.existingOwnerDeviceId, "another-owner");
+
+  const unpairedTarget = await repo.preflightOwnership({ deviceId: "not-paired", ownerDeviceId: "owner-phone", authorizedOwnerIds: ["owner-phone"] });
+  assert.equal(unpairedTarget.code, "device_not_paired");
+  const invalid = await repo.preflightOwnership({ deviceId: "bad id", ownerDeviceId: "owner-phone", authorizedOwnerIds: ["owner-phone"] });
+  assert.equal(invalid.code, "invalid_mapping");
 });
 
 test("a failed ownership write compensates the pairing insert instead of leaving an orphan code", async () => {
