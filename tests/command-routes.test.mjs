@@ -65,11 +65,27 @@ function registry() {
   };
 }
 
-const auth = { authorization: "Bearer ax-test-secret" };
+const OWNER_ID = "owner-phone";
+const OWNER_TOKEN = "owner-device-token";
+const auth = {
+  authorization: "Bearer ax-test-secret",
+  "x-owner-device-id": OWNER_ID,
+  "x-owner-device-token": OWNER_TOKEN
+};
+const ownerVerifier = async (token, deviceId) => token === OWNER_TOKEN && deviceId === OWNER_ID;
+
+function mountTestApp(app, repository, extra = {}) {
+  return registerUniversalCommandRoutes(app, {
+    env: { HABITAT_AX_BRIDGE_TOKEN: "ax-test-secret" },
+    repository, registry: registry(),
+    verifyDevice: ownerVerifier, ownerDeviceId: OWNER_ID,
+    ...extra
+  });
+}
 
 test("registers the complete command route surface without duplicate paths", () => {
   const app = makeApp();
-  registerUniversalCommandRoutes(app, { env: { HABITAT_AX_BRIDGE_TOKEN: "ax-test-secret" }, repository: memoryRepository(), registry: registry() });
+  mountTestApp(app, memoryRepository());
   const paths = [...app.routes.keys()];
   assert.equal(paths.length, 13);
   assert.equal(new Set(paths).size, paths.length);
@@ -81,7 +97,7 @@ test("registers the complete command route surface without duplicate paths", () 
 test("rejects missing and incorrect Ax credentials before touching command storage", async () => {
   const app = makeApp();
   const repository = memoryRepository();
-  registerUniversalCommandRoutes(app, { env: { HABITAT_AX_BRIDGE_TOKEN: "ax-test-secret" }, repository, registry: registry() });
+  mountTestApp(app, repository);
   const missing = await invoke(app, "GET /ax/command/roles", { headers: {} });
   const wrong = await invoke(app, "GET /ax/command/tools", { headers: { authorization: "Bearer wrong" } });
   assert.equal(missing.statusCode, 401);
@@ -109,7 +125,7 @@ test("reports missing command storage as 503 for stateful routes", async () => {
 test("reports D1 initialization failure as 503 and does not continue into the engine", async () => {
   const app = makeApp();
   const repository = memoryRepository({ failInitialize: true });
-  registerUniversalCommandRoutes(app, { env: { HABITAT_AX_BRIDGE_TOKEN: "ax-test-secret" }, repository, registry: registry() });
+  mountTestApp(app, repository);
   const result = await invoke(app, "POST /ax/command/tasks", { headers: auth, body: { objective: "Inspect status" } });
   assert.equal(result.statusCode, 503);
   assert.match(result.body.error, /storage is not ready/);
@@ -119,7 +135,7 @@ test("reports D1 initialization failure as 503 and does not continue into the en
 test("authenticated role and tool descriptions are read-only and explicit", async () => {
   const app = makeApp();
   const repository = memoryRepository();
-  registerUniversalCommandRoutes(app, { env: { HABITAT_AX_BRIDGE_TOKEN: "ax-test-secret" }, repository, registry: registry() });
+  mountTestApp(app, repository);
   const roles = await invoke(app, "GET /ax/command/roles", { headers: auth });
   const tools = await invoke(app, "GET /ax/command/tools", { headers: auth });
   assert.equal(roles.statusCode, 200);
@@ -133,7 +149,7 @@ test("authenticated role and tool descriptions are read-only and explicit", asyn
 test("authenticated owner can submit, read, plan, checkpoint and complete with evidence", async () => {
   const app = makeApp();
   const repository = memoryRepository();
-  registerUniversalCommandRoutes(app, { env: { HABITAT_AX_BRIDGE_TOKEN: "ax-test-secret" }, repository, registry: registry() });
+  mountTestApp(app, repository);
 
   const submitted = await invoke(app, "POST /ax/command/tasks", {
     headers: auth,
@@ -175,7 +191,7 @@ test("authenticated owner can submit, read, plan, checkpoint and complete with e
 test("approval, denial, failure and retry endpoints preserve the engine lifecycle", async () => {
   const app = makeApp();
   const repository = memoryRepository();
-  registerUniversalCommandRoutes(app, { env: { HABITAT_AX_BRIDGE_TOKEN: "ax-test-secret" }, repository, registry: registry() });
+  mountTestApp(app, repository);
 
   const submitted = await invoke(app, "POST /ax/command/tasks", { headers: auth, body: { objective: "Run a guarded operation" } });
   const id = submitted.body.task.id;
@@ -211,9 +227,153 @@ test("approval, denial, failure and retry endpoints preserve the engine lifecycl
 
 test("unknown task and invalid transition errors use stable HTTP status codes", async () => {
   const app = makeApp();
-  registerUniversalCommandRoutes(app, { env: { HABITAT_AX_BRIDGE_TOKEN: "ax-test-secret" }, repository: memoryRepository(), registry: registry() });
+  mountTestApp(app, memoryRepository());
   const missing = await invoke(app, "GET /ax/command/tasks/:id", { headers: auth, params: { id: "missing" } });
   assert.equal(missing.statusCode, 404);
   const invalid = await invoke(app, "POST /ax/command/tasks/:id/approve", { headers: auth, params: { id: "missing" }, body: {} });
   assert.equal(invalid.statusCode, 404);
+});
+
+// ---- route-level ownership gate (Ax decision) -----------------------------
+
+function fencedRow(extra = {}) {
+  const at = new Date().toISOString();
+  return {
+    id: "cmd_fenced", objective: "run a real operation", status: "working",
+    createdAt: at, updatedAt: at, attempts: 0, approvals: [], statusHistory: [],
+    fence: "active-fence", claimedBy: "nexus-worker-1", leaseUntil: new Date(Date.now() + 600000).toISOString(),
+    ...extra
+  };
+}
+
+test("Ax routes cannot complete or fail a worker-owned task", async () => {
+  for (const action of ["complete", "fail"]) {
+    const app = makeApp();
+    const repository = memoryRepository();
+    repository.rows.set("cmd_fenced", fencedRow());
+    mountTestApp(app, repository);
+    const res = await invoke(app, "POST /ax/command/tasks/:id/" + action, {
+      headers: auth, params: { id: "cmd_fenced" },
+      body: action === "complete"
+        ? { result: { summary: "Ax says done", evidence: ["x"] } }
+        : { error: "Ax says failed" }
+    });
+    assert.equal(res.statusCode, 409, action + " must be refused");
+    assert.equal(res.body.code, "task_owned_by_worker");
+    assert.match(res.body.error, /fenced worker execution path/);
+    const stored = repository.rows.get("cmd_fenced");
+    assert.equal(stored.status, "working", "the task was not modified");
+    assert.equal(stored.fence, "active-fence");
+    assert.equal(stored.result ?? null, null);
+    assert.equal(stored.error ?? null, null);
+  }
+});
+
+test("supplying a matching claim to the Ax route does not bypass the ownership gate", async () => {
+  const app = makeApp();
+  const repository = memoryRepository();
+  repository.rows.set("cmd_fenced", fencedRow());
+  mountTestApp(app, repository);
+  const res = await invoke(app, "POST /ax/command/tasks/:id/complete", {
+    headers: auth, params: { id: "cmd_fenced" },
+    body: {
+      claim: { fence: "active-fence", workerId: "nexus-worker-1" },
+      result: { summary: "pretend worker", evidence: ["x"] }
+    }
+  });
+  assert.equal(res.statusCode, 409);
+  assert.equal(repository.rows.get("cmd_fenced").status, "working");
+});
+
+test("an owner can still close a legacy task that has no fence", async () => {
+  const app = makeApp();
+  const repository = memoryRepository();
+  const at = new Date().toISOString();
+  repository.rows.set("cmd_legacy", {
+    id: "cmd_legacy", objective: "old task", status: "working",
+    createdAt: at, updatedAt: at, attempts: 0, approvals: [], statusHistory: []
+  });
+  mountTestApp(app, repository);
+  const res = await invoke(app, "POST /ax/command/tasks/:id/complete", {
+    headers: auth, params: { id: "cmd_legacy" },
+    body: { result: { summary: "closed manually", evidence: ["note"] } }
+  });
+  assert.equal(res.statusCode, 200);
+  assert.equal(repository.rows.get("cmd_legacy").status, "done");
+});
+
+test("manual close-out without a valid owner device is rejected", async () => {
+  const app = makeApp();
+  const repository = memoryRepository();
+  const at = new Date().toISOString();
+  repository.rows.set("cmd_manual", {
+    id: "cmd_manual", objective: "old task", status: "working",
+    createdAt: at, updatedAt: at, attempts: 0, approvals: [], statusHistory: []
+  });
+  // Accepts any valid paired device token, so this test isolates the owner check from credential validity.
+  mountTestApp(app, repository, { verifyDevice: async token => token === OWNER_TOKEN });
+
+  const bridgeOnly = await invoke(app, "POST /ax/command/tasks/:id/complete", {
+    headers: { authorization: "Bearer ax-test-secret" }, params: { id: "cmd_manual" },
+    body: { result: { summary: "no device proof", evidence: ["x"] } }
+  });
+  assert.equal(bridgeOnly.statusCode, 401);
+  assert.equal(bridgeOnly.body.code, "owner_required");
+
+  const badToken = await invoke(app, "POST /ax/command/tasks/:id/fail", {
+    headers: { authorization: "Bearer ax-test-secret", "x-owner-device-id": OWNER_ID, "x-owner-device-token": "wrong" },
+    params: { id: "cmd_manual" }, body: { error: "nope" }
+  });
+  assert.equal(badToken.statusCode, 401);
+  assert.equal(badToken.body.code, "owner_invalid");
+
+  const nonOwner = await invoke(app, "POST /ax/command/tasks/:id/complete", {
+    headers: { authorization: "Bearer ax-test-secret", "x-owner-device-id": "other-phone", "x-owner-device-token": OWNER_TOKEN },
+    params: { id: "cmd_manual" }, body: { result: { summary: "not owner", evidence: ["x"] } }
+  });
+  assert.equal(nonOwner.statusCode, 403);
+  assert.equal(repository.rows.get("cmd_manual").status, "working", "nothing was modified");
+});
+
+test("manual close-out fails closed when no device verifier is configured", async () => {
+  const app = makeApp();
+  const repository = memoryRepository();
+  const at = new Date().toISOString();
+  repository.rows.set("cmd_noverify", {
+    id: "cmd_noverify", objective: "x", status: "working", createdAt: at, updatedAt: at, attempts: 0, approvals: [], statusHistory: []
+  });
+  registerUniversalCommandRoutes(app, {
+    env: { HABITAT_AX_BRIDGE_TOKEN: "ax-test-secret" },
+    repository, registry: registry(), ownerDeviceId: OWNER_ID
+  });
+  const res = await invoke(app, "POST /ax/command/tasks/:id/complete", {
+    headers: auth, params: { id: "cmd_noverify" },
+    body: { result: { summary: "should not work", evidence: ["x"] } }
+  });
+  assert.equal(res.statusCode, 503);
+  assert.equal(repository.rows.get("cmd_noverify").status, "working");
+});
+
+test("Ax routes cannot plan, checkpoint or request approval on a worker-owned task", async () => {
+  const cases = [
+    ["plan", { steps: [{ step: "hijack", role: "ax" }] }],
+    ["checkpoint", { note: "hijack" }],
+    ["approval", { reason: "hijack" }]
+  ];
+  for (const [action, body] of cases) {
+    const app = makeApp();
+    const repository = memoryRepository();
+    repository.rows.set("cmd_fenced", fencedRow());
+    mountTestApp(app, repository);
+    const res = await invoke(app, "POST /ax/command/tasks/:id/" + action, {
+      headers: auth, params: { id: "cmd_fenced" }, body
+    });
+    assert.equal(res.statusCode, 409, action + " must be refused");
+    assert.equal(res.body.code, "task_owned_by_worker");
+    const stored = repository.rows.get("cmd_fenced");
+    assert.equal(stored.status, "working");
+    assert.equal(stored.plan, undefined);
+    assert.equal(stored.checkpoints, undefined);
+    assert.equal(stored.approvals.length, 0);
+  }
 });

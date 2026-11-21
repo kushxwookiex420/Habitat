@@ -43,8 +43,35 @@ function reply(res, outcome) {
   });
 }
 
-export function registerUniversalCommandRoutes(app, { env = process.env, fetchImpl = fetch, repository = null, registry = null } = {}) {
+export function registerUniversalCommandRoutes(app, {
+  env = process.env,
+  fetchImpl = fetch,
+  repository = null,
+  registry = null,
+  deviceRepository = null,
+  verifyDevice = null,
+  ownerDeviceId = null,
+  ownerDeviceIds = null,
+  requireOwnerForClose = true
+} = {}) {
   const axToken = String(env.HABITAT_AX_BRIDGE_TOKEN || "").trim();
+
+  // Manual close-out needs an owner device proof on top of the bridge credential. The device
+  // verifier comes from the DEVICE repository (verifyDeviceToken); the task repository never had it.
+  function resolveVerifier() {
+    if (typeof verifyDevice === "function") return verifyDevice;
+    const candidate = deviceRepository || verifyDevice;
+    if (candidate && typeof candidate.verifyDeviceToken === "function") {
+      return (token, deviceId) => candidate.verifyDeviceToken(token, deviceId);
+    }
+    return null;
+  }
+  const verifyClose = resolveVerifier();
+
+  const owners = new Set();
+  const addOwners = value => String(value || "").split(",").map(part => part.trim()).filter(Boolean).forEach(id => owners.add(id));
+  addOwners(ownerDeviceId); addOwners(ownerDeviceIds);
+  addOwners(env.HABITAT_OWNER_DEVICE_ID); addOwners(env.HABITAT_OWNER_DEVICE_IDS);
   const registryInstance = registry || createToolRegistry({ env });
 
   const hasD1 = ["CLOUDFLARE_ACCOUNT_ID", "HABITAT_D1_DATABASE_ID", "HABITAT_D1_API_TOKEN"]
@@ -83,6 +110,59 @@ export function registerUniversalCommandRoutes(app, { env = process.env, fetchIm
     return true;
   }
 
+  /**
+   * Owner proof for manual complete/fail. The bridge token alone is never enough: the caller must
+   * present a paired owner device id and its device token, verified by the device repository.
+   */
+  async function authorizeClose(req, res) {
+    if (!requireOwnerForClose) return true;
+    if (typeof verifyClose !== "function") {
+      res.status(503).json({ ok: false, error: "Manual close-out is unavailable: device verification is not configured." });
+      return false;
+    }
+    const deviceId = String(req.headers?.["x-owner-device-id"] || "").trim();
+    const token = String(req.headers?.["x-owner-device-token"] || "").trim();
+    if (!deviceId || !token) {
+      res.status(401).json({ ok: false, code: "owner_required", error: "Manual close-out requires an owner device id and device token." });
+      return false;
+    }
+    let valid = false;
+    try {
+      valid = (await verifyClose(token, deviceId)) === true;
+    } catch (error) {
+      console.error("COMMAND_OWNER_VERIFY_FAILED", String(error?.message || error));
+      res.status(503).json({ ok: false, error: "Device verification is unavailable; no state was changed." });
+      return false;
+    }
+    if (!valid) {
+      res.status(401).json({ ok: false, code: "owner_invalid", error: "The owner device credential is not valid." });
+      return false;
+    }
+    if (!owners.has(deviceId)) {
+      res.status(403).json({ ok: false, code: "not_owner", error: "This device is not the configured owner and cannot close tasks manually." });
+      return false;
+    }
+    return true;
+  }
+
+  /** A fenced task may only be closed by the worker holding that claim. */
+  async function rejectFenced(res, taskId) {
+    const task = await store.get(taskId);
+    if (!task) {
+      reply(res, { ok: false, code: "not_found", error: "No command task with that id." });
+      return true;
+    }
+    if (task.fence) {
+      res.status(409).json({
+        ok: false,
+        code: "task_owned_by_worker",
+        error: "This task is owned by an active worker and must be completed or failed through the fenced worker execution path."
+      });
+      return true;
+    }
+    return false;
+  }
+
   function requireAx(req, res, next) {
     if (!axToken) return res.status(503).json({ ok: false, error: "Command API is unavailable: set HABITAT_AX_BRIDGE_TOKEN for this service." });
     if (!safeEqual(bearer(req), axToken)) {
@@ -110,7 +190,8 @@ export function registerUniversalCommandRoutes(app, { env = process.env, fetchIm
       objective: req.body?.objective,
       requestedBy: req.body?.requestedBy || "owner",
       role: req.body?.role || "ax",
-      idempotencyKey: req.body?.idempotencyKey || null
+      idempotencyKey: req.body?.idempotencyKey || null,
+      adapter: req.body?.adapter ?? null
     });
     if (outcome.ok && !outcome.replayed) {
       res.status(201).json(outcome);
@@ -128,14 +209,17 @@ export function registerUniversalCommandRoutes(app, { env = process.env, fetchIm
   }));
 
   app.post("/ax/command/tasks/:id/plan", requireAx, guard(async (req, res) => {
+    if (await rejectFenced(res, req.params.id)) return undefined;
     reply(res, await engine.plan({ taskId: req.params.id, steps: req.body?.steps, by: req.body?.by || "ax" }));
   }));
 
   app.post("/ax/command/tasks/:id/checkpoint", requireAx, guard(async (req, res) => {
+    if (await rejectFenced(res, req.params.id)) return undefined;
     reply(res, await engine.checkpoint({ taskId: req.params.id, note: req.body?.note, by: req.body?.by || "ax" }));
   }));
 
   app.post("/ax/command/tasks/:id/approval", requireAx, guard(async (req, res) => {
+    if (await rejectFenced(res, req.params.id)) return undefined;
     reply(res, await engine.requestApproval({
       taskId: req.params.id,
       reason: req.body?.reason,
@@ -153,6 +237,8 @@ export function registerUniversalCommandRoutes(app, { env = process.env, fetchIm
   }));
 
   app.post("/ax/command/tasks/:id/complete", requireAx, guard(async (req, res) => {
+    if (!(await authorizeClose(req, res))) return undefined;
+    if (await rejectFenced(res, req.params.id)) return undefined;
     reply(res, await engine.complete({
       taskId: req.params.id,
       result: req.body?.result,
@@ -161,6 +247,8 @@ export function registerUniversalCommandRoutes(app, { env = process.env, fetchIm
   }));
 
   app.post("/ax/command/tasks/:id/fail", requireAx, guard(async (req, res) => {
+    if (!(await authorizeClose(req, res))) return undefined;
+    if (await rejectFenced(res, req.params.id)) return undefined;
     reply(res, await engine.fail({ taskId: req.params.id, error: req.body?.error, by: req.body?.by || "system" }));
   }));
 

@@ -1,0 +1,26 @@
+# Non-production Habitat service running the Nexus Revision 3 runtime mount.
+# This repository is kushxwookiex420/Habitat (flat root). It is NOT home-launcher.
+# No secrets are stored here; every secret is sync:false.
+services:
+  - type: web
+    name: ax-nexus-habitat-nonprod
+    runtime: node
+    plan: starter
+    region: oregon
+    branch: REPLACE-WITH-NONPROD-BRANCH
+    rootDir: .
+    buildCommand: npm install --omit=dev --ignore-scripts
+    startCommand: npm start
+    healthCheckPath: /health
+    autoDeploy: false
+    envVars:
+      - key: CLOUDFLARE_ACCOUNT_ID
+        sync: false
+      - key: HABITAT_D1_DATABASE_ID
+        sync: false
+      - key: HABITAT_D1_API_TOKEN
+        sync: false
+      - key: HABITAT_AX_BRIDGE_TOKEN
+        sync: false
+      - key: HABITAT_OWNER_DEVICE_ID
+        sync: false

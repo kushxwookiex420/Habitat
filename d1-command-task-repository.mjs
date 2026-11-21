@@ -1,6 +1,29 @@
 const API = "https://api.cloudflare.com/client/v4";
 
 /**
+ * Fenced transition: one conditional UPDATE. It succeeds only when the row is still 'working' and
+ * still carries the expected fence and claimedBy, so a stale worker cannot overwrite a newer claim
+ * even if it checked ownership a moment earlier. This is the authoritative check; worker-side
+ * checks are only a fast path.
+ */
+/**
+ * Unfenced legacy update: one conditional UPDATE. The row must still be unfenced and still carry
+ * the status the caller read, so a claim that lands after the SELECT turns the write into a no-op.
+ * The SELECT is only used to merge the patch; this statement is the security boundary.
+ */
+export const COMMAND_TASK_UNFENCED_UPDATE_SQL =
+  "UPDATE habitat_command_tasks SET record_json = ?, status = ?, updated_at = ? " +
+  "WHERE id = ? AND status = ? " +
+  "AND json_extract(record_json, '$.fence') IS NULL " +
+  "AND record_json = ? RETURNING record_json";
+
+export const COMMAND_TASK_FENCED_SQL =
+  "UPDATE habitat_command_tasks SET record_json = ?, status = ?, updated_at = ? " +
+  "WHERE id = ? AND status = ? " +
+  "AND json_extract(record_json, '$.fence') IS ? " +
+  "AND json_extract(record_json, '$.claimedBy') IS ? RETURNING record_json";
+
+/**
  * Durable storage for universal command tasks.
  *
  * This is deliberately a separate table from habitat_tasks: the existing worker-task routes and
@@ -69,14 +92,53 @@ export function createD1CommandTaskRepository({ accountId, databaseId, apiToken,
 
     async update(id, patch) {
       if (!patch || typeof patch !== "object" || Array.isArray(patch)) throw new Error("A command update needs a patch object.");
-      const current = await this.get(id);
-      if (!current) return null;
+      // Read the exact stored bytes: they become the optimistic-concurrency token, so two legacy
+      // writers that read the same version cannot both win.
+      const read = await query("SELECT record_json FROM habitat_command_tasks WHERE id = ? LIMIT 1", [String(id)]);
+      const original = read[0]?.results?.[0]?.record_json;
+      if (!original) return null;
+      const current = decode({ record_json: original });
+      if (!current) throw new Error("A command record could not be decoded; refusing to update.");
+      if (current.fence) {
+        throw new Error("Refusing to overwrite a fenced command task; use transition() with the current fence.");
+      }
+      const expectedStatus = String(current.status || "queued");
       const next = { ...current, ...structuredClone(patch), id: current.id };
       const updatedAt = String(next.updatedAt || new Date().toISOString());
-      await query("UPDATE habitat_command_tasks SET record_json = ?, status = ?, updated_at = ? WHERE id = ?", [
-        JSON.stringify(next), String(next.status || "queued"), updatedAt, current.id
+      const result = await query(COMMAND_TASK_UNFENCED_UPDATE_SQL, [
+        JSON.stringify(next),
+        String(next.status || "queued"),
+        updatedAt,
+        current.id,
+        expectedStatus,
+        original
       ]);
-      return next;
+      const stored = decode(result[0]?.results?.[0] || {});
+      if (!stored) {
+        // Fence appeared (claim), status changed, or another legacy writer committed first.
+        throw new Error("Refusing to update a command task that changed while it was being updated (concurrent claim or stale write).");
+      }
+      return stored;
+    },
+
+    /**
+     * Atomic fenced transition. Returns the stored record, or null when the expectation no longer
+     * holds (stale claim, already terminal, changed owner). Never writes on a mismatch.
+     */
+    async transition(id, { expect, next } = {}) {
+      if (!expect || typeof expect !== "object") throw new Error("A fenced command transition needs an expect object.");
+      if (!next || typeof next !== "object") throw new Error("A fenced command transition needs the next record.");
+      const at = String(next.updatedAt || new Date().toISOString());
+      const result = await query(COMMAND_TASK_FENCED_SQL, [
+        JSON.stringify({ ...next, id: String(id) }),
+        String(next.status || "working"),
+        at,
+        String(id),
+        String(expect.status || "working"),
+        expect.fence ?? null,
+        expect.claimedBy ?? null
+      ]);
+      return decode(result[0]?.results?.[0] || {});
     },
 
     async healthCheck() {

@@ -1,0 +1,37 @@
+name: Nexus D1 live verification
+
+# Manual, disposable-database-only check. Never runs on push.
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: Type isolated to confirm this is a disposable database
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Run against disposable D1
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          NEXUS_D1_TEST_DATABASE_ID: ${{ vars.NEXUS_D1_TEST_DATABASE_ID }}
+          HABITAT_D1_DATABASE_ID: ${{ vars.HABITAT_D1_DATABASE_ID }}
+          NEXUS_D1_TEST_CONFIRM: ${{ inputs.confirm }}
+          HABITAT_D1_API_TOKEN: ${{ secrets.HABITAT_D1_API_TOKEN }}
+        run: |
+          test "$NEXUS_D1_TEST_CONFIRM" = "isolated"
+          test -n "$CLOUDFLARE_ACCOUNT_ID"
+          test -n "$NEXUS_D1_TEST_DATABASE_ID"
+          test -n "$HABITAT_D1_DATABASE_ID"
+          test "$NEXUS_D1_TEST_DATABASE_ID" != "$HABITAT_D1_DATABASE_ID"
+          node scripts/d1-live-test.mjs

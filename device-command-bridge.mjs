@@ -3,6 +3,8 @@ import { createD1DeviceCommandRepository } from "./d1-device-command-repository.
 import { registerHomeBridgeConsole } from "./home-bridge-console.mjs";
 import { registerDeviceHabitat } from "./device-habitat.mjs";
 import { registerUniversalCommandRoutes } from "./command-routes.mjs";
+import { createD1Query, registerNexusRuntime } from "./nexus-runtime.mjs";
+import { buildReadOnlyNexusAdapters } from "./nexus-adapter-registration.mjs";
 
 const SAFE_COMMANDS = new Set(["device.status"]);
 const PAIRING_TTL_MS = 10 * 60 * 1000;
@@ -40,7 +42,15 @@ function sanitizeDeviceDetails(value) {
 export function registerDeviceCommandBridge(app, {
   env = process.env,
   fetchImpl = fetch,
-  repository = null
+  repository = null,
+  // Test/embedded injection only. Production passes none of these and builds the same objects
+  // from env below; the task store is never re-created for the runtime.
+  taskRepository = null,
+  query = null,
+  adapters = null,
+  handleSignals = true,
+  exitOnSignal = true,
+  log = console
 } = {}) {
   const hasD1 = ["CLOUDFLARE_ACCOUNT_ID", "HABITAT_D1_DATABASE_ID", "HABITAT_D1_API_TOKEN"]
     .every(key => String(env[key] || "").trim());
@@ -327,17 +337,71 @@ export function registerDeviceCommandBridge(app, {
 
   // Universal command engine (AX/NEXUS/ORION/SENTINEL/ATLAS). Additive: /ax/command routes only,
   // its own ax-token guard and its own durable table, so worker-task routes are untouched.
+  let commandApi = null;
   try {
-    registerUniversalCommandRoutes(app, { env, fetchImpl });
+    commandApi = registerUniversalCommandRoutes(app, {
+      env, fetchImpl,
+      repository: taskRepository,
+      deviceRepository: store,
+      ownerDeviceId: env.HABITAT_OWNER_DEVICE_ID
+    });
   } catch (error) {
     console.error("UNIVERSAL_COMMAND_MOUNT_FAILED", String(error?.message || error));
   }
 
+  // Nexus runtime is mounted against the SAME task store and engine as /ax/command. It is only
+  // registered when a store and an atomic query are both available; otherwise no worker starts
+  // and the runtime endpoint fails closed. The worker itself starts later, from initialize(),
+  // after the device store is ready.
+  let nexusRuntime = null;
+  let nexusMount = { configured: false, reason: "command_store_unavailable" };
+  try {
+    const taskStore = commandApi?.store?.() || null;
+    const accountId = String(env.CLOUDFLARE_ACCOUNT_ID || "").trim();
+    const databaseId = String(env.HABITAT_D1_DATABASE_ID || "").trim();
+    const apiToken = String(env.HABITAT_D1_API_TOKEN || "").trim();
+    const hasD1 = Boolean(accountId && databaseId && apiToken);
+    const runtimeQuery = query || (hasD1 ? createD1Query({ accountId, databaseId, apiToken, fetchImpl }) : null);
+    if (taskStore && runtimeQuery) {
+      const adapterMap = adapters || buildReadOnlyNexusAdapters({
+        rootDir: process.cwd(),
+        allowedPrefixes: ["src", "tests", "docs", "app/src", "README.md", "package.json"],
+        taskRepository: taskStore,
+        d1Query: runtimeQuery
+      });
+      nexusRuntime = registerNexusRuntime(app, {
+        env, fetchImpl,
+        repository: taskStore,
+        query: runtimeQuery,
+        engine: commandApi.engine,
+        registry: commandApi.registry,
+        adapters: adapterMap,
+        deviceRepository: store,
+        ownerDeviceId: env.HABITAT_OWNER_DEVICE_ID,
+        handleSignals,
+        exitOnSignal,
+        log
+      });
+      nexusMount = { configured: true, reason: null };
+    } else {
+      log.warn?.("NEXUS_RUNTIME: disabled — " + (taskStore ? "D1 query is not configured" : "no command task store is configured"));
+    }
+  } catch (error) {
+    nexusMount = { configured: false, reason: "mount_failed" };
+    console.error("NEXUS_RUNTIME_MOUNT_FAILED", String(error?.message || error));
+  }
+
+  let initialized = false;
+  let nexusInit = null;
+
   return Object.freeze({
     async initialize() {
+      if (initialized) {
+        return { ok: true, durable: Boolean(store?.durable), alreadyInitialized: true, nexus: nexusInit };
+      }
       if (!store) {
         console.warn("DEVICE_COMMAND_BRIDGE: disabled — D1 credentials are not configured");
-        return { ok: false, durable: false };
+        return { ok: false, durable: false, nexus: nexusMount };
       }
       await store.initialize();
       const bootstrapHash = String(env.HABITAT_DEVICE_PAIRING_BOOTSTRAP_CODE_HASH || "").trim().toLowerCase();
@@ -352,7 +416,24 @@ export function registerDeviceCommandBridge(app, {
       }
       ready = true;
       console.log("DEVICE_COMMAND_BRIDGE: durable D1 queue ready");
-      return { ok: true, durable: true };
+      if (nexusRuntime) {
+        // Storage is ready; only now may the worker claim. A failure here leaves the device bridge
+        // usable but the Nexus worker unstarted, and is reported instead of being swallowed.
+        try {
+          nexusInit = await nexusRuntime.initialize();
+          console.log("NEXUS_RUNTIME_MOUNT", JSON.stringify({
+            started: Boolean(nexusInit?.started),
+            worker: Boolean(nexusInit?.worker),
+            alreadyRunning: Boolean(nexusInit?.alreadyRunning),
+            reason: nexusInit?.reason || null
+          }));
+        } catch (error) {
+          nexusInit = { ok: false, durable: false, started: false, reason: "initialize_failed" };
+          console.error("NEXUS_RUNTIME_INIT_FAILED", String(error?.message || error));
+        }
+      }
+      initialized = true;
+      return { ok: true, durable: true, nexus: nexusInit || nexusMount };
     },
     async listDevices() {
       if (!store || !ready) return [];
@@ -385,7 +466,21 @@ export function registerDeviceCommandBridge(app, {
       return store.get(String(id || ""));
     },
     status() {
-      return { ready, durable: Boolean(store?.durable), axTokenConfigured: Boolean(axToken), perDeviceTokens: true };
+      return {
+        ready,
+        durable: Boolean(store?.durable),
+        axTokenConfigured: Boolean(axToken),
+        perDeviceTokens: true,
+        nexus: nexusRuntime ? { configured: true, ...nexusRuntime.status() } : nexusMount
+      };
+    },
+    nexus() {
+      return nexusRuntime;
+    },
+    async shutdown(reason = "shutdown") {
+      if (!nexusRuntime) return { ok: false, reason: "not_mounted" };
+      await nexusRuntime.shutdown(reason);
+      return { ok: true, reason };
     }
   });
 }
