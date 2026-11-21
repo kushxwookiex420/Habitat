@@ -1,23 +1,26 @@
-# Non-production Habitat service for Revision 4.4 device integration.
+# Non-production Habitat service — Revision 4.5 ($0/month).
 # Repository: kushxwookiex420/Habitat (flat root). NOT home-launcher.
 #
-# This file never touches production. Every secret is sync:false and set in the Render dashboard;
-# no credential, token, or database id is stored in this repository.
+# Render Free web service: 0.1 CPU / 512 MB, no cost. It spins down after 15 minutes without
+# inbound traffic and takes about a minute to wake; the phone's 5-second poll keeps it awake while
+# the app is running. 750 free instance hours per workspace per calendar month, ephemeral disk,
+# one instance, no shell, and Render may restart it at any time. No persistent disk or paid
+# resource is declared here.
 #
-# Cost: plan "starter" is a paid Render instance (about USD 7/month at the time of writing).
-# Nothing was provisioned from this file. Free alternatives are listed in
-# docs/REVISION_4.4_NONPROD_DEVICE.md; do not switch to them without the owner's approval.
+# This file never touches production. Every secret is sync:false and is entered in the Render
+# dashboard; no credential, token, pairing code, or database id is stored in this repository.
 #
-# Hard separation: HABITAT_PRODUCTION_D1_DATABASE_ID is declared so this nonproduction process can
-# detect that it points at production. When it does, device storage is refused (503) and the
-# server seals its D1 credentials, so no task, content, secret, or Nexus write can reach production.
+# Hard separation: a nonproduction process must declare HABITAT_PRODUCTION_D1_DATABASE_ID so it can
+# prove it is not using production. If it points at production, or if the declaration is missing
+# while a database is configured, the device bridge refuses durable storage (503) and the server
+# seals its D1 credentials so no task, content, secret, or Nexus write can occur.
 services:
   - type: web
     name: ax-nexus-habitat-nonprod
     runtime: node
-    plan: starter
+    plan: free
     region: oregon
-    branch: ax-nexus/revision-4.4-nonprod-device-integration
+    branch: ax-nexus/revision-4.5-free-deployment-readiness
     rootDir: .
     buildCommand: npm install --omit=dev --ignore-scripts
     startCommand: npm start
@@ -26,9 +29,12 @@ services:
     envVars:
       - key: HABITAT_SERVICE_NAME
         value: "ax-nexus-habitat-nonprod"
-      # nonproduction is explicit. NODE_ENV alone is never treated as nonproduction.
+      # Explicit. NODE_ENV alone is never treated as nonproduction.
       - key: HABITAT_RUNTIME_ENV
         value: "nonproduction"
+      # Node 22 is required by package.json engines; Render injects PORT (default 10000).
+      - key: NODE_VERSION
+        value: "22.14.0"
       - key: CLOUDFLARE_ACCOUNT_ID
         sync: false
       # Nonproduction database id only. Must differ from HABITAT_PRODUCTION_D1_DATABASE_ID.
@@ -36,10 +42,12 @@ services:
         sync: false
       - key: HABITAT_D1_API_TOKEN
         sync: false
-      # Declared so a nonproduction process that points at production fails closed.
+      # REQUIRED for isolation. Production database id, used only for comparison. If unset while
+      # HABITAT_D1_DATABASE_ID is set, the service fails closed (no durable storage, 503 on every
+      # device route) instead of trusting an unverified database.
       - key: HABITAT_PRODUCTION_D1_DATABASE_ID
         sync: false
-      # Token the Android APK does not hold; used by Ax and the acceptance harness.
+      # Token Ax and the acceptance harness use. The Android APK never holds it.
       - key: HABITAT_AX_BRIDGE_TOKEN
         sync: false
       # Exactly one owner device id is required to mint pairing codes.
@@ -47,6 +55,7 @@ services:
         sync: false
       - key: HABITAT_BREAK_GLASS_TOKEN
         sync: false
+      # Optional: only needed for the Home Bridge console / chat.
       - key: HOME_BRIDGE_URL
         sync: false
       - key: HOME_BRIDGE_AX_TOKEN
@@ -55,7 +64,7 @@ services:
         sync: false
       - key: NEXUS_RUNTIME_ENABLED
         value: "true"
-      # Optional AI provider keys for /chat; the device bridge does not need them.
+      # Optional AI provider key for /chat; the device bridge does not need it.
       - key: OPENAI_API_KEY
         sync: false
       # First-run bootstrap only: SHA-256 (hex) of a one-time owner pairing code, plus its expiry.

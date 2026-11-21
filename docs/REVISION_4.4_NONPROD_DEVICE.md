@@ -3,6 +3,10 @@
 Branch: `ax-nexus/revision-4.4-nonprod-device-integration` (from Revision 4.3 `4eb638e`)
 Production (`main`, `ax-nexus/revision-4.2-readiness`) and the production service are untouched.
 
+> Revision 4.5 supersedes the cost and deployment sections below: `render.yaml` now selects Render
+> **Free ($0/month)**. Use [REVISION_4.5_FREE_DEPLOYMENT.md](REVISION_4.5_FREE_DEPLOYMENT.md) for
+> the current phone-first deployment guide.
+
 ## Status at a glance
 
 | Item | State |
@@ -130,13 +134,11 @@ means something to the service that issued it.
 
 ## 4. Deploying the isolated nonproduction backend (needs your approval)
 
-**Cost, before you approve anything:** Render **Starter is USD 7/month** (always on, 512 MB,
-0.5 CPU). Render **Free is USD 0** for a web service but spins down after 15 minutes without
-inbound traffic and takes about a minute to wake; 750 free instance hours per workspace per month.
-Cloudflare **D1 free tier is USD 0**: 5M row reads/day, 100k row writes/day, 5 GB account storage,
-10 databases. Cloudflare Workers Paid is USD 5/month if you outgrow D1 free. Total for this
-nonproduction setup: **USD 0 (Render Free + D1 free)** or **USD 7/month** for an always-on service.
-I have provisioned nothing and created no accounts.
+**Cost:** **USD 0/month.** Revision 4.5 selects the Render **Free** plan in `render.yaml`
+(0.1 CPU, 512 MB, sleeps after 15 idle minutes, ~1 minute wake, 750 instance hours/month) and
+Cloudflare **D1 free** (5M row reads/day, 100k row writes/day, 5 GB). No paid resource is declared.
+I have provisioned nothing and created no accounts. See
+[REVISION_4.5_FREE_DEPLOYMENT.md](REVISION_4.5_FREE_DEPLOYMENT.md) for the current guide.
 
 Steps:
 
@@ -187,10 +189,9 @@ Steps:
    `https://ax-nexus-habitat-nonprod.onrender.com`, open the app's LINK dialog and set the real URL
    under "Isolated nonproduction backend URL". Production is refused there.
 
-Free alternative if you do not want the USD 7/month Render service: use the Render Free instance
-type for the same blueprint (expect ~1 minute cold start after 15 idle minutes; the phone's 5-second
-poll keeps it awake while the app is running). Do not use a free Postgres — this service needs D1,
-and Render's free Postgres expires after 30 days.
+The Blueprint already selects **Render Free** (about a minute cold start after 15 idle minutes; the
+phone's 5-second poll keeps it awake while the app is running). Do not use a free Postgres — this
+service needs D1, and Render's free Postgres expires after 30 days.
 
 ---
 
@@ -302,8 +303,8 @@ variant has its own two tests proving it keeps its compiled endpoint and refuses
 
 ## 7. What still needs you
 
-1. **Approve infrastructure cost** (USD 0 Render Free or USD 7/month Starter, D1 free) and create
-   the nonproduction D1 database + Render service from §4. Nothing is deployed.
+1. **Create the free nonproduction D1 database + Render Free service.** Cost is USD 0/month; no
+   paid resource is needed. Nothing is deployed.
 2. **Provide the nonproduction credentials** in the Render dashboard (not in chat or the repo):
    `CLOUDFLARE_ACCOUNT_ID`, `HABITAT_D1_DATABASE_ID` (nonproduction), `HABITAT_D1_API_TOKEN`,
    `HABITAT_PRODUCTION_D1_DATABASE_ID`, `HABITAT_AX_BRIDGE_TOKEN`, `HABITAT_OWNER_DEVICE_IDS`.
