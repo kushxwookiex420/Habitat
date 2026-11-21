@@ -1,6 +1,7 @@
 name: Nexus D1 live verification
 
-# Manual, disposable-database-only check. Never runs on push.
+# One-shot push trigger is restricted to a unique commit message on the
+# non-production branch. Manual dispatch remains available with confirmation.
 on:
   workflow_dispatch:
     inputs:
@@ -8,12 +9,16 @@ on:
         description: Type isolated to confirm this is a disposable database
         required: true
         type: string
+  push:
+    branches:
+      - ax-nexus/revision-3-nonprod
 
 permissions:
   contents: read
 
 jobs:
   verify:
+    if: ${{ (github.event_name == 'push' && github.event.head_commit.message == 'RUN_ISOLATED_NEXUS_D1_ONCE') || (github.event_name == 'workflow_dispatch' && inputs.confirm == 'isolated') }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -21,13 +26,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-      - name: Reject missing or incorrect confirmation
-        if: ${{ inputs.confirm != 'isolated' }}
-        run: |
-          echo "Confirmation rejected: enter exactly isolated in the workflow dispatch form."
-          exit 1
       - name: Run against disposable D1
-        if: ${{ inputs.confirm == 'isolated' }}
         env:
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
           NEXUS_D1_TEST_DATABASE_ID: ${{ vars.NEXUS_D1_TEST_DATABASE_ID }}
