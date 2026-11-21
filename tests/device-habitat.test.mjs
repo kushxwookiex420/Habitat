@@ -89,7 +89,7 @@ function setup(options = {}) {
     }
   };
   const env = {
-    HOME_BRIDGE_URL: "https://relay.test",
+    HOME_BRIDGE_URL: options.homeBridgeUrl === undefined ? "https://relay.test" : options.homeBridgeUrl,
     HOME_BRIDGE_AX_TOKEN: AX,
     HOME_BRIDGE_BUFF_TOKEN: BUFF,
     HABITAT_GITHUB_REPO: "kushxwookiex420/home-launcher",
@@ -194,19 +194,37 @@ test("phone actions are allowlisted and sent with the ax credential", async () =
   assert.match(calls.find((c) => c.path === "/send").auth, /^Bearer hb_ax_/);
 });
 
+test("H2 a non-owner paired device cannot read the dashboard, files, or phone state", async () => {
+  const nonOwner = setup({ ownerId: "owner-other" });
+  const dashboard = await invoke(nonOwner.app, "GET /device/habitat", auth);
+  assert.equal(dashboard.statusCode, 403);
+  assert.equal(dashboard.body.code, "owner_required");
+
+  const file = await invoke(nonOwner.app, "GET /device/habitat/file", withAuth({ query: { name: "reports/x.md" } }));
+  assert.equal(file.statusCode, 403);
+
+  const phone = await invoke(nonOwner.app, "POST /device/habitat/phone", withAuth({
+    body: { deviceId: DEVICE_ID, action: "status" }
+  }));
+  assert.equal(phone.statusCode, 403);
+  assert.equal(nonOwner.calls.length, 0, "no relay request may run for a non-owner");
+});
+
 test("destructive phone actions require the configured owner device", async () => {
   const owner = setup();
   const allowed = await invoke(owner.app, "POST /device/habitat/phone", withAuth({
     body: { deviceId: DEVICE_ID, action: "clear" }
   }));
   assert.equal(allowed.statusCode, 200);
+  const ownerStatus = await invoke(owner.app, "GET /device/habitat", auth);
+  assert.equal(ownerStatus.statusCode, 200);
 
   const nonOwner = setup({ ownerId: "owner-other" });
   const denied = await invoke(nonOwner.app, "POST /device/habitat/phone", withAuth({
     body: { deviceId: DEVICE_ID, action: "remote", arg: "lock" }
   }));
   assert.equal(denied.statusCode, 403);
-  assert.equal(nonOwner.calls.some(call => call.path === "/send"), false, "the relay was not called");
+  assert.equal(nonOwner.calls.length, 0, "the relay was not called at all for a non-owner");
 
   const unconfigured = setup({ ownerId: null });
   const unavailable = await invoke(unconfigured.app, "POST /device/habitat/phone", withAuth({
@@ -214,6 +232,20 @@ test("destructive phone actions require the configured owner device", async () =
   }));
   assert.equal(unavailable.statusCode, 503);
   assert.equal(unconfigured.calls.some(call => call.path === "/send"), false);
+});
+
+test("a missing Home Bridge URL fails closed without a credential-bearing network call", async () => {
+  const { app, calls } = setup({ homeBridgeUrl: "" });
+  const dashboard = await invoke(app, "GET /device/habitat", auth);
+  assert.equal(dashboard.statusCode, 200);
+  assert.ok(dashboard.body.errors.length > 0);
+  assert.equal(calls.some(call => call.auth), false, "no Home Bridge credential may be sent");
+
+  const phone = await invoke(app, "POST /device/habitat/phone", withAuth({
+    body: { deviceId: DEVICE_ID, action: "status" }
+  }));
+  assert.equal(phone.statusCode, 502);
+  assert.equal(calls.some(call => call.auth), false);
 });
 
 test("phone actions need the device token too", async () => {

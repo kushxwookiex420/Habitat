@@ -555,6 +555,7 @@ app.get("/health", (req, res) => {
       ready: deviceBridge.ready,
       durable: deviceBridge.durable,
       axTokenConfigured: deviceBridge.axTokenConfigured,
+      breakGlassConfigured: deviceBridge.breakGlassConfigured,
       perDeviceTokens: deviceBridge.perDeviceTokens
     },
     provider: "multi-provider",
@@ -592,7 +593,22 @@ app.post("/chat", async (req, res) => {
     // queue. Never ask the language model to pretend it ran a device command.
     if (/\bdevice\.status\b|\bphone\s+(?:connection\s+)?diagnostic\b|\bdevice\s+connection\s+diagnostic\b/i.test(message)) {
       try {
-        const queued = await deviceCommandBridge.requestDeviceStatus();
+        // Device commands are owner-scoped and authenticated. A public chat request must never
+        // select the most recently seen device from another owner.
+        const owner = await deviceCommandBridge.authorizeOwnerRequest(req);
+        if (!owner.ok) {
+          return res.status(owner.status || 401).json({
+            response: "PHONE DEVICE STATUS\nStatus: UNAUTHORIZED\nOwner device authentication is required for device commands.",
+            error: owner.error,
+            code: owner.code,
+            deterministic: true
+          });
+        }
+        const requestedTarget = String(req.body?.deviceId || "").trim() || null;
+        const queued = await deviceCommandBridge.requestDeviceStatus({
+          ownerDeviceId: owner.deviceId,
+          targetDeviceId: requestedTarget
+        });
         if (!queued.ok) {
           return res.json({
             response: "PHONE DEVICE STATUS\nStatus: UNVERIFIED\n" + queued.error,

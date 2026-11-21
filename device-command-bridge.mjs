@@ -8,6 +8,7 @@ import { buildReadOnlyNexusAdapters } from "./nexus-adapter-registration.mjs";
 
 const SAFE_COMMANDS = new Set(["device.status"]);
 const PAIRING_TTL_MS = 10 * 60 * 1000;
+const PAIRING_RECOVERY_TTL_MS = 60 * 1000;
 
 function digest(value) {
   return createHash("sha256").update(String(value), "utf8").digest("hex");
@@ -62,7 +63,18 @@ export function registerDeviceCommandBridge(app, {
   }) : null);
 
   const axToken = String(env.HABITAT_AX_BRIDGE_TOKEN || "");
-  const nexusEnabled = String(env.NEXUS_RUNTIME_ENABLED || "").trim().toLowerCase() === "true";
+  const breakGlassToken = String(env.HABITAT_BREAK_GLASS_TOKEN || "").trim();
+  const configuredRuntimeEnvironment = String(env.HABITAT_RUNTIME_ENV || "").trim().toLowerCase();
+  const nodeEnvironment = String(env.NODE_ENV || "").trim().toLowerCase();
+  // An explicit HABITAT_RUNTIME_ENV is authoritative. If it is absent, NODE_ENV=production is a
+  // fail-safe production block rather than an implicit non-production assumption.
+  const runtimeEnvironment = configuredRuntimeEnvironment || (nodeEnvironment === "production" ? "production" : "nonproduction");
+  const productionRuntimeBlocked = runtimeEnvironment === "production";
+  const productionD1Id = String(env.HABITAT_PRODUCTION_D1_DATABASE_ID || "").trim();
+  const configuredD1Id = String(env.HABITAT_D1_DATABASE_ID || repository?.databaseId || "").trim();
+  const usesProductionD1 = Boolean(productionD1Id && configuredD1Id === productionD1Id);
+  const nexusEnabled = String(env.NEXUS_RUNTIME_ENABLED || "").trim().toLowerCase() === "true" &&
+    !productionRuntimeBlocked && !usesProductionD1;
   const owners = new Set();
   for (const value of [env.HABITAT_OWNER_DEVICE_ID, env.HABITAT_OWNER_DEVICE_IDS]) {
     String(value || "").split(",").map(part => part.trim()).filter(Boolean).forEach(id => owners.add(id));
@@ -72,29 +84,50 @@ export function registerDeviceCommandBridge(app, {
     return owners.size === 1 ? [...owners][0] : null;
   }
 
-  /** Authenticate an owner device and return its server-side device id, never a body value. */
-  async function authenticateOwner(req, res) {
+  async function audit(event, { actorDeviceId = null, targetDeviceId = null, detail = null } = {}) {
+    try {
+      if (store && typeof store.audit === "function") {
+        await store.audit({ event, actorDeviceId, targetDeviceId, detail });
+      }
+    } catch (error) {
+      // Audit failure must be visible but must not turn a completed security action into a
+      // success claim. The action itself remains fail-closed at its own authorization boundary.
+      console.error("DEVICE_SECURITY_AUDIT_FAILED", String(error?.message || error));
+    }
+  }
+
+  /**
+   * Authenticate an owner request without writing a response. Used by /chat, which needs to
+   * authenticate a device command without becoming a general owner API.
+   */
+  async function authorizeOwnerRequest(req) {
     if (!owners.size) {
-      res.status(503).json({ ok: false, error: "Owner authorization is not configured." });
-      return null;
+      return { ok: false, status: 503, code: "owner_unconfigured", error: "Owner authorization is not configured." };
     }
     const ownerDeviceId = String(req.headers?.["x-owner-device-id"] || "").trim();
     const token = bearer(req);
     if (!validDeviceId(ownerDeviceId) || !token) {
-      res.status(401).json({ ok: false, code: "owner_required", error: "A valid owner device id and token are required." });
-      return null;
+      return { ok: false, status: 401, code: "owner_required", error: "A valid owner device id and token are required." };
     }
     try {
-      if (!(await store.verifyDeviceToken(token, ownerDeviceId)) || !owners.has(ownerDeviceId)) {
-        res.status(401).json({ ok: false, code: "owner_invalid", error: "The owner device credential is not valid." });
-        return null;
+      if (!store || !(await store.verifyDeviceToken(token, ownerDeviceId)) || !owners.has(ownerDeviceId)) {
+        return { ok: false, status: 401, code: "owner_invalid", error: "The owner device credential is not valid." };
       }
-      return ownerDeviceId;
+      return { ok: true, deviceId: ownerDeviceId };
     } catch (error) {
       console.error("DEVICE_OWNER_AUTH_FAILED", String(error?.message || error));
-      res.status(503).json({ ok: false, error: "Owner verification is temporarily unavailable." });
+      return { ok: false, status: 503, code: "owner_unavailable", error: "Owner verification is temporarily unavailable." };
+    }
+  }
+
+  /** Authenticate an owner device and return its server-side device id, never a body value. */
+  async function authenticateOwner(req, res) {
+    const result = await authorizeOwnerRequest(req);
+    if (!result.ok) {
+      res.status(result.status).json({ ok: false, code: result.code, error: result.error });
       return null;
     }
+    return result.deviceId;
   }
 
   function requireAx(req, res, next) {
@@ -144,7 +177,11 @@ export function registerDeviceCommandBridge(app, {
       const code = randomBytes(16).toString("base64url");
       const createdAt = new Date().toISOString();
       const expiresAt = new Date(Date.now() + PAIRING_TTL_MS).toISOString();
+      if (typeof store.isDeviceRevoked === "function" && await store.isDeviceRevoked(ownerDeviceId)) {
+        return res.status(409).json({ ok: false, code: "owner_inactive", error: "The configured owner device is revoked; pairing codes cannot be minted." });
+      }
       await store.createPairing({ codeHash: digest(code), deviceId, createdAt, expiresAt, ownerDeviceId });
+      await audit("device.pairing.minted", { actorDeviceId: ownerDeviceId, targetDeviceId: deviceId });
       return res.status(201).json({ ok: true, pairing: { code, deviceId, expiresAt, singleUse: true } });
     } catch (error) {
       console.error("DEVICE_PAIRING_CREATE_FAILED", String(error?.message || error));
@@ -188,6 +225,20 @@ export function registerDeviceCommandBridge(app, {
         });
       }
 
+      async function ownerIsActive(ownerDeviceId, targetDeviceId) {
+        if (!owners.has(ownerDeviceId)) return { ok: false, code: "ownership_invalid" };
+        // A revoked owner must never be able to redeem a code. An owner is allowed to enroll
+        // itself before it has a device row (the initial bootstrap), but every other target
+        // requires the owner to be actively paired.
+        if (typeof store.isDeviceRevoked === "function" && await store.isDeviceRevoked(ownerDeviceId)) {
+          return { ok: false, code: "owner_inactive" };
+        }
+        if (targetDeviceId !== ownerDeviceId && typeof store.isDevicePaired === "function") {
+          if (!(await store.isDevicePaired(ownerDeviceId))) return { ok: false, code: "owner_inactive" };
+        }
+        return { ok: true };
+      }
+
       async function issueToken(recovered, ownerDeviceId) {
         // A revoked device must not be revived by a consumed-code recovery or a fresh code. An
         // owner must explicitly un-revoke it first.
@@ -204,6 +255,16 @@ export function registerDeviceCommandBridge(app, {
         if (!owners.has(ownerDeviceId)) {
           return res.status(409).json({ ok: false, code: "ownership_invalid", error: "This pairing code was issued for an owner that is not configured." });
         }
+        const ownerActive = await ownerIsActive(ownerDeviceId, deviceId);
+        if (!ownerActive.ok) {
+          return res.status(409).json({
+            ok: false,
+            code: ownerActive.code,
+            error: ownerActive.code === "owner_inactive"
+              ? "This pairing code was issued by an owner device that is not active or is revoked."
+              : "This pairing code was issued for an owner that is not configured."
+          });
+        }
         if (owners.has(deviceId) && deviceId !== ownerDeviceId) {
           return res.status(403).json({ ok: false, code: "owner_mismatch", error: "An owner device may only be assigned to itself." });
         }
@@ -219,6 +280,9 @@ export function registerDeviceCommandBridge(app, {
         if (registered === false) {
           return res.status(409).json({ ok: false, code: "ownership_conflict", error: "Device ownership changed before pairing completed." });
         }
+        await audit(recovered ? "device.pairing.recovered" : "device.pairing.redeemed", {
+          actorDeviceId: ownerDeviceId, targetDeviceId: deviceId, detail: { recovered: Boolean(recovered) }
+        });
         // Keep the canonical nested object and expose top-level aliases for older Bridge APK parsers.
         // The raw credential is returned only in this one-time exchange response.
         return res.status(200).json({
@@ -258,15 +322,41 @@ export function registerDeviceCommandBridge(app, {
         });
       }
       if (pairing.consumedAt) {
-        // The same code, already consumed by this device, means the first response was lost
-        // (app closed, network dropped). Recover instead of punishing the owner with a new code;
-        // the old token stops working because registerDevice replaces its hash.
-        if (pairing.deviceId === deviceId) return issueToken(true, pairing.ownerDeviceId);
-        return res.status(409).json({
-          ok: false,
-          code: "pairing_used_other_device",
-          error: "This pairing code was already used by another device. Generate a fresh code."
-        });
+        if (pairing.deviceId !== deviceId) {
+          return res.status(409).json({
+            ok: false,
+            code: "pairing_used_other_device",
+            error: "This pairing code was already used by another device. Generate a fresh code."
+          });
+        }
+        const consumedAgeMs = Date.parse(now) - Date.parse(pairing.consumedAt);
+        if (!Number.isFinite(consumedAgeMs) || consumedAgeMs < 0 || consumedAgeMs > PAIRING_RECOVERY_TTL_MS) {
+          return res.status(401).json({
+            ok: false,
+            code: "pairing_recovery_expired",
+            error: "This pairing code was already used and its short lost-response recovery window has closed. Generate a fresh code."
+          });
+        }
+        if (pairing.recoveryAt) {
+          return res.status(409).json({
+            ok: false,
+            code: "pairing_recovery_exhausted",
+            error: "This pairing code already used its one bounded recovery. Generate a fresh code."
+          });
+        }
+        if (typeof store.claimPairingRecovery !== "function") {
+          return res.status(503).json({ ok: false, error: "Pairing recovery is unavailable on this device store." });
+        }
+        const consumedAfter = new Date(Date.parse(now) - PAIRING_RECOVERY_TTL_MS).toISOString();
+        const recovered = await store.claimPairingRecovery({ codeHash, deviceId, recoveredAt: now, consumedAfter });
+        if (!recovered) {
+          return res.status(409).json({
+            ok: false,
+            code: "pairing_recovery_exhausted",
+            error: "This pairing code already used its one bounded recovery. Generate a fresh code."
+          });
+        }
+        return issueToken(true, pairing.ownerDeviceId);
       }
       return res.status(401).json({
         ok: false,
@@ -371,6 +461,7 @@ export function registerDeviceCommandBridge(app, {
     if (!validDeviceId(deviceId)) return res.status(400).json({ ok: false, error: "A valid deviceId is required." });
     try {
       await store.revokeDevice(deviceId, new Date().toISOString());
+      await audit("device.ax.revoked", { actorDeviceId: "ax", targetDeviceId: deviceId });
       return res.json({ ok: true, deviceId, revoked: true });
     } catch (error) {
       console.error("DEVICE_REVOKE_FAILED", String(error?.message || error));
@@ -406,6 +497,7 @@ export function registerDeviceCommandBridge(app, {
       const createdAt = new Date().toISOString();
       const expiresAt = new Date(Date.now() + PAIRING_TTL_MS).toISOString();
       await store.createPairing({ codeHash: digest(code), deviceId, createdAt, expiresAt, ownerDeviceId });
+      await audit("device.owner.pairing.minted", { actorDeviceId: ownerDeviceId, targetDeviceId: deviceId });
       return res.status(201).json({ ok: true, pairing: { code, deviceId, expiresAt, singleUse: true } });
     } catch (error) {
       console.error("DEVICE_OWNER_PAIRING_CREATE_FAILED", String(error?.message || error));
@@ -437,6 +529,7 @@ export function registerDeviceCommandBridge(app, {
       if (!restored) {
         return res.status(409).json({ ok: false, code: "ownership_changed", error: "Device ownership changed before recovery completed." });
       }
+      await audit("device.owner.unrevoked", { actorDeviceId: ownerDeviceId, targetDeviceId });
       return res.json({ ok: true, deviceId: targetDeviceId, revoked: false, requiresPairing: true });
     } catch (error) {
       console.error("DEVICE_UNREVOKE_FAILED", String(error?.message || error));
@@ -450,6 +543,13 @@ export function registerDeviceCommandBridge(app, {
     const ownerDeviceId = await authenticateOwner(req, res);
     if (!ownerDeviceId) return undefined;
     if (!validDeviceId(targetDeviceId)) return res.status(400).json({ ok: false, error: "A valid deviceId is required." });
+    if (targetDeviceId === ownerDeviceId) {
+      return res.status(409).json({
+        ok: false,
+        code: "cannot_revoke_self",
+        error: "An owner device cannot revoke itself; use another owner or audited break-glass recovery."
+      });
+    }
     try {
       if (typeof store.revokeDeviceOwned !== "function" || typeof store.getDeviceOwner !== "function") {
         return res.status(501).json({ ok: false, error: "This device store cannot enforce ownership." });
@@ -465,10 +565,46 @@ export function registerDeviceCommandBridge(app, {
       if (!revoked) {
         return res.status(409).json({ ok: false, code: "ownership_changed", error: "Device ownership changed before revocation completed." });
       }
+      await audit("device.owner.revoked", { actorDeviceId: ownerDeviceId, targetDeviceId });
       return res.json({ ok: true, deviceId: targetDeviceId, revoked: true });
     } catch (error) {
       console.error("DEVICE_OWNER_REVOKE_FAILED", String(error?.message || error));
       return res.status(503).json({ ok: false, error: "Unable to revoke the device." });
+    }
+  });
+
+  // Break-glass is deliberately separate from the owner token. It exists only to recover a
+  // revoked owner that can no longer authenticate; it is never a general device-management API.
+  app.post("/device/break-glass/devices/:deviceId/unrevoke", requireStore, async (req, res) => {
+    if (!breakGlassToken) {
+      return res.status(503).json({ ok: false, error: "Break-glass recovery is not configured." });
+    }
+    const supplied = String(req.headers?.["x-break-glass-token"] || "").trim();
+    if (!safeEqual(supplied, breakGlassToken)) {
+      await audit("device.break_glass.denied", { targetDeviceId: req.params?.deviceId || null });
+      return res.status(401).json({ ok: false, code: "break_glass_invalid", error: "Break-glass credential is not valid." });
+    }
+    const targetDeviceId = String(req.params?.deviceId || "").trim();
+    if (!validDeviceId(targetDeviceId)) {
+      return res.status(400).json({ ok: false, error: "A valid deviceId is required." });
+    }
+    try {
+      if (typeof store.unrevokeDeviceByBreakGlass !== "function") {
+        return res.status(501).json({ ok: false, error: "This device store does not support break-glass recovery." });
+      }
+      const restored = await store.unrevokeDeviceByBreakGlass(targetDeviceId);
+      if (!restored) {
+        return res.status(409).json({ ok: false, code: "device_not_revoked_or_unowned", error: "Only a revoked, owned device can be restored." });
+      }
+      await audit("device.break_glass.unrevoked", {
+        actorDeviceId: "break-glass",
+        targetDeviceId,
+        detail: { reason: String(req.body?.reason || "").slice(0, 200) || null }
+      });
+      return res.json({ ok: true, deviceId: targetDeviceId, revoked: false, requiresPairing: true, audit: true });
+    } catch (error) {
+      console.error("DEVICE_BREAK_GLASS_FAILED", String(error?.message || error));
+      return res.status(503).json({ ok: false, error: "Unable to complete break-glass recovery." });
     }
   });
 
@@ -483,7 +619,10 @@ export function registerDeviceCommandBridge(app, {
 
   // The Control Center mints a fresh pairing code itself, using its own operator session (or the
   // Ax bridge credential). The Ax token stays server-side: the browser never receives it.
-  app.post("/bridge/console/pairing", (consoleApi?.requireOperator || requireAx), requireStore, async (req, res) => {
+  const consolePairingGuard = consoleApi
+    ? [consoleApi.requireSameOrigin, consoleApi.requireOperator]
+    : [requireAx];
+  app.post("/bridge/console/pairing", ...consolePairingGuard, requireStore, async (req, res) => {
     try {
       const deviceId = String(req.body?.deviceId || "").trim();
       if (deviceId && !validDeviceId(deviceId)) {
@@ -493,11 +632,15 @@ export function registerDeviceCommandBridge(app, {
       if (!ownerDeviceId) {
         return res.status(409).json({ ok: false, code: "ownership_ambiguous", error: "Exactly one configured owner is required to mint a pairing code." });
       }
+      if (typeof store.isDeviceRevoked === "function" && await store.isDeviceRevoked(ownerDeviceId)) {
+        return res.status(409).json({ ok: false, code: "owner_inactive", error: "The configured owner device is revoked; pairing codes cannot be minted." });
+      }
       const code = randomBytes(16).toString("base64url");
       const createdAt = new Date().toISOString();
       const expiresAt = new Date(Date.now() + PAIRING_TTL_MS).toISOString();
       // Without a device id the code is bound to the first device that uses it.
       await store.createPairing({ codeHash: digest(code), deviceId: deviceId || "*", createdAt, expiresAt, ownerDeviceId });
+      await audit("device.console.pairing.minted", { actorDeviceId: ownerDeviceId, targetDeviceId: deviceId || null });
       return res.status(201).json({
         ok: true,
         pairing: { code, deviceId: deviceId || null, expiresAt, singleUse: true }
@@ -524,7 +667,8 @@ export function registerDeviceCommandBridge(app, {
       env, fetchImpl,
       repository: taskRepository,
       deviceRepository: store,
-      ownerDeviceId: env.HABITAT_OWNER_DEVICE_ID
+      ownerDeviceId: env.HABITAT_OWNER_DEVICE_ID,
+      audit: entry => audit(entry.event, entry)
     });
   } catch (error) {
     console.error("UNIVERSAL_COMMAND_MOUNT_FAILED", String(error?.message || error));
@@ -559,15 +703,19 @@ export function registerDeviceCommandBridge(app, {
         adapters: adapterMap,
         deviceRepository: store,
         ownerDeviceId: env.HABITAT_OWNER_DEVICE_ID,
+        audit: entry => audit(entry.event, entry),
         handleSignals,
         exitOnSignal,
         log
       });
       nexusMount = { configured: true, reason: null };
     } else {
-      const reason = !nexusEnabled ? "NEXUS_RUNTIME_ENABLED is not true" :
-        (taskStore ? "D1 query is not configured" : "no command task store is configured");
-      nexusMount = { configured: false, reason: !nexusEnabled ? "disabled_by_config" : nexusMount.reason };
+      const environmentBlocked = productionRuntimeBlocked || usesProductionD1;
+      const reason = environmentBlocked
+        ? (usesProductionD1 ? "configured D1 database is marked as production" : "runtime environment is production")
+        : !nexusEnabled ? "NEXUS_RUNTIME_ENABLED is not true"
+        : (taskStore ? "D1 query is not configured" : "no command task store is configured");
+      nexusMount = { configured: false, reason: environmentBlocked ? "disabled_environment" : (!nexusEnabled ? "disabled_by_config" : nexusMount.reason) };
       log.warn?.("NEXUS_RUNTIME: disabled — " + reason);
     }
   } catch (error) {
@@ -603,12 +751,17 @@ export function registerDeviceCommandBridge(app, {
       const bootstrapExpiryMs = Date.parse(bootstrapExpiresAt);
       const bootstrapOwner = soleOwner();
       if (/^[a-f0-9]{64}$/.test(bootstrapHash) && Number.isFinite(bootstrapExpiryMs) && bootstrapExpiryMs > Date.now() && bootstrapOwner) {
-        await store.seedBootstrapPairing({
-          codeHash: bootstrapHash,
-          createdAt: new Date().toISOString(),
-          expiresAt: new Date(bootstrapExpiryMs).toISOString(),
-          ownerDeviceId: bootstrapOwner
-        });
+        const ownerRevoked = typeof store.isDeviceRevoked === "function" && await store.isDeviceRevoked(bootstrapOwner);
+        if (ownerRevoked) {
+          console.warn("DEVICE_COMMAND_BRIDGE: bootstrap pairing skipped — owner is revoked");
+        } else {
+          await store.seedBootstrapPairing({
+            codeHash: bootstrapHash,
+            createdAt: new Date().toISOString(),
+            expiresAt: new Date(bootstrapExpiryMs).toISOString(),
+            ownerDeviceId: bootstrapOwner
+          });
+        }
       } else if (/^[a-f0-9]{64}$/.test(bootstrapHash) && !bootstrapOwner) {
         console.warn("DEVICE_COMMAND_BRIDGE: bootstrap pairing skipped — exactly one owner is required");
       }
@@ -637,15 +790,31 @@ export function registerDeviceCommandBridge(app, {
       if (!store || !ready) return [];
       return store.listDevices();
     },
-    async requestDeviceStatus() {
+    async authorizeOwnerRequest(req) {
+      return authorizeOwnerRequest(req);
+    },
+    async requestDeviceStatus({ ownerDeviceId = null, targetDeviceId = null } = {}) {
       if (!store || !ready) return { ok: false, error: "Device command bridge is not ready." };
+      if (!validDeviceId(ownerDeviceId)) return { ok: false, error: "An authenticated owner device is required." };
+      if (targetDeviceId && !validDeviceId(targetDeviceId)) return { ok: false, error: "A valid target deviceId is required." };
       const rows = await store.listDevices();
       const now = Date.now();
-      const device = rows
+      const candidates = rows
+        .filter(row => row.owner_device_id === ownerDeviceId)
         .filter(row => !row.revoked_at && row.last_seen_at && validDeviceId(row.device_id))
         .filter(row => now - Date.parse(row.last_seen_at) <= 45 * 60 * 1000)
-        .sort((a, b) => Date.parse(b.last_seen_at) - Date.parse(a.last_seen_at))[0];
-      if (!device) return { ok: false, error: "No paired device has checked in within the last 45 minutes." };
+        .filter(row => !targetDeviceId || row.device_id === targetDeviceId)
+        .sort((a, b) => Date.parse(b.last_seen_at) - Date.parse(a.last_seen_at));
+      const device = candidates[0];
+      if (!device) {
+        return {
+          ok: false,
+          code: targetDeviceId ? "target_not_owned_or_offline" : "no_owned_device_online",
+          error: targetDeviceId
+            ? "The requested device is not owned by this owner or has not checked in recently."
+            : "No device owned by this owner has checked in within the last 45 minutes."
+        };
+      }
       const createdAt = new Date().toISOString();
       const command = {
         id: "dc_" + randomUUID(),
@@ -657,6 +826,10 @@ export function registerDeviceCommandBridge(app, {
         expiresAt: new Date(now + 2 * 60 * 1000).toISOString()
       };
       await store.enqueue(command);
+      await audit("device.status.requested", {
+        actorDeviceId: ownerDeviceId,
+        targetDeviceId: device.device_id
+      });
       return { ok: true, deviceId: device.device_id, commandId: command.id, status: command.status };
     },
     async getCommand(id) {
@@ -668,6 +841,7 @@ export function registerDeviceCommandBridge(app, {
         ready,
         durable: Boolean(store?.durable),
         axTokenConfigured: Boolean(axToken),
+        breakGlassConfigured: Boolean(breakGlassToken),
         perDeviceTokens: true,
         nexus: nexusRuntime ? { configured: true, ...nexusRuntime.status() } : nexusMount
       };

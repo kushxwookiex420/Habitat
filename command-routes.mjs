@@ -51,9 +51,14 @@ export function registerUniversalCommandRoutes(app, {
   deviceRepository = null,
   verifyDevice = null,
   ownerDeviceId = null,
-  ownerDeviceIds = null
+  ownerDeviceIds = null,
+  audit = null
 } = {}) {
   const axToken = String(env.HABITAT_AX_BRIDGE_TOKEN || "").trim();
+  const recordAudit = async entry => {
+    if (typeof audit !== "function") return;
+    try { await audit(entry); } catch (error) { console.error("COMMAND_AUDIT_FAILED", String(error?.message || error)); }
+  };
 
   // Manual close-out needs an owner device proof on top of the bridge credential. The device
   // verifier comes from the DEVICE repository (verifyDeviceToken); the task repository never had it.
@@ -219,55 +224,79 @@ export function registerUniversalCommandRoutes(app, {
 
   app.post("/ax/command/tasks/:id/approval", requireAx, guard(async (req, res) => {
     if (await rejectFenced(res, req.params.id)) return undefined;
-    reply(res, await engine.requestApproval({
+    const outcome = await engine.requestApproval({
       taskId: req.params.id,
       reason: req.body?.reason,
       action: req.body?.action || null,
       by: "ax"
-    }));
+    });
+    if (outcome?.ok !== false) {
+      await recordAudit({ event: "command.approval.requested", actorDeviceId: "ax", targetDeviceId: req.params.id });
+    }
+    reply(res, outcome);
   }));
 
   app.post("/ax/command/tasks/:id/approve", requireAx, guard(async (req, res) => {
     const deviceId = await authorizeOwnerAction(req, res, "Owner approval");
     if (!deviceId) return undefined;
     if (await rejectFenced(res, req.params.id)) return undefined;
-    reply(res, await engine.approve({ taskId: req.params.id, by: "owner:" + deviceId }));
+    const outcome = await engine.approve({ taskId: req.params.id, by: "owner:" + deviceId });
+    if (outcome?.ok !== false) {
+      await recordAudit({ event: "command.approved", actorDeviceId: deviceId, targetDeviceId: req.params.id });
+    }
+    reply(res, outcome);
   }));
 
   app.post("/ax/command/tasks/:id/deny", requireAx, guard(async (req, res) => {
     const deviceId = await authorizeOwnerAction(req, res, "Owner denial");
     if (!deviceId) return undefined;
     if (await rejectFenced(res, req.params.id)) return undefined;
-    reply(res, await engine.deny({
+    const outcome = await engine.deny({
       taskId: req.params.id,
       by: "owner:" + deviceId,
       reason: req.body?.reason || null
-    }));
+    });
+    if (outcome?.ok !== false) {
+      await recordAudit({ event: "command.denied", actorDeviceId: deviceId, targetDeviceId: req.params.id });
+    }
+    reply(res, outcome);
   }));
 
   app.post("/ax/command/tasks/:id/complete", requireAx, guard(async (req, res) => {
     const deviceId = await authorizeOwnerAction(req, res, "Manual close-out");
     if (!deviceId) return undefined;
     if (await rejectFenced(res, req.params.id)) return undefined;
-    reply(res, await engine.complete({
+    const outcome = await engine.complete({
       taskId: req.params.id,
       result: req.body?.result,
       verifiedBy: "owner:" + deviceId
-    }));
+    });
+    if (outcome?.ok !== false) {
+      await recordAudit({ event: "command.completed", actorDeviceId: deviceId, targetDeviceId: req.params.id });
+    }
+    reply(res, outcome);
   }));
 
   app.post("/ax/command/tasks/:id/fail", requireAx, guard(async (req, res) => {
     const deviceId = await authorizeOwnerAction(req, res, "Manual failure");
     if (!deviceId) return undefined;
     if (await rejectFenced(res, req.params.id)) return undefined;
-    reply(res, await engine.fail({ taskId: req.params.id, error: req.body?.error, by: "owner:" + deviceId }));
+    const outcome = await engine.fail({ taskId: req.params.id, error: req.body?.error, by: "owner:" + deviceId });
+    if (outcome?.ok !== false) {
+      await recordAudit({ event: "command.failed", actorDeviceId: deviceId, targetDeviceId: req.params.id });
+    }
+    reply(res, outcome);
   }));
 
   app.post("/ax/command/tasks/:id/retry", requireAx, guard(async (req, res) => {
     const deviceId = await authorizeOwnerAction(req, res, "Task retry");
     if (!deviceId) return undefined;
     if (await rejectFenced(res, req.params.id)) return undefined;
-    reply(res, await engine.retry({ taskId: req.params.id, by: "owner:" + deviceId }));
+    const outcome = await engine.retry({ taskId: req.params.id, by: "owner:" + deviceId });
+    if (outcome?.ok !== false) {
+      await recordAudit({ event: "command.retried", actorDeviceId: deviceId, targetDeviceId: req.params.id });
+    }
+    reply(res, outcome);
   }));
 
   return { engine, registry: registryInstance, store: () => store };

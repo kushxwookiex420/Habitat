@@ -150,8 +150,8 @@ test("the Nexus runtime is disabled unless NEXUS_RUNTIME_ENABLED is exactly true
   assert.equal(bridge.nexus(), null);
 });
 
-async function seedDevice(deviceRepo, deviceId, token) {
-  await deviceRepo.registerDevice({ deviceId, tokenHash: hash(token), createdAt: new Date().toISOString() });
+async function seedDevice(deviceRepo, deviceId, token, ownerDeviceId = null) {
+  await deviceRepo.registerDevice({ deviceId, tokenHash: hash(token), createdAt: new Date().toISOString(), ownerDeviceId });
 }
 
 async function submit(app, adapter = "runtime.health", key = "integration-" + Date.now()) {
@@ -289,6 +289,9 @@ test("10. graceful shutdown drains an in-flight adapter and persists completion"
 
 test("12. pairing and heartbeat still work through the mounted bridge", async () => {
   const h = harness();
+  await h.deviceRepo.initialize();
+  // The owner must be an active paired device before it can enroll a non-owner target.
+  await seedDevice(h.deviceRepo, OWNER, OWNER_TOKEN, OWNER);
   await h.bridge.initialize();
 
   const issued = await invoke(h.app, "POST /ax/device/pairings", {

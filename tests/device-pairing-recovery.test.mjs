@@ -14,6 +14,7 @@ const OPERATOR = "ax_bridge_" + "7".repeat(40);
 const CODE = "pairing-code-" + "a".repeat(28);
 const OWNER_ID = "owner-phone";
 const OWNER_TOKEN = "owner-device-token";
+const BREAK_GLASS = "break-glass-" + "b".repeat(48);
 
 function digest(value) {
   return createHash("sha256").update(String(value), "utf8").digest("hex");
@@ -68,6 +69,7 @@ function fakeStore(seed = []) {
       deviceId: entry.deviceId || "*",
       expiresAt: entry.expiresAt,
       consumedAt: entry.consumedAt || null,
+      recoveryAt: entry.recoveryAt || null,
       ownerDeviceId: entry.ownerDeviceId || OWNER_ID
     });
   }
@@ -81,15 +83,23 @@ function fakeStore(seed = []) {
     devices,
     owners,
     revoked,
+    audits: [],
     invalidatePairings,
     async initialize() { return { ok: true, durable: true }; },
     async createPairing({ codeHash, deviceId, expiresAt, ownerDeviceId = OWNER_ID }) {
-      pairings.set(codeHash, { deviceId, expiresAt, consumedAt: null, ownerDeviceId });
+      pairings.set(codeHash, { deviceId, expiresAt, consumedAt: null, recoveryAt: null, ownerDeviceId });
       return true;
     },
     async findPairing({ codeHash }) {
       const row = pairings.get(codeHash);
-      return row ? { codeHash, deviceId: row.deviceId, expiresAt: row.expiresAt, consumedAt: row.consumedAt, ownerDeviceId: row.ownerDeviceId || null } : null;
+      return row ? { codeHash, deviceId: row.deviceId, expiresAt: row.expiresAt, consumedAt: row.consumedAt, recoveryAt: row.recoveryAt || null, ownerDeviceId: row.ownerDeviceId || null } : null;
+    },
+    async claimPairingRecovery({ codeHash, deviceId, recoveredAt, consumedAfter }) {
+      const row = pairings.get(codeHash);
+      if (!row || row.deviceId !== deviceId || !row.consumedAt || row.recoveryAt) return false;
+      if (row.consumedAt < consumedAfter) return false;
+      row.recoveryAt = recoveredAt;
+      return true;
     },
     async consumePairing({ codeHash, deviceId, consumedAt }) {
       const row = pairings.get(codeHash);
@@ -103,12 +113,11 @@ function fakeStore(seed = []) {
     },
     async registerDevice({ deviceId, tokenHash, ownerDeviceId = null }) {
       if (ownerDeviceId) {
-        const existingOwner = owners.get(deviceId);
-        if (existingOwner && existingOwner !== ownerDeviceId) return false;
+        if (!owners.has(deviceId)) owners.set(deviceId, ownerDeviceId);
+        if (owners.get(deviceId) !== ownerDeviceId) return false;
       }
       // Registration never clears revocation, matching the D1 repository.
       devices.set(deviceId, tokenHash);
-      if (ownerDeviceId) owners.set(deviceId, ownerDeviceId);
       return true;
     },
     async getDeviceOwner(deviceId) { return owners.get(deviceId) || null; },
@@ -125,14 +134,28 @@ function fakeStore(seed = []) {
     async revokeDevice(deviceId) {
       revoked.add(deviceId);
       invalidatePairings(deviceId);
+      for (const [codeHash, row] of pairings) if (row.ownerDeviceId === deviceId) pairings.delete(codeHash);
       return true;
     },
     async unrevokeDevice(deviceId, ownerDeviceId = null) {
       if (!ownerDeviceId || owners.get(deviceId) !== ownerDeviceId) return false;
+      return this.recoverRevokedDevice(deviceId);
+    },
+    async unrevokeDeviceByBreakGlass(deviceId) {
+      if (!owners.has(deviceId)) return false;
+      return this.recoverRevokedDevice(deviceId);
+    },
+    async recoverRevokedDevice(deviceId) {
+      if (!revoked.has(deviceId)) return false;
       revoked.delete(deviceId);
       devices.delete(deviceId);
       invalidatePairings(deviceId);
+      for (const [codeHash, row] of pairings) if (row.ownerDeviceId === deviceId) pairings.delete(codeHash);
       return true;
+    },
+    async audit(entry) {
+      this.audits.push(entry);
+      return { ok: true };
     },
     async verifyDeviceToken(token, deviceId) {
       return !revoked.has(deviceId) && Boolean(devices.get(deviceId)) && devices.get(deviceId) === digest(token);
@@ -153,12 +176,16 @@ async function setup(seed = [], { owners = [OWNER_ID] } = {}) {
       HABITAT_AX_BRIDGE_TOKEN: OPERATOR,
       HABITAT_OWNER_DEVICE_ID: owners[0] || "",
       HABITAT_OWNER_DEVICE_IDS: owners.join(","),
+      HABITAT_BREAK_GLASS_TOKEN: BREAK_GLASS,
       NEXUS_RUNTIME_ENABLED: "false"
     },
     fetchImpl: async () => { throw new Error("network disabled in this test"); },
     repository: store
   });
   await bridge.initialize();
+  // The owner is an active paired device in normal operation. Seed it for tests that exercise
+  // owner-issued enrollment without turning every test into a two-step bootstrap setup.
+  if (owners.includes(OWNER_ID)) store.devices.set(OWNER_ID, digest(OWNER_TOKEN));
   return { app, store };
 }
 
@@ -245,7 +272,7 @@ test("a short code and an invalid device id are rejected before touching storage
   assert.equal(short.statusCode, 400);
   const badId = await invoke(app, "POST /device/pair", { body: { deviceId: "bad id!", code: CODE } });
   assert.equal(badId.statusCode, 400);
-  assert.equal(store.devices.size, 0);
+  assert.equal(store.devices.has("launcher-a"), false);
 });
 
 test("two simultaneous submissions by the same device both succeed without corrupting the token", async () => {
@@ -256,8 +283,9 @@ test("two simultaneous submissions by the same device both succeed without corru
   ]);
   assert.equal(one.statusCode, 200);
   assert.equal(two.statusCode, 200);
-  // The last issued token is the valid one; exactly one token is stored for the device.
-  assert.equal(store.devices.size, 1);
+  // The owner seed is present; the launcher gets exactly one valid token after one use and one
+  // bounded lost-response recovery.
+  assert.equal(store.devices.size, 2);
   const stored = store.devices.get("launcher-a");
   assert.ok([one.body.token, two.body.token].map(digest).includes(stored));
 });
@@ -283,6 +311,79 @@ test("the Control Center can mint a fresh code, and only with its credential", a
 
   const exchanged = await invoke(app, "POST /device/pair", { body: { deviceId: "launcher-a", code } });
   assert.equal(exchanged.statusCode, 200);
+});
+
+test("H7 break-glass recovery is separately authenticated, audited, and requires fresh pairing", async () => {
+  const { app, store } = await setup([{ code: CODE, expiresAt: future() }]);
+  const first = await invoke(app, "POST /device/pair", { body: { deviceId: "launcher-a", code: CODE } });
+  assert.equal(first.statusCode, 200);
+  await store.revokeDevice("launcher-a");
+
+  const missing = await invoke(app, "POST /device/break-glass/devices/:deviceId/unrevoke", { params: { deviceId: "launcher-a" } });
+  assert.equal(missing.statusCode, 401);
+  assert.equal(store.revoked.has("launcher-a"), true);
+
+  const wrong = await invoke(app, "POST /device/break-glass/devices/:deviceId/unrevoke", {
+    headers: { "x-break-glass-token": "wrong" }, params: { deviceId: "launcher-a" }
+  });
+  assert.equal(wrong.statusCode, 401);
+  assert.equal(store.revoked.has("launcher-a"), true);
+
+  const restored = await invoke(app, "POST /device/break-glass/devices/:deviceId/unrevoke", {
+    headers: { "x-break-glass-token": BREAK_GLASS },
+    params: { deviceId: "launcher-a" },
+    body: { reason: "owner phone lost" }
+  });
+  assert.equal(restored.statusCode, 200);
+  assert.equal(restored.body.requiresPairing, true);
+  assert.equal(restored.body.audit, true);
+  assert.equal(store.revoked.has("launcher-a"), false);
+  assert.equal(await store.verifyDeviceToken(first.body.token, "launcher-a"), false);
+  assert.ok(store.audits.some(entry => entry.event === "device.break_glass.unrevoked" && entry.targetDeviceId === "launcher-a"));
+  assert.ok(store.audits.some(entry => entry.event === "device.break_glass.denied"));
+
+  const again = await invoke(app, "POST /device/break-glass/devices/:deviceId/unrevoke", {
+    headers: { "x-break-glass-token": BREAK_GLASS }, params: { deviceId: "launcher-a" }
+  });
+  assert.equal(again.statusCode, 409);
+  assert.equal(again.body.code, "device_not_revoked_or_unowned");
+});
+
+test("H5 codes issued by a revoked or inactive owner cannot enroll a device", async () => {
+  const revoked = await setup([{ code: CODE, expiresAt: future(), ownerDeviceId: OWNER_ID }]);
+  await revoked.store.revokeDevice(OWNER_ID);
+  const oldCode = await invoke(revoked.app, "POST /device/pair", { body: { deviceId: "launcher-a", code: CODE } });
+  assert.equal(oldCode.statusCode, 401);
+  assert.equal(oldCode.body.code, "pairing_unknown", "revocation removes every code issued by the owner");
+
+  const mintForRevoked = await invoke(revoked.app, "POST /ax/device/pairings", {
+    headers: { authorization: "Bearer " + OPERATOR },
+    body: { deviceId: "launcher-b" }
+  });
+  assert.equal(mintForRevoked.statusCode, 409);
+  assert.equal(mintForRevoked.body.code, "owner_inactive");
+
+  const OWNER_B = "owner-phone-b";
+  const inactiveSetup = await setup([], { owners: [OWNER_ID, OWNER_B] });
+  const inactiveCode = "inactive-owner-" + "d".repeat(24);
+  await inactiveSetup.store.createPairing({ codeHash: digest(inactiveCode), deviceId: "launcher-c", expiresAt: future(), ownerDeviceId: OWNER_B });
+  const inactive = await invoke(inactiveSetup.app, "POST /device/pair", { body: { deviceId: "launcher-c", code: inactiveCode } });
+  assert.equal(inactive.statusCode, 409);
+  assert.equal(inactive.body.code, "owner_inactive");
+});
+
+test("H3 consumed-code recovery expires and is limited to one retry", async () => {
+  const old = await setup([{ code: CODE, expiresAt: future(), deviceId: "launcher-a", consumedAt: new Date(Date.now() - 120000).toISOString() }]);
+  const expired = await invoke(old.app, "POST /device/pair", { body: { deviceId: "launcher-a", code: CODE } });
+  assert.equal(expired.statusCode, 401);
+  assert.equal(expired.body.code, "pairing_recovery_expired");
+
+  const fresh = await setup([{ code: CODE, expiresAt: future() }]);
+  assert.equal((await invoke(fresh.app, "POST /device/pair", { body: { deviceId: "launcher-a", code: CODE } })).statusCode, 200);
+  assert.equal((await invoke(fresh.app, "POST /device/pair", { body: { deviceId: "launcher-a", code: CODE } })).body.recovered, true);
+  const exhausted = await invoke(fresh.app, "POST /device/pair", { body: { deviceId: "launcher-a", code: CODE } });
+  assert.equal(exhausted.statusCode, 409);
+  assert.equal(exhausted.body.code, "pairing_recovery_exhausted");
 });
 
 test("a revoked device cannot recover with a consumed code or a fresh code", async () => {
@@ -367,6 +468,18 @@ test("only a configured owner device can explicitly restore a revoked device", a
   assert.equal(freshPair.statusCode, 200);
   assert.notEqual(freshPair.body.token, first.body.token);
   assert.equal(await store.verifyDeviceToken(freshPair.body.token, "launcher-a"), true);
+});
+
+test("an owner cannot revoke its own only credential into a lockout", async () => {
+  const { app, store } = await setup();
+  const selfRevoke = await invoke(app, "POST /device/owner/devices/:deviceId/revoke", {
+    headers: { "x-owner-device-id": OWNER_ID, authorization: "Bearer " + OWNER_TOKEN },
+    params: { deviceId: OWNER_ID }
+  });
+  assert.equal(selfRevoke.statusCode, 409);
+  assert.equal(selfRevoke.body.code, "cannot_revoke_self");
+  assert.equal(store.revoked.has(OWNER_ID), false);
+  assert.equal(await store.verifyDeviceToken(OWNER_TOKEN, OWNER_ID), true);
 });
 
 test("recovery refuses a device that is not revoked", async () => {

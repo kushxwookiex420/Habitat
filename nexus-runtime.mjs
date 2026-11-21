@@ -531,6 +531,7 @@ export function registerNexusRuntime(app, {
   deviceRepository = null,
   ownerDeviceId = null,
   ownerDeviceIds = null,
+  audit = null,
   handleSignals = true,
   exitOnSignal = true,
   exit = code => process.exit(code),
@@ -564,6 +565,10 @@ export function registerNexusRuntime(app, {
   let started = false;
   let signalsAttached = false;
   let shuttingDown = false;
+  const recordAudit = async entry => {
+    if (typeof audit !== "function") return;
+    try { await audit(entry); } catch (error) { console.error("NEXUS_AUDIT_FAILED", String(error?.message || error)); }
+  };
 
   async function deviceFrom(req) {
     if (typeof verify !== "function") return { deviceId: null, reason: "unconfigured" };
@@ -653,6 +658,11 @@ export function registerNexusRuntime(app, {
         return res.status(409).json({ ok: false, error: outcome.error || "The decision was rejected.", details: outcome.details || null });
       }
       const after = outcome?.task || await store.get(taskId) || {};
+      await recordAudit({
+        event: approved ? "device.command.approved" : "device.command.denied",
+        actorDeviceId: deviceId,
+        targetDeviceId: taskId
+      });
       return res.json({
         ok: true,
         taskId,

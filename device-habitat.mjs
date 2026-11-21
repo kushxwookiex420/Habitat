@@ -16,7 +16,6 @@ import { createHomeBridgeClient } from "./home-bridge-client.mjs";
 const GITHUB_CACHE_MS = 60000;
 // Same vocabulary the relay accepts; anything else is refused here before a request is made.
 const PHONE_ACTIONS = new Set(["status", "page", "app", "torch", "clear", "remote", "url"]);
-const OWNER_ONLY_PHONE_ACTIONS = new Set(["clear", "remote"]);
 
 function short(value, max = 200) {
   return String(value == null ? "" : value).slice(0, max);
@@ -82,6 +81,16 @@ export function registerDeviceHabitat(app, { env = process.env, fetchImpl = fetc
       console.error("DEVICE_HABITAT_AUTH_FAILED", String(error?.message || error));
       return res.status(503).json({ ok: false, error: "Device authentication is temporarily unavailable." });
     }
+  }
+
+  function requireOwner(req, res, next) {
+    if (!owners.size) {
+      return res.status(503).json({ ok: false, error: "Owner authorization is not configured for the Habitat dashboard." });
+    }
+    if (!owners.has(req.habitatDeviceId)) {
+      return res.status(403).json({ ok: false, code: "owner_required", error: "Only the configured owner device may use this dashboard." });
+    }
+    return next();
   }
 
   async function commits() {
@@ -249,7 +258,7 @@ export function registerDeviceHabitat(app, { env = process.env, fetchImpl = fetc
     };
   }
 
-  app.get("/device/habitat", requireDevice, async (req, res) => {
+  app.get("/device/habitat", requireDevice, requireOwner, async (req, res) => {
     try {
       res.setHeader("cache-control", "no-store");
       return res.json(await buildPayload(req.habitatDeviceId));
@@ -261,16 +270,14 @@ export function registerDeviceHabitat(app, { env = process.env, fetchImpl = fetc
 
   // Queue one allowlisted phone action with the server-held ax credential. The phone never holds
   // that credential itself, and the relay still re-validates the action against its own whitelist.
-  app.post("/device/habitat/phone", requireDevice, async (req, res) => {
+  app.post("/device/habitat/phone", requireDevice, requireOwner, async (req, res) => {
     const action = String(req.body?.action || "").trim();
     const arg = String(req.body?.arg || "").trim().slice(0, 300);
     if (!PHONE_ACTIONS.has(action)) {
       return res.status(400).json({ ok: false, error: `action must be one of ${[...PHONE_ACTIONS].join(", ")}` });
     }
-    if (OWNER_ONLY_PHONE_ACTIONS.has(action)) {
-      if (!owners.size) return res.status(503).json({ ok: false, error: "Owner authorization is not configured for destructive phone actions." });
-      if (!owners.has(req.habitatDeviceId)) return res.status(403).json({ ok: false, error: "This paired device is not the configured owner." });
-    }
+    // The owner-only gate above covers all phone actions. A non-owner paired device must not be
+    // able to use the server-held relay credential to inspect or control the owner's phone.
     const result = await client.sendPhoneAction({ action, arg });
     return res.status(result.ok ? 200 : 502).json({
       ok: result.ok,
@@ -282,7 +289,7 @@ export function registerDeviceHabitat(app, { env = process.env, fetchImpl = fetc
   });
 
   // Read one shared file with the server-held ax credential, for the phone's files panel.
-  app.get("/device/habitat/file", requireDevice, async (req, res) => {
+  app.get("/device/habitat/file", requireDevice, requireOwner, async (req, res) => {
     const name = String(req.query?.name || "").trim();
     if (!name) return res.status(400).json({ ok: false, error: "name is required" });
     const result = await client.readFile(name);
