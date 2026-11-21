@@ -158,6 +158,22 @@ Public, unauthenticated OpenAPI 3.1 document describing the endpoints above. It 
 no credential. Served publicly because ChatGPT imports it before any credential exists in a
 conversation.
 
+### `/ax/command/runs` — Habitat-native Ax
+
+Ax can also plan an objective itself, inside Habitat, and submit the resulting steps through this
+same engine. Full behaviour, configuration and cost: `docs/AX_NATIVE_ORCHESTRATOR.md`.
+
+| Method | Path | Result |
+| --- | --- | --- |
+| POST | `/ax/command/runs` | `{objective}` → `201` with a run: plan, task ids, verified evidence, token usage and `costUsd` |
+| GET | `/ax/command/runs` | recent runs, newest first |
+| GET | `/ax/command/runs/:id` | one run, or `404 not_found` |
+
+These three are not part of the ChatGPT OpenAPI document. When the agent is off they answer
+`503 orchestrator_disabled` or `503 openai_unconfigured`; they never pretend an agent exists. A run's
+`status` is the run's outcome, not the HTTP result — a `201` with `run.status: "failed"` means the
+request was accepted and the work failed.
+
 ## 4. Errors
 
 | HTTP | `code` | Meaning |

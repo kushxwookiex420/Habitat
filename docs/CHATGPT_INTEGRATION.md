@@ -1,5 +1,14 @@
 # Connecting ChatGPT (Ax) to Habitat
 
+> **Correction, 2026-11-21 (Mission 04).** This path is **not available to a personal ChatGPT
+> account**, Free or paid. OpenAI's help center states: "New GPT creation and publishing are not
+> available on personal ChatGPT accounts, including Free, Go, Plus, and Pro." Actions live inside a
+> custom GPT, so no personal plan can create one. Custom MCP servers are Business/Enterprise only and
+> accept OAuth only — not a bearer key. See `docs/AX_ARCHITECTURE_DECISION.md` §1 for the citations.
+>
+> The API described below is built and tested. It is the interface a managed workspace would use, and
+> it is what the Habitat-native agent calls today. Nothing here can be completed on this account.
+
 **Status: not connected.** This document is the integration plan and the exact first live test. No
 ChatGPT workspace, connector or custom GPT has been created, no credential has been issued, and no
 request has ever travelled from OpenAI to Habitat. Everything below is unverified until §8 passes.
@@ -24,9 +33,11 @@ So: **a GPT Action with API-key/Bearer auth**. That is the only supported method
 Habitat's existing bearer token. An MCP server would require Habitat to become an OAuth
 authorization server — a real project, deliberately out of scope here.
 
-Availability caveat: OpenAI's pages disagree about which plans can add custom MCP servers; custom
-GPTs and Actions are broadly available on paid consumer and workspace plans. Confirm in the account
-actually being used.
+Availability, checked 2026-11-21: **no personal plan (Free, Go, Plus, Pro) can create a GPT**, so no
+personal account can create an Action at all; custom MCP servers are limited to Business and
+Enterprise/Edu workspaces and accept OAuth only. Custom GPTs are also scheduled for retirement
+(standard date 2026-12-11) in favour of plugins. Do not plan around this path without a managed
+workspace.
 
 ## 2. What the Action sees
 
