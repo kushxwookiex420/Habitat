@@ -56,6 +56,13 @@ function record(label, extra = {}) {
 }
 const claimParams = (worker, leaseMs, fence) => [worker, new Date(Date.now() + leaseMs).toISOString(), fence, new Date().toISOString(), new Date().toISOString()];
 const rows = reply => reply?.[0]?.results || [];
+async function retireQueuedTestTask(id) {
+  const timestamp = new Date().toISOString();
+  await query(
+    "UPDATE habitat_command_tasks SET status = 'done', record_json = json_set(record_json, '$.status', 'done', '$.updatedAt', ?), updated_at = ? WHERE id = ?",
+    [timestamp, timestamp, id]
+  );
+}
 
 async function main() {
   console.log("Target D1 database:", databaseId, "(disposable, confirmed isolated)");
@@ -67,6 +74,9 @@ async function main() {
   await repository.create(created);
   const fetched = await repository.get(created.id);
   check("task creation and retrieval", fetched?.id === created.id && fetched?.objective === created.objective);
+  // The claim SQL intentionally claims the oldest queued task globally; retire this fixture
+  // so it cannot be mistaken for the dedicated claim fixture in the next check.
+  await retireQueuedTestTask(created.id);
 
   // 2. claim acquisition (exactly once)
   const claimTask = record("claim");
@@ -138,6 +148,9 @@ async function main() {
   const raceRow = await repository.get(race.id);
   const recoveryWon = rows(recovery).length === 1;
   check("recovery racing completion", !(completion.ok && recoveryWon) && ((completion.ok && raceRow?.status === "done") || (!completion.ok && raceRow?.status === "queued")), "status=" + raceRow?.status);
+  // If recovery wins, it deliberately leaves this task queued. Retire the fixture so the
+  // next global claim targets the exhausted-takeover fixture, not this earlier race fixture.
+  await retireQueuedTestTask(race.id);
 
   // 10. exhausted takeover uses the same fence guard
   const exhausted = record("exhausted");
