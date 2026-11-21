@@ -97,7 +97,10 @@ export function registerUniversalCommandRoutes(app, {
   audit = null,
   // Optional live view of the executor, supplied by the caller that mounted the Nexus runtime.
   // Absent or failing, presence reports "not mounted" rather than inventing availability.
-  presenceProvider = null
+  presenceProvider = null,
+  // Optional Habitat-native Ax. Absent or disabled, the run routes answer 503 instead of pretending
+  // an agent exists.
+  orchestratorProvider = null
 } = {}) {
   // Two credentials, two permission sets. The bridge token is device-capable and predates this
   // work. The command token may only reach /ax/command, and it can never satisfy an owner action.
@@ -319,6 +322,59 @@ export function registerUniversalCommandRoutes(app, {
     // when storage is unhealthy, and it says so through queue.ok=false.
     res.json({ ok: true, presence: { reachable: true, ...presence, observedAt: new Date().toISOString() } });
   });
+
+  function resolveOrchestrator() {
+    try { return typeof orchestratorProvider === "function" ? orchestratorProvider() : null; }
+    catch { return null; }
+  }
+
+  /** Shared closed-door answer: no agent, no route, and a reason the caller can act on. */
+  function orchestratorUnavailable(res) {
+    const orchestrator = resolveOrchestrator();
+    if (orchestrator?.enabled) return orchestrator;
+    res.status(503).json({
+      ok: false,
+      code: orchestrator?.code || "orchestrator_disabled",
+      error: orchestrator?.error || "Habitat-native Ax is not available on this service."
+    });
+    return null;
+  }
+
+  // Ax's own entrypoint. An objective goes in; a run record with a plan, task ids, verified
+  // evidence and its token cost comes out. It is not part of the ChatGPT OpenAPI document: this is
+  // Habitat's own agent, not a tool for an external model.
+  route.post("/ax/command/runs", requireAx, guard(async (req, res) => {
+    const orchestrator = orchestratorUnavailable(res);
+    if (!orchestrator) return undefined;
+    const objective = String(req.body?.objective || "").trim();
+    if (!objective) {
+      return reply(res, { ok: false, code: "invalid_objective", error: "An objective is required." });
+    }
+    try {
+      await orchestrator.initialize?.();
+    } catch (error) {
+      console.error("AX_RUN_STORE_INIT_FAILED", String(error?.message || error));
+      return res.status(503).json({ ok: false, code: "run_store_unavailable", error: "The Ax run store could not be initialized." });
+    }
+    const outcome = await orchestrator.runObjective({ objective, requestedBy: "ax" });
+    // 201 when a run record exists, whatever the run's own outcome: the request succeeded, the
+    // work may not have. `run.status` and `run.verified` carry that distinction.
+    return res.status(201).json({ ok: outcome.ok === true, code: outcome.code ?? null, error: outcome.error ?? null, run: outcome.run });
+  }));
+
+  route.get("/ax/command/runs", requireAx, guard(async (req, res) => {
+    const orchestrator = orchestratorUnavailable(res);
+    if (!orchestrator) return undefined;
+    res.json({ ok: true, runs: await orchestrator.listRuns({ limit: req.query?.limit }) });
+  }));
+
+  route.get("/ax/command/runs/:id", requireAx, guard(async (req, res) => {
+    const orchestrator = orchestratorUnavailable(res);
+    if (!orchestrator) return undefined;
+    const run = await orchestrator.getRun(req.params.id);
+    if (!run) return reply(res, { ok: false, code: "not_found", error: "No Ax run with that id." });
+    res.json({ ok: true, run });
+  }));
 
   route.get("/ax/command/events", requireAx, guard(async (req, res) => {
     if (!store || typeof store.listChanged !== "function") {

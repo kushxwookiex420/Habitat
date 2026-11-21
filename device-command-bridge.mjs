@@ -4,7 +4,9 @@ import { registerHomeBridgeConsole } from "./home-bridge-console.mjs";
 import { registerDeviceHabitat } from "./device-habitat.mjs";
 import { registerUniversalCommandRoutes } from "./command-routes.mjs";
 import { createD1Query, registerNexusRuntime } from "./nexus-runtime.mjs";
-import { buildReadOnlyNexusAdapters, READ_ONLY_ADAPTER_PREFIXES } from "./nexus-adapter-registration.mjs";
+import { buildReadOnlyNexusAdapters, READ_ONLY_ADAPTER_NAMES, READ_ONLY_ADAPTER_PREFIXES } from "./nexus-adapter-registration.mjs";
+import { createAxOrchestrator, createOpenAiPlanner, resolveAxOrchestratorConfig } from "./ax-orchestrator.mjs";
+import { createD1AxRunRepository } from "./d1-ax-run-repository.mjs";
 
 const SAFE_COMMANDS = new Set(["device.status"]);
 const PAIRING_TTL_MS = 10 * 60 * 1000;
@@ -349,6 +351,9 @@ export function registerDeviceCommandBridge(app, {
   // mounted further down. The closures read them at request time, after mounting has finished.
   let nexusRuntime = null;
   let nexusMount = { configured: false, reason: "command_store_unavailable" };
+  // Resolved on the first run request, once the engine and the runtime exist. `undefined` means
+  // "not resolved yet"; a resolved failure is cached as null or a disabled descriptor.
+  let axOrchestrator;
   let commandApi = null;
   try {
     commandApi = registerUniversalCommandRoutes(app, {
@@ -370,6 +375,59 @@ export function registerDeviceCommandBridge(app, {
           queue: { ok: false, error: "executor_not_mounted" },
           canExecute: false
         };
+      },
+      // Habitat-native Ax. Built lazily so it can use the engine this call creates and the runtime
+      // mounted after it, without either of them owning a second task store.
+      orchestratorProvider: () => {
+        if (axOrchestrator !== undefined) return axOrchestrator;
+        axOrchestrator = null;
+        try {
+          const axConfig = resolveAxOrchestratorConfig(env);
+          const runStore = hasD1
+            ? createD1AxRunRepository({
+                accountId: env.CLOUDFLARE_ACCOUNT_ID,
+                databaseId: env.HABITAT_D1_DATABASE_ID,
+                apiToken: env.HABITAT_D1_API_TOKEN,
+                fetchImpl
+              })
+            : null;
+          if (!axConfig.enabled) {
+            axOrchestrator = { enabled: false, code: axConfig.code, error: axConfig.error };
+          } else if (!commandApi?.engine || !runStore) {
+            axOrchestrator = {
+              enabled: false,
+              code: "run_store_unavailable",
+              error: "Habitat-native Ax needs the command engine and D1 to record its runs."
+            };
+          } else {
+            axOrchestrator = createAxOrchestrator({
+              engine: commandApi.engine,
+              // In-process execution when the runtime is mounted; otherwise the run is queued for
+              // the cron executor and says so instead of spinning.
+              execute: nexusRuntime && typeof nexusRuntime.tick === "function" ? () => nexusRuntime.tick() : null,
+              planner: createOpenAiPlanner({
+                apiKey: axConfig.apiKey,
+                model: axConfig.model,
+                baseUrl: axConfig.baseUrl,
+                fetchImpl,
+                prices: axConfig.prices,
+                maxSteps: axConfig.maxSteps
+              }),
+              runs: runStore,
+              // The planner may only choose adapters the worker actually has, never the registry's
+              // full read-only surface.
+              adapters: READ_ONLY_ADAPTER_NAMES,
+              config: axConfig,
+              log
+            });
+            Promise.resolve(axOrchestrator.initialize()).catch(error =>
+              log.error?.("AX_RUN_STORE_INIT_FAILED", String(error?.message || error))
+            );
+          }
+        } catch (error) {
+          axOrchestrator = { enabled: false, code: "orchestrator_init_failed", error: String(error?.message || error) };
+        }
+        return axOrchestrator;
       }
     });
   } catch (error) {

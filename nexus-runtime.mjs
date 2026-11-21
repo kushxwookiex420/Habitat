@@ -1065,6 +1065,12 @@ export function registerNexusRuntime(app, {
       return { ok: true, durable: Boolean(store.durable), worker: Boolean(runtime), started };
     },
     startWorker: startNexusWorker,
+    // One tick, as the process would run it. Used by the Ax orchestrator to execute what it just
+    // submitted; without it a run is queued for the cron executor instead.
+    async tick() {
+      if (!runtime || typeof runtime.tick !== "function") return { ok: false, claimed: 0, error: "no_worker", stage: "tick" };
+      return runtime.tick();
+    },
     shutdown,
     status() {
       return {
