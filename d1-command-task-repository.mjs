@@ -81,6 +81,9 @@ export function createD1CommandTaskRepository({ accountId, databaseId, apiToken,
     async initialize() {
       await query("CREATE TABLE IF NOT EXISTS habitat_command_tasks (id TEXT PRIMARY KEY NOT NULL, record_json TEXT NOT NULL, status TEXT NOT NULL, updated_at TEXT NOT NULL)");
       await query("CREATE INDEX IF NOT EXISTS habitat_command_tasks_status_updated_at ON habitat_command_tasks(status, updated_at DESC)");
+      // Compound index for the change feed cursor (updated_at, id): without it every poll is a
+      // full scan, and with it a cursor seek is a range scan.
+      await query("CREATE INDEX IF NOT EXISTS habitat_command_tasks_updated_at ON habitat_command_tasks(updated_at, id)");
       return { ok: true, adapter: "cloudflare-d1" };
     },
 
@@ -104,6 +107,22 @@ export function createD1CommandTaskRepository({ accountId, databaseId, apiToken,
         ? await query("SELECT record_json FROM habitat_command_tasks WHERE status = ? ORDER BY updated_at DESC LIMIT ?", [String(status), safeLimit])
         : await query("SELECT record_json FROM habitat_command_tasks ORDER BY updated_at DESC LIMIT ?", [safeLimit]);
       return (result[0]?.results || []).map(decode).filter(Boolean);
+    },
+
+    /**
+     * Change feed: rows strictly after the compound cursor, oldest first. The cursor is
+     * (updated_at, id) so two tasks written in the same millisecond cannot be skipped or repeated.
+     */
+    async listChanged({ since = "1970-01-01T00:00:00.000Z", afterId = "", limit = 50 } = {}) {
+      const safeLimit = Math.max(1, Math.min(200, Math.floor(Number(limit) || 50)));
+      const cursor = String(since);
+      const result = await query(
+        "SELECT record_json, updated_at FROM habitat_command_tasks WHERE updated_at > ? OR (updated_at = ? AND id > ?) ORDER BY updated_at ASC, id ASC LIMIT ?",
+        [cursor, cursor, String(afterId || ""), safeLimit]
+      );
+      return (result[0]?.results || [])
+        .map(row => ({ task: decode(row), updatedAt: String(row.updated_at || "") }))
+        .filter(entry => entry.task && entry.updatedAt);
     },
 
     async update(id, patch) {

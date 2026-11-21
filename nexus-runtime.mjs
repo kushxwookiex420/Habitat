@@ -917,13 +917,13 @@ export function registerNexusRuntime(app, {
     }
   });
 
-  app.get("/nexus/runtime", async (req, res) => {
-    const axToken = String(env.HABITAT_AX_BRIDGE_TOKEN || "");
-    if (!axToken || !same(bearer(req), axToken)) {
-      return res.status(401).json({ ok: false, error: "Ax bridge authentication required." });
-    }
-    if (!store || !d1Query) return unavailable(res);
-    try {
+  /**
+   * One description of the executor, shared by /nexus/runtime (operator view) and the command
+   * API's /ax/command/presence (Ax view), so the two views cannot drift apart.
+   */
+  async function describeRuntime() {
+    if (!store || !d1Query) return { ok: false, reason: "no_query" };
+    {
       const rows = await d1Query("SELECT worker_id, started_at, heartbeat_at, state, claimed, completed, failed, detail FROM habitat_nexus_workers ORDER BY heartbeat_at DESC LIMIT 5");
       const workers = (rows?.[0]?.results || []).map(row => ({
         workerId: row.worker_id,
@@ -952,7 +952,7 @@ export function registerNexusRuntime(app, {
           : live.length
             ? "running"
             : "started_no_live_heartbeat";
-      return res.json({
+      return {
         ok: true,
         runtime: {
           workerConfigured: Boolean(runtime),
@@ -974,7 +974,19 @@ export function registerNexusRuntime(app, {
           sleepingNote: "No live heartbeat means nothing is executing. On a service that sleeps, that is a pause, not evidence that work succeeded.",
           workers
         }
-      });
+      };
+    }
+  }
+
+  app.get("/nexus/runtime", async (req, res) => {
+    const axToken = String(env.HABITAT_AX_BRIDGE_TOKEN || "");
+    if (!axToken || !same(bearer(req), axToken)) {
+      return res.status(401).json({ ok: false, error: "Ax bridge authentication required." });
+    }
+    try {
+      const described = await describeRuntime();
+      if (!described.ok) return unavailable(res);
+      return res.json({ ok: true, runtime: described.runtime });
     } catch (error) {
       console.error("NEXUS_RUNTIME_READ_FAILED", String(error?.message || error));
       return res.status(502).json({ ok: false, error: "Could not read runtime heartbeats." });
@@ -1069,6 +1081,46 @@ export function registerNexusRuntime(app, {
         heartbeatSeconds: config.heartbeatMs / 1000,
         retentionDays: config.retentionDays,
         lastTick: runtime?.lastTick?.() || null
+      };
+    },
+    /**
+     * Ax's availability view. `canExecute` is true only when a heartbeat is fresh: a mounted but
+     * unstarted worker, a sleeping service and a cron job that has not run are all reported as
+     * unable to execute, never as success.
+     */
+    async presence() {
+      let described;
+      try {
+        described = await describeRuntime();
+      } catch (error) {
+        console.error("NEXUS_PRESENCE_FAILED", String(error?.message || error));
+        described = { ok: false, reason: "read_failed" };
+      }
+      if (!described.ok) {
+        return {
+          executor: { configured: Boolean(runtime), started, state: "unavailable", reason: described.reason },
+          heartbeat: { verified: false, liveWorkers: 0, asleep: true, lastHeartbeatAgeSeconds: null },
+          queue: { ok: false, error: "unavailable" },
+          canExecute: false
+        };
+      }
+      const runtimeView = described.runtime;
+      return {
+        executor: { configured: runtimeView.workerConfigured, started: runtimeView.workerStarted, state: runtimeView.state },
+        heartbeat: {
+          verified: runtimeView.heartbeatVerified,
+          liveWorkers: runtimeView.liveWorkers,
+          asleep: runtimeView.asleep,
+          lastHeartbeatAgeSeconds: runtimeView.lastHeartbeatAgeSeconds
+        },
+        queue: runtimeView.queue,
+        staleQueue: runtimeView.staleQueue,
+        canExecute: runtimeView.heartbeatVerified,
+        // True only for the in-process timer. A cron executor can be healthy with this false.
+        willExecuteWithoutScheduler: runtimeView.workerStarted,
+        heartbeatSeconds: runtimeView.heartbeatSeconds,
+        lastTick: runtime?.lastTick?.() || null,
+        observedAt: new Date().toISOString()
       };
     }
   });

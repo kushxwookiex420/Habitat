@@ -88,10 +88,13 @@ test("registers the complete command route surface without duplicate paths", () 
   const app = makeApp();
   mountTestApp(app, memoryRepository());
   const paths = [...app.routes.keys()];
-  assert.equal(paths.length, 14);
+  assert.equal(paths.length, 17);
   assert.equal(new Set(paths).size, paths.length);
   assert.ok(paths.includes("GET /ax/command/roles"));
   assert.ok(paths.includes("GET /ax/command/tools"));
+  assert.ok(paths.includes("GET /ax/command/events"));
+  assert.ok(paths.includes("GET /ax/command/presence"));
+  assert.ok(paths.includes("GET /ax/command/openapi.json"));
   assert.ok(paths.includes("POST /ax/command/tasks/:id/cancel"));
   assert.ok(paths.includes("POST /ax/command/tasks/:id/retry"));
 });

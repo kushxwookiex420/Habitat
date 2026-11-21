@@ -345,6 +345,10 @@ export function registerDeviceCommandBridge(app, {
   // Owner-only actions (approve/deny/complete/fail/cancel/retry) are verified against the DEVICE
   // repository, never the command-task repository: only the device store holds token hashes. When
   // no device verifier is available those routes answer 503 instead of trusting the caller.
+  // Declared before the command routes because /ax/command/presence reports on the executor
+  // mounted further down. The closures read them at request time, after mounting has finished.
+  let nexusRuntime = null;
+  let nexusMount = { configured: false, reason: "command_store_unavailable" };
   let commandApi = null;
   try {
     commandApi = registerUniversalCommandRoutes(app, {
@@ -353,7 +357,20 @@ export function registerDeviceCommandBridge(app, {
       repository: taskRepository,
       deviceRepository: store,
       ownerDeviceId: env.HABITAT_OWNER_DEVICE_ID,
-      ownerDeviceIds: env.HABITAT_OWNER_DEVICE_IDS
+      ownerDeviceIds: env.HABITAT_OWNER_DEVICE_IDS,
+      // Ax asks whether NEXUS can execute. The answer comes from the mounted runtime; without one
+      // it is "not mounted" plus the mount reason, never a guess.
+      presenceProvider: async () => {
+        if (nexusRuntime && typeof nexusRuntime.presence === "function") {
+          return nexusRuntime.presence();
+        }
+        return {
+          executor: { configured: false, started: false, state: "not_mounted", reason: nexusMount.reason },
+          heartbeat: { verified: false, liveWorkers: 0, asleep: true, lastHeartbeatAgeSeconds: null },
+          queue: { ok: false, error: "executor_not_mounted" },
+          canExecute: false
+        };
+      }
     });
   } catch (error) {
     console.error("UNIVERSAL_COMMAND_MOUNT_FAILED", String(error?.message || error));
@@ -368,8 +385,6 @@ export function registerDeviceCommandBridge(app, {
   //   3. the atomic claim query exists, built from the same account/database/token as that store.
   // The worker is constructed here; it starts from initialize(), after storage is ready.
   const nexusRequested = String(env.NEXUS_RUNTIME_ENABLED || "").trim().toLowerCase() === "true";
-  let nexusRuntime = null;
-  let nexusMount = { configured: false, reason: "command_store_unavailable" };
   try {
     const commandStore = commandApi?.store?.() || null;
     const accountId = String(env.CLOUDFLARE_ACCOUNT_ID || "").trim();
