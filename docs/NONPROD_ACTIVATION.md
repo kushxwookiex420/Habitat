@@ -109,7 +109,7 @@ Store it directly in Render as `HABITAT_AX_BRIDGE_TOKEN`. It authenticates `/ax/
 6. Deploy. Record the Render service ID, deploy ID, deployed commit, and the first successful
    `/health` response.
 
-The blueprint sets `autoDeploy: false`; configuration commits do not silently deploy themselves.
+The blueprint sets `autoDeployTrigger: off`; configuration commits do not silently deploy themselves.
 
 ## Guarded live D1 verification
 
