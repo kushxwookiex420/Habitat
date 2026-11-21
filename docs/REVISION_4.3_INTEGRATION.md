@@ -1,3 +1,8 @@
+> Revision 4.4 supersedes this document's Android build commands and adds strict production
+> separation. See [REVISION_4.4_NONPROD_DEVICE.md](REVISION_4.4_NONPROD_DEVICE.md) for the current
+> nonproduction APK, deployment, and device procedure. The backend and pairing details below remain
+> valid.
+
 # Revision 4.3 — Android + Nonproduction Integration
 
 This runbook covers the Android client, the isolated nonproduction backend, and the acceptance
