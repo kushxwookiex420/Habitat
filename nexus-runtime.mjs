@@ -187,6 +187,7 @@ export function createNexusWorker({
   workerId = "nexus-" + randomUUID().slice(0, 8),
   pollMs = 5000,
   leaseMs = 5 * 60 * 1000,
+  adapterTimeoutMs = 120_000,
   maxAttempts = 3,
   shutdownTimeoutMs = 15_000,
   renewLease = true,
@@ -199,6 +200,7 @@ export function createNexusWorker({
   if (!adapters || typeof adapters !== "object") throw new Error("Nexus worker config: adapters must be an object.");
   requireInteger("pollMs", pollMs, 50, 3_600_000);
   requireInteger("leaseMs", leaseMs, 200, 86_400_000);
+  requireInteger("adapterTimeoutMs", adapterTimeoutMs, 100, 86_400_000);
   requireInteger("maxAttempts", maxAttempts, 1, 100);
   requireInteger("shutdownTimeoutMs", shutdownTimeoutMs, 0, 600_000);
 
@@ -384,12 +386,32 @@ export function createNexusWorker({
 
     startRenewal(task);
     let result;
+    let timeout = null;
+    const controller = new AbortController();
     try {
-      result = await run(task);
+      // Bound every adapter. A hung adapter currently renews its own lease forever, so the task
+      // never reaches the recovery path. The signal is advisory for adapters that support it; the
+      // race is the authoritative deadline. A late result is ignored.
+      const deadline = new Promise((_, reject) => {
+        timeout = setTimeout(() => {
+          controller.abort();
+          reject(new Error("adapter timed out after " + adapterTimeoutMs + "ms"));
+        }, adapterTimeoutMs);
+        // A shutdown can give up on a hung adapter before this deadline. Do not let the pending
+        // deadline keep a test process or a draining worker alive; the task lease remains the
+        // durable recovery mechanism if the process exits first.
+        if (typeof timeout.unref === "function") timeout.unref();
+      });
+      result = await Promise.race([
+        Promise.resolve().then(() => run(task, { signal: controller.signal, timeoutMs: adapterTimeoutMs })),
+        deadline
+      ]);
     } catch (error) {
+      clearTimeout(timeout);
       stopRenewal(task.id);
       return failTask(task, "adapter failed: " + String(error?.message || error));
     }
+    clearTimeout(timeout);
     stopRenewal(task.id);
 
     // The lease may have expired and another worker may own the task by now.
@@ -507,6 +529,7 @@ export function createNexusWorker({
     isStopped: () => stopped,
     maxAttempts,
     leaseMs,
+    adapterTimeoutMs,
     shutdownTimeoutMs
   });
 }
@@ -674,6 +697,37 @@ export function registerNexusRuntime(app, {
     } catch (error) {
       console.error("DEVICE_APPROVAL_FAILED", String(error?.message || error));
       return res.status(502).json({ ok: false, error: "Could not record the decision." });
+    }
+  });
+
+  app.post("/device/command/tasks/:id/cancel", async (req, res) => {
+    if (!store || !engine || !ready) return unavailable(res);
+    const owner = await authorizeOwner(req);
+    if (!owner.deviceId) return refuseDevice(res, owner.reason);
+    const { deviceId } = owner;
+    const taskId = String(req.params?.id || "").trim();
+    if (!taskId) return res.status(400).json({ ok: false, error: "taskId is required." });
+    try {
+      const task = await store.get(taskId);
+      if (!task) return res.status(404).json({ ok: false, error: "No such task." });
+      const outcome = await engine.cancel({
+        taskId,
+        by: "phone:" + deviceId,
+        reason: String(req.body?.reason || "").slice(0, 200) || null
+      });
+      if (outcome?.ok === false) {
+        return res.status(409).json({
+          ok: false,
+          code: outcome.code || "cancel_rejected",
+          error: outcome.error || "The cancellation was rejected.",
+          status: outcome.status || null
+        });
+      }
+      await recordAudit({ event: "device.command.cancelled", actorDeviceId: deviceId, targetDeviceId: taskId });
+      return res.json({ ok: true, taskId, status: "cancelled" });
+    } catch (error) {
+      console.error("DEVICE_CANCEL_FAILED", String(error?.message || error));
+      return res.status(502).json({ ok: false, error: "Could not cancel the task." });
     }
   });
 

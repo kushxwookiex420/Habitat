@@ -88,10 +88,11 @@ test("registers the complete command route surface without duplicate paths", () 
   const app = makeApp();
   mountTestApp(app, memoryRepository());
   const paths = [...app.routes.keys()];
-  assert.equal(paths.length, 13);
+  assert.equal(paths.length, 14);
   assert.equal(new Set(paths).size, paths.length);
   assert.ok(paths.includes("GET /ax/command/roles"));
   assert.ok(paths.includes("GET /ax/command/tools"));
+  assert.ok(paths.includes("POST /ax/command/tasks/:id/cancel"));
   assert.ok(paths.includes("POST /ax/command/tasks/:id/retry"));
 });
 
@@ -229,8 +230,27 @@ test("approval, denial, failure and retry endpoints preserve the engine lifecycl
   assert.equal(approved.body.task.approvals.at(-1).decidedBy, "owner:" + OWNER_ID);
 });
 
-test("approve, deny and retry reject bridge-only, invalid and non-owner credentials", async () => {
-  for (const action of ["approve", "deny", "retry"]) {
+test("an owner can cancel a queued task and it becomes terminal", async () => {
+  const app = makeApp();
+  mountTestApp(app, memoryRepository());
+  const submitted = await invoke(app, "POST /ax/command/tasks", {
+    headers: auth, body: { objective: "Cancel this safely" }
+  });
+  const id = submitted.body.task.id;
+  const cancelled = await invoke(app, "POST /ax/command/tasks/:id/cancel", {
+    headers: ownerAuth, params: { id }, body: { reason: "no longer needed" }
+  });
+  assert.equal(cancelled.statusCode, 200);
+  assert.equal(cancelled.body.task.status, "cancelled");
+  assert.equal(cancelled.body.task.cancelReason, "no longer needed");
+  const late = await invoke(app, "POST /ax/command/tasks/:id/complete", {
+    headers: ownerAuth, params: { id }, body: { result: { summary: "too late", evidence: ["x"] } }
+  });
+  assert.equal(late.statusCode, 409);
+});
+
+test("approve, deny, cancel and retry reject bridge-only, invalid and non-owner credentials", async () => {
+  for (const action of ["approve", "deny", "cancel", "retry"]) {
     const app = makeApp();
     const repository = memoryRepository();
     mountTestApp(app, repository);

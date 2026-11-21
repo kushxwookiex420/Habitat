@@ -12,8 +12,8 @@ import { getRole } from "./agent-roles.mjs";
  * Lifecycle: queued -> working -> needs_approval -> working -> done | failed
  * Retry returns a failed task to queued and is capped, so a broken objective cannot loop forever.
  */
-export const TASK_STATES = Object.freeze(["queued", "working", "needs_approval", "done", "failed"]);
-export const TERMINAL_STATES = Object.freeze(["done", "failed"]);
+export const TASK_STATES = Object.freeze(["queued", "working", "needs_approval", "done", "failed", "cancelled"]);
+export const TERMINAL_STATES = Object.freeze(["done", "failed", "cancelled"]);
 
 // Records written by the older worker-task routes still read correctly.
 const LEGACY_STATES = Object.freeze({
@@ -182,7 +182,19 @@ function validateObjective(objective) {
       idempotencyKey: key || null
     };
     if (adapterCheck.adapter) task.adapter = adapterCheck.adapter;
-    await repository.create(task);
+    try {
+      await repository.create(task);
+    } catch (error) {
+      // A concurrent submission with the same idempotency key can win the INSERT after both
+      // callers passed the read above. The database primary key is the final arbiter: if the
+      // now-existing task has our deterministic id, return it instead of surfacing a duplicate
+      // write as a 502. A different failure is re-thrown unchanged.
+      if (key) {
+        const raced = await load(id);
+        if (raced) return { ok: true, replayed: true, task: raced };
+      }
+      throw error;
+    }
     return { ok: true, replayed: false, task };
   }
 
@@ -256,6 +268,7 @@ function validateObjective(objective) {
   async function checkpoint({ taskId, note, by = "ax" } = {}) {
     const task = await load(taskId);
     if (!task) return failure("not_found", "No command task with that id.");
+    if (TERMINAL_STATES.includes(task.status)) return failure("invalid_transition", `A ${task.status} task cannot accept a checkpoint.`, { status: task.status });
     const checkpointOwned = ownershipRefusal(task, null);
     if (checkpointOwned) return checkpointOwned;
     const text = String(note || "").trim();
@@ -374,6 +387,24 @@ function validateObjective(objective) {
     return { ok: true, task: stored };
   }
 
+  async function cancel({ taskId, by = "owner", reason = null } = {}) {
+    const task = await load(taskId);
+    if (!task) return failure("not_found", "No command task with that id.");
+    if (TERMINAL_STATES.includes(task.status)) return failure("invalid_transition", `A ${task.status} task cannot be cancelled.`, { status: task.status });
+    // A worker-owned task can have a side effect in flight. Refuse to mark it cancelled from the
+    // owner API while the fenced worker may still finish; the worker/lease path owns that record.
+    const cancelOwned = ownershipRefusal(task, null);
+    if (cancelOwned) return cancelOwned;
+    const at = now();
+    const text = String(reason || "").trim();
+    task.cancelledAt = at;
+    task.cancelledBy = String(by || "owner").slice(0, 120);
+    task.cancelReason = text ? text.slice(0, 300) : null;
+    task.error = task.cancelReason ? "Cancelled: " + task.cancelReason : "Cancelled by " + task.cancelledBy;
+    const stored = await save(task, "cancelled", { by: task.cancelledBy, reason: task.error });
+    return { ok: true, cancelled: true, task: stored };
+  }
+
   async function retry({ taskId, by = "owner" } = {}) {
     const task = await load(taskId);
     if (!task) return failure("not_found", "No command task with that id.");
@@ -422,6 +453,7 @@ function validateObjective(objective) {
     deny: options => decideApproval({ ...options, approved: false }),
     complete,
     fail,
+    cancel,
     retry,
     get,
     list

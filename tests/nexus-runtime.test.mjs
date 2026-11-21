@@ -365,6 +365,21 @@ test("an expired lease at the attempt limit is failed, never retried forever", a
   assert.match(fail.options.error, /after 3 attempt/);
 });
 
+test("a hung adapter is bounded by adapterTimeoutMs and fails instead of renewing forever", async () => {
+  const d1 = miniD1();
+  const engine = engineOver(d1);
+  const worker = workerOn(d1, engine, {
+    workerId: "w-timeout",
+    adapterTimeoutMs: 100,
+    adapters: { slow: () => new Promise(() => {}) }
+  });
+  const started = Date.now();
+  await worker.execute(seedOwned(d1, "cmd_timeout", "w-timeout", { adapter: "slow" }));
+  assert.ok(Date.now() - started < 2000, "timeout was bounded");
+  assert.equal(d1.state.tasks.get("cmd_timeout").status, "failed");
+  assert.match(d1.state.tasks.get("cmd_timeout").error, /timed out after 100ms/);
+});
+
 // ---- 7. evidence gate ----------------------------------------------------
 
 test("missing evidence cannot produce a completed task", async () => {

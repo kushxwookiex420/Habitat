@@ -288,6 +288,21 @@ export function registerUniversalCommandRoutes(app, {
     reply(res, outcome);
   }));
 
+  app.post("/ax/command/tasks/:id/cancel", requireAx, guard(async (req, res) => {
+    const deviceId = await authorizeOwnerAction(req, res, "Task cancellation");
+    if (!deviceId) return undefined;
+    if (await rejectFenced(res, req.params.id)) return undefined;
+    const outcome = await engine.cancel({
+      taskId: req.params.id,
+      by: "owner:" + deviceId,
+      reason: req.body?.reason || null
+    });
+    if (outcome?.ok !== false) {
+      await recordAudit({ event: "command.cancelled", actorDeviceId: deviceId, targetDeviceId: req.params.id });
+    }
+    reply(res, outcome);
+  }));
+
   app.post("/ax/command/tasks/:id/retry", requireAx, guard(async (req, res) => {
     const deviceId = await authorizeOwnerAction(req, res, "Task retry");
     if (!deviceId) return undefined;
