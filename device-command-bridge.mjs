@@ -53,15 +53,6 @@ export function registerDeviceCommandBridge(app, {
   exitOnSignal = true,
   log = console
 } = {}) {
-  const hasD1 = ["CLOUDFLARE_ACCOUNT_ID", "HABITAT_D1_DATABASE_ID", "HABITAT_D1_API_TOKEN"]
-    .every(key => String(env[key] || "").trim());
-  const store = repository || (hasD1 ? createD1DeviceCommandRepository({
-    accountId: env.CLOUDFLARE_ACCOUNT_ID,
-    databaseId: env.HABITAT_D1_DATABASE_ID,
-    apiToken: env.HABITAT_D1_API_TOKEN,
-    fetchImpl
-  }) : null);
-
   const axToken = String(env.HABITAT_AX_BRIDGE_TOKEN || "");
   const breakGlassToken = String(env.HABITAT_BREAK_GLASS_TOKEN || "").trim();
   const configuredRuntimeEnvironment = String(env.HABITAT_RUNTIME_ENV || "").trim().toLowerCase();
@@ -73,6 +64,30 @@ export function registerDeviceCommandBridge(app, {
   const productionD1Id = String(env.HABITAT_PRODUCTION_D1_DATABASE_ID || "").trim();
   const configuredD1Id = String(env.HABITAT_D1_DATABASE_ID || repository?.databaseId || "").trim();
   const usesProductionD1 = Boolean(productionD1Id && configuredD1Id === productionD1Id);
+
+  // A nonproduction process whose D1 id equals the declared production id would still pair
+  // phones, record heartbeats, and execute well-formed commands against production data. The
+  // previous build only disabled the Nexus worker in that misconfiguration, which left the
+  // device queue writable. Refuse durable device storage entirely instead, so every device route
+  // answers 503 and no write can occur. An injected repository is a test/embedded path.
+  const environmentConflict = Boolean(!repository && !productionRuntimeBlocked && usesProductionD1);
+  if (environmentConflict) {
+    log.error?.(
+      "DEVICE_COMMAND_BRIDGE_ENVIRONMENT_CONFLICT: HABITAT_D1_DATABASE_ID equals " +
+      "HABITAT_PRODUCTION_D1_DATABASE_ID; durable device storage is disabled for this " +
+      "nonproduction process"
+    );
+  }
+
+  const hasD1 = ["CLOUDFLARE_ACCOUNT_ID", "HABITAT_D1_DATABASE_ID", "HABITAT_D1_API_TOKEN"]
+    .every(key => String(env[key] || "").trim());
+  const store = repository || (hasD1 && !environmentConflict ? createD1DeviceCommandRepository({
+    accountId: env.CLOUDFLARE_ACCOUNT_ID,
+    databaseId: env.HABITAT_D1_DATABASE_ID,
+    apiToken: env.HABITAT_D1_API_TOKEN,
+    fetchImpl
+  }) : null);
+
   const nexusEnabled = String(env.NEXUS_RUNTIME_ENABLED || "").trim().toLowerCase() === "true" &&
     !productionRuntimeBlocked && !usesProductionD1;
   const owners = new Set();
@@ -846,6 +861,11 @@ export function registerDeviceCommandBridge(app, {
         axTokenConfigured: Boolean(axToken),
         breakGlassConfigured: Boolean(breakGlassToken),
         perDeviceTokens: true,
+        environment: {
+          runtime: runtimeEnvironment,
+          productionD1Conflict: environmentConflict,
+          nexusEnabled
+        },
         nexus: nexusRuntime ? { configured: true, ...nexusRuntime.status() } : nexusMount
       };
     },

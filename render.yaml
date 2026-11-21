@@ -1,13 +1,17 @@
-# Non-production Habitat service running the Nexus Revision 4 security remediation.
+# Non-production Habitat service for Revision 4.3 integration testing.
 # This repository is kushxwookiex420/Habitat (flat root). It is NOT home-launcher.
-# No secrets are stored here; every secret is sync:false.
+# No secrets are stored here; every secret is sync:false and set in the Render dashboard.
+#
+# Production is untouched by this file. The service below must never be repointed at the
+# production database: HABITAT_PRODUCTION_D1_DATABASE_ID is declared here so the backend can
+# detect that misconfiguration and refuse durable device storage (see docs/REVISION_4.3_INTEGRATION.md).
 services:
   - type: web
     name: ax-nexus-habitat-nonprod
     runtime: node
     plan: starter
     region: oregon
-    branch: ax-nexus/revision-4-security-remediation
+    branch: ax-nexus/revision-4.3-integration
     rootDir: .
     buildCommand: npm install --omit=dev --ignore-scripts
     startCommand: npm start
@@ -16,13 +20,19 @@ services:
     envVars:
       - key: CLOUDFLARE_ACCOUNT_ID
         sync: false
+      # Nonproduction database id only. Must differ from HABITAT_PRODUCTION_D1_DATABASE_ID.
       - key: HABITAT_D1_DATABASE_ID
         sync: false
       - key: HABITAT_D1_API_TOKEN
         sync: false
+      # Declared so a nonproduction process that points at production fails closed.
+      - key: HABITAT_PRODUCTION_D1_DATABASE_ID
+        sync: false
       - key: HABITAT_AX_BRIDGE_TOKEN
         sync: false
-      - key: HABITAT_OWNER_DEVICE_ID
+      # Exactly one owner device id for pairing-code minting; a comma-separated list is accepted
+      # but only a single owner may mint codes.
+      - key: HABITAT_OWNER_DEVICE_IDS
         sync: false
       - key: HABITAT_RUNTIME_ENV
         value: "nonproduction"
@@ -36,3 +46,9 @@ services:
         sync: false
       - key: NEXUS_RUNTIME_ENABLED
         value: "true"
+      # First-run bootstrap only: SHA-256 (hex) of a one-time owner pairing code, plus its expiry.
+      # Remove both after the owner phone is paired.
+      - key: HABITAT_DEVICE_PAIRING_BOOTSTRAP_CODE_HASH
+        sync: false
+      - key: HABITAT_DEVICE_PAIRING_BOOTSTRAP_EXPIRES_AT
+        sync: false

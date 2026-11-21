@@ -561,7 +561,10 @@ app.get("/health", (req, res) => {
       durable: deviceBridge.durable,
       axTokenConfigured: deviceBridge.axTokenConfigured,
       breakGlassConfigured: deviceBridge.breakGlassConfigured,
-      perDeviceTokens: deviceBridge.perDeviceTokens
+      perDeviceTokens: deviceBridge.perDeviceTokens,
+      // Runtime environment separation. productionD1Conflict=true means durable device storage
+      // was refused because this nonproduction process pointed at the production database.
+      environment: deviceBridge.environment || null
     },
     // Read-only runtime readiness. This is intentionally not part of the HTTP success condition:
     // Render health must stay up even when the optional command worker is disabled or degraded.
