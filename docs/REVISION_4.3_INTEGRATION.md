@@ -197,8 +197,19 @@ Four categories are reported separately:
 npm run check                                      # exit 0
 npm test                                           # 455 tests, 455 pass, 0 fail
 npm run test:acceptance                            # 4 suites covering checks 2-12 over HTTP
-./toolchain/run-android-acceptance.sh              # Robolectric: 5 tests, 0 skipped, 0 failed
-gradle :app:assembleDebug :app:testDebugUnitTest   # BUILD SUCCESSFUL
+gradle :app:assembleDebug                          # BUILD SUCCESSFUL
+gradle :app:testDebugUnitTest                      # 6 tests: smoke + 5 Android client integrations
+```
+
+To run the Android client integration suite, start the nonproduction listener first and export the
+credentials it prints:
+
+```bash
+node scripts/nonprod-acceptance-server.mjs         # prints HABITAT_ACCEPTANCE_SERVER {...}
+export HABITAT_ACCEPTANCE_BASE_URL=<url>
+export HABITAT_ACCEPTANCE_AX_TOKEN=<axToken>
+export HABITAT_ACCEPTANCE_TOKEN=<acceptanceToken>
+gradle :app:testDebugUnitTest --tests 'com.habitat.AndroidDeviceBridgeIntegrationTest'
 ```
 
 The Android integration suite is skipped (not reported as passing) unless
