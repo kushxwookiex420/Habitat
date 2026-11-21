@@ -294,6 +294,11 @@ without any phone involved, and `result.evidence` contains runtime-obtained text
 Priorities: **P0** = required for any autonomous operation; **P1** = required for safe real work;
 **P2** = operability; **P3** = capability. Every task is independently testable.
 
+> Mission 02 update: R-1 (`scripts/nexus-tick.mjs`), R-2 (heartbeat throttle + retention) and the
+> detection half of R-8 (queue health, stale alarm, honest states) are implemented and tested. See
+> `docs/NEXUS_AUTONOMOUS_EXECUTION.md`. The cron service itself is still a specification
+> (`docs/NEXUS_CRON_DEPLOYMENT.md`), so nothing runs on a schedule yet.
+
 ### P0 — make it run and stay running
 
 | ID | Task | Test that proves it | Files |

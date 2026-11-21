@@ -203,9 +203,10 @@ printf '%s' "$NONPROD_D1_DATABASE_ID" | sha256sum | cut -c1-12
 2. **No durable command audit on `main`.** Revision 4.5 writes audit rows through the device store's
    `audit()`; `main`'s device store has no such method, so this PR passes no audit hook. Actions are
    recorded in each task's own `history` only.
-3. **No wake-up guarantee.** The worker is an in-process timer. On Render Free the service sleeps
-   after 15 minutes without inbound traffic, so the worker runs only while the service is awake. A
-   queued task does not execute during a sleep and nothing wakes the process for it.
+3. **No scheduler yet.** The in-process timer still runs only while the web service is awake. The
+   one-shot entrypoint that removes that dependency now exists (`scripts/nexus-tick.mjs`), but the
+   Render Cron Job that would call it has **not** been created — see
+   `docs/NEXUS_CRON_DEPLOYMENT.md`.
 4. **No migration runner.** Schema creation remains lazy. This is adequate for the two tables involved
    (`CREATE TABLE IF NOT EXISTS`) and is not a substitute for migrations.
 5. **No live verification.** Nothing in this branch has executed against Cloudflare D1 or a physical
@@ -261,7 +262,7 @@ the deployment.** No test contacted Cloudflare D1, Render, or a phone.
 | Owner approval deadlocks on a fenced task | Closed. Parking for approval clears the fence through the same fenced transition, so the owner can then decide. |
 | Duplicate task system | No. `habitat_tasks` and `habitat_command_tasks` stay separate; the worker touches only the latter plus the new `habitat_nexus_workers`. |
 | Worker silently not running | Reported, not hidden: `/health` `nexus`, `/nexus/runtime` (`workerConfigured`, `workerStarted`, `liveWorkers`, `heartbeatVerified`), and a `NEXUS_RUNTIME_MOUNT` log line. |
-| D1 write cost from polling | Real and larger than it looks: `tick()` writes **two** heartbeat rows when idle (`polling`, then `idle`) and **three** when it executes (`polling`, `executing`, `idle`), and each write also touches the primary-key index. At the default `pollMs` of 5000 an idle worker writes ≈34,600 rows/day — about a third of D1 Free's 100,000 rows-written/day before any real work. Throttling the heartbeat to a state-change-plus-interval policy is required before this runs 24/7 (roadmap R-2). |
+| D1 write cost from polling | Fixed by the heartbeat policy: routine beats are written at most once per `NEXUS_HEARTBEAT_SECONDS` (>= 30 s) and lifecycle transitions (`starting`, `executing`, `stopped`, `error`) are never throttled, so an idle worker at a 5 s poll writes ≈2,880 rows/day instead of ≈34,600. See `docs/NEXUS_AUTONOMOUS_EXECUTION.md` §3. |
 | Render Free sleep | The worker stops when the service sleeps. Queued work waits. Not solved here. |
 | Data-loss / destructive action | Not reachable. Only read-only adapters are registered, and `repo.test` (the only executor) is deliberately excluded from the mount. |
 | Silent behavioural change on deploy | Worker is off unless `NEXUS_RUNTIME_ENABLED=true`. The command API's owner actions change from "body-supplied actor" to "verified owner device", which is the point of the PR and the main review item. |
