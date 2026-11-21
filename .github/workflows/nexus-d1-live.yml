@@ -1,8 +1,6 @@
 name: Nexus D1 live verification
 
-# One-shot push trigger is restricted to a unique commit message on the
-# non-production branch. Manual dispatch remains available with confirmation.
-# The unique trigger commit runs the current branch head, including the fixture-order fix.
+# Manual, disposable-database-only check. Never runs on push.
 on:
   workflow_dispatch:
     inputs:
@@ -10,16 +8,13 @@ on:
         description: Type isolated to confirm this is a disposable database
         required: true
         type: string
-  push:
-    branches:
-      - ax-nexus/revision-3-nonprod
 
 permissions:
   contents: read
 
 jobs:
   verify:
-    if: ${{ (github.event_name == 'push' && github.event.head_commit.message == 'RUN_ISOLATED_NEXUS_D1_ONCE') || (github.event_name == 'workflow_dispatch' && inputs.confirm == 'isolated') }}
+    if: ${{ inputs.confirm == 'isolated' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
