@@ -1,8 +1,9 @@
 /**
- * Candidate registration for the four read-only Nexus adapters.
+ * Registration for the read-only Nexus adapters.
  *
  * This module only builds the adapter map. It does not mount Nexus, start a worker, register a
- * route, read environment variables or perform any I/O. Nothing calls it in production today.
+ * route, read environment variables or perform any I/O. `device-command-bridge.mjs` calls it when
+ * Nexus is enabled.
  *
  * Compatibility: `registerNexusRuntime({ adapters })` expects a plain object mapping adapter name
  * to `async (task) => ({ ok, summary, evidence?, error?, blockers? })`. createReadOnlyAdapters()
@@ -27,7 +28,7 @@ export const READ_ONLY_ADAPTER_SPECS = Object.freeze({
   "repo.inspect": Object.freeze({
     permissions: ["read:repo-files"],
     input: { path: "string — repository-relative, must resolve under an allowed prefix" },
-    timeoutMs: null,
+    timeoutMs: "bounded by defaultTimeoutMs (default 120000, overridable at mount)",
     evidence: "repo.file:<path>#bytes=<start>-<end>@sha256:<hex> or repo.dir:<path>/@entries=<n>@sha256:<hex>"
   }),
   "repo.test": Object.freeze({
@@ -40,14 +41,14 @@ export const READ_ONLY_ADAPTER_SPECS = Object.freeze({
   }),
   "task.inspect": Object.freeze({
     permissions: ["read:tasks"],
-    input: { taskId: "string" },
-    timeoutMs: null,
+    input: { taskId: "string; must equal the executing task id when supplied" },
+    timeoutMs: "bounded by defaultTimeoutMs (default 120000, overridable at mount)",
     evidence: "task:<id>:status=<s>:attempts=<n>:owner=<id|none>:fence=<present|none>:lease=<iso|none>:history=<n>@observed=<iso>"
   }),
   "runtime.health": Object.freeze({
     permissions: ["read:health"],
     input: {},
-    timeoutMs: "determined by the D1 query implementation",
+    timeoutMs: "bounded by defaultTimeoutMs (default 120000, overridable at mount)",
     evidence: "runtime:workers=<n>:live=<n>:stale=<n>:stopped=<n>:working=<n>@observed=<iso>"
   })
 });

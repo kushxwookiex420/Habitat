@@ -12,6 +12,8 @@ import { registerDeviceCommandBridge } from "../device-command-bridge.mjs";
 
 const OPERATOR = "ax_bridge_" + "7".repeat(40);
 const CODE = "pairing-code-" + "a".repeat(28);
+const OWNER_ID = "owner-phone";
+const OWNER_TOKEN = "owner-device-token";
 
 function digest(value) {
   return createHash("sha256").update(String(value), "utf8").digest("hex");
@@ -59,6 +61,7 @@ async function invoke(app, key, req = {}) {
 function fakeStore(seed = []) {
   const pairings = new Map();
   const devices = new Map();
+  const revoked = new Set();
   for (const entry of seed) {
     pairings.set(digest(entry.code), {
       deviceId: entry.deviceId || "*",
@@ -69,6 +72,7 @@ function fakeStore(seed = []) {
   return {
     pairings,
     devices,
+    revoked,
     async initialize() { return { ok: true, durable: true }; },
     async createPairing({ codeHash, deviceId, expiresAt }) {
       pairings.set(codeHash, { deviceId, expiresAt, consumedAt: null });
@@ -89,11 +93,23 @@ function fakeStore(seed = []) {
       return true;
     },
     async registerDevice({ deviceId, tokenHash }) {
+      // Registration never clears revocation, matching the D1 repository.
       devices.set(deviceId, tokenHash);
       return true;
     },
+    async isDeviceRevoked(deviceId) {
+      return revoked.has(deviceId);
+    },
+    async revokeDevice(deviceId) {
+      revoked.add(deviceId);
+      return true;
+    },
+    async unrevokeDevice(deviceId) {
+      revoked.delete(deviceId);
+      return true;
+    },
     async verifyDeviceToken(token, deviceId) {
-      return devices.get(deviceId) === digest(token);
+      return !revoked.has(deviceId) && devices.get(deviceId) === digest(token);
     },
     async touchDevice() { return true; },
     async updateDeviceInfo(deviceId, seenAt, details) {
@@ -107,7 +123,11 @@ async function setup(seed = []) {
   const store = fakeStore(seed);
   const app = makeApp();
   const bridge = registerDeviceCommandBridge(app, {
-    env: { HABITAT_AX_BRIDGE_TOKEN: OPERATOR },
+    env: {
+      HABITAT_AX_BRIDGE_TOKEN: OPERATOR,
+      HABITAT_OWNER_DEVICE_ID: OWNER_ID,
+      NEXUS_RUNTIME_ENABLED: "false"
+    },
     fetchImpl: async () => { throw new Error("network disabled in this test"); },
     repository: store
   });
@@ -236,6 +256,68 @@ test("the Control Center can mint a fresh code, and only with its credential", a
 
   const exchanged = await invoke(app, "POST /device/pair", { body: { deviceId: "launcher-a", code } });
   assert.equal(exchanged.statusCode, 200);
+});
+
+test("a revoked device cannot recover with a consumed code or a fresh code", async () => {
+  const { app, store } = await setup([{ code: CODE, expiresAt: future() }]);
+  const first = await invoke(app, "POST /device/pair", { body: { deviceId: "launcher-a", code: CODE } });
+  assert.equal(first.statusCode, 200);
+  await store.revokeDevice("launcher-a");
+
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const replay = await invoke(app, "POST /device/pair", { body: { deviceId: "launcher-a", code: CODE } });
+    assert.equal(replay.statusCode, 403, "consumed-code recovery attempt " + attempt);
+    assert.equal(replay.body.code, "device_revoked");
+    assert.equal(store.revoked.has("launcher-a"), true, "revocation survives attempt " + attempt);
+  }
+
+  const fresh = await store.createPairing({
+    codeHash: digest("fresh-code-" + "b".repeat(28)),
+    deviceId: "launcher-a",
+    expiresAt: future()
+  });
+  assert.equal(fresh, true);
+  const freshPair = await invoke(app, "POST /device/pair", { body: { deviceId: "launcher-a", code: "fresh-code-" + "b".repeat(28) } });
+  assert.equal(freshPair.statusCode, 403);
+  assert.equal(freshPair.body.code, "device_revoked");
+  assert.equal(store.revoked.has("launcher-a"), true);
+
+  const heartbeat = await invoke(app, "POST /device/heartbeat", {
+    ...tokenHeaders(first.body.token),
+    body: { deviceId: "launcher-a", details: { model: "S26 Ultra", androidSdk: 34 } }
+  });
+  assert.equal(heartbeat.statusCode, 401, "the revoked device token must stop authenticating");
+});
+
+test("only a configured owner device can explicitly restore a revoked device", async () => {
+  const { app, store } = await setup([{ code: CODE, expiresAt: future() }]);
+  const first = await invoke(app, "POST /device/pair", { body: { deviceId: "launcher-a", code: CODE } });
+  assert.equal(first.statusCode, 200);
+  await store.revokeDevice("launcher-a");
+
+  const anonymous = await invoke(app, "POST /device/owner/devices/:deviceId/unrevoke", { params: { deviceId: "launcher-a" } });
+  assert.equal(anonymous.statusCode, 401);
+  assert.equal(store.revoked.has("launcher-a"), true);
+
+  store.devices.set(OWNER_ID, digest(OWNER_TOKEN));
+  const nonOwner = await invoke(app, "POST /device/owner/devices/:deviceId/unrevoke", {
+    headers: { "x-owner-device-id": "not-owner", authorization: "Bearer " + OWNER_TOKEN },
+    params: { deviceId: "launcher-a" }
+  });
+  assert.equal(nonOwner.statusCode, 401);
+  assert.equal(store.revoked.has("launcher-a"), true);
+
+  const restored = await invoke(app, "POST /device/owner/devices/:deviceId/unrevoke", {
+    headers: { "x-owner-device-id": OWNER_ID, authorization: "Bearer " + OWNER_TOKEN },
+    params: { deviceId: "launcher-a" }
+  });
+  assert.equal(restored.statusCode, 200);
+  assert.equal(store.revoked.has("launcher-a"), false);
+
+  const freshCode = "fresh-code-" + "c".repeat(28);
+  await store.createPairing({ codeHash: digest(freshCode), deviceId: "launcher-a", expiresAt: future() });
+  const freshPair = await invoke(app, "POST /device/pair", { body: { deviceId: "launcher-a", code: freshCode } });
+  assert.equal(freshPair.statusCode, 200);
 });
 
 test("the pairing response never contains the operator credential", async () => {

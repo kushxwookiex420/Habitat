@@ -236,6 +236,7 @@ test("repo.test fails closed when the sandbox backend is unavailable", async () 
   let called = false;
   const adapters = createReadOnlyAdapters({
     rootDir: dir,
+    enableTestAdapter: true,
     allowedTests: { unit: { command: "node", args: ["-e", "process.exit(0)"] } },
     sandboxRunner: async () => {
       called = true;

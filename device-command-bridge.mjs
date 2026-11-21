@@ -62,6 +62,11 @@ export function registerDeviceCommandBridge(app, {
   }) : null);
 
   const axToken = String(env.HABITAT_AX_BRIDGE_TOKEN || "");
+  const nexusEnabled = String(env.NEXUS_RUNTIME_ENABLED || "").trim().toLowerCase() === "true";
+  const owners = new Set();
+  for (const value of [env.HABITAT_OWNER_DEVICE_ID, env.HABITAT_OWNER_DEVICE_IDS]) {
+    String(value || "").split(",").map(part => part.trim()).filter(Boolean).forEach(id => owners.add(id));
+  }
 
   function requireAx(req, res, next) {
     if (!axToken || !safeEqual(bearer(req), axToken)) {
@@ -141,6 +146,15 @@ export function registerDeviceCommandBridge(app, {
       const codeHash = digest(code);
 
       async function issueToken(recovered) {
+        // A revoked device must not be revived by a consumed-code recovery or a fresh code. An
+        // owner must explicitly un-revoke it first.
+        if (typeof store.isDeviceRevoked === "function" && await store.isDeviceRevoked(deviceId)) {
+          return res.status(403).json({
+            ok: false,
+            code: "device_revoked",
+            error: "This device is revoked. An owner must explicitly restore it before pairing again."
+          });
+        }
         const deviceToken = randomBytes(32).toString("base64url");
         await store.registerDevice({ deviceId, tokenHash: digest(deviceToken), createdAt: now });
         // Keep the canonical nested object and expose top-level aliases for older Bridge APK parsers.
@@ -295,6 +309,28 @@ export function registerDeviceCommandBridge(app, {
     }
   });
 
+  // Revocation is never undone by pairing. This is the only owner-authorized recovery path.
+  app.post("/device/owner/devices/:deviceId/unrevoke", requireStore, async (req, res) => {
+    const targetDeviceId = String(req.params.deviceId || "").trim();
+    const ownerDeviceId = String(req.headers?.["x-owner-device-id"] || "").trim();
+    const ownerToken = bearer(req);
+    if (!validDeviceId(targetDeviceId)) return res.status(400).json({ ok: false, error: "A valid deviceId is required." });
+    if (!owners.size) return res.status(503).json({ ok: false, error: "Owner authorization is not configured." });
+    try {
+      if (!validDeviceId(ownerDeviceId) || !ownerToken || !(await store.verifyDeviceToken(ownerToken, ownerDeviceId)) || !owners.has(ownerDeviceId)) {
+        return res.status(401).json({ ok: false, error: "A valid configured owner device is required." });
+      }
+      if (typeof store.unrevokeDevice !== "function") {
+        return res.status(501).json({ ok: false, error: "This device store cannot un-revoke devices." });
+      }
+      await store.unrevokeDevice(targetDeviceId);
+      return res.json({ ok: true, deviceId: targetDeviceId, revoked: false });
+    } catch (error) {
+      console.error("DEVICE_UNREVOKE_FAILED", String(error?.message || error));
+      return res.status(503).json({ ok: false, error: "Unable to restore the device." });
+    }
+  });
+
   // Home Bridge command center (Ax/Buff/phone/projects). Additive: it only registers
   // /bridge/console routes and never changes the device command bridge above.
   let consoleApi = null;
@@ -362,7 +398,7 @@ export function registerDeviceCommandBridge(app, {
     const apiToken = String(env.HABITAT_D1_API_TOKEN || "").trim();
     const hasD1 = Boolean(accountId && databaseId && apiToken);
     const runtimeQuery = query || (hasD1 ? createD1Query({ accountId, databaseId, apiToken, fetchImpl }) : null);
-    if (taskStore && runtimeQuery) {
+    if (nexusEnabled && taskStore && runtimeQuery) {
       const adapterMap = adapters || buildReadOnlyNexusAdapters({
         rootDir: process.cwd(),
         allowedPrefixes: ["src", "tests", "docs", "app/src", "README.md", "package.json"],
@@ -384,7 +420,10 @@ export function registerDeviceCommandBridge(app, {
       });
       nexusMount = { configured: true, reason: null };
     } else {
-      log.warn?.("NEXUS_RUNTIME: disabled — " + (taskStore ? "D1 query is not configured" : "no command task store is configured"));
+      const reason = !nexusEnabled ? "NEXUS_RUNTIME_ENABLED is not true" :
+        (taskStore ? "D1 query is not configured" : "no command task store is configured");
+      nexusMount = { configured: false, reason: !nexusEnabled ? "disabled_by_config" : nexusMount.reason };
+      log.warn?.("NEXUS_RUNTIME: disabled — " + reason);
     }
   } catch (error) {
     nexusMount = { configured: false, reason: "mount_failed" };
@@ -395,8 +434,18 @@ export function registerDeviceCommandBridge(app, {
   let nexusInit = null;
 
   return Object.freeze({
-    async initialize() {
+    async initialize({ startWorker = true } = {}) {
       if (initialized) {
+        // A failed or deferred Nexus initialization must be retryable without restarting the
+        // whole bridge. startWorker=false lets the HTTP listener come up first.
+        if (nexusRuntime && nexusInit && nexusInit.started !== true) {
+          try {
+            nexusInit = await nexusRuntime.initialize({ startWorker });
+          } catch (error) {
+            nexusInit = { ok: false, durable: false, started: false, reason: "initialize_failed" };
+            console.error("NEXUS_RUNTIME_INIT_FAILED", String(error?.message || error));
+          }
+        }
         return { ok: true, durable: Boolean(store?.durable), alreadyInitialized: true, nexus: nexusInit };
       }
       if (!store) {
@@ -420,7 +469,7 @@ export function registerDeviceCommandBridge(app, {
         // Storage is ready; only now may the worker claim. A failure here leaves the device bridge
         // usable but the Nexus worker unstarted, and is reported instead of being swallowed.
         try {
-          nexusInit = await nexusRuntime.initialize();
+          nexusInit = await nexusRuntime.initialize({ startWorker });
           console.log("NEXUS_RUNTIME_MOUNT", JSON.stringify({
             started: Boolean(nexusInit?.started),
             worker: Boolean(nexusInit?.worker),
@@ -476,6 +525,18 @@ export function registerDeviceCommandBridge(app, {
     },
     nexus() {
       return nexusRuntime;
+    },
+    async startNexusWorker() {
+      if (!nexusRuntime) return { ok: false, started: false, reason: nexusMount.reason || "not_mounted" };
+      if (!ready) return { ok: false, started: false, reason: "not_initialized" };
+      try {
+        const result = await nexusRuntime.startWorker();
+        nexusInit = { ...(nexusInit || {}), ...result };
+        return { ok: true, ...result };
+      } catch (error) {
+        console.error("NEXUS_RUNTIME_START_FAILED", String(error?.message || error));
+        return { ok: false, started: false, reason: "start_failed" };
+      }
     },
     async shutdown(reason = "shutdown") {
       if (!nexusRuntime) return { ok: false, reason: "not_mounted" };

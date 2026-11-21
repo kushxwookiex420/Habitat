@@ -1986,7 +1986,7 @@ if (secretVault) {
   console.warn("TIKTOK_TOKEN_VAULT: unavailable — OAuth cannot be marked connected until D1 and HABITAT_TOKEN_ENCRYPTION_KEY are configured");
 }
 const contentStorageInit = await contentEngine.initialize();
-const deviceCommandBridgeInit = await deviceCommandBridge.initialize();
+const deviceCommandBridgeInit = await deviceCommandBridge.initialize({ startWorker: false });
 console.log("DEVICE_COMMAND_BRIDGE_STATUS", JSON.stringify({ ...deviceCommandBridge.status(), initialized: deviceCommandBridgeInit.ok }));
 contentStorageReady = contentStorageInit?.durable === true;
 
@@ -1997,6 +1997,14 @@ app.listen(
     console.log(
       `Habitat Ax Core listening on port ${port}`
     );
+
+    // Start the Nexus worker only after the HTTP listener is accepting connections. This keeps the
+    // Render health check independent of the first task tick.
+    deviceCommandBridge.startNexusWorker().then(result => {
+      console.log("NEXUS_WORKER_START", JSON.stringify(result));
+    }).catch(error => {
+      console.error("NEXUS_WORKER_START_FAILED", String(error?.message || error));
+    });
 
     // Safe startup verification: prove whether the Render runtime can
     // actually authenticate to OpenRouter without ever logging the secret.

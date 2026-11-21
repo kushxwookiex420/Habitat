@@ -51,8 +51,7 @@ export function registerUniversalCommandRoutes(app, {
   deviceRepository = null,
   verifyDevice = null,
   ownerDeviceId = null,
-  ownerDeviceIds = null,
-  requireOwnerForClose = true
+  ownerDeviceIds = null
 } = {}) {
   const axToken = String(env.HABITAT_AX_BRIDGE_TOKEN || "").trim();
 
@@ -111,20 +110,20 @@ export function registerUniversalCommandRoutes(app, {
   }
 
   /**
-   * Owner proof for manual complete/fail. The bridge token alone is never enough: the caller must
-   * present a paired owner device id and its device token, verified by the device repository.
+   * Owner proof for every owner-only action. The bridge token alone is never enough: the caller
+   * must present a paired owner device id and its device token, verified by the device repository.
+   * Returns the verified device id so audit identity never comes from the request body.
    */
-  async function authorizeClose(req, res) {
-    if (!requireOwnerForClose) return true;
+  async function authorizeOwnerAction(req, res, label = "This action") {
     if (typeof verifyClose !== "function") {
-      res.status(503).json({ ok: false, error: "Manual close-out is unavailable: device verification is not configured." });
-      return false;
+      res.status(503).json({ ok: false, error: label + " is unavailable: device verification is not configured." });
+      return null;
     }
     const deviceId = String(req.headers?.["x-owner-device-id"] || "").trim();
     const token = String(req.headers?.["x-owner-device-token"] || "").trim();
     if (!deviceId || !token) {
-      res.status(401).json({ ok: false, code: "owner_required", error: "Manual close-out requires an owner device id and device token." });
-      return false;
+      res.status(401).json({ ok: false, code: "owner_required", error: label + " requires an owner device id and device token." });
+      return null;
     }
     let valid = false;
     try {
@@ -132,17 +131,17 @@ export function registerUniversalCommandRoutes(app, {
     } catch (error) {
       console.error("COMMAND_OWNER_VERIFY_FAILED", String(error?.message || error));
       res.status(503).json({ ok: false, error: "Device verification is unavailable; no state was changed." });
-      return false;
+      return null;
     }
     if (!valid) {
       res.status(401).json({ ok: false, code: "owner_invalid", error: "The owner device credential is not valid." });
-      return false;
+      return null;
     }
     if (!owners.has(deviceId)) {
-      res.status(403).json({ ok: false, code: "not_owner", error: "This device is not the configured owner and cannot close tasks manually." });
-      return false;
+      res.status(403).json({ ok: false, code: "not_owner", error: "This device is not the configured owner and cannot perform " + label.toLowerCase() + "." });
+      return null;
     }
-    return true;
+    return deviceId;
   }
 
   /** A fenced task may only be closed by the worker holding that claim. */
@@ -188,7 +187,7 @@ export function registerUniversalCommandRoutes(app, {
   app.post("/ax/command/tasks", requireAx, guard(async (req, res) => {
     const outcome = await engine.submit({
       objective: req.body?.objective,
-      requestedBy: req.body?.requestedBy || "owner",
+      requestedBy: "ax",
       role: req.body?.role || "ax",
       idempotencyKey: req.body?.idempotencyKey || null,
       adapter: req.body?.adapter ?? null
@@ -210,12 +209,12 @@ export function registerUniversalCommandRoutes(app, {
 
   app.post("/ax/command/tasks/:id/plan", requireAx, guard(async (req, res) => {
     if (await rejectFenced(res, req.params.id)) return undefined;
-    reply(res, await engine.plan({ taskId: req.params.id, steps: req.body?.steps, by: req.body?.by || "ax" }));
+    reply(res, await engine.plan({ taskId: req.params.id, steps: req.body?.steps, by: "ax" }));
   }));
 
   app.post("/ax/command/tasks/:id/checkpoint", requireAx, guard(async (req, res) => {
     if (await rejectFenced(res, req.params.id)) return undefined;
-    reply(res, await engine.checkpoint({ taskId: req.params.id, note: req.body?.note, by: req.body?.by || "ax" }));
+    reply(res, await engine.checkpoint({ taskId: req.params.id, note: req.body?.note, by: "ax" }));
   }));
 
   app.post("/ax/command/tasks/:id/approval", requireAx, guard(async (req, res) => {
@@ -224,36 +223,51 @@ export function registerUniversalCommandRoutes(app, {
       taskId: req.params.id,
       reason: req.body?.reason,
       action: req.body?.action || null,
-      by: req.body?.by || "ax"
+      by: "ax"
     }));
   }));
 
   app.post("/ax/command/tasks/:id/approve", requireAx, guard(async (req, res) => {
-    reply(res, await engine.approve({ taskId: req.params.id, by: req.body?.by || "owner" }));
+    const deviceId = await authorizeOwnerAction(req, res, "Owner approval");
+    if (!deviceId) return undefined;
+    if (await rejectFenced(res, req.params.id)) return undefined;
+    reply(res, await engine.approve({ taskId: req.params.id, by: "owner:" + deviceId }));
   }));
 
   app.post("/ax/command/tasks/:id/deny", requireAx, guard(async (req, res) => {
-    reply(res, await engine.deny({ taskId: req.params.id, by: req.body?.by || "owner", reason: req.body?.reason || null }));
+    const deviceId = await authorizeOwnerAction(req, res, "Owner denial");
+    if (!deviceId) return undefined;
+    if (await rejectFenced(res, req.params.id)) return undefined;
+    reply(res, await engine.deny({
+      taskId: req.params.id,
+      by: "owner:" + deviceId,
+      reason: req.body?.reason || null
+    }));
   }));
 
   app.post("/ax/command/tasks/:id/complete", requireAx, guard(async (req, res) => {
-    if (!(await authorizeClose(req, res))) return undefined;
+    const deviceId = await authorizeOwnerAction(req, res, "Manual close-out");
+    if (!deviceId) return undefined;
     if (await rejectFenced(res, req.params.id)) return undefined;
     reply(res, await engine.complete({
       taskId: req.params.id,
       result: req.body?.result,
-      verifiedBy: req.body?.verifiedBy || "ax"
+      verifiedBy: "owner:" + deviceId
     }));
   }));
 
   app.post("/ax/command/tasks/:id/fail", requireAx, guard(async (req, res) => {
-    if (!(await authorizeClose(req, res))) return undefined;
+    const deviceId = await authorizeOwnerAction(req, res, "Manual failure");
+    if (!deviceId) return undefined;
     if (await rejectFenced(res, req.params.id)) return undefined;
-    reply(res, await engine.fail({ taskId: req.params.id, error: req.body?.error, by: req.body?.by || "system" }));
+    reply(res, await engine.fail({ taskId: req.params.id, error: req.body?.error, by: "owner:" + deviceId }));
   }));
 
   app.post("/ax/command/tasks/:id/retry", requireAx, guard(async (req, res) => {
-    reply(res, await engine.retry({ taskId: req.params.id, by: req.body?.by || "owner" }));
+    const deviceId = await authorizeOwnerAction(req, res, "Task retry");
+    if (!deviceId) return undefined;
+    if (await rejectFenced(res, req.params.id)) return undefined;
+    reply(res, await engine.retry({ taskId: req.params.id, by: "owner:" + deviceId }));
   }));
 
   return { engine, registry: registryInstance, store: () => store };

@@ -101,6 +101,26 @@ const task = {
   updatedAt: "2026-11-21T12:00:00.000Z"
 };
 
+test("every D1 request carries a bounded abort signal", async () => {
+  const signals = [];
+  const repository = createD1CommandTaskRepository({
+    accountId: "acct",
+    databaseId: "db",
+    apiToken: "token",
+    fetchImpl: async (_url, options) => {
+      signals.push(options.signal);
+      return { ok: true, status: 200, async json() { return { success: true, result: [{ results: [] }] }; } };
+    }
+  });
+  await repository.get("missing");
+  assert.equal(signals.length, 1);
+  assert.ok(signals[0] instanceof AbortSignal);
+  assert.equal(signals[0].aborted, false);
+  await repository.initialize();
+  assert.ok(signals.length >= 2);
+  assert.ok(signals.every(signal => signal instanceof AbortSignal));
+});
+
 test("initialize creates the command table and index, idempotently", async () => {
   const { repository, fake } = build();
   const first = await repository.initialize();

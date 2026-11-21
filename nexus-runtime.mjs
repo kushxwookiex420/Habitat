@@ -50,14 +50,20 @@ export const NEXUS_HEARTBEAT_SQL =
   "completed = excluded.completed, failed = excluded.failed, detail = excluded.detail";
 
 export const NEXUS_CLAIM_SQL =
-  // A task is claimable when it is queued, or when it is 'working' with no fence (that is how the
-  // engine leaves an approved task after approve() moves it to working). Fencing prevents two
-  // workers from owning the same execution.
+  // A task is claimable only when it is queued (or approved working with no fence) AND it names an
+  // adapter. Legacy or adapter-less rows stay queued for manual handling instead of being silently
+  // claimed and failed by the worker. An unknown non-empty adapter is still claimed so the worker
+  // can fail it with an explicit "no adapter registered" error.
   "UPDATE habitat_command_tasks SET status = 'working', " +
   "record_json = json_set(record_json, '$.status', 'working', '$.claimedBy', ?, '$.leaseUntil', ?, '$.fence', ?, '$.updatedAt', ?), " +
-  "updated_at = ? WHERE id = (SELECT id FROM habitat_command_tasks WHERE status = 'queued' " +
-  "OR (status = 'working' AND json_extract(record_json, '$.fence') IS NULL) ORDER BY updated_at ASC LIMIT 1) " +
+  "updated_at = ? WHERE id = (SELECT id FROM habitat_command_tasks WHERE (status = 'queued' " +
+  "OR (status = 'working' AND json_extract(record_json, '$.fence') IS NULL)) " +
+  "AND json_extract(record_json, '$.adapter') IS NOT NULL " +
+  "AND json_extract(record_json, '$.adapter') <> '' " +
+  "ORDER BY updated_at ASC LIMIT 1) " +
   "AND (status = 'queued' OR (status = 'working' AND json_extract(record_json, '$.fence') IS NULL)) " +
+  "AND json_extract(record_json, '$.adapter') IS NOT NULL " +
+  "AND json_extract(record_json, '$.adapter') <> '' " +
   "RETURNING record_json";
 
 export const NEXUS_RENEW_SQL =
@@ -99,7 +105,8 @@ export function createD1Query({ accountId, databaseId, apiToken, fetchImpl = fet
     const response = await fetchImpl(endpoint, {
       method: "POST",
       headers: { Authorization: "Bearer " + apiToken, "Content-Type": "application/json" },
-      body: JSON.stringify({ sql, params })
+      body: JSON.stringify({ sql, params }),
+      signal: AbortSignal.timeout(15_000)
     });
     let payload = {};
     try { payload = await response.json(); } catch {}
@@ -339,6 +346,11 @@ export function createNexusWorker({
     const pending = (Array.isArray(task.approvals) ? task.approvals : []).filter(entry => entry.state === "requested");
     if (pending.length) {
       const next = { ...task, status: "needs_approval", updatedAt: new Date().toISOString() };
+      // Parking for owner approval releases the worker fence. Otherwise the owner's decision route
+      // would see a fenced task and refuse it forever.
+      delete next.fence;
+      delete next.claimedBy;
+      delete next.leaseUntil;
       // An unclaimed record has no fence: a plain update is the correct legacy path.
       if (!task.fence) {
         await repository.update(task.id, next);
@@ -717,8 +729,20 @@ export function registerNexusRuntime(app, {
 
   async function shutdown(reason = "shutdown") {
     shuttingDown = true;
-    await runtime?.stop(reason);
-    started = false;
+    try {
+      await runtime?.stop(reason);
+    } finally {
+      started = false;
+    }
+  }
+
+  async function startNexusWorker() {
+    if (!runtime) return { ok: false, started: false, reason: "no_worker" };
+    if (started) return { ok: true, started: true, alreadyRunning: true };
+    if (!ready) return { ok: false, started: false, reason: "not_initialized" };
+    const result = await runtime.start();
+    started = runtime.isStarted ? runtime.isStarted() : true;
+    return { ok: true, started, alreadyRunning: Boolean(result?.alreadyRunning) };
   }
 
   return Object.freeze({
@@ -747,12 +771,12 @@ export function registerNexusRuntime(app, {
       ready = true;
       if (runtime && startWorker) {
         if (shuttingDown) return { ok: true, durable: Boolean(store.durable), worker: Boolean(runtime), started: false, reason: "shutting_down" };
-        const startResult = await runtime.start();
-        started = runtime.isStarted ? runtime.isStarted() : true;
-        return { ok: true, durable: Boolean(store.durable), worker: Boolean(runtime), started, alreadyRunning: Boolean(startResult?.alreadyRunning) };
+        const startResult = await startNexusWorker();
+        return { ok: true, durable: Boolean(store.durable), worker: Boolean(runtime), started: startResult.started, alreadyRunning: Boolean(startResult.alreadyRunning) };
       }
       return { ok: true, durable: Boolean(store.durable), worker: Boolean(runtime), started };
     },
+    startWorker: startNexusWorker,
     shutdown,
     status() {
       return {

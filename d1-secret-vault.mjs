@@ -17,7 +17,8 @@ export function createD1SecretVault({ accountId, databaseId, apiToken, encryptio
     const response = await fetchImpl(endpoint, {
       method: "POST",
       headers: { Authorization: `Bearer ${apiToken}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ sql, params })
+      body: JSON.stringify({ sql, params }),
+      signal: AbortSignal.timeout(15_000)
     });
     let payload = {};
     try { payload = await response.json(); } catch {}

@@ -82,7 +82,7 @@ async function invoke(app, key, req = {}) {
   return res;
 }
 
-function harness({ adapters = null, owner = OWNER, withOwnerToken = true } = {}) {
+function harness({ adapters = null, owner = OWNER, withOwnerToken = true, nexusEnabled = true } = {}) {
   const db = new DatabaseSync(":memory:");
   const d1Fetch = async (_url, init) => {
     const { sql, params = [] } = JSON.parse(init.body);
@@ -100,7 +100,11 @@ function harness({ adapters = null, owner = OWNER, withOwnerToken = true } = {})
   });
   const app = makeApp();
   const bridge = registerDeviceCommandBridge(app, {
-    env: { HABITAT_AX_BRIDGE_TOKEN: AX, HABITAT_OWNER_DEVICE_ID: owner },
+    env: {
+      HABITAT_AX_BRIDGE_TOKEN: AX,
+      HABITAT_OWNER_DEVICE_ID: owner,
+      NEXUS_RUNTIME_ENABLED: nexusEnabled ? "true" : "false"
+    },
     repository: deviceRepo,
     taskRepository: taskRepo,
     query,
@@ -111,6 +115,21 @@ function harness({ adapters = null, owner = OWNER, withOwnerToken = true } = {})
   });
   return { app, bridge, db, taskRepo, deviceRepo, adapters: baseAdapters, query };
 }
+
+test("the Nexus runtime is disabled unless NEXUS_RUNTIME_ENABLED is exactly true", async () => {
+  const { bridge } = harness({ nexusEnabled: false });
+  const init = await bridge.initialize();
+  assert.equal(init.ok, true);
+  assert.equal(init.nexus.configured, false);
+  assert.equal(init.nexus.reason, "disabled_by_config");
+  const status = bridge.status();
+  assert.equal(status.nexus.configured, false);
+  assert.equal(status.nexus.reason, "disabled_by_config");
+  const started = await bridge.startNexusWorker();
+  assert.equal(started.ok, false);
+  assert.equal(started.reason, "disabled_by_config");
+  assert.equal(bridge.nexus(), null);
+});
 
 async function seedDevice(deviceRepo, deviceId, token) {
   await deviceRepo.registerDevice({ deviceId, tokenHash: hash(token), createdAt: new Date().toISOString() });

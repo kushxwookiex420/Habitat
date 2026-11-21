@@ -10,7 +10,8 @@ export function createD1TaskRepository({ accountId, databaseId, apiToken, fetchI
     const response = await fetchImpl(endpoint, {
       method: "POST",
       headers: { Authorization: `Bearer ${apiToken}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ sql, params })
+      body: JSON.stringify({ sql, params }),
+      signal: AbortSignal.timeout(15_000)
     });
     const payload = await response.json();
     if (!response.ok || payload?.success !== true) {

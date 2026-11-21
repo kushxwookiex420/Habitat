@@ -32,9 +32,17 @@ registerUniversalCommandRoutes  ->  commandApi { engine, store }
 - One task store: the runtime receives `commandApi.store()` and `commandApi.engine`; it never creates
   another repository or engine.
 - One device repository: `deviceRepository: store` is passed for owner-device verification.
-- Three adapters only: `repo.inspect`, `task.inspect`, `runtime.health`; `repo.test` is excluded.
-- Worker gate: the runtime is mounted only when a task store and an atomic D1 query both exist.
-  `initialize()` starts it only after the device store and bootstrap setup are complete.
+- Three adapters only: `repo.inspect`, `task.inspect`, `runtime.health`; `repo.test` is excluded,
+  and calling its factory directly still fails closed unless `enableTestAdapter:true` is passed.
+- Worker gate: the runtime is mounted only when `NEXUS_RUNTIME_ENABLED=true` **and** a task store and
+  an atomic D1 query exist. The flag defaults to false; an existing service does not start the worker
+  merely by upgrading the code. `server.mjs` calls `initialize({startWorker:false})`, opens the HTTP
+  listener, and only then starts the worker, so `/health` is never blocked by the first task tick.
+- Claim gate: only tasks naming a non-empty adapter are claimable. Legacy/adapter-less queued rows
+  stay queued instead of being claimed and failed; an unknown adapter is claimed only so the worker
+  can fail it with an explicit "no adapter registered" error.
+- Revocation: a revoked device is never revived by replaying a pairing code. Recovery is an explicit
+  owner-device action (`POST /device/owner/devices/:deviceId/unrevoke`).
 - Fail closed: no D1/store means no `/nexus/runtime` route, no worker, and command routes answer 503.
 - Shutdown: the runtime attaches SIGTERM/SIGINT handlers; repeated signals are absorbed while the
   in-flight task drains (15 s default). `bridge.shutdown()` is available for embedded callers.
@@ -42,13 +50,13 @@ registerUniversalCommandRoutes  ->  commandApi { engine, store }
 
 ## Tests
 
-- `tests/nexus-habitat-integration.test.mjs` — 8 tests through the real bridge, routes, engine, D1
+- `tests/nexus-habitat-integration.test.mjs` — 9 tests through the real bridge, routes, engine, D1
   repository code, worker, adapters, and the real SQLite engine. SQLite is reached through the
   repository's production HTTP shape (local D1 transport shim), not by replacing runtime logic.
 - `tests/nexus-habitat-lifecycle.test.mjs` — child process sends two SIGTERMs during a mounted
   bridge task; one drain, one completion, exit 0.
-- Full backend suite: `npm test` -> **383/383**.
-- These are not live Cloudflare D1 or Render results.
+- Full backend suite: `npm test`; exact counts are recorded in the remediation report, not in this
+  document. These are not live Cloudflare D1 or Render results.
 
 ## Deployment (non-production only)
 
@@ -59,7 +67,8 @@ registerUniversalCommandRoutes  ->  commandApi { engine, store }
 - start `npm start` (runs the syntax check, then `server.mjs`)
 - health `/health`
 - required service variables: `CLOUDFLARE_ACCOUNT_ID`, `HABITAT_D1_DATABASE_ID`,
-  `HABITAT_D1_API_TOKEN`, `HABITAT_AX_BRIDGE_TOKEN`, `HABITAT_OWNER_DEVICE_ID`
+  `HABITAT_D1_API_TOKEN`, `HABITAT_AX_BRIDGE_TOKEN`, `HABITAT_OWNER_DEVICE_ID`, and the deliberate
+  activation flag `NEXUS_RUNTIME_ENABLED=true`. Without the flag the worker stays absent.
 
 `/health` is the Render liveness check only; it returns 200 even when the optional AI provider is
 not configured. Nexus readiness is `/nexus/runtime`, which requires the bridge token and must report
@@ -72,8 +81,14 @@ production database, token, or Render service.
 
 Revision 2 remains `artifacts/nexus-runtime-executor/nexus-runtime-executor.patch` in the Ax
 workspace (`2fe8b27d...`), with runtime `38264497...`. To roll back a deployed service, redeploy the
-previous Revision 2 commit without the mount; do not edit the accepted Runtime file. This mount
-changes only `device-command-bridge.mjs`, `package.json`, tests, scripts, docs and `render.yaml`.
+previous Revision 2 commit (or the last known-good commit) rather than editing files in place. This
+revision changes production/runtime files: `command-routes.mjs`, `device-command-bridge.mjs`,
+`device-habitat.mjs`, `d1-command-task-repository.mjs`, `d1-content-job-repository.mjs`,
+`d1-device-command-repository.mjs`, `d1-dispatch-lease-repository.mjs`, `d1-secret-vault.mjs`,
+`d1-task-repository.mjs`, `nexus-adapters.mjs`, `nexus-adapter-registration.mjs`,
+`nexus-runtime.mjs`, `render-sandbox-compat.mjs`, `server.mjs`, `render.yaml`, and
+`scripts/d1-live-test.mjs`, `scripts/d1-cleanup.mjs`; tests and docs change with them. Revert all of
+them together; reverting only `device-command-bridge.mjs` is not sufficient.
 
 ## Still blocked
 

@@ -12,7 +12,8 @@ export function createD1DeviceCommandRepository({ accountId, databaseId, apiToke
     const response = await fetchImpl(endpoint, {
       method: "POST",
       headers: { Authorization: `Bearer ${apiToken}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ sql, params })
+      body: JSON.stringify({ sql, params }),
+      signal: AbortSignal.timeout(15_000)
     });
     let payload = {};
     try { payload = await response.json(); } catch {}
@@ -82,10 +83,27 @@ export function createD1DeviceCommandRepository({ accountId, databaseId, apiToke
       };
     },
     async registerDevice({ deviceId, tokenHash, createdAt }) {
+      // Never clear revoked_at here. A revoked device must not be revived by replaying a pairing
+      // code (or by any other registration path); recovery requires an explicit owner action.
       await query(
         "INSERT INTO habitat_paired_devices (device_id, token_hash, created_at, last_seen_at, device_json, revoked_at) VALUES (?, ?, ?, NULL, NULL, NULL) " +
-        "ON CONFLICT(device_id) DO UPDATE SET token_hash = excluded.token_hash, created_at = excluded.created_at, last_seen_at = NULL, device_json = NULL, revoked_at = NULL",
+        "ON CONFLICT(device_id) DO UPDATE SET token_hash = excluded.token_hash, created_at = excluded.created_at, last_seen_at = NULL, device_json = NULL",
         [deviceId, tokenHash, createdAt]
+      );
+      return true;
+    },
+    async isDeviceRevoked(deviceId) {
+      const result = await query(
+        "SELECT revoked_at FROM habitat_paired_devices WHERE device_id = ? LIMIT 1",
+        [deviceId]
+      );
+      const row = result[0]?.results?.[0];
+      return Boolean(row?.revoked_at);
+    },
+    async unrevokeDevice(deviceId) {
+      await query(
+        "UPDATE habitat_paired_devices SET revoked_at = NULL WHERE device_id = ?",
+        [deviceId]
       );
       return true;
     },

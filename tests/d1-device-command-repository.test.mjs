@@ -28,7 +28,20 @@ function fakeD1() {
         result = [{ results: [{ device_id: row.device_id }] }];
       } else result = [{ results: [] }];
     } else if (sql.startsWith("INSERT INTO habitat_paired_devices")) {
-      devices.set(params[0], { device_id: params[0], token_hash: params[1], created_at: params[2], last_seen_at: null, revoked_at: null });
+      const existing = devices.get(params[0]);
+      devices.set(params[0], {
+        device_id: params[0],
+        token_hash: params[1],
+        created_at: params[2],
+        last_seen_at: null,
+        revoked_at: existing?.revoked_at || null
+      });
+    } else if (sql.startsWith("SELECT revoked_at FROM habitat_paired_devices")) {
+      const row = devices.get(params[0]);
+      result = [{ results: row ? [{ revoked_at: row.revoked_at }] : [] }];
+    } else if (sql === "UPDATE habitat_paired_devices SET revoked_at = NULL WHERE device_id = ?") {
+      const row = devices.get(params[0]);
+      if (row) row.revoked_at = null;
     } else if (sql.startsWith("SELECT token_hash FROM habitat_paired_devices")) {
       const row = devices.get(params[0]);
       result = [{ results: row && !row.revoked_at ? [{ token_hash: row.token_hash }] : [] }];
@@ -101,6 +114,18 @@ test("D1 device repository stores only hashes, supports one-time bootstrap pairi
   await repo.revokeDevice("s26-ultra", now);
   assert.equal(await repo.verifyDeviceToken(token, "s26-ultra"), false);
   assert.equal(await repo.isDevicePaired("s26-ultra"), false);
+  assert.equal(await repo.isDeviceRevoked("s26-ultra"), true);
+
+  // Re-registration must not clear revocation.
+  const replacementToken = "replacement-token-not-persisted-raw";
+  const replacementHash = createHash("sha256").update(replacementToken).digest("hex");
+  await repo.registerDevice({ deviceId: "s26-ultra", tokenHash: replacementHash, createdAt: now });
+  assert.equal(await repo.isDeviceRevoked("s26-ultra"), true);
+  assert.equal(await repo.verifyDeviceToken(replacementToken, "s26-ultra"), false);
+
+  await repo.unrevokeDevice("s26-ultra");
+  assert.equal(await repo.isDeviceRevoked("s26-ultra"), false);
+  assert.equal(await repo.verifyDeviceToken(replacementToken, "s26-ultra"), true);
   assert.ok(fake.calls.every(call => !JSON.stringify(call).includes(token)));
   assert.ok(fake.calls.every(call => !JSON.stringify(call).includes("test-only-d1-token")));
 });

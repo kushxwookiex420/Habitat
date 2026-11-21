@@ -26,7 +26,8 @@ function miniD1() {
       if (busy) return [{ results: [] }];
       busy = true;
       try {
-        const claimable = task => task.status === "queued" || (task.status === "working" && (task.fence ?? null) === null);
+        const claimable = task => (task.status === "queued" || (task.status === "working" && (task.fence ?? null) === null))
+          && typeof task.adapter === "string" && task.adapter.length > 0;
         const candidate = [...state.tasks.values()]
           .filter(claimable)
           .sort((a, b) => String(a.updatedAt).localeCompare(String(b.updatedAt)))[0];
@@ -254,8 +255,8 @@ function workerOn(d1, engine, overrides = {}) {
 test("two competing workers cannot claim the same task from a shared store", async () => {
   const d1 = miniD1();
   const engine = engineOver(d1);
-  d1.state.tasks.set("cmd_a", task("cmd_a"));
-  d1.state.tasks.set("cmd_b", task("cmd_b", { updatedAt: "2026-11-21T00:00:01.000Z" }));
+  d1.state.tasks.set("cmd_a", task("cmd_a", { adapter: "runtime.health" }));
+  d1.state.tasks.set("cmd_b", task("cmd_b", { adapter: "runtime.health", updatedAt: "2026-11-21T00:00:01.000Z" }));
   const one = workerOn(d1, engine, { workerId: "w1" });
   const two = workerOn(d1, engine, { workerId: "w2" });
   const [first, second] = await Promise.all([one.claim(), two.claim()]);
@@ -268,7 +269,7 @@ test("two competing workers cannot claim the same task from a shared store", asy
 test("when only one task exists, the second worker gets nothing", async () => {
   const d1 = miniD1();
   const engine = engineOver(d1);
-  d1.state.tasks.set("cmd_only", task("cmd_only"));
+  d1.state.tasks.set("cmd_only", task("cmd_only", { adapter: "runtime.health" }));
   const one = workerOn(d1, engine, { workerId: "w1" });
   const two = workerOn(d1, engine, { workerId: "w2" });
   const [first, second] = await Promise.all([one.claim(), two.claim()]);
@@ -395,6 +396,18 @@ test("initialize() actually starts the worker", async () => {
   const states = d1.state.heartbeats.map(beat => beat.state);
   assert.ok(states.includes("starting"), "worker recorded a starting heartbeat: " + states.join(","));
   assert.ok(states.includes("idle") || states.includes("polling"));
+});
+
+test("a deferred worker can be started after initialization, and shutdown is idempotent", async () => {
+  const { runtime, init } = await setup({ startWorker: false });
+  assert.equal(init.started, false);
+  const started = await runtime.startWorker();
+  assert.equal(started.ok, true);
+  assert.equal(started.started, true);
+  assert.equal(runtime.status().started, true);
+  await runtime.shutdown("first");
+  await runtime.shutdown("second");
+  assert.equal(runtime.worker.isStopped(), true);
 });
 
 test("initialize({startWorker:false}) leaves it stopped, and shutdown stops a running worker", async () => {
@@ -885,6 +898,41 @@ test("an approved task becomes executable and the worker completes it", async ()
   assert.equal(stored.status, "done");
   assert.equal(stored.result.verifiedBy, runtime.worker.workerId);
   assert.deepEqual(stored.result.evidence, ["evidence:cmd_ap"]);
+});
+
+test("a worker-parks a pending task without a fence so the owner can then approve it", async () => {
+  const d1 = miniD1();
+  const repository = repositoryOver(d1);
+  const engine = createUniversalCommandEngine({ repository, registry: fakeRegistry() });
+  const app = makeApp();
+  const runtime = registerNexusRuntime(app, {
+    env: { HABITAT_AX_BRIDGE_TOKEN: AX_TOKEN },
+    repository, registry: fakeRegistry(), query: d1.query, engine,
+    adapters: TEST_ADAPTERS,
+    verifyDevice: async (token, deviceId) => deviceId === DEVICE && token === DEVICE_TOKEN,
+    ownerDeviceId: DEVICE, handleSignals: false, log: quiet
+  });
+  await runtime.initialize({ startWorker: false });
+  await repository.create(task("cmd_park", {
+    adapter: "task.ok",
+    approvals: [{ state: "requested", requestedAt: "2026-11-21T00:03:00.000Z" }]
+  }));
+
+  await runtime.worker.tick();
+  const parked = d1.state.tasks.get("cmd_park");
+  assert.equal(parked.status, "needs_approval");
+  assert.equal(parked.fence, undefined, "parking releases the worker fence");
+  assert.equal(parked.claimedBy, undefined);
+
+  const approved = await request(app, "POST", "/device/command/tasks/cmd_park/approval", {
+    headers: { authorization: "Bearer " + DEVICE_TOKEN },
+    body: { deviceId: DEVICE, approved: true }, params: { id: "cmd_park" }
+  });
+  assert.equal(approved.statusCode, 200, approved.body?.error || "owner approval succeeds");
+  assert.equal(approved.body.status, "working");
+
+  await runtime.worker.tick();
+  assert.equal(d1.state.tasks.get("cmd_park").status, "done");
 });
 
 test("a denied task is terminal and is never executed", async () => {

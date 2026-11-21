@@ -20,6 +20,7 @@ import { randomUUID } from "node:crypto";
 import { createD1Query, NEXUS_CLAIM_SQL, NEXUS_RENEW_SQL, NEXUS_REQUEUE_SQL, NEXUS_EXPIRED_SQL, NEXUS_SEIZE_SQL } from "../nexus-runtime.mjs";
 import { createD1CommandTaskRepository } from "../d1-command-task-repository.mjs";
 import { createUniversalCommandEngine } from "../universal-command-engine.mjs";
+import { cleanupIsolatedRows } from "./d1-cleanup.mjs";
 
 const env = process.env;
 const fail = message => { console.error("REFUSING:", message); process.exit(2); };
@@ -50,6 +51,7 @@ function record(label, extra = {}) {
   ids.push(id);
   return {
     id, objective: "isolated D1 verification " + label, role: "ax", status: "queued",
+    adapter: "runtime.health",
     createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
     attempts: 0, approvals: [], statusHistory: [], result: null, error: null, ...extra
   };
@@ -169,10 +171,5 @@ async function main() {
 main()
   .catch(error => { console.error("LIVE D1 TEST ERROR:", String(error?.message || error)); process.exitCode = 1; })
   .finally(async () => {
-    try {
-      for (const id of ids) await query("DELETE FROM habitat_command_tasks WHERE id = ?", [id]);
-      console.log("Cleaned up " + ids.length + " isolated test record(s).");
-    } catch (error) {
-      console.error("CLEANUP FAILED (only prefixed test ids are targeted):", String(error?.message || error));
-    }
+    await cleanupIsolatedRows(query, ids);
   });

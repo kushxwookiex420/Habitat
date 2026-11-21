@@ -67,6 +67,7 @@ test("repo.test runs an allowlisted command and reports the real exit code and e
   const adapters = createReadOnlyAdapters({
     rootDir: root,
     allowedPrefixes: ["src", "package.json"],
+    enableTestAdapter: true,
     allowedTests: { "pass": { command: process.execPath, args: ["-e", "console.log('ok')"] } }
   });
   const result = await adapters["repo.test"]({ input: { test: "pass" } });
@@ -80,6 +81,7 @@ test("repo.test reports a failing command as a failure, never as success", needs
   const { root } = await fixture();
   const adapters = createReadOnlyAdapters({
     rootDir: root,
+    enableTestAdapter: true,
     allowedTests: { "fail": { command: process.execPath, args: ["-e", "console.error('boom'); process.exit(3)"] } }
   });
   const result = await adapters["repo.test"]({ input: { test: "fail" } });
@@ -91,16 +93,29 @@ test("repo.test reports a failing command as a failure, never as success", needs
 
 test("repo.test refuses commands that are not on the allowlist", async () => {
   const { root } = await fixture();
-  const adapters = createReadOnlyAdapters({ rootDir: root, allowedTests: {} });
+  const adapters = createReadOnlyAdapters({ rootDir: root, allowedTests: {}, enableTestAdapter: true });
   const result = await adapters["repo.test"]({ input: { test: "rm -rf /" } });
   assert.equal(result.ok, false);
   assert.match(result.error, /allowed test list/);
+});
+
+test("repo.test is disabled by default even when its factory is called directly", async () => {
+  const { root } = await fixture();
+  const adapters = createReadOnlyAdapters({
+    rootDir: root,
+    allowedTests: { "pass": { command: process.execPath, args: ["-e", "process.exit(0)"] } }
+  });
+  const result = await adapters["repo.test"]({ input: { test: "pass" } });
+  assert.equal(result.ok, false);
+  assert.match(result.error, /disabled/i);
+  assert.equal(result.evidence, undefined);
 });
 
 test("repo.test kills a hung command and reports the timeout", needsSandbox, async () => {
   const { root } = await fixture();
   const adapters = createReadOnlyAdapters({
     rootDir: root,
+    enableTestAdapter: true,
     allowedTests: { "hang": { command: process.execPath, args: ["-e", "setTimeout(() => {}, 30000)"], timeoutMs: 1000 } }
   });
   const started = Date.now();
@@ -119,7 +134,7 @@ test("task.inspect reports ownership, lease, approvals and history", async () =>
     approvals: [{ state: "approved" }], statusHistory: [{ to: "queued" }, { to: "working" }]
   };
   const adapters = createReadOnlyAdapters({ rootDir: ".", repository: await repoWith(task) });
-  const result = await adapters["task.inspect"]({ input: { taskId: "cmd_1" } });
+  const result = await adapters["task.inspect"]({ id: "cmd_1", input: { taskId: "cmd_1" } });
   assert.equal(result.ok, true);
   assert.match(result.summary, /working/);
   assert.match(result.summary, /approvals: approved/);
@@ -129,14 +144,22 @@ test("task.inspect reports ownership, lease, approvals and history", async () =>
 
 test("task.inspect fails honestly for a missing task or repository", async () => {
   const adapters = createReadOnlyAdapters({ rootDir: ".", repository: { async get() { return null; } } });
-  const missing = await adapters["task.inspect"]({ input: { taskId: "nope" } });
+  const missing = await adapters["task.inspect"]({ id: "nope", input: { taskId: "nope" } });
   assert.equal(missing.ok, false);
   assert.match(missing.error, /No task/);
 
   const noRepo = createReadOnlyAdapters({ rootDir: "." });
-  const unavailable = await noRepo["task.inspect"]({ input: { taskId: "nope" } });
+  const unavailable = await noRepo["task.inspect"]({ id: "nope", input: { taskId: "nope" } });
   assert.equal(unavailable.ok, false);
   assert.match(unavailable.error, /needs a task repository/);
+});
+
+test("task.inspect refuses to read a different task id", async () => {
+  const task = { id: "cmd_1", objective: "inspect", status: "working", attempts: 0, approvals: [], statusHistory: [] };
+  const adapters = createReadOnlyAdapters({ rootDir: ".", repository: await repoWith(task) });
+  const result = await adapters["task.inspect"]({ id: "cmd_1", input: { taskId: "cmd_other" } });
+  assert.equal(result.ok, false);
+  assert.match(result.error, /only inspect the executing task/);
 });
 
 test("runtime.health reports live, stale and stopped workers plus active working tasks", async () => {
@@ -174,12 +197,13 @@ test("every successful adapter result carries verifiable evidence", needsSandbox
     rootDir: root,
     repository: await repoWith(task),
     query: async () => [{ results: [] }],
+    enableTestAdapter: true,
     allowedTests: { "pass": { command: process.execPath, args: ["-e", "process.exit(0)"] } }
   });
   const results = await Promise.all([
     full["repo.inspect"]({ input: { path: "src/app.js" } }),
     full["repo.test"]({ input: { test: "pass" } }),
-    full["task.inspect"]({ input: { taskId: "cmd_2" } }),
+    full["task.inspect"]({ id: "cmd_2", input: { taskId: "cmd_2" } }),
     full["runtime.health"]({})
   ]);
   for (const result of results) {
@@ -195,6 +219,7 @@ test("repo.test does not leak service secrets into the child environment", needs
   const { root } = await fixture();
   const adapters = createReadOnlyAdapters({
     rootDir: root,
+    enableTestAdapter: true,
     allowedTests: {
       "env": { command: process.execPath, args: ["-e", "process.exit(process.env.NEXUS_TEST_SENTINEL ? 7 : 0)"] }
     }
@@ -212,6 +237,7 @@ test("repo.test never echoes command output that could contain a secret", needsS
   const { root } = await fixture();
   const adapters = createReadOnlyAdapters({
     rootDir: root,
+    enableTestAdapter: true,
     allowedTests: {
       "leak": { command: process.execPath, args: ["-e", "console.error('super-secret-value'); process.exit(1)"] }
     }

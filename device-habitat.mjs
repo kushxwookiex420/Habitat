@@ -16,6 +16,7 @@ import { createHomeBridgeClient } from "./home-bridge-client.mjs";
 const GITHUB_CACHE_MS = 60000;
 // Same vocabulary the relay accepts; anything else is refused here before a request is made.
 const PHONE_ACTIONS = new Set(["status", "page", "app", "torch", "clear", "remote", "url"]);
+const OWNER_ONLY_PHONE_ACTIONS = new Set(["clear", "remote"]);
 
 function short(value, max = 200) {
   return String(value == null ? "" : value).slice(0, max);
@@ -52,6 +53,10 @@ export function registerDeviceHabitat(app, { env = process.env, fetchImpl = fetc
 
   const githubRepo = String(env.HABITAT_GITHUB_REPO || "kushxwookiex420/home-launcher").trim();
   const githubToken = String(env.GITHUB_TOKEN || "").trim();
+  const owners = new Set();
+  for (const value of [env.HABITAT_OWNER_DEVICE_ID, env.HABITAT_OWNER_DEVICE_IDS]) {
+    String(value || "").split(",").map(part => part.trim()).filter(Boolean).forEach(id => owners.add(id));
+  }
   const startedAt = Date.now();
   const githubCache = { at: 0, data: null };
 
@@ -261,6 +266,10 @@ export function registerDeviceHabitat(app, { env = process.env, fetchImpl = fetc
     const arg = String(req.body?.arg || "").trim().slice(0, 300);
     if (!PHONE_ACTIONS.has(action)) {
       return res.status(400).json({ ok: false, error: `action must be one of ${[...PHONE_ACTIONS].join(", ")}` });
+    }
+    if (OWNER_ONLY_PHONE_ACTIONS.has(action)) {
+      if (!owners.size) return res.status(503).json({ ok: false, error: "Owner authorization is not configured for destructive phone actions." });
+      if (!owners.has(req.habitatDeviceId)) return res.status(403).json({ ok: false, error: "This paired device is not the configured owner." });
     }
     const result = await client.sendPhoneAction({ action, arg });
     return res.status(result.ok ? 200 : 502).json({

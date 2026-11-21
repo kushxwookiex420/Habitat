@@ -48,12 +48,31 @@ export function createReadOnlyAdapters({
   allowedPrefixes = DEFAULT_ALLOWED_PREFIXES,
   allowedTests = {},
   defaultTimeoutMs = DEFAULT_TIMEOUT_MS,
+  maxFileBytes = MAX_READ_BYTES,
+  enableTestAdapter = false,
   sandboxRunner = runSandboxed,
   now = () => new Date().toISOString()
 } = {}) {
   if (!rootDir) throw new Error("Read-only adapters need a rootDir.");
   const root = path.resolve(rootDir);
   const prefixes = allowedPrefixes.map(normalizeRel).filter(Boolean);
+  const readLimit = Math.max(1, Math.min(MAX_READ_BYTES, Number(maxFileBytes) || MAX_READ_BYTES));
+
+  async function bounded(promise, label, timeoutMs = defaultTimeoutMs) {
+    let timer;
+    try {
+      return await Promise.race([
+        promise,
+        new Promise((_, reject) => {
+          timer = setTimeout(() => reject(new Error(label + " timed out after " + timeoutMs + "ms")), timeoutMs);
+        })
+      ]);
+    } catch (error) {
+      return failure(String(error?.message || error));
+    } finally {
+      clearTimeout(timer);
+    }
+  }
 
   /** Resolve a task-supplied path inside root and inside the allowlist, following symlinks. */
   async function resolveInside(relPath) {
@@ -80,6 +99,10 @@ export function createReadOnlyAdapters({
     if (resolved.ok === false) return resolved;
     const { rel, real } = resolved;
     try {
+      // Narrow the realpath/open race: re-resolve immediately before use and never follow a
+      // symlink as the final component when opening a file.
+      const realAgain = await fs.realpath(real);
+      if (realAgain !== real) return failure("Path changed while it was being inspected.");
       const stat = await fs.stat(real);
       if (stat.isDirectory()) {
         const entries = (await fs.readdir(real, { withFileTypes: true }))
@@ -95,9 +118,9 @@ export function createReadOnlyAdapters({
           evidence: ["repo.dir:" + rel + "/@entries=" + entries.length + "@sha256:" + digest]
         };
       }
-      const handle = await fs.open(real, "r");
+      const handle = await fs.open(real, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
       try {
-        const buffer = Buffer.alloc(Math.min(MAX_READ_BYTES, Number(stat.size) || 0));
+        const buffer = Buffer.alloc(Math.min(readLimit, Number(stat.size) || 0));
         const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
         const content = buffer.subarray(0, bytesRead).toString("utf8");
         const lines = content.split("\n").length;
@@ -120,6 +143,9 @@ export function createReadOnlyAdapters({
   }
 
   async function repoTest(task) {
+    if (enableTestAdapter !== true) {
+      return failure("repo.test is disabled; it requires an explicit enableTestAdapter mount and owner approval.");
+    }
     const name = String(task?.input?.test || task?.input?.suite || "").trim();
     if (!name) return failure("input.test must name an allowed test.");
     if (name.length > 80) return failure("input.test is too long.");
@@ -185,8 +211,13 @@ export function createReadOnlyAdapters({
 
   async function taskInspect(task) {
     if (!repository || typeof repository.get !== "function") return failure("task.inspect needs a task repository.");
-    const taskId = String(task?.input?.taskId || task?.id || "").trim();
-    if (!taskId) return failure("No task id is available to inspect.");
+    const executingTaskId = String(task?.id || "").trim();
+    const requestedTaskId = String(task?.input?.taskId || executingTaskId).trim();
+    if (!executingTaskId) return failure("No executing task id is available to inspect.");
+    if (requestedTaskId !== executingTaskId) {
+      return failure("task.inspect may only inspect the executing task.");
+    }
+    const taskId = executingTaskId;
     let record;
     try {
       record = await repository.get(taskId);
@@ -249,9 +280,9 @@ export function createReadOnlyAdapters({
   }
 
   return Object.freeze({
-    "repo.inspect": repoInspect,
+    "repo.inspect": task => bounded(repoInspect(task), "repo.inspect"),
     "repo.test": repoTest,
-    "task.inspect": taskInspect,
-    "runtime.health": runtimeHealth
+    "task.inspect": task => bounded(taskInspect(task), "task.inspect"),
+    "runtime.health": task => bounded(runtimeHealth(task), "runtime.health")
   });
 }

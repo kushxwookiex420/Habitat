@@ -48,7 +48,11 @@ const app = {
   get(path, ...handlers) { routes.set("GET " + path, handlers); }
 };
 const bridge = registerDeviceCommandBridge(app, {
-  env: { HABITAT_AX_BRIDGE_TOKEN: "fixture-ax-token", HABITAT_OWNER_DEVICE_ID: "owner-fixture" },
+  env: {
+    HABITAT_AX_BRIDGE_TOKEN: "fixture-ax-token",
+    HABITAT_OWNER_DEVICE_ID: "owner-fixture",
+    NEXUS_RUNTIME_ENABLED: "true"
+  },
   repository: deviceRepo,
   taskRepository: taskRepo,
   query,

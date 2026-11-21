@@ -24,3 +24,5 @@ services:
         sync: false
       - key: HABITAT_OWNER_DEVICE_ID
         sync: false
+      - key: NEXUS_RUNTIME_ENABLED
+        value: "true"

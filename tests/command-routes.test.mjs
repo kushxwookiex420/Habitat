@@ -67,8 +67,9 @@ function registry() {
 
 const OWNER_ID = "owner-phone";
 const OWNER_TOKEN = "owner-device-token";
-const auth = {
-  authorization: "Bearer ax-test-secret",
+const auth = { authorization: "Bearer ax-test-secret" };
+const ownerAuth = {
+  ...auth,
   "x-owner-device-id": OWNER_ID,
   "x-owner-device-token": OWNER_TOKEN
 };
@@ -183,9 +184,10 @@ test("authenticated owner can submit, read, plan, checkpoint and complete with e
   assert.equal(checkpoint.body.task.checkpoints.at(-1).note, "Health endpoint checked.");
 
   const completed = await invoke(app, "POST /ax/command/tasks/:id/complete", {
-    headers: auth, params: { id }, body: { result: { summary: "Health endpoint responded.", evidence: ["https://example.test/health"] } }
+    headers: ownerAuth, params: { id }, body: { result: { summary: "Health endpoint responded.", evidence: ["https://example.test/health"] } }
   });
   assert.equal(completed.body.task.status, "done");
+  assert.equal(completed.body.task.result.verifiedBy, "owner:" + OWNER_ID);
 });
 
 test("approval, denial, failure and retry endpoints preserve the engine lifecycle", async () => {
@@ -202,15 +204,16 @@ test("approval, denial, failure and retry endpoints preserve the engine lifecycl
   assert.equal(approval.body.task.status, "needs_approval");
 
   const denied = await invoke(app, "POST /ax/command/tasks/:id/deny", {
-    headers: auth, params: { id }, body: { by: "owner", reason: "Not approved." }
+    headers: ownerAuth, params: { id }, body: { by: "caller-forged", reason: "Not approved." }
   });
   assert.equal(denied.body.task.status, "failed");
+  assert.equal(denied.body.task.approvals.at(-1).decidedBy, "owner:" + OWNER_ID);
 
-  const retry = await invoke(app, "POST /ax/command/tasks/:id/retry", { headers: auth, params: { id }, body: { by: "owner" } });
+  const retry = await invoke(app, "POST /ax/command/tasks/:id/retry", { headers: ownerAuth, params: { id }, body: { by: "owner" } });
   assert.equal(retry.body.task.status, "queued");
 
   const failed = await invoke(app, "POST /ax/command/tasks/:id/fail", {
-    headers: auth, params: { id }, body: { error: "The adapter is not configured." }
+    headers: ownerAuth, params: { id }, body: { error: "The adapter is not configured." }
   });
   assert.equal(failed.body.task.status, "failed");
 
@@ -220,9 +223,43 @@ test("approval, denial, failure and retry endpoints preserve the engine lifecycl
     headers: auth, params: { id: approvedId }, body: { reason: "Owner decision required." }
   });
   const approved = await invoke(app, "POST /ax/command/tasks/:id/approve", {
-    headers: auth, params: { id: approvedId }, body: { by: "owner" }
+    headers: ownerAuth, params: { id: approvedId }, body: { by: "caller-forged" }
   });
   assert.equal(approved.body.task.status, "working");
+  assert.equal(approved.body.task.approvals.at(-1).decidedBy, "owner:" + OWNER_ID);
+});
+
+test("approve, deny and retry reject bridge-only, invalid and non-owner credentials", async () => {
+  for (const action of ["approve", "deny", "retry"]) {
+    const app = makeApp();
+    const repository = memoryRepository();
+    mountTestApp(app, repository);
+    const submitted = await invoke(app, "POST /ax/command/tasks", { headers: auth, body: { objective: "guarded " + action } });
+    const id = submitted.body.task.id;
+    await invoke(app, "POST /ax/command/tasks/:id/approval", { headers: auth, params: { id }, body: { reason: "owner decision" } });
+
+    const bridgeOnly = await invoke(app, "POST /ax/command/tasks/:id/" + action, {
+      headers: auth, params: { id }, body: { by: "owner" }
+    });
+    assert.equal(bridgeOnly.statusCode, 401, action + " must reject bridge-only callers");
+    assert.equal(bridgeOnly.body.code, "owner_required");
+
+    const badToken = await invoke(app, "POST /ax/command/tasks/:id/" + action, {
+      headers: { ...auth, "x-owner-device-id": OWNER_ID, "x-owner-device-token": "wrong" },
+      params: { id }, body: {}
+    });
+    assert.equal(badToken.statusCode, 401, action + " must reject an invalid device token");
+    assert.equal(badToken.body.code, "owner_invalid");
+
+    const nonOwner = await invoke(app, "POST /ax/command/tasks/:id/" + action, {
+      headers: { ...auth, "x-owner-device-id": "other-owner", "x-owner-device-token": OWNER_TOKEN },
+      params: { id }, body: {}
+    });
+    assert.equal(nonOwner.statusCode, 401, action + " non-owner token must not verify for another id");
+
+    const stillPending = repository.rows.get(id);
+    assert.equal(stillPending.status, "needs_approval", action + " must not change the task");
+  }
 });
 
 test("unknown task and invalid transition errors use stable HTTP status codes", async () => {
@@ -230,7 +267,7 @@ test("unknown task and invalid transition errors use stable HTTP status codes", 
   mountTestApp(app, memoryRepository());
   const missing = await invoke(app, "GET /ax/command/tasks/:id", { headers: auth, params: { id: "missing" } });
   assert.equal(missing.statusCode, 404);
-  const invalid = await invoke(app, "POST /ax/command/tasks/:id/approve", { headers: auth, params: { id: "missing" }, body: {} });
+  const invalid = await invoke(app, "POST /ax/command/tasks/:id/approve", { headers: ownerAuth, params: { id: "missing" }, body: {} });
   assert.equal(invalid.statusCode, 404);
 });
 
@@ -253,7 +290,7 @@ test("Ax routes cannot complete or fail a worker-owned task", async () => {
     repository.rows.set("cmd_fenced", fencedRow());
     mountTestApp(app, repository);
     const res = await invoke(app, "POST /ax/command/tasks/:id/" + action, {
-      headers: auth, params: { id: "cmd_fenced" },
+      headers: ownerAuth, params: { id: "cmd_fenced" },
       body: action === "complete"
         ? { result: { summary: "Ax says done", evidence: ["x"] } }
         : { error: "Ax says failed" }
@@ -275,7 +312,7 @@ test("supplying a matching claim to the Ax route does not bypass the ownership g
   repository.rows.set("cmd_fenced", fencedRow());
   mountTestApp(app, repository);
   const res = await invoke(app, "POST /ax/command/tasks/:id/complete", {
-    headers: auth, params: { id: "cmd_fenced" },
+    headers: ownerAuth, params: { id: "cmd_fenced" },
     body: {
       claim: { fence: "active-fence", workerId: "nexus-worker-1" },
       result: { summary: "pretend worker", evidence: ["x"] }
@@ -295,7 +332,7 @@ test("an owner can still close a legacy task that has no fence", async () => {
   });
   mountTestApp(app, repository);
   const res = await invoke(app, "POST /ax/command/tasks/:id/complete", {
-    headers: auth, params: { id: "cmd_legacy" },
+    headers: ownerAuth, params: { id: "cmd_legacy" },
     body: { result: { summary: "closed manually", evidence: ["note"] } }
   });
   assert.equal(res.statusCode, 200);
@@ -347,7 +384,7 @@ test("manual close-out fails closed when no device verifier is configured", asyn
     repository, registry: registry(), ownerDeviceId: OWNER_ID
   });
   const res = await invoke(app, "POST /ax/command/tasks/:id/complete", {
-    headers: auth, params: { id: "cmd_noverify" },
+    headers: ownerAuth, params: { id: "cmd_noverify" },
     body: { result: { summary: "should not work", evidence: ["x"] } }
   });
   assert.equal(res.statusCode, 503);

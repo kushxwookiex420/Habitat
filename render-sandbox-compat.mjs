@@ -121,6 +121,7 @@ if (!verdict.available) {
     const adapters = createReadOnlyAdapters({
       rootDir: dir,
       allowedTests: { unit: { command: "node", args: ["-e", "process.exit(0)"] } },
+      enableTestAdapter: true,
       sandboxRunner: async () => ({ ok: false, code: "sandbox_unavailable", error: "probe: unavailable" })
     });
     const outcome = await adapters["repo.test"]({ input: { test: "unit" } });

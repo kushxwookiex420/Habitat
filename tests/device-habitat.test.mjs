@@ -80,6 +80,7 @@ function relayStub(calls, { failFiles = false } = {}) {
 
 function setup(options = {}) {
   const app = makeApp();
+  const ownerId = Object.prototype.hasOwnProperty.call(options, "ownerId") ? options.ownerId : DEVICE_ID;
   const calls = [];
   const verified = { token: DEVICE_TOKEN, deviceId: DEVICE_ID };
   const repository = {
@@ -91,7 +92,8 @@ function setup(options = {}) {
     HOME_BRIDGE_URL: "https://relay.test",
     HOME_BRIDGE_AX_TOKEN: AX,
     HOME_BRIDGE_BUFF_TOKEN: BUFF,
-    HABITAT_GITHUB_REPO: "kushxwookiex420/home-launcher"
+    HABITAT_GITHUB_REPO: "kushxwookiex420/home-launcher",
+    ...(ownerId ? { HABITAT_OWNER_DEVICE_ID: ownerId } : {})
   };
   registerDeviceHabitat(app, { env, fetchImpl: relayStub(calls, options), repository });
   return { app, calls, env };
@@ -190,6 +192,28 @@ test("phone actions are allowlisted and sent with the ax credential", async () =
   assert.equal(good.statusCode, 200);
   assert.equal(good.body.action, "torch");
   assert.match(calls.find((c) => c.path === "/send").auth, /^Bearer hb_ax_/);
+});
+
+test("destructive phone actions require the configured owner device", async () => {
+  const owner = setup();
+  const allowed = await invoke(owner.app, "POST /device/habitat/phone", withAuth({
+    body: { deviceId: DEVICE_ID, action: "clear" }
+  }));
+  assert.equal(allowed.statusCode, 200);
+
+  const nonOwner = setup({ ownerId: "owner-other" });
+  const denied = await invoke(nonOwner.app, "POST /device/habitat/phone", withAuth({
+    body: { deviceId: DEVICE_ID, action: "remote", arg: "lock" }
+  }));
+  assert.equal(denied.statusCode, 403);
+  assert.equal(nonOwner.calls.some(call => call.path === "/send"), false, "the relay was not called");
+
+  const unconfigured = setup({ ownerId: null });
+  const unavailable = await invoke(unconfigured.app, "POST /device/habitat/phone", withAuth({
+    body: { deviceId: DEVICE_ID, action: "clear" }
+  }));
+  assert.equal(unavailable.statusCode, 503);
+  assert.equal(unconfigured.calls.some(call => call.path === "/send"), false);
 });
 
 test("phone actions need the device token too", async () => {

@@ -6,6 +6,13 @@ import { buildReadOnlyNexusAdapters } from "../nexus-adapter-registration.mjs";
 
 const AX_TOKEN = "ax-test-secret";
 const AUTH = { authorization: "Bearer " + AX_TOKEN };
+const OWNER_ID = "owner-phone";
+const OWNER_TOKEN = "owner-device-token";
+const OWNER_AUTH = {
+  ...AUTH,
+  "x-owner-device-id": OWNER_ID,
+  "x-owner-device-token": OWNER_TOKEN
+};
 
 function makeApp() {
   const routes = new Map();
@@ -78,6 +85,8 @@ function mount(repository, extra = {}) {
   const mounted = registerUniversalCommandRoutes(app, {
     env: { HABITAT_AX_BRIDGE_TOKEN: AX_TOKEN },
     repository, registry: registry(),
+    verifyDevice: async (token, deviceId) => token === OWNER_TOKEN && deviceId === OWNER_ID,
+    ownerDeviceId: OWNER_ID,
     ...extra
   });
   return { app, mounted };
@@ -162,7 +171,7 @@ test("a bound runtime.health task is claimed and executed by the real worker", a
 
 test("manual completion cannot bypass worker fencing", async () => {
   const repository = memoryRepository();
-  const { app } = mount(repository, { requireOwnerForClose: false });
+  const { app } = mount(repository);
   const submitted = await submit(app, { objective: "fenced task", adapter: "runtime.health" });
   const id = submitted.body.task.id;
   // Simulate the worker claim: fenced, owned record.
@@ -173,7 +182,7 @@ test("manual completion cannot bypass worker fencing", async () => {
   repository.rows.set(id, row);
 
   const manual = await invoke(app, "POST /ax/command/tasks/:id/complete", {
-    headers: AUTH, params: { id }, body: { result: { summary: "forged", evidence: ["forged"] } }
+    headers: OWNER_AUTH, params: { id }, body: { result: { summary: "forged", evidence: ["forged"] } }
   });
   assert.equal(manual.statusCode, 409);
   const stored = await repository.get(id);

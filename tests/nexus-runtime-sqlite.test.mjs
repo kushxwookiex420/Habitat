@@ -46,7 +46,7 @@ const PAST = "2000-01-01T00:00:00.000Z";
 
 test("D1/SQLite: the claim statement claims a queued task exactly once", () => {
   const database = db();
-  insert(database, "t1", { id: "t1", status: "queued", attempts: 0, updatedAt: T0 });
+  insert(database, "t1", { id: "t1", status: "queued", attempts: 0, adapter: "runtime.health", updatedAt: T0 });
 
   const first = database.prepare(NEXUS_CLAIM_SQL).all("w1", "2026-11-21T00:05:00.000Z", "fence-1", T0, T0);
   assert.equal(first.length, 1, "first claim wins");
@@ -60,10 +60,18 @@ test("D1/SQLite: the claim statement claims a queued task exactly once", () => {
 
 test("D1/SQLite: an approved task (working, no fence) is claimable", () => {
   const database = db();
-  insert(database, "t2", { id: "t2", status: "working", updatedAt: T0, approvals: [{ state: "approved" }] });
+  insert(database, "t2", { id: "t2", status: "working", updatedAt: T0, adapter: "runtime.health", approvals: [{ state: "approved" }] });
   const claimed = database.prepare(NEXUS_CLAIM_SQL).all("w1", "2026-11-21T00:05:00.000Z", "fence-9", T0, T0);
   assert.equal(claimed.length, 1, "approve() leaves the task in working with no fence, and it is picked up");
   assert.equal(JSON.parse(claimed[0].record_json).fence, "fence-9");
+});
+
+test("D1/SQLite: an adapter-less legacy task is not claimed", () => {
+  const database = db();
+  insert(database, "legacy", { id: "legacy", status: "queued", attempts: 0, updatedAt: T0 });
+  const claimed = database.prepare(NEXUS_CLAIM_SQL).all("w1", "2026-11-21T00:05:00.000Z", "fence-legacy", T0, T0);
+  assert.equal(claimed.length, 0);
+  assert.equal(read(database, "legacy").status, "queued");
 });
 
 test("D1/SQLite: a fenced (owned) task is not claimable by another worker", () => {
