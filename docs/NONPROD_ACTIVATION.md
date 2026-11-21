@@ -196,6 +196,33 @@ Trigger **Manual Deploy → Restart** (or a new deploy) in Render. The logs must
 `NEXUS_RUNTIME: received SIGTERM` and a stopped state. After restart, `/nexus/runtime` must show a
 fresh heartbeat. A sleeping free instance is not the same as a graceful shutdown test.
 
+## Ax connection gate (not yet satisfied)
+
+`integrations/ax-nexus/openapi.json` still contains
+`https://REPLACE-WITH-NON-PRODUCTION-CONNECTOR-HOST` and `x-server-url-status:
+"placeholder-not-verified"`. Do not import that document into ChatGPT as a working connector.
+
+The root `render.yaml` currently defines only the Habitat service; the gateway/connector reference
+under `integrations/ax-nexus/` is not part of this Blueprint and has not been deployed. There is no
+ChatGPT account authorization in this environment.
+
+After hosted worker acceptance passes, deploy the gateway and connector as separate non-production
+services using `rootDir: integrations/ax-nexus`, then:
+
+1. Verify `GET https://<gateway>/v1/health` and `GET https://<connector>/health`.
+2. Verify the connector rejects a missing/wrong bearer key with 401 and enforces its per-IP rate
+   limit with 429 plus `Retry-After`.
+3. Import `https://<connector>/openapi.json` in ChatGPT. The connector rewrites `servers[0].url`
+   from `PUBLIC_BASE_URL` or Render's `RENDER_EXTERNAL_URL`; confirm the imported URL is the
+   non-production connector origin, not the placeholder.
+4. Configure API-key auth with header `Authorization` and value `Bearer <AX_CONNECTOR_API_KEY>`.
+5. Submit `runtime.health` from ChatGPT and retrieve the persisted task. Success requires
+   `status:"done"` and `result.evidence` beginning with `runtime:`. A 202 response alone is not a
+   ChatGPT round trip.
+
+Until all five steps succeed, Ax is not connected to Nexus and no direct-communication claim is
+valid.
+
 ## Remaining owner actions
 
 - Cloudflare: create the disposable database and scoped token.
