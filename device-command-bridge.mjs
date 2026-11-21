@@ -128,18 +128,58 @@ export function registerDeviceCommandBridge(app, {
         return res.status(400).json({ ok: false, error: "A valid deviceId and pairing code are required." });
       }
       const now = new Date().toISOString();
-      const paired = await store.consumePairing({ codeHash: digest(code), deviceId, consumedAt: now });
-      if (!paired) return res.status(401).json({ ok: false, error: "Pairing code is invalid, expired, or already used." });
-      const deviceToken = randomBytes(32).toString("base64url");
-      await store.registerDevice({ deviceId, tokenHash: digest(deviceToken), createdAt: now });
-      // Keep the canonical nested object and expose top-level aliases for older Bridge APK parsers.
-      // The raw credential is returned only in this one-time exchange response.
-      return res.status(200).json({
-        ok: true,
-        deviceId,
-        token: deviceToken,
-        deviceToken,
-        device: { deviceId, token: deviceToken, deviceToken }
+      const codeHash = digest(code);
+
+      async function issueToken(recovered) {
+        const deviceToken = randomBytes(32).toString("base64url");
+        await store.registerDevice({ deviceId, tokenHash: digest(deviceToken), createdAt: now });
+        // Keep the canonical nested object and expose top-level aliases for older Bridge APK parsers.
+        // The raw credential is returned only in this one-time exchange response.
+        return res.status(200).json({
+          ok: true,
+          deviceId,
+          recovered,
+          token: deviceToken,
+          deviceToken,
+          device: { deviceId, token: deviceToken, deviceToken }
+        });
+      }
+
+      const paired = await store.consumePairing({ codeHash, deviceId, consumedAt: now });
+      if (paired) return issueToken(false);
+
+      // A failed exchange is explained, not just refused: the phone must be able to tell the owner
+      // whether to ask for a new code. The code itself is never returned here.
+      const pairing = typeof store.findPairing === "function" ? await store.findPairing({ codeHash }) : null;
+      if (!pairing) {
+        return res.status(401).json({
+          ok: false,
+          code: "pairing_unknown",
+          error: "This pairing code was never issued. Generate a fresh code in the Control Center."
+        });
+      }
+      if (Date.parse(pairing.expiresAt) <= Date.parse(now)) {
+        return res.status(401).json({
+          ok: false,
+          code: "pairing_expired",
+          error: "This pairing code expired. Generate a fresh code in the Control Center."
+        });
+      }
+      if (pairing.consumedAt) {
+        // The same code, already consumed by this device, means the first response was lost
+        // (app closed, network dropped). Recover instead of punishing the owner with a new code;
+        // the old token stops working because registerDevice replaces its hash.
+        if (pairing.deviceId === deviceId) return issueToken(true);
+        return res.status(409).json({
+          ok: false,
+          code: "pairing_used_other_device",
+          error: "This pairing code was already used by another device. Generate a fresh code."
+        });
+      }
+      return res.status(401).json({
+        ok: false,
+        code: "pairing_invalid",
+        error: "This pairing code does not match this device. Generate a fresh code."
       });
     } catch (error) {
       console.error("DEVICE_PAIRING_EXCHANGE_FAILED", String(error?.message || error));
@@ -247,11 +287,35 @@ export function registerDeviceCommandBridge(app, {
 
   // Home Bridge command center (Ax/Buff/phone/projects). Additive: it only registers
   // /bridge/console routes and never changes the device command bridge above.
+  let consoleApi = null;
   try {
-    registerHomeBridgeConsole(app, { env, fetchImpl });
+    consoleApi = registerHomeBridgeConsole(app, { env, fetchImpl });
   } catch (error) {
     console.error("HOME_BRIDGE_CONSOLE_MOUNT_FAILED", String(error?.message || error));
   }
+
+  // The Control Center mints a fresh pairing code itself, using its own operator session (or the
+  // Ax bridge credential). The Ax token stays server-side: the browser never receives it.
+  app.post("/bridge/console/pairing", (consoleApi?.requireOperator || requireAx), requireStore, async (req, res) => {
+    try {
+      const deviceId = String(req.body?.deviceId || "").trim();
+      if (deviceId && !validDeviceId(deviceId)) {
+        return res.status(400).json({ ok: false, error: "A valid deviceId is required when one is supplied." });
+      }
+      const code = randomBytes(16).toString("base64url");
+      const createdAt = new Date().toISOString();
+      const expiresAt = new Date(Date.now() + PAIRING_TTL_MS).toISOString();
+      // Without a device id the code is bound to the first device that uses it.
+      await store.createPairing({ codeHash: digest(code), deviceId: deviceId || "*", createdAt, expiresAt });
+      return res.status(201).json({
+        ok: true,
+        pairing: { code, deviceId: deviceId || null, expiresAt, singleUse: true }
+      });
+    } catch (error) {
+      console.error("CONSOLE_PAIRING_CREATE_FAILED", String(error?.message || error));
+      return res.status(500).json({ ok: false, error: "Unable to create a pairing code." });
+    }
+  });
 
   // The launcher's Habitat panel reads through this endpoint with its own device token, so the
   // relay's ax credential never ships inside the APK.
