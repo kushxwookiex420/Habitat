@@ -15,6 +15,8 @@ import { registerTikTokOAuth } from "./tiktok-oauth.mjs";
 import { registerShopifyOAuth } from "./shopify-oauth.mjs";
 import { registerPublicPages } from "./public-pages.mjs";
 import { readFile } from "node:fs/promises";
+import { randomBytes } from "node:crypto";
+import { createTaskAuthorizer } from "./task-authorizer.mjs";
 
 import express from "express";
 
@@ -23,6 +25,30 @@ const app = express();
 app.use(express.json({ limit: "1mb" }));
 
 const deviceCommandBridge = registerDeviceCommandBridge(app);
+
+// Internal loopback calls made by /chat must prove they came from this process. The token is
+// generated per boot and never returned by an endpoint or written to a log.
+const INTERNAL_TASK_TOKEN = randomBytes(24).toString("hex");
+function internalTaskHeaders() {
+  return { "x-habitat-internal-token": INTERNAL_TASK_TOKEN };
+}
+const requireTaskCaller = createTaskAuthorizer({
+  internalToken: INTERNAL_TASK_TOKEN,
+  getAxToken: () => process.env.HABITAT_AX_BRIDGE_TOKEN,
+  authorizeOwner: (req) => deviceCommandBridge.authorizeOwnerRequest(req)
+});
+
+async function requireChatOwner(req, res, action) {
+  const owner = await deviceCommandBridge.authorizeOwnerRequest(req);
+  if (owner.ok) return true;
+  res.status(owner.status || 401).json({
+    response: "AUTHORIZATION REQUIRED\n" + action + " requires a paired, verified owner device.",
+    error: owner.error || "Owner device authentication required.",
+    code: owner.code || "owner_required",
+    deterministic: true
+  });
+  return false;
+}
 
 registerPublicPages(app);
 registerProductDemoResearch(app);
@@ -514,27 +540,6 @@ app.get("/diagnostics/provider", async (req, res) => {
   }
 });
 
-app.post("/device/heartbeat", (req, res) => {
-  const packageName = String(req.body?.packageName || "").trim();
-  const deviceId = String(req.body?.deviceId || "").trim();
-  const deviceModel = String(req.body?.deviceModel || "").trim();
-  const appVersion = String(req.body?.appVersion || "").trim();
-
-  if (packageName !== "com.habitat" || !deviceId || !deviceModel) {
-    return res.status(400).json({ ok: false, error: "Valid Habitat Android identity required." });
-  }
-
-  const device = {
-    deviceId,
-    packageName,
-    deviceModel,
-    appVersion,
-    lastSeenAt: nowIso()
-  };
-  androidDevices.set(deviceId, device);
-  return res.json({ ok: true, androidDeviceAccess: "PASS", device });
-});
-
 app.get("/device/status", async (req, res) => {
   const access = await androidAccessStatus();
   return res.json({
@@ -558,6 +563,9 @@ app.get("/health", (req, res) => {
       breakGlassConfigured: deviceBridge.breakGlassConfigured,
       perDeviceTokens: deviceBridge.perDeviceTokens
     },
+    // Read-only runtime readiness. This is intentionally not part of the HTTP success condition:
+    // Render health must stay up even when the optional command worker is disabled or degraded.
+    nexus: deviceBridge.nexus || null,
     provider: "multi-provider",
     model,
     free_brain: true
@@ -664,6 +672,7 @@ app.post("/chat", async (req, res) => {
     }
 
     if (/system\s*check/i.test(message)) {
+      if (!(await requireChatOwner(req, res, "System check"))) return undefined;
       const check = await runSystemCheck();
       return res.json({
         response: check.report,
@@ -714,6 +723,7 @@ app.post("/chat", async (req, res) => {
       /\b(task|operation|mission|job|worker)\b/i.test(message);
 
     if (operationalIntent) {
+      if (!(await requireChatOwner(req, res, "Operational task execution"))) return undefined;
       const requestedTitle =
         message.match(/\b(?:task|operation|mission|job)\s+(?:named|called|titled)\s+["']?([^"'\n]+)["']?/i)?.[1]?.trim() ||
         message.match(/(?:create|make|start|add)\s+(?:a\s+)?(?:real\s+)?(?:task|operation|mission|job)\b(?:\s+to)?\s+(.+?)(?:\.|$)/i)?.[1]?.trim() ||
@@ -724,7 +734,7 @@ app.post("/chat", async (req, res) => {
       try {
         const createResponse = await fetch("http://127.0.0.1:" + port + "/tasks", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: { "Content-Type": "application/json", ...internalTaskHeaders() },
           body: JSON.stringify({
             title: title || "Ax Operational Task",
             description: "Created by Ax operational command: " + message
@@ -741,7 +751,7 @@ app.post("/chat", async (req, res) => {
         let task = created.task;
         if (wantsExecution) {
           const delegateResponse = await fetch("http://127.0.0.1:" + port + "/tasks/" + encodeURIComponent(task.id) + "/delegate", {
-            method: "POST", headers: { "Content-Type": "application/json" }, body: "{}"
+            method: "POST", headers: { "Content-Type": "application/json", ...internalTaskHeaders() }, body: "{}"
           });
           const delegateText = await delegateResponse.text();
           let delegated;
@@ -774,13 +784,14 @@ app.post("/chat", async (req, res) => {
     );
 
     if (taskIntent) {
+      if (!(await requireChatOwner(req, res, "Task creation"))) return undefined;
       const title = String(taskIntent[1] || "").trim().replace(/[.]+$/, "");
       if (!title) return res.status(400).json({ error: "task title required" });
 
       try {
         const createResponse = await fetch("http://127.0.0.1:" + port + "/tasks", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: { "Content-Type": "application/json", ...internalTaskHeaders() },
           body: JSON.stringify({
             title,
             description: "Created by Ax from an explicit task command: " + message
@@ -807,7 +818,7 @@ app.post("/chat", async (req, res) => {
             "http://127.0.0.1:" + port + "/tasks/" + encodeURIComponent(task.id) + "/delegate",
             {
               method: "POST",
-              headers: { "Content-Type": "application/json" },
+              headers: { "Content-Type": "application/json", ...internalTaskHeaders() },
               body: "{}"
             }
           );
@@ -1127,26 +1138,12 @@ function storageSelfTest() {
 
 function nowIso() { return new Date().toISOString(); }
 
-// Real Android app presence registry. A running Habitat APK posts a heartbeat;
-// system checks can verify that the Android client actually reached the backend.
-const androidDevices = new Map();
+// Android presence comes only from the authenticated device bridge. The old unauthenticated
+// heartbeat route could make an arbitrary device look online; it is intentionally gone.
 const ANDROID_HEARTBEAT_TTL_MS = 120000;
 const DEVICE_BRIDGE_HEARTBEAT_TTL_MS = 45 * 60 * 1000;
 
-function pruneAndroidDevices() {
-  const cutoff = Date.now() - ANDROID_HEARTBEAT_TTL_MS;
-  for (const [id, device] of androidDevices.entries()) {
-    if (new Date(device.lastSeenAt).getTime() < cutoff) androidDevices.delete(id);
-  }
-}
-
 async function androidAccessStatus() {
-  pruneAndroidDevices();
-  const legacyDevices = Array.from(androidDevices.values()).map(device => ({
-    ...device,
-    source: "legacy-heartbeat",
-    heartbeatTtlMs: ANDROID_HEARTBEAT_TTL_MS
-  }));
   let pairedDevices = [];
   try {
     pairedDevices = await deviceCommandBridge.listDevices();
@@ -1174,7 +1171,7 @@ async function androidAccessStatus() {
         heartbeatTtlMs: DEVICE_BRIDGE_HEARTBEAT_TTL_MS
       };
     });
-  const devices = [...legacyDevices, ...bridgeDevices]
+  const devices = bridgeDevices
     .sort((a, b) => new Date(b.lastSeenAt).getTime() - new Date(a.lastSeenAt).getTime());
   const active = devices.filter(device =>
     Date.now() - new Date(device.lastSeenAt).getTime() <= (device.heartbeatTtlMs || ANDROID_HEARTBEAT_TTL_MS)
@@ -1439,7 +1436,7 @@ app.get("/storage/check", async (_req, res) => {
   });
 });
 
-app.post("/tasks", async (req, res) => {
+app.post("/tasks", requireTaskCaller, async (req, res) => {
   const title = String(req.body?.title || "").trim();
   const description = String(req.body?.description || title).trim();
   if (!title) return res.status(400).json({ ok: false, error: "title required" });
@@ -1458,7 +1455,7 @@ app.post("/tasks", async (req, res) => {
   }
 });
 
-app.get("/tasks", async (_req, res) => {
+app.get("/tasks", requireTaskCaller, async (_req, res) => {
   try {
     const tasks = (await listStoredTasks())
       .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
@@ -1468,7 +1465,7 @@ app.get("/tasks", async (_req, res) => {
   }
 });
 
-app.get("/tasks/:id", async (req, res) => {
+app.get("/tasks/:id", requireTaskCaller, async (req, res) => {
   try {
     let task = taskRepository && taskStorageReady
       ? await taskRepository.get(req.params.id)
@@ -1481,7 +1478,7 @@ app.get("/tasks/:id", async (req, res) => {
   }
 });
 
-app.post("/tasks/:id/retry", async (req, res) => {
+app.post("/tasks/:id/retry", requireTaskCaller, async (req, res) => {
   const existing = taskStore.get(req.params.id);
   if (!existing) {
     if (taskRepository && taskStorageReady) {
@@ -1509,7 +1506,7 @@ app.post("/tasks/:id/retry", async (req, res) => {
   }
 });
 
-app.post("/tasks/:id/delegate", async (req, res) => {
+app.post("/tasks/:id/delegate", requireTaskCaller, async (req, res) => {
   let task = taskStore.get(req.params.id);
   if (!task && taskRepository && taskStorageReady) {
     try {
@@ -1965,7 +1962,7 @@ const contentEngine = registerContentEngine(app, { nowIso, makeTaskId, taskStore
  * and external diagnostics one canonical endpoint instead of relying on
  * simulated task/verifier output.
  */
-app.post("/system-check", async (req, res) => {
+app.post("/system-check", requireTaskCaller, async (req, res) => {
   try {
     const check = await runSystemCheck();
     return res.status(check.overall === "VERIFIED PASS" ? 200 : 503).json({

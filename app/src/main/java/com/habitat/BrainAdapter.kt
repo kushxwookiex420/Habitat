@@ -1,16 +1,16 @@
 package com.habitat
 
 import android.content.Context
-import android.os.Build
-import java.util.UUID
 import org.json.JSONArray
 import org.json.JSONObject
 import java.net.HttpURLConnection
-import java.net.URL
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.Executors
 
-class BrainAdapter(private val context: Context) {
+class BrainAdapter(
+    private val context: Context,
+    private val credentials: (() -> Pair<String, String>?)? = null
+) {
     enum class State { CONNECTED, DISCONNECTED, ERROR, CONNECTING }
     data class Result(val state: State, val text: String = "", val detail: String = "")
 
@@ -19,44 +19,29 @@ class BrainAdapter(private val context: Context) {
         private const val DROPPILOT_ENDPOINT = "https://habitat-1-szzd.onrender.com/orchestrate/dropilot"
         private const val VICECITY_ENDPOINT = "https://habitat-1-szzd.onrender.com/orchestrate/vicecity"
         private const val TASKS_ENDPOINT = "https://habitat-1-szzd.onrender.com/tasks"
-        private const val DEVICE_HEARTBEAT_ENDPOINT = "https://habitat-1-szzd.onrender.com/device/heartbeat"
-        private const val DEVICE_ID_KEY = "android_device_id"
         private const val PREFS = "habitat_brain"
         private const val HISTORY_KEY = "conversation_history"
         private const val MAX_HISTORY = 20
     }
 
     private val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-    private fun deviceId(): String = prefs.getString(DEVICE_ID_KEY, null) ?: UUID.randomUUID().toString().also { prefs.edit().putString(DEVICE_ID_KEY, it).apply() }
+    private val executor = Executors.newSingleThreadExecutor()
 
-    fun heartbeat(callback: ((Boolean, String) -> Unit)? = null) {
-        executor.execute {
-            var connection: HttpURLConnection? = null
-            try {
-                connection = HabitatNetwork.openConnection(DEVICE_HEARTBEAT_ENDPOINT)
-                connection.requestMethod = "POST"
-                connection.connectTimeout = 10000
-                connection.readTimeout = 10000
-                connection.doOutput = true
-                connection.setRequestProperty("Content-Type", "application/json")
-                connection.setRequestProperty("Accept", "application/json")
-                val body = JSONObject().apply {
-                    put("deviceId", deviceId())
-                    put("packageName", context.packageName)
-                    put("deviceModel", Build.MODEL ?: "Android")
-                    put("appVersion", try { context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "unknown" } catch (_: Exception) { "unknown" })
-                }.toString()
-                connection.outputStream.use { it.write(body.toByteArray(StandardCharsets.UTF_8)) }
-                val code = connection.responseCode
-                val stream = if (code in 200..299) connection.inputStream else connection.errorStream
-                val text = stream?.bufferedReader()?.use { it.readText() } ?: ""
-                callback?.invoke(code in 200..299, text)
-            } catch (e: Exception) {
-                callback?.invoke(false, e.message ?: e.javaClass.simpleName)
-            } finally { connection?.disconnect() }
+    /**
+     * Attach the paired device identity when one is available. The owner credentials stay in the
+     * app's encrypted AndroidDeviceBridge store; they are never placed in shared preferences that
+     * the chat history uses. An unpaired app can still use the public chat endpoint, but task
+     * creation and system checks fail closed on the server.
+     */
+    private fun attachDeviceIdentity(connection: HttpURLConnection) {
+        val pair = credentials?.invoke() ?: return
+        val deviceId = pair.first.trim()
+        val token = pair.second.trim()
+        if (deviceId.isNotEmpty() && token.isNotEmpty()) {
+            connection.setRequestProperty("x-owner-device-id", deviceId)
+            connection.setRequestProperty("Authorization", "Bearer " + token)
         }
     }
-    private val executor = Executors.newSingleThreadExecutor()
 
     fun endpoint(): String = LIVE_ENDPOINT
 
@@ -93,6 +78,7 @@ class BrainAdapter(private val context: Context) {
             var connection: HttpURLConnection? = null
             try {
                 connection = HabitatNetwork.openConnection(DROPPILOT_ENDPOINT)
+                attachDeviceIdentity(connection)
                 connection.requestMethod = "POST"
                 connection.connectTimeout = 15000
                 connection.readTimeout = 90000
@@ -164,6 +150,7 @@ class BrainAdapter(private val context: Context) {
             var connection: HttpURLConnection? = null
             try {
                 connection = HabitatNetwork.openConnection(VICECITY_ENDPOINT)
+                attachDeviceIdentity(connection)
                 connection.requestMethod = "POST"
                 connection.connectTimeout = 15000
                 connection.readTimeout = 120000
@@ -231,6 +218,7 @@ class BrainAdapter(private val context: Context) {
             var connection: HttpURLConnection? = null
             try {
                 connection = HabitatNetwork.openConnection(LIVE_ENDPOINT)
+                attachDeviceIdentity(connection)
                 connection.requestMethod = "POST"
                 connection.connectTimeout = 15000
                 connection.readTimeout = 120000
@@ -319,6 +307,7 @@ class BrainAdapter(private val context: Context) {
             var connection: HttpURLConnection? = null
             try {
                 connection = HabitatNetwork.openConnection(TASKS_ENDPOINT)
+                attachDeviceIdentity(connection)
                 connection.requestMethod = "POST"
                 connection.connectTimeout = 10000
                 connection.readTimeout = 30000
@@ -385,6 +374,7 @@ class BrainAdapter(private val context: Context) {
             var connection: HttpURLConnection? = null
             try {
                 connection = HabitatNetwork.openConnection(TASKS_ENDPOINT)
+                attachDeviceIdentity(connection)
                 connection.requestMethod = "GET"
                 connection.connectTimeout = 10000
                 connection.readTimeout = 30000
@@ -471,10 +461,9 @@ class BrainAdapter(private val context: Context) {
             var connection: HttpURLConnection? = null
 
             try {
-                connection =
-                    URL("$TASKS_ENDPOINT/$taskId/delegate")
-                        .openConnection() as HttpURLConnection
+                connection = HabitatNetwork.openConnection("$TASKS_ENDPOINT/$taskId/delegate")
 
+                attachDeviceIdentity(connection)
                 connection.requestMethod = "POST"
                 connection.connectTimeout = 10000
 
@@ -697,6 +686,7 @@ class BrainAdapter(private val context: Context) {
             var connection: HttpURLConnection? = null
             try {
                 connection = HabitatNetwork.openConnection("https://habitat-1-szzd.onrender.com/content/publisher/creator-info")
+                attachDeviceIdentity(connection)
                 connection.requestMethod = "POST"; connection.connectTimeout = 10000; connection.readTimeout = 30000
                 connection.doOutput = true; connection.setRequestProperty("Content-Type", "application/json")
                 connection.outputStream.use { it.write("{}".toByteArray(StandardCharsets.UTF_8)) }
@@ -732,6 +722,7 @@ class BrainAdapter(private val context: Context) {
         var connection: HttpURLConnection? = null
         try {
             connection = HabitatNetwork.openConnection(url)
+            attachDeviceIdentity(connection)
             connection.requestMethod = "POST"; connection.connectTimeout = 10000; connection.readTimeout = 120000
             connection.doOutput = true; connection.setRequestProperty("Content-Type", "application/json"); connection.setRequestProperty("Accept", "application/json")
             connection.outputStream.use { it.write(body.toString().toByteArray(StandardCharsets.UTF_8)) }

@@ -48,6 +48,9 @@ class AndroidDeviceBridge(
 
     fun isConfigured(): Boolean = !readToken().isNullOrBlank()
 
+    /** Used by the in-app chat adapter so task and chat requests carry the same paired identity. */
+    fun currentToken(): String? = readToken()
+
     fun pair(code: String, onComplete: (Boolean, String) -> Unit) {
         val clean = code.trim()
         if (clean.length < 20 || clean.length > 128) {
@@ -105,7 +108,9 @@ class AndroidDeviceBridge(
     fun clearCredentials() {
         stop()
         DeviceBridgeScheduler.cancel(appContext)
-        prefs.edit().remove("encrypted_token").apply()
+        // A re-pair must send a fresh heartbeat rather than inheriting the previous credential's
+        // throttling timestamp.
+        prefs.edit().remove("encrypted_token").remove("last_heartbeat_at").apply()
     }
 
     @Synchronized
@@ -229,6 +234,7 @@ class AndroidDeviceBridge(
         }
     }
 
+    @Synchronized
     private fun readToken(): String? {
         val packedText = prefs.getString("encrypted_token", null) ?: return null
         return try {
@@ -244,6 +250,7 @@ class AndroidDeviceBridge(
         }
     }
 
+    @Synchronized
     private fun getOrCreateKey(): SecretKey {
         val store = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
         val existing = store.getKey(KEY_ALIAS, null) as? SecretKey

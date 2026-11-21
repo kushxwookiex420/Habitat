@@ -109,8 +109,11 @@ export function registerDeviceCommandBridge(app, {
     if (!validDeviceId(ownerDeviceId) || !token) {
       return { ok: false, status: 401, code: "owner_required", error: "A valid owner device id and token are required." };
     }
+    if (!store) {
+      return { ok: false, status: 503, code: "owner_unavailable", error: "Device verification is not configured on this process." };
+    }
     try {
-      if (!store || !(await store.verifyDeviceToken(token, ownerDeviceId)) || !owners.has(ownerDeviceId)) {
+      if (!(await store.verifyDeviceToken(token, ownerDeviceId)) || !owners.has(ownerDeviceId)) {
         return { ok: false, status: 401, code: "owner_invalid", error: "The owner device credential is not valid." };
       }
       return { ok: true, deviceId: ownerDeviceId };
