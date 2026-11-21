@@ -7,7 +7,7 @@ services:
     runtime: node
     plan: starter
     region: oregon
-    branch: REPLACE-WITH-NONPROD-BRANCH
+    branch: ax-nexus/revision-3-nonprod
     rootDir: .
     buildCommand: npm install --omit=dev --ignore-scripts
     startCommand: npm start

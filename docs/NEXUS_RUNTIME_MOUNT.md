@@ -1,7 +1,9 @@
 # Nexus runtime mount (Revision 3)
 
-Status: **source integration complete and tested locally; not deployed.** The non-production
-service and live D1 run remain outstanding.
+Status: **source integration complete and tested locally; non-production configuration hardened,
+not deployed.** The Render service and live D1 run remain outstanding because no Render or
+Cloudflare credentials are available to the agent. See `docs/NONPROD_ACTIVATION.md` for the
+owner runbook.
 
 ## Repository identity
 
@@ -50,17 +52,21 @@ registerUniversalCommandRoutes  ->  commandApi { engine, store }
 
 ## Deployment (non-production only)
 
-Use `render.yaml` in this repository after replacing `REPLACE-WITH-NONPROD-BRANCH`:
+`render.yaml` targets the published branch `ax-nexus/revision-3-nonprod` and declares:
 
 - name `ax-nexus-habitat-nonprod`, root `.`, region `oregon`, starter
 - build `npm install --omit=dev --ignore-scripts`
 - start `npm start` (runs the syntax check, then `server.mjs`)
 - health `/health`
-- env: `CLOUDFLARE_ACCOUNT_ID`, `HABITAT_D1_DATABASE_ID`, `HABITAT_D1_API_TOKEN`,
-  `HABITAT_AX_BRIDGE_TOKEN`, `HABITAT_OWNER_DEVICE_ID` (all secret except the IDs)
+- required service variables: `CLOUDFLARE_ACCOUNT_ID`, `HABITAT_D1_DATABASE_ID`,
+  `HABITAT_D1_API_TOKEN`, `HABITAT_AX_BRIDGE_TOKEN`, `HABITAT_OWNER_DEVICE_ID`
 
-After deploy: `/nexus/runtime` with the bridge token must report `workerStarted:true` and a live
-heartbeat. A task must reach `done` with `runtime:` evidence. Stop and roll back on failure.
+`/health` is the Render liveness check only; it returns 200 even when the optional AI provider is
+not configured. Nexus readiness is `/nexus/runtime`, which requires the bridge token and must report
+`workerStarted:true` plus a non-stale heartbeat. A health 200 alone is not acceptance.
+
+A task must reach `done` with `runtime:` evidence. Stop and roll back on failure. Do not use the
+production database, token, or Render service.
 
 ## Rollback
 
@@ -72,4 +78,5 @@ changes only `device-command-bridge.mjs`, `package.json`, tests, scripts, docs a
 ## Still blocked
 
 Live D1, Render service creation, Render sandbox probe, and a hosted worker heartbeat. No production
-deployment, production credentials, or worker activation was performed.
+deployment, production credentials, or worker activation was performed. The agent environment has
+no Render or Cloudflare credentials; those steps need the owner's secure dashboard access.

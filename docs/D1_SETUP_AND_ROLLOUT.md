@@ -1,6 +1,7 @@
 # Cloudflare D1 setup and safe rollout
 
-This runbook is for the D1 repository foundation in this branch. It does **not** mean production task routes already use D1.
+This runbook is for the D1 repository foundation. It is historical context, not authorization for
+production activation; the non-production runbook is `docs/NONPROD_ACTIVATION.md`.
 
 ## Required configuration
 
@@ -14,7 +15,7 @@ The existing `CLOUDFLARE_API_TOKEN` used for Workers AI is a separate credential
 
 ## Schema
 
-Apply `migrations/0001_habitat_tasks.sql` to the new D1 database using the Cloudflare dashboard or Wrangler. The repository's `initialize()` method also creates the table and index idempotently, but the current production server does not call it.
+Apply `migrations/0001_habitat_tasks.sql` to the new D1 database using the Cloudflare dashboard or Wrangler, or rely on the idempotent `initialize()` DDL. Revision 3's `server.mjs` calls `initialize()` during startup whenever all three D1 values are present, and fails closed if initialization does not succeed. Never point this at production while preparing the non-production service.
 
 ## Safe rollout gates
 
@@ -27,4 +28,4 @@ Do not declare task persistence active until all of these are true:
 5. A real D1-backed task survives a Render restart and can be read back.
 6. Task dispatch has duplicate-execution protection so recovering a task cannot accidentally repeat an external publishing action.
 
-Until then, the in-memory task map is still the production store. This foundation alone does not make task history durable.
+Revision 3 wires the D1 task repository into startup, so the old "in-memory production store" caveat no longer applies to the mounted runtime. The remaining production gates are deployment, a real restart-and-hydration test, and dispatch duplicate-execution protection. This foundation alone is not production acceptance.
