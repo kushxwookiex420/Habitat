@@ -1,5 +1,6 @@
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { createD1DeviceCommandRepository } from "./d1-device-command-repository.mjs";
+import { registerHomeBridgeConsole } from "./home-bridge-console.mjs";
 
 const SAFE_COMMANDS = new Set(["device.status"]);
 const PAIRING_TTL_MS = 10 * 60 * 1000;
@@ -241,6 +242,14 @@ export function registerDeviceCommandBridge(app, {
       return res.status(500).json({ ok: false, error: "Unable to revoke device." });
     }
   });
+
+  // Home Bridge command center (Ax/Buff/phone/projects). Additive: it only registers
+  // /bridge/console routes and never changes the device command bridge above.
+  try {
+    registerHomeBridgeConsole(app, { env, fetchImpl });
+  } catch (error) {
+    console.error("HOME_BRIDGE_CONSOLE_MOUNT_FAILED", String(error?.message || error));
+  }
 
   return Object.freeze({
     async initialize() {
