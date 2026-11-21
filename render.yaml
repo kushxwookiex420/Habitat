@@ -12,7 +12,7 @@ services:
     buildCommand: npm install --omit=dev --ignore-scripts
     startCommand: npm start
     healthCheckPath: /health
-    autoDeployTrigger: off
+    autoDeployTrigger: "off"
     envVars:
       - key: CLOUDFLARE_ACCOUNT_ID
         sync: false
