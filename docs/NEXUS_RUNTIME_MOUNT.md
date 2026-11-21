@@ -41,11 +41,18 @@ registerUniversalCommandRoutes  ->  commandApi { engine, store }
 - Claim gate: only tasks naming a non-empty adapter are claimable. Legacy/adapter-less queued rows
   stay queued instead of being claimed and failed; an unknown adapter is claimed only so the worker
   can fail it with an explicit "no adapter registered" error.
+- Device ownership: every paired device has a server-side owner record in
+  `habitat_device_ownership`; pairing codes carry their issuing owner in `habitat_pairing_owners`.
+  The owner is never read from a request body. The authenticated owner may recover or revoke only a
+  device assigned to that same owner. Missing or ambiguous ownership fails closed.
 - Revocation: a revoked device is never revived by replaying a pairing code. Recovery is an explicit
-  owner-device action (`POST /device/owner/devices/:deviceId/unrevoke`). Recovery destroys the old
-  token hash and every old pairing code for the device; the device must complete a fresh pairing.
-  All configured owner devices are administrators and may restore another configured owner's device;
-  non-owners and revoked owner tokens are refused.
+  owner-device action (`POST /device/owner/devices/:deviceId/unrevoke`) and is restricted to the
+  target's recorded owner. Recovery destroys the old token hash and every old pairing code for the
+  device; the device must complete a fresh pairing. The separately configured Ax bridge credential
+  remains the super-admin revocation path; it is not an owner-device recovery credential.
+- Pairing: Ax/Control Center minting resolves the single configured owner server-side and refuses
+  when several owners are configured. An authenticated owner may mint through
+  `POST /device/owner/pairings` only for itself, a new ownerless device, or a device it already owns.
 - Fail closed: no D1/store means no `/nexus/runtime` route, no worker, and command routes answer 503.
 - Shutdown: the runtime attaches SIGTERM/SIGINT handlers; repeated signals are absorbed while the
   in-flight task drains (15 s default). `bridge.shutdown()` is available for embedded callers.

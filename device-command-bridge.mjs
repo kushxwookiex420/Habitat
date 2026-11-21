@@ -68,6 +68,35 @@ export function registerDeviceCommandBridge(app, {
     String(value || "").split(",").map(part => part.trim()).filter(Boolean).forEach(id => owners.add(id));
   }
 
+  function soleOwner() {
+    return owners.size === 1 ? [...owners][0] : null;
+  }
+
+  /** Authenticate an owner device and return its server-side device id, never a body value. */
+  async function authenticateOwner(req, res) {
+    if (!owners.size) {
+      res.status(503).json({ ok: false, error: "Owner authorization is not configured." });
+      return null;
+    }
+    const ownerDeviceId = String(req.headers?.["x-owner-device-id"] || "").trim();
+    const token = bearer(req);
+    if (!validDeviceId(ownerDeviceId) || !token) {
+      res.status(401).json({ ok: false, code: "owner_required", error: "A valid owner device id and token are required." });
+      return null;
+    }
+    try {
+      if (!(await store.verifyDeviceToken(token, ownerDeviceId)) || !owners.has(ownerDeviceId)) {
+        res.status(401).json({ ok: false, code: "owner_invalid", error: "The owner device credential is not valid." });
+        return null;
+      }
+      return ownerDeviceId;
+    } catch (error) {
+      console.error("DEVICE_OWNER_AUTH_FAILED", String(error?.message || error));
+      res.status(503).json({ ok: false, error: "Owner verification is temporarily unavailable." });
+      return null;
+    }
+  }
+
   function requireAx(req, res, next) {
     if (!axToken || !safeEqual(bearer(req), axToken)) {
       return res.status(401).json({ ok: false, error: "Ax bridge authentication required." });
@@ -108,10 +137,14 @@ export function registerDeviceCommandBridge(app, {
       if (!validDeviceId(deviceId)) {
         return res.status(400).json({ ok: false, error: "A valid deviceId is required." });
       }
+      const ownerDeviceId = soleOwner();
+      if (!ownerDeviceId) {
+        return res.status(409).json({ ok: false, code: "ownership_ambiguous", error: "Exactly one configured owner is required to mint a pairing code." });
+      }
       const code = randomBytes(16).toString("base64url");
       const createdAt = new Date().toISOString();
       const expiresAt = new Date(Date.now() + PAIRING_TTL_MS).toISOString();
-      await store.createPairing({ codeHash: digest(code), deviceId, createdAt, expiresAt });
+      await store.createPairing({ codeHash: digest(code), deviceId, createdAt, expiresAt, ownerDeviceId });
       return res.status(201).json({ ok: true, pairing: { code, deviceId, expiresAt, singleUse: true } });
     } catch (error) {
       console.error("DEVICE_PAIRING_CREATE_FAILED", String(error?.message || error));
@@ -155,7 +188,7 @@ export function registerDeviceCommandBridge(app, {
         });
       }
 
-      async function issueToken(recovered) {
+      async function issueToken(recovered, ownerDeviceId) {
         // A revoked device must not be revived by a consumed-code recovery or a fresh code. An
         // owner must explicitly un-revoke it first.
         if (typeof store.isDeviceRevoked === "function" && await store.isDeviceRevoked(deviceId)) {
@@ -165,8 +198,27 @@ export function registerDeviceCommandBridge(app, {
             error: "This device is revoked. An owner must explicitly restore it before pairing again."
           });
         }
+        if (!ownerDeviceId) {
+          return res.status(409).json({ ok: false, code: "ownership_missing", error: "This pairing code has no recorded owner." });
+        }
+        if (!owners.has(ownerDeviceId)) {
+          return res.status(409).json({ ok: false, code: "ownership_invalid", error: "This pairing code was issued for an owner that is not configured." });
+        }
+        if (owners.has(deviceId) && deviceId !== ownerDeviceId) {
+          return res.status(403).json({ ok: false, code: "owner_mismatch", error: "An owner device may only be assigned to itself." });
+        }
+        if (typeof store.getDeviceOwner !== "function") {
+          return res.status(503).json({ ok: false, code: "ownership_unavailable", error: "Device ownership cannot be verified." });
+        }
+        const existingOwner = await store.getDeviceOwner(deviceId);
+        if (existingOwner && existingOwner !== ownerDeviceId) {
+          return res.status(403).json({ ok: false, code: "owned_by_another", error: "This device belongs to another owner." });
+        }
         const deviceToken = randomBytes(32).toString("base64url");
-        await store.registerDevice({ deviceId, tokenHash: digest(deviceToken), createdAt: now });
+        const registered = await store.registerDevice({ deviceId, tokenHash: digest(deviceToken), createdAt: now, ownerDeviceId });
+        if (registered === false) {
+          return res.status(409).json({ ok: false, code: "ownership_conflict", error: "Device ownership changed before pairing completed." });
+        }
         // Keep the canonical nested object and expose top-level aliases for older Bridge APK parsers.
         // The raw credential is returned only in this one-time exchange response.
         return res.status(200).json({
@@ -179,12 +231,18 @@ export function registerDeviceCommandBridge(app, {
         });
       }
 
+      // Read the server-side record before consuming so the authenticated request cannot choose
+      // an owner. The pairing row and its owner are written by the server when the code is minted.
+      let pairing = typeof store.findPairing === "function" ? await store.findPairing({ codeHash }) : null;
       const paired = await store.consumePairing({ codeHash, deviceId, consumedAt: now });
-      if (paired) return issueToken(false);
+      if (paired) return issueToken(false, pairing?.ownerDeviceId);
+
+      // A concurrent exchange may have consumed the code after our first read. Re-read before
+      // deciding this is a replay, so the same device still gets the lost-response recovery path.
+      if (typeof store.findPairing === "function") pairing = await store.findPairing({ codeHash });
 
       // A failed exchange is explained, not just refused: the phone must be able to tell the owner
       // whether to ask for a new code. The code itself is never returned here.
-      const pairing = typeof store.findPairing === "function" ? await store.findPairing({ codeHash }) : null;
       if (!pairing) {
         return res.status(401).json({
           ok: false,
@@ -203,7 +261,7 @@ export function registerDeviceCommandBridge(app, {
         // The same code, already consumed by this device, means the first response was lost
         // (app closed, network dropped). Recover instead of punishing the owner with a new code;
         // the old token stops working because registerDevice replaces its hash.
-        if (pairing.deviceId === deviceId) return issueToken(true);
+        if (pairing.deviceId === deviceId) return issueToken(true, pairing.ownerDeviceId);
         return res.status(409).json({
           ok: false,
           code: "pairing_used_other_device",
@@ -229,7 +287,8 @@ export function registerDeviceCommandBridge(app, {
         pairedAt: row.created_at,
         lastSeenAt: row.last_seen_at || null,
         deviceInfo: (() => { try { return row.device_json ? JSON.parse(row.device_json) : null; } catch { return null; } })(),
-        revoked: Boolean(row.revoked_at)
+        revoked: Boolean(row.revoked_at),
+        ownerDeviceId: row.owner_device_id || null
       })) });
     } catch (error) {
       console.error("DEVICE_LIST_FAILED", String(error?.message || error));
@@ -319,28 +378,97 @@ export function registerDeviceCommandBridge(app, {
     }
   });
 
+  // An authenticated owner may mint a code only for devices assigned to that owner (or a new
+  // ownerless device). Ownership comes from the authenticated owner device, never from the body.
+  app.post("/device/owner/pairings", requireStore, async (req, res) => {
+    const ownerDeviceId = await authenticateOwner(req, res);
+    if (!ownerDeviceId) return undefined;
+    const deviceId = String(req.body?.deviceId || "").trim();
+    if (!validDeviceId(deviceId)) return res.status(400).json({ ok: false, error: "A valid deviceId is required." });
+    if (owners.has(deviceId) && deviceId !== ownerDeviceId) {
+      return res.status(403).json({ ok: false, code: "owner_mismatch", error: "An owner device may only be assigned to itself." });
+    }
+    try {
+      if (typeof store.getDeviceOwner === "function") {
+        const existingOwner = await store.getDeviceOwner(deviceId);
+        if (existingOwner && existingOwner !== ownerDeviceId) {
+          return res.status(403).json({ ok: false, code: "owned_by_another", error: "This device belongs to another owner." });
+        }
+        if (!existingOwner) {
+          const known = typeof store.isDevicePaired === "function" ? await store.isDevicePaired(deviceId) : false;
+          const revoked = typeof store.isDeviceRevoked === "function" ? await store.isDeviceRevoked(deviceId) : false;
+          if (known || revoked) {
+            return res.status(409).json({ ok: false, code: "ownership_missing", error: "This existing device has no recorded owner." });
+          }
+        }
+      }
+      const code = randomBytes(16).toString("base64url");
+      const createdAt = new Date().toISOString();
+      const expiresAt = new Date(Date.now() + PAIRING_TTL_MS).toISOString();
+      await store.createPairing({ codeHash: digest(code), deviceId, createdAt, expiresAt, ownerDeviceId });
+      return res.status(201).json({ ok: true, pairing: { code, deviceId, expiresAt, singleUse: true } });
+    } catch (error) {
+      console.error("DEVICE_OWNER_PAIRING_CREATE_FAILED", String(error?.message || error));
+      return res.status(503).json({ ok: false, error: "Unable to create an owner pairing code." });
+    }
+  });
+
   // Revocation is never undone by pairing. This is the only owner-authorized recovery path.
   app.post("/device/owner/devices/:deviceId/unrevoke", requireStore, async (req, res) => {
     const targetDeviceId = String(req.params.deviceId || "").trim();
-    const ownerDeviceId = String(req.headers?.["x-owner-device-id"] || "").trim();
-    const ownerToken = bearer(req);
+    const ownerDeviceId = await authenticateOwner(req, res);
+    if (!ownerDeviceId) return undefined;
     if (!validDeviceId(targetDeviceId)) return res.status(400).json({ ok: false, error: "A valid deviceId is required." });
-    if (!owners.size) return res.status(503).json({ ok: false, error: "Owner authorization is not configured." });
     try {
-      if (!validDeviceId(ownerDeviceId) || !ownerToken || !(await store.verifyDeviceToken(ownerToken, ownerDeviceId)) || !owners.has(ownerDeviceId)) {
-        return res.status(401).json({ ok: false, error: "A valid configured owner device is required." });
+      if (typeof store.unrevokeDevice !== "function" || typeof store.getDeviceOwner !== "function") {
+        return res.status(501).json({ ok: false, error: "This device store cannot enforce ownership." });
       }
-      if (typeof store.unrevokeDevice !== "function") {
-        return res.status(501).json({ ok: false, error: "This device store cannot un-revoke devices." });
+      const targetOwner = await store.getDeviceOwner(targetDeviceId);
+      if (!targetOwner) {
+        return res.status(409).json({ ok: false, code: "ownership_missing", error: "This device has no recorded owner." });
+      }
+      if (targetOwner !== ownerDeviceId) {
+        return res.status(403).json({ ok: false, code: "owned_by_another", error: "This device belongs to another owner." });
       }
       if (typeof store.isDeviceRevoked === "function" && !(await store.isDeviceRevoked(targetDeviceId))) {
         return res.status(409).json({ ok: false, code: "device_not_revoked", error: "Only a revoked device can be restored." });
       }
-      await store.unrevokeDevice(targetDeviceId);
+      const restored = await store.unrevokeDevice(targetDeviceId, ownerDeviceId);
+      if (!restored) {
+        return res.status(409).json({ ok: false, code: "ownership_changed", error: "Device ownership changed before recovery completed." });
+      }
       return res.json({ ok: true, deviceId: targetDeviceId, revoked: false, requiresPairing: true });
     } catch (error) {
       console.error("DEVICE_UNREVOKE_FAILED", String(error?.message || error));
       return res.status(503).json({ ok: false, error: "Unable to restore the device." });
+    }
+  });
+
+  // Owner-scoped revocation. The Ax bridge credential remains the separate super-admin path.
+  app.post("/device/owner/devices/:deviceId/revoke", requireStore, async (req, res) => {
+    const targetDeviceId = String(req.params.deviceId || "").trim();
+    const ownerDeviceId = await authenticateOwner(req, res);
+    if (!ownerDeviceId) return undefined;
+    if (!validDeviceId(targetDeviceId)) return res.status(400).json({ ok: false, error: "A valid deviceId is required." });
+    try {
+      if (typeof store.revokeDeviceOwned !== "function" || typeof store.getDeviceOwner !== "function") {
+        return res.status(501).json({ ok: false, error: "This device store cannot enforce ownership." });
+      }
+      const targetOwner = await store.getDeviceOwner(targetDeviceId);
+      if (!targetOwner) {
+        return res.status(409).json({ ok: false, code: "ownership_missing", error: "This device has no recorded owner." });
+      }
+      if (targetOwner !== ownerDeviceId) {
+        return res.status(403).json({ ok: false, code: "owned_by_another", error: "This device belongs to another owner." });
+      }
+      const revoked = await store.revokeDeviceOwned(targetDeviceId, ownerDeviceId, new Date().toISOString());
+      if (!revoked) {
+        return res.status(409).json({ ok: false, code: "ownership_changed", error: "Device ownership changed before revocation completed." });
+      }
+      return res.json({ ok: true, deviceId: targetDeviceId, revoked: true });
+    } catch (error) {
+      console.error("DEVICE_OWNER_REVOKE_FAILED", String(error?.message || error));
+      return res.status(503).json({ ok: false, error: "Unable to revoke the device." });
     }
   });
 
@@ -361,11 +489,15 @@ export function registerDeviceCommandBridge(app, {
       if (deviceId && !validDeviceId(deviceId)) {
         return res.status(400).json({ ok: false, error: "A valid deviceId is required when one is supplied." });
       }
+      const ownerDeviceId = soleOwner();
+      if (!ownerDeviceId) {
+        return res.status(409).json({ ok: false, code: "ownership_ambiguous", error: "Exactly one configured owner is required to mint a pairing code." });
+      }
       const code = randomBytes(16).toString("base64url");
       const createdAt = new Date().toISOString();
       const expiresAt = new Date(Date.now() + PAIRING_TTL_MS).toISOString();
       // Without a device id the code is bound to the first device that uses it.
-      await store.createPairing({ codeHash: digest(code), deviceId: deviceId || "*", createdAt, expiresAt });
+      await store.createPairing({ codeHash: digest(code), deviceId: deviceId || "*", createdAt, expiresAt, ownerDeviceId });
       return res.status(201).json({
         ok: true,
         pairing: { code, deviceId: deviceId || null, expiresAt, singleUse: true }
@@ -469,12 +601,16 @@ export function registerDeviceCommandBridge(app, {
       const bootstrapHash = String(env.HABITAT_DEVICE_PAIRING_BOOTSTRAP_CODE_HASH || "").trim().toLowerCase();
       const bootstrapExpiresAt = String(env.HABITAT_DEVICE_PAIRING_BOOTSTRAP_EXPIRES_AT || "").trim();
       const bootstrapExpiryMs = Date.parse(bootstrapExpiresAt);
-      if (/^[a-f0-9]{64}$/.test(bootstrapHash) && Number.isFinite(bootstrapExpiryMs) && bootstrapExpiryMs > Date.now()) {
+      const bootstrapOwner = soleOwner();
+      if (/^[a-f0-9]{64}$/.test(bootstrapHash) && Number.isFinite(bootstrapExpiryMs) && bootstrapExpiryMs > Date.now() && bootstrapOwner) {
         await store.seedBootstrapPairing({
           codeHash: bootstrapHash,
           createdAt: new Date().toISOString(),
-          expiresAt: new Date(bootstrapExpiryMs).toISOString()
+          expiresAt: new Date(bootstrapExpiryMs).toISOString(),
+          ownerDeviceId: bootstrapOwner
         });
+      } else if (/^[a-f0-9]{64}$/.test(bootstrapHash) && !bootstrapOwner) {
+        console.warn("DEVICE_COMMAND_BRIDGE: bootstrap pairing skipped — exactly one owner is required");
       }
       ready = true;
       console.log("DEVICE_COMMAND_BRIDGE: durable D1 queue ready");

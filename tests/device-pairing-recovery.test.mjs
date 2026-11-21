@@ -61,12 +61,14 @@ async function invoke(app, key, req = {}) {
 function fakeStore(seed = []) {
   const pairings = new Map();
   const devices = new Map();
+  const owners = new Map();
   const revoked = new Set();
   for (const entry of seed) {
     pairings.set(digest(entry.code), {
       deviceId: entry.deviceId || "*",
       expiresAt: entry.expiresAt,
-      consumedAt: entry.consumedAt || null
+      consumedAt: entry.consumedAt || null,
+      ownerDeviceId: entry.ownerDeviceId || OWNER_ID
     });
   }
   const invalidatePairings = deviceId => {
@@ -77,16 +79,17 @@ function fakeStore(seed = []) {
   return {
     pairings,
     devices,
+    owners,
     revoked,
     invalidatePairings,
     async initialize() { return { ok: true, durable: true }; },
-    async createPairing({ codeHash, deviceId, expiresAt }) {
-      pairings.set(codeHash, { deviceId, expiresAt, consumedAt: null });
+    async createPairing({ codeHash, deviceId, expiresAt, ownerDeviceId = OWNER_ID }) {
+      pairings.set(codeHash, { deviceId, expiresAt, consumedAt: null, ownerDeviceId });
       return true;
     },
     async findPairing({ codeHash }) {
       const row = pairings.get(codeHash);
-      return row ? { codeHash, deviceId: row.deviceId, expiresAt: row.expiresAt, consumedAt: row.consumedAt } : null;
+      return row ? { codeHash, deviceId: row.deviceId, expiresAt: row.expiresAt, consumedAt: row.consumedAt, ownerDeviceId: row.ownerDeviceId || null } : null;
     },
     async consumePairing({ codeHash, deviceId, consumedAt }) {
       const row = pairings.get(codeHash);
@@ -98,20 +101,34 @@ function fakeStore(seed = []) {
       row.consumedAt = consumedAt;
       return true;
     },
-    async registerDevice({ deviceId, tokenHash }) {
+    async registerDevice({ deviceId, tokenHash, ownerDeviceId = null }) {
+      if (ownerDeviceId) {
+        const existingOwner = owners.get(deviceId);
+        if (existingOwner && existingOwner !== ownerDeviceId) return false;
+      }
       // Registration never clears revocation, matching the D1 repository.
       devices.set(deviceId, tokenHash);
+      if (ownerDeviceId) owners.set(deviceId, ownerDeviceId);
       return true;
+    },
+    async getDeviceOwner(deviceId) { return owners.get(deviceId) || null; },
+    async revokeDeviceOwned(deviceId, ownerDeviceId) {
+      if (!ownerDeviceId || owners.get(deviceId) !== ownerDeviceId) return false;
+      return this.revokeDevice(deviceId);
     },
     async isDeviceRevoked(deviceId) {
       return revoked.has(deviceId);
+    },
+    async isDevicePaired(deviceId) {
+      return devices.has(deviceId) && !revoked.has(deviceId);
     },
     async revokeDevice(deviceId) {
       revoked.add(deviceId);
       invalidatePairings(deviceId);
       return true;
     },
-    async unrevokeDevice(deviceId) {
+    async unrevokeDevice(deviceId, ownerDeviceId = null) {
+      if (!ownerDeviceId || owners.get(deviceId) !== ownerDeviceId) return false;
       revoked.delete(deviceId);
       devices.delete(deviceId);
       invalidatePairings(deviceId);
@@ -356,6 +373,7 @@ test("recovery refuses a device that is not revoked", async () => {
   const { app, store } = await setup();
   store.devices.set(OWNER_ID, digest(OWNER_TOKEN));
   store.devices.set("launcher-a", digest("healthy-token"));
+  store.owners.set("launcher-a", OWNER_ID);
   const res = await invoke(app, "POST /device/owner/devices/:deviceId/unrevoke", {
     headers: { "x-owner-device-id": OWNER_ID, authorization: "Bearer " + OWNER_TOKEN },
     params: { deviceId: "launcher-a" }
@@ -365,26 +383,36 @@ test("recovery refuses a device that is not revoked", async () => {
   assert.equal(await store.verifyDeviceToken("healthy-token", "launcher-a"), true);
 });
 
-test("configured owners share recovery authority, but non-owners and revoked owners do not", async () => {
+test("one configured owner cannot restore or revoke another owner's device", async () => {
   const OWNER_B = "owner-phone-b";
   const OWNER_B_TOKEN = "owner-device-token-b";
   const { app, store } = await setup([], { owners: [OWNER_ID, OWNER_B] });
   store.devices.set(OWNER_ID, digest(OWNER_TOKEN));
   store.devices.set(OWNER_B, digest(OWNER_B_TOKEN));
+  store.owners.set(OWNER_B, OWNER_B);
   await store.revokeDevice(OWNER_B);
 
-  // A second configured owner is an administrator and can restore the revoked owner device.
   const byOtherOwner = await invoke(app, "POST /device/owner/devices/:deviceId/unrevoke", {
     headers: { "x-owner-device-id": OWNER_ID, authorization: "Bearer " + OWNER_TOKEN },
     params: { deviceId: OWNER_B }
   });
-  assert.equal(byOtherOwner.statusCode, 200);
-  assert.equal(store.revoked.has(OWNER_B), false);
-  // The restored owner must re-pair; its old token was destroyed by recovery.
-  assert.equal(await store.verifyDeviceToken(OWNER_B_TOKEN, OWNER_B), false);
+  assert.equal(byOtherOwner.statusCode, 403);
+  assert.equal(store.revoked.has(OWNER_B), true, "another owner must not restore the device");
 
-  const revokedAgain = await store.revokeDevice(OWNER_B);
-  assert.equal(revokedAgain, true);
+  const revokeByOtherOwner = await invoke(app, "POST /device/owner/devices/:deviceId/revoke", {
+    headers: { "x-owner-device-id": OWNER_ID, authorization: "Bearer " + OWNER_TOKEN },
+    params: { deviceId: OWNER_B }
+  });
+  assert.equal(revokeByOtherOwner.statusCode, 403);
+  assert.equal(store.revoked.has(OWNER_B), true);
+
+  const pairForOtherOwner = await invoke(app, "POST /device/owner/pairings", {
+    headers: { "x-owner-device-id": OWNER_ID, authorization: "Bearer " + OWNER_TOKEN },
+    body: { deviceId: OWNER_B }
+  });
+  assert.equal(pairForOtherOwner.statusCode, 403);
+  assert.equal(pairForOtherOwner.body.code, "owner_mismatch");
+
   const byRevokedOwner = await invoke(app, "POST /device/owner/devices/:deviceId/unrevoke", {
     headers: { "x-owner-device-id": OWNER_B, authorization: "Bearer " + OWNER_B_TOKEN },
     params: { deviceId: OWNER_B }
@@ -409,6 +437,88 @@ test("recovery fails closed when no owner device is configured", async () => {
   });
   assert.equal(res.statusCode, 503);
   assert.equal(store.revoked.has("launcher-a"), true);
+});
+
+test("pairing ownership is taken from the server record, not caller-supplied fields", async () => {
+  const OWNER_B = "owner-phone-b";
+  const OWNER_B_TOKEN = "owner-device-token-b";
+  const { app, store } = await setup([{ code: CODE, expiresAt: future(), ownerDeviceId: OWNER_ID }], { owners: [OWNER_ID, OWNER_B] });
+  store.devices.set(OWNER_ID, digest(OWNER_TOKEN));
+  store.devices.set(OWNER_B, digest(OWNER_B_TOKEN));
+
+  const paired = await invoke(app, "POST /device/pair", {
+    body: { deviceId: "launcher-a", code: CODE, ownerDeviceId: OWNER_B }
+  });
+  assert.equal(paired.statusCode, 200);
+  assert.equal(store.owners.get("launcher-a"), OWNER_ID, "the body must not choose the owner");
+
+  await store.revokeDevice("launcher-a");
+  const byOtherOwner = await invoke(app, "POST /device/owner/devices/:deviceId/unrevoke", {
+    headers: { "x-owner-device-id": OWNER_B, authorization: "Bearer " + OWNER_B_TOKEN },
+    params: { deviceId: "launcher-a" }
+  });
+  assert.equal(byOtherOwner.statusCode, 403);
+  assert.equal(store.revoked.has("launcher-a"), true);
+
+  const byRecordedOwner = await invoke(app, "POST /device/owner/devices/:deviceId/unrevoke", {
+    headers: { "x-owner-device-id": OWNER_ID, authorization: "Bearer " + OWNER_TOKEN },
+    params: { deviceId: "launcher-a" }
+  });
+  assert.equal(byRecordedOwner.statusCode, 200);
+});
+
+test("recovery fails closed when the target has no ownership record", async () => {
+  const { app, store } = await setup();
+  store.devices.set(OWNER_ID, digest(OWNER_TOKEN));
+  store.devices.set("orphan-device", digest("orphan-token"));
+  store.revoked.add("orphan-device");
+
+  const res = await invoke(app, "POST /device/owner/devices/:deviceId/unrevoke", {
+    headers: { "x-owner-device-id": OWNER_ID, authorization: "Bearer " + OWNER_TOKEN },
+    params: { deviceId: "orphan-device" }
+  });
+  assert.equal(res.statusCode, 409);
+  assert.equal(res.body.code, "ownership_missing");
+  assert.equal(store.revoked.has("orphan-device"), true);
+
+  const minted = await invoke(app, "POST /device/owner/pairings", {
+    headers: { "x-owner-device-id": OWNER_ID, authorization: "Bearer " + OWNER_TOKEN },
+    body: { deviceId: "orphan-device" }
+  });
+  assert.equal(minted.statusCode, 409);
+  assert.equal(minted.body.code, "ownership_missing");
+});
+
+test("ambiguous multi-owner provisioning fails closed instead of choosing an owner", async () => {
+  const { app, store } = await setup([], { owners: [OWNER_ID, "owner-phone-b"] });
+  const minted = await invoke(app, "POST /ax/device/pairings", {
+    headers: { authorization: "Bearer " + OPERATOR }, body: { deviceId: "launcher-a" }
+  });
+  assert.equal(minted.statusCode, 409);
+  assert.equal(minted.body.code, "ownership_ambiguous");
+  assert.equal(store.pairings.size, 0);
+});
+
+test("concurrent recovery and owner revocation never leave the old token usable", async () => {
+  const { app, store } = await setup([{ code: CODE, expiresAt: future() }]);
+  const paired = await invoke(app, "POST /device/pair", { body: { deviceId: "launcher-a", code: CODE } });
+  assert.equal(paired.statusCode, 200);
+  store.devices.set(OWNER_ID, digest(OWNER_TOKEN));
+  await store.revokeDevice("launcher-a");
+
+  const [restored, revoked] = await Promise.all([
+    invoke(app, "POST /device/owner/devices/:deviceId/unrevoke", {
+      headers: { "x-owner-device-id": OWNER_ID, authorization: "Bearer " + OWNER_TOKEN },
+      params: { deviceId: "launcher-a" }
+    }),
+    invoke(app, "POST /device/owner/devices/:deviceId/revoke", {
+      headers: { "x-owner-device-id": OWNER_ID, authorization: "Bearer " + OWNER_TOKEN },
+      params: { deviceId: "launcher-a" }
+    })
+  ]);
+  assert.ok([200, 409].includes(restored.statusCode), "recovery result: " + restored.statusCode);
+  assert.ok([200, 409].includes(revoked.statusCode), "revocation result: " + revoked.statusCode);
+  assert.equal(await store.verifyDeviceToken(paired.body.token, "launcher-a"), false);
 });
 
 test("the pairing response never contains the operator credential", async () => {

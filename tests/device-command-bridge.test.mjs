@@ -36,11 +36,14 @@ function memoryRepository() {
   const commands = new Map();
   const pairings = new Map();
   const devices = new Map();
+  const owners = new Map();
   return {
     durable: true,
+    owners,
     async initialize() {},
     async createPairing(row) { pairings.set(row.codeHash, { ...row, consumedAt: null }); },
     async seedBootstrapPairing(row) { if (!pairings.has(row.codeHash)) pairings.set(row.codeHash, { ...row, deviceId: "*", consumedAt: null }); },
+    async findPairing({ codeHash }) { const row = pairings.get(codeHash); return row ? { ...row, codeHash } : null; },
     async consumePairing({ codeHash, deviceId, consumedAt }) {
       const row = pairings.get(codeHash);
       if (!row || (row.deviceId !== deviceId && row.deviceId !== "*") || row.consumedAt || row.expiresAt <= consumedAt) return false;
@@ -48,7 +51,17 @@ function memoryRepository() {
       row.consumedAt = consumedAt;
       return true;
     },
-    async registerDevice({ deviceId, tokenHash, createdAt }) { devices.set(deviceId, { tokenHash, createdAt, lastSeenAt: null, revoked: false }); },
+    async registerDevice({ deviceId, tokenHash, createdAt, ownerDeviceId }) {
+      if (ownerDeviceId && owners.has(deviceId) && owners.get(deviceId) !== ownerDeviceId) return false;
+      devices.set(deviceId, { tokenHash, createdAt, lastSeenAt: null, revoked: false });
+      if (ownerDeviceId) owners.set(deviceId, ownerDeviceId);
+      return true;
+    },
+    async getDeviceOwner(deviceId) { return owners.get(deviceId) || null; },
+    async revokeDeviceOwned(deviceId, ownerDeviceId) {
+      if (!ownerDeviceId || owners.get(deviceId) !== ownerDeviceId) return false;
+      const row = devices.get(deviceId); if (row) row.revoked = true; return true;
+    },
     async verifyDeviceToken(token, deviceId) {
       const row = devices.get(deviceId);
       return Boolean(row && !row.revoked && row.tokenHash === createHash("sha256").update(token).digest("hex"));
@@ -84,7 +97,8 @@ test("bootstrap pairing is short-lived, single-use, and never exposes an Ax toke
   const bridge = registerDeviceCommandBridge(app, {
     env: {
       HABITAT_DEVICE_PAIRING_BOOTSTRAP_CODE_HASH: codeHash,
-      HABITAT_DEVICE_PAIRING_BOOTSTRAP_EXPIRES_AT: new Date(Date.now() + 10 * 60 * 1000).toISOString()
+      HABITAT_DEVICE_PAIRING_BOOTSTRAP_EXPIRES_AT: new Date(Date.now() + 10 * 60 * 1000).toISOString(),
+      HABITAT_OWNER_DEVICE_ID: "owner-phone"
     },
     repository
   });
@@ -100,13 +114,14 @@ test("bootstrap pairing is short-lived, single-use, and never exposes an Ax toke
   const replay = await invoke(app, "POST /device/pair", {
     headers: {}, body: { deviceId: "another-device", code }
   });
-  assert.equal(replay.statusCode, 401);
+  assert.equal(replay.statusCode, 409);
+  assert.equal(replay.body.code, "pairing_used_other_device");
 });
 
 test("Bridge APK field aliases receive the same one-time credential response", async () => {
   const app = makeApp();
   const repository = memoryRepository();
-  const bridge = registerDeviceCommandBridge(app, { env: { HABITAT_AX_BRIDGE_TOKEN: "ax-secret" }, repository });
+  const bridge = registerDeviceCommandBridge(app, { env: { HABITAT_AX_BRIDGE_TOKEN: "ax-secret", HABITAT_OWNER_DEVICE_ID: "owner-phone" }, repository });
   await bridge.initialize();
   const issued = await invoke(app, "POST /ax/device/pairings", {
     headers: { authorization: "Bearer ax-secret" }, body: { deviceId: "android-s26" }
@@ -129,7 +144,7 @@ test("pairing codes are one-time and issue individual phone credentials", async 
   const app = makeApp();
   const repository = memoryRepository();
   const bridge = registerDeviceCommandBridge(app, {
-    env: { HABITAT_AX_BRIDGE_TOKEN: "ax-secret" },
+    env: { HABITAT_AX_BRIDGE_TOKEN: "ax-secret", HABITAT_OWNER_DEVICE_ID: "owner-phone" },
     repository
   });
   await bridge.initialize();
@@ -150,13 +165,15 @@ test("pairing codes are one-time and issue individual phone credentials", async 
     headers: {}, body: { deviceId: "s26", code }
   });
   assert.equal(paired.statusCode, 200);
-  const token = paired.body.device.token;
+  let token = paired.body.device.token;
   assert.ok(token.length >= 40);
 
   const replay = await invoke(app, "POST /device/pair", {
     headers: {}, body: { deviceId: "s26", code }
   });
-  assert.equal(replay.statusCode, 401);
+  assert.equal(replay.statusCode, 200);
+  assert.equal(replay.body.recovered, true);
+  token = replay.body.device.token;
 
   const noSharedToken = await invoke(app, "GET /device/commands/next", {
     headers: { authorization: "Bearer phone-secret" }, query: { deviceId: "s26" }
