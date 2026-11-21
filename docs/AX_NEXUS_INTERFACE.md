@@ -168,3 +168,32 @@ the index and careful paging), then M-2.6.
 | Ax approving its own task | structurally impossible: approvals require a verified owner device |
 | Feed skipping a task in a busy millisecond | `(updated_at, id)` compound cursor |
 | Presence row claiming a connection that never happened | presence records calls, not intention; absence reads as `null` |
+
+---
+
+## 10. Implementation status (Mission 03)
+
+Built, tested locally, committed on the integration branch:
+
+| Item | State |
+| --- | --- |
+| `schemaVersion: 1` on every `/ax/command` reply, including errors | done, via one wrapper so no route can forget it |
+| `HABITAT_AX_COMMAND_TOKEN`, constant-time, fail-closed, `/ax/command`-only | done |
+| Command token can never satisfy an owner action | done: `403 command_token_cannot_approve` before any device check |
+| `GET /ax/command/events` with `(updatedAt, id)` cursor + index | done |
+| `GET /ax/command/presence` | done, and it reports **NEXUS availability** as Mission 03 specifies, not Ax call history |
+| `GET /ax/command/openapi.json` for ChatGPT | done, public, shapes only |
+| §7 acceptance test against the deployed origin | **not run** — no credential, no deployment, no ChatGPT surface |
+
+Deltas from the design above, recorded so the design is not read as implemented fact:
+
+- The feed emits **one event per changed task** with `changes` holding the transitions since the
+  cursor, instead of separate `task.claimed`/`task.progress` events. The task row plus its
+  `statusHistory` is the single source of truth; a second event stream could disagree with it.
+- Presence reports the executor, heartbeat and queue. There is no `habitat_ax_presence` table and no
+  Ax call log: the mission asked for NEXUS availability, and a per-call write would cost D1 writes to
+  answer a question nobody asked.
+- Operator runtime facts stay on `/nexus/runtime`, which the command token cannot read.
+
+See `docs/AX_COMMAND_API.md` for the implemented contract and `docs/CHATGPT_INTEGRATION.md` for the
+connection steps and the live test that would make "connected" true.
