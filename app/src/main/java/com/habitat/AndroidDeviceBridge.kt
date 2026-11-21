@@ -24,9 +24,10 @@ class AndroidDeviceBridge(
     context: Context,
     baseUrl: String = BuildConfig.HABITAT_BASE_URL,
     private val credentials: CredentialStore = KeystoreCredentialStore(context),
+    private val environment: String = BuildConfig.HABITAT_ENVIRONMENT,
     private val onStatus: (String) -> Unit
 ) {
-    enum class LinkState { UNPAIRED, PAIRED_UNVERIFIED, LIVE, REVOKED }
+    enum class LinkState { UNPAIRED, PAIRING, PAIRED_UNVERIFIED, LIVE, REVOKED }
 
     class HttpStatusException(val code: Int, message: String) : Exception(message)
 
@@ -37,14 +38,46 @@ class AndroidDeviceBridge(
         private const val PAIRED_AT_KEY = "paired_at"
         private const val CONFIRMED_AT_KEY = "last_confirmed_at"
         private const val HEARTBEAT_AT_KEY = "last_heartbeat_at"
+        private const val PAIRING_AT_KEY = "pairing_started_at"
+        private const val NONPROD_ENDPOINT_KEY = "nonproduction_endpoint"
         private const val HEARTBEAT_INTERVAL_MS = 60_000L
+        // A pairing attempt interrupted by process death is reported as PAIRING for this long,
+        // then honestly falls back to UNPAIRED instead of showing a stale in-progress state.
+        private const val PAIRING_WINDOW_MS = 5 * 60 * 1000L
     }
 
     private val appContext = context.applicationContext
     private val prefs = appContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
     private val diagnostics = BridgeDiagnostics(appContext)
-    private val endpoint = baseUrl.trim().trimEnd('/')
+    private val isProductionBuild = environment.trim().equals(HabitatEndpointPolicy.PRODUCTION, ignoreCase = true)
+
+    // Nonproduction builds may be repointed at a different isolated service from inside the app;
+    // production builds read only the compiled endpoint and have no override key at all.
+    @Volatile
+    private var endpoint: String = resolveInitialEndpoint(baseUrl)
     private var executor: ScheduledExecutorService? = null
+
+    /** Non-null when this build must not talk to its configured endpoint. Nothing is sent then. */
+    val configurationError: String?
+        get() = HabitatEndpointPolicy.validate(endpoint, environment)
+
+    val environmentName: String
+        get() = if (isProductionBuild) HabitatEndpointPolicy.PRODUCTION else HabitatEndpointPolicy.NONPRODUCTION
+
+    private fun resolveInitialEndpoint(compiled: String): String {
+        val clean = compiled.trim().trimEnd('/')
+        if (isProductionBuild) return clean
+        val stored = prefs.getString(NONPROD_ENDPOINT_KEY, null)?.trim()?.trimEnd('/')
+        if (!stored.isNullOrBlank() && HabitatEndpointPolicy.validate(stored, environment) == null) {
+            return stored
+        }
+        return clean
+    }
+
+    init {
+        diagnostics.record("INFO", "bridge environment " + environmentName + " endpoint " + endpoint)
+        configurationError?.let { diagnostics.record("ERROR", "endpoint refused: " + it) }
+    }
 
     val deviceId: String
         get() {
@@ -65,7 +98,10 @@ class AndroidDeviceBridge(
     fun linkState(): LinkState {
         val stored = prefs.getString(STATE_KEY, null)
         if (!isConfigured()) {
-            return if (stored == LinkState.REVOKED.name) LinkState.REVOKED else LinkState.UNPAIRED
+            if (stored == LinkState.REVOKED.name) return LinkState.REVOKED
+            val pairingAt = prefs.getLong(PAIRING_AT_KEY, 0L)
+            val pairingFresh = pairingAt > 0L && System.currentTimeMillis() - pairingAt < PAIRING_WINDOW_MS
+            return if (pairingFresh) LinkState.PAIRING else LinkState.UNPAIRED
         }
         return when (stored) {
             LinkState.LIVE.name -> LinkState.LIVE
@@ -90,7 +126,15 @@ class AndroidDeviceBridge(
             onComplete(false, "Pairing code format is invalid. Request a fresh code.")
             return
         }
-        diagnostics.record("INFO", "pairing request started for " + deviceId)
+        configurationError?.let { refusal ->
+            diagnostics.record("ERROR", "pairing refused: " + refusal)
+            onComplete(false, refusal)
+            return
+        }
+        // PAIRING is written before the request leaves the phone, so a recreation or process death
+        // still shows an in-progress attempt instead of an unexplained idle screen.
+        prefs.edit().putLong(PAIRING_AT_KEY, System.currentTimeMillis()).apply()
+        diagnostics.record("INFO", "pairing request started for " + deviceId + " at " + endpoint)
         Thread({
             var failureReason = "Pairing failed. Check the code and phone ID."
             val success = try {
@@ -112,6 +156,7 @@ class AndroidDeviceBridge(
                     prefs.edit()
                         .putString(STATE_KEY, LinkState.PAIRED_UNVERIFIED.name)
                         .putLong(PAIRED_AT_KEY, System.currentTimeMillis())
+                        .remove(PAIRING_AT_KEY)
                         .remove(HEARTBEAT_AT_KEY)
                         .apply()
                     diagnostics.record("INFO", "credential stored; awaiting authenticated poll")
@@ -126,6 +171,7 @@ class AndroidDeviceBridge(
                 diagnostics.record("ERROR", "pairing transport failure: " + failureReason)
                 false
             }
+            if (!success) prefs.edit().remove(PAIRING_AT_KEY).apply()
             try {
                 onComplete(success, if (success) "Credential saved; verifying with Ax…" else failureReason)
             } catch (_: Throwable) {
@@ -141,6 +187,7 @@ class AndroidDeviceBridge(
         400 -> "Pairing code was rejected as malformed. Request a fresh code."
         401, 403 -> "Pairing was refused. Request a fresh code from Ax."
         409 -> reason.ifBlank { "This pairing code is expired, used, or belongs to another phone." }
+        404 -> "This endpoint is not a Habitat backend (HTTP 404). Check the nonproduction URL."
         429 -> "Too many pairing attempts. Wait, then request a fresh code."
         503 -> "Habitat is temporarily unavailable. The screen stays open; try again shortly."
         else -> if (reason.isBlank()) "Pairing failed (HTTP $code)." else "Pairing failed (HTTP $code): $reason"
@@ -155,14 +202,59 @@ class AndroidDeviceBridge(
         prefs.edit()
             .remove(HEARTBEAT_AT_KEY)
             .remove(CONFIRMED_AT_KEY)
+            .remove(PAIRING_AT_KEY)
             .putString(STATE_KEY, LinkState.UNPAIRED.name)
             .apply()
         diagnostics.record("INFO", "credentials cleared by user")
     }
 
+    /**
+     * Point a nonproduction build at a different isolated backend.
+     *
+     * Returns null on success or a refusal. A production build can never be repointed, and a
+     * nonproduction build refuses the production host. Changing the backend clears any credential
+     * from the previous service, because a token is only meaningful to the backend that issued it.
+     */
+    @Synchronized
+    fun configureEndpoint(candidate: String): String? {
+        if (isProductionBuild) {
+            return "This production build cannot change its backend endpoint."
+        }
+        val clean = candidate.trim().trimEnd('/')
+        val rejection = HabitatEndpointPolicy.validate(clean, environment)
+        if (rejection != null) {
+            diagnostics.record("ERROR", "endpoint change refused: " + rejection)
+            return rejection
+        }
+        if (clean == endpoint) {
+            prefs.edit().putString(NONPROD_ENDPOINT_KEY, clean).apply()
+            return null
+        }
+        stop()
+        DeviceBridgeScheduler.cancel(appContext)
+        credentials.clear()
+        prefs.edit()
+            .putString(NONPROD_ENDPOINT_KEY, clean)
+            .putString(STATE_KEY, LinkState.UNPAIRED.name)
+            .remove(PAIRED_AT_KEY)
+            .remove(CONFIRMED_AT_KEY)
+            .remove(HEARTBEAT_AT_KEY)
+            .remove(PAIRING_AT_KEY)
+            .apply()
+        endpoint = clean
+        diagnostics.record("INFO", "nonproduction endpoint set to " + clean)
+        onStatus("Endpoint set to " + clean + "; pair this phone again")
+        return null
+    }
+
     @Synchronized
     fun start() {
         if (!isConfigured() || executor != null) return
+        configurationError?.let { refusal ->
+            diagnostics.record("ERROR", "polling not started: " + refusal)
+            onStatus(refusal)
+            return
+        }
         executor = Executors.newSingleThreadScheduledExecutor()
         executor?.scheduleWithFixedDelay({ pollOnce() }, 0, 5, TimeUnit.SECONDS)
         onStatus("AX device bridge polling started")
@@ -219,6 +311,10 @@ class AndroidDeviceBridge(
     private fun pollOnce() {
         val token = credentials.read()
         if (token.isNullOrBlank()) return
+        configurationError?.let { refusal ->
+            markNotLive(refusal)
+            return
+        }
         try {
             val next = request(
                 "GET",

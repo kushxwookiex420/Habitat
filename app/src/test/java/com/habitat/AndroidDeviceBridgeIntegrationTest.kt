@@ -40,16 +40,6 @@ class AndroidDeviceBridgeIntegrationTest {
     private lateinit var axToken: String
     private lateinit var acceptanceToken: String
 
-    class InMemoryCredentialStore(private var token: String? = null) : CredentialStore {
-        override fun read(): String? = token
-        override fun write(token: String): Boolean {
-            if (token.trim().length < 40) return false
-            this.token = token.trim()
-            return true
-        }
-        override fun clear() { token = null }
-    }
-
     private data class HttpResult(val status: Int, val body: JSONObject?)
 
     @Before

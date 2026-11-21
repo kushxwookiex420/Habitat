@@ -100,6 +100,7 @@ class MainActivity : Activity() {
             text = when (deviceBridge.linkState()) {
                 AndroidDeviceBridge.LinkState.LIVE -> "LIVE"
                 AndroidDeviceBridge.LinkState.PAIRED_UNVERIFIED -> "VERIFY"
+                AndroidDeviceBridge.LinkState.PAIRING -> "PAIRING"
                 AndroidDeviceBridge.LinkState.REVOKED -> "REVOKED"
                 AndroidDeviceBridge.LinkState.UNPAIRED -> "LINK"
             }
@@ -441,12 +442,25 @@ class MainActivity : Activity() {
         super.onSaveInstanceState(outState)
     }
 
+    private fun environmentSummary(): String = buildString {
+        append(
+            if (deviceBridge.environmentName == HabitatEndpointPolicy.NONPRODUCTION) "NONPRODUCTION BUILD"
+            else "PRODUCTION BUILD"
+        )
+        append(" • backend ")
+        append(deviceBridge.baseUrl)
+        deviceBridge.configurationError?.let { append("\nREFUSED: ").append(it) }
+    }
+
     private fun diagnosticsReport(): String {
         val lines = deviceBridge.diagnosticsLines()
         return buildString {
             append("DIAGNOSTICS\n")
-            append("Endpoint: ")
+            append("Environment: ")
+            append(deviceBridge.environmentName)
+            append("\nEndpoint: ")
             append(deviceBridge.baseUrl)
+            deviceBridge.configurationError?.let { append("\nRefused: ").append(it) }
             append("\nLink: ")
             append(deviceBridge.linkState().name)
             append("\nConfirmed: ")
@@ -465,6 +479,7 @@ class MainActivity : Activity() {
         deviceBridgeButton?.text = when (deviceBridge.linkState()) {
             AndroidDeviceBridge.LinkState.LIVE -> "LIVE"
             AndroidDeviceBridge.LinkState.PAIRED_UNVERIFIED -> "VERIFY"
+            AndroidDeviceBridge.LinkState.PAIRING -> "PAIRING"
             AndroidDeviceBridge.LinkState.REVOKED -> "REVOKED"
             AndroidDeviceBridge.LinkState.UNPAIRED -> "LINK"
         }
@@ -487,6 +502,9 @@ class MainActivity : Activity() {
                         pairingStatusView?.text = "Ax revoked this phone's link. Pair again with a fresh code."
                         pairingButton?.isEnabled = true
                         pairingButton?.text = "Pair phone"
+                    }
+                    AndroidDeviceBridge.LinkState.PAIRING -> {
+                        pairingStatusView?.text = "Pairing in progress. The screen can be reopened without losing the attempt."
                     }
                     else -> pairingStatusView?.text = status
                 }
@@ -682,10 +700,16 @@ class MainActivity : Activity() {
             textSize = 15f
             setSingleLine(true)
         }
-        val status = TextView(this).apply {
-            text = "Ready. Waiting for a pairing code."
+        val environmentView = TextView(this).apply {
+            text = environmentSummary()
             textSize = 12f
-            setTextColor(Color.DKGRAY)
+            setTextColor(Color.rgb(60, 60, 60))
+            setPadding(0, 10, 0, 0)
+        }
+        val status = TextView(this).apply {
+            text = deviceBridge.configurationError ?: "Ready. Waiting for a pairing code."
+            textSize = 12f
+            setTextColor(if (deviceBridge.configurationError != null) Color.rgb(180, 40, 40) else Color.DKGRAY)
             setPadding(0, 10, 0, 0)
         }
         val diagnosticsView = TextView(this).apply {
@@ -694,10 +718,52 @@ class MainActivity : Activity() {
             setTextColor(Color.rgb(80, 80, 80))
             setPadding(0, 12, 0, 0)
         }
+        // Production builds never expose an endpoint field: their backend is compiled in. A
+        // nonproduction build may name a different isolated service, but the policy refuses the
+        // production host here exactly as it does at build time.
+        val endpointSection = if (deviceBridge.environmentName == HabitatEndpointPolicy.NONPRODUCTION) {
+            LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(0, 14, 0, 0)
+                addView(TextView(this@MainActivity).apply {
+                    text = "Isolated nonproduction backend URL"
+                    textSize = 12f
+                    setTextColor(Color.DKGRAY)
+                })
+                val field = EditText(this@MainActivity).apply {
+                    setText(deviceBridge.baseUrl)
+                    inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_URI
+                    textSize = 13f
+                    setSingleLine(true)
+                }
+                addView(field)
+                addView(Button(this@MainActivity).apply {
+                    text = "Use this backend"
+                    isAllCaps = false
+                    textSize = 13f
+                    setOnClickListener {
+                        val refusal = deviceBridge.configureEndpoint(field.text?.toString().orEmpty())
+                        if (refusal != null) {
+                            status.setTextColor(Color.rgb(180, 40, 40))
+                            status.text = refusal
+                        } else {
+                            field.setText(deviceBridge.baseUrl)
+                            environmentView.text = environmentSummary()
+                            status.setTextColor(Color.DKGRAY)
+                            status.text = "Backend set. Pair with a code minted by that service."
+                            updateBridgeButton()
+                        }
+                        diagnosticsView.text = diagnosticsReport()
+                    }
+                })
+            }
+        } else null
         panel.addView(device)
         panel.addView(help)
+        panel.addView(environmentView)
         panel.addView(code)
         panel.addView(status)
+        if (endpointSection != null) panel.addView(endpointSection)
         panel.addView(diagnosticsView)
         pairingStatusView = status
         pairingDiagnosticsView = diagnosticsView

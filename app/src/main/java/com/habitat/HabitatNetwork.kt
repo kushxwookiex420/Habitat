@@ -27,7 +27,7 @@ import javax.net.ssl.SSLSession
  * HttpsURLConnection, which crashed on an http:// nonproduction endpoint.
  */
 object HabitatNetwork {
-    const val PRODUCTION_HOST = "habitat-1-szzd.onrender.com"
+    const val PRODUCTION_HOST = HabitatEndpointPolicy.PRODUCTION_HOST
     private const val DNS_PORT = 53
     private val DNS_SERVERS = listOf("1.1.1.1", "8.8.8.8")
 
