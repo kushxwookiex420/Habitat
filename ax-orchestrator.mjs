@@ -435,8 +435,9 @@ export function createAxOrchestrator({
       run.error = null;
     } else if (derived.status === "failed") {
       const unverified = run.steps.filter(step => !satisfied(step, run.steps));
+      // Prefer the recorded cause (e.g. a submit failure or an id mismatch) over the bare reason.
       run.error = run.correctionError ||
-        "unverified: " + unverified.map(step => (step.taskId || "step " + step.index) + " (" + (step.verifyReason || step.status) + ")").join(", ");
+        "unverified: " + unverified.map(step => (step.taskId || "step " + step.index) + " (" + (step.error || step.verifyReason || step.status) + ")").join(", ");
     } else if (derived.status === "needs_approval") {
       run.error = "A step needs the owner's approval. Ax cannot approve it.";
     } else if (derived.status === "deadline_exceeded") {
@@ -568,10 +569,35 @@ export function createAxOrchestrator({
       // Durable BEFORE submission: if the process dies now, the id is known and recoverable.
       await persist(run);
     }
+    // A persisted step keeps its original key and id. Recovery may adopt a task or submit the
+    // missing one; it must never mint a different id, or a retry would duplicate the work.
+    const key = step.key || stepKey;
+    if (!key) {
+      step.status = "failed";
+      step.terminal = true;
+      step.verified = false;
+      step.verifyReason = "missing_task_key";
+      step.error = "missing_task_key: the persisted step has neither a key nor a task id";
+      await persist(run);
+      return step;
+    }
+    if (!step.taskId) step.taskId = taskIdForKey(key);
+    step.key = key;
+    if (taskIdForKey(key) !== step.taskId) {
+      step.status = "failed";
+      step.terminal = true;
+      step.verified = false;
+      step.verifyReason = "task_id_mismatch";
+      step.error = "task_id_mismatch: the persisted task id does not match its idempotency key; refusing to submit a second task";
+      await persist(run);
+      return step;
+    }
     const existing = await readTask(step.taskId);
     if (!existing.ok) {
+      // Not found would mean "submit it". A failed read means we do not know, so we must not submit
+      // and risk a second task for the same key: leave the step open and say why.
       step.status = "submitting";
-      step.readError = "task_unreadable";
+      step.readError = existing.code || "task_unreadable";
       await persist(run);
       return step;
     }
@@ -587,7 +613,7 @@ export function createAxOrchestrator({
       requestedBy: "ax",
       role: "ax",
       adapter: spec.adapter,
-      idempotencyKey: stepKey
+      idempotencyKey: key
     });
     if (outcome?.ok === false) {
       step.status = "failed";
@@ -598,7 +624,11 @@ export function createAxOrchestrator({
       return step;
     }
     step.adopted = Boolean(outcome.replayed);
-    step.status = outcome.task.status;
+    step.taskId = outcome.task?.id || step.taskId;
+    step.status = outcome.task?.status || "submitting";
+    delete step.readError;
+    // Bind evidence immediately when the engine returned an already-finished task.
+    await refreshStep(step);
     await persist(run);
     return step;
   }
@@ -610,8 +640,9 @@ export function createAxOrchestrator({
   async function submitPhase(run) {
     for (const [index, spec] of run.plan.entries()) {
       const existing = run.steps.find(entry => entry.index === index);
-      if (existing && (existing.taskId || existing.status === "needs_approval")) continue;
-      if (spec.needsApproval) {
+      // An approval step has no task by design: Ax cannot approve it and must not submit it.
+      if (existing && !existing.taskId && existing.status === "needs_approval") continue;
+      if (!existing && spec.needsApproval) {
         // Ax must never start work the plan itself says needs the owner. Report and stop.
         run.steps.push({
           index,
@@ -632,7 +663,9 @@ export function createAxOrchestrator({
         await persist(run);
         return;
       }
-      await ensureStep(run, index, spec, { stepKey: run.id + ":s" + index });
+      // Always adopt-or-submit, even when the step already has an id: the process may have died
+      // between persisting that id and creating the command task. Skipping it would strand the run.
+      await ensureStep(run, index, spec, { stepKey: existing?.key || run.id + ":s" + index });
       if (run.status === "needs_approval") return;
     }
   }
@@ -657,6 +690,25 @@ export function createAxOrchestrator({
       idle = (report?.claimed || 0) > 0 ? 0 : idle + 1;
       await sleep(idle > 3 ? Math.min(2_000, config.pollMs * 4) : config.pollMs);
     }
+  }
+
+  /**
+   * A corrective step persisted before its task was submitted is the same missing-submission state
+   * as a planned step, and must be recovered by its own key before the driver waits on it.
+   */
+  async function recoverCorrective(run) {
+    const orphan = run.steps.find(step => step.corrective && !step.terminal && step.taskId);
+    if (!orphan) return;
+    await ensureStep(
+      run,
+      orphan.index,
+      { objective: orphan.objective, adapter: orphan.adapter, needsApproval: Boolean(orphan.needsApproval) },
+      { corrective: true, stepKey: orphan.key }
+    );
+    // The crash may also have landed between the submit and recording which step it repairs.
+    const unlinked = run.steps.find(step => step.status === "failed" && !step.correctedBy && !step.corrective);
+    if (unlinked) unlinked.correctedBy = orphan.taskId;
+    await persist(run);
   }
 
   async function correctPhase(run) {
@@ -729,6 +781,7 @@ export function createAxOrchestrator({
         if (!planned) return finalize(run);
       }
       await submitPhase(run);
+      await recoverCorrective(run);
       if (run.status !== "needs_approval") {
         const outcome = await drive(run);
         if (outcome === "settled") await correctPhase(run);

@@ -24,6 +24,7 @@ it stood at `ad3bea9`, what it would have done in production, and what was chang
 | D-10 | **Low** | `engine.get` returning `not_found` was treated as "task unreadable" | First submission after a restart was skipped entirely (found by the new suite) | `not_found` is the normal pre-submission state; only real read failures block |
 | D-11 | **Medium** | Prices defaulted to $2.00/$10.00 per 1M and the model id was unverified | Cost reporting overstated by 20×; an invalid model id would fail every run | `gpt-6-luna` confirmed on OpenAI's model page (Chat Completions supported); defaults corrected to **$0.10 / $0.50** |
 | D-12 | **Doc** | "Data stays in D1" | False: objectives and failures are sent to OpenAI | Privacy section rewritten in `docs/AX_NATIVE_ORCHESTRATOR.md`; see §5 below |
+| D-13 | **High** | `submitPhase` skipped any step that already had a task id — and `ensureStep` persists that id *before* submitting | A process dying between `persist` and `engine.submit` left a step with an id and no task. Every resume skipped it, so the run never submitted the work: it polled to the deadline and reported `deadline_exceeded` forever | `submitPhase` always delegates to adopt-or-submit; an existing step with no task is submitted under its **original** key. See §7 |
 
 ## 2. Recovery semantics (what a crash now does)
 
@@ -31,7 +32,8 @@ it stood at `ad3bea9`, what it would have done in production, and what was chang
 | --- | --- | --- |
 | 1. After creating the run | run record | resumes; plans once |
 | 2. After the plan is saved | plan + charge | submits the missing steps only |
-| 3. After submitting a task, before saving the step | task (deterministic id) | adopts it, does not resubmit |
+| 3. After saving the step, before submitting its task | step with its deterministic id | submits the missing task under that same key (D-13) |
+| 3b. After submitting a task, before saving the step | task (deterministic id) | adopts it, does not resubmit |
 | 4. After claiming a task | claim + fence + lease | the worker either finishes (fenced) or the lease expires and a later tick requeues it |
 | 5. After the adapter ran, before the result is saved | claim only | same as 4: the task is requeued and the adapter runs again — **at-least-once**, which is why only read-only adapters may be registered |
 | 6. After evidence is saved, before the run is updated | done task with evidence + digest | reconciliation marks the step verified; no second execution |
@@ -101,11 +103,52 @@ are persisted or returned.
    reasoning.
 7. **Single account, single workspace** — nobody has run this against a live model or Render.
 
-## 7. Verdict
+## 7. The missing-submission defect (Mission 06)
+
+**What happened.** `ensureStep` writes the step — including its deterministic task id — and *then*
+submits. `submitPhase` then skipped any step that already had a task id:
+
+```js
+if (existing && (existing.taskId || existing.status === "needs_approval")) continue;
+```
+
+That test cannot tell "persisted before submission" from "already submitted", so a crash between the
+two left a step that every subsequent attempt skipped. No task was ever created; `refreshStep`
+reported `task_missing`; the driver polled until the deadline and the run reported
+`deadline_exceeded` with `settled: false` — for good, because the task would never appear. The work
+was lost and the run could not recover.
+
+**Why it happened.** The skip was written as an optimisation for "this step is already handled"
+using a field that is written *before* the very action it was meant to detect. The persisted id was
+treated as evidence of submission; it is only evidence of intent.
+
+**Corrected sequence.** `submitPhase` no longer decides anything. It calls `ensureStep`, which now:
+
+1. keeps the persisted `key` and `taskId`, generating one only when the step is new;
+2. refuses a step whose `taskId` disagrees with `taskIdForKey(key)` (`task_id_mismatch`, no task
+   created) rather than submitting under a second id;
+3. reads the task: read failure → leave the step open with `readError`, submit nothing;
+   task present → adopt, refresh and verify; task absent → submit under the **original** key and bind
+   the returned id.
+
+A corrective step persisted before its task was submitted is the same state; `recoverCorrective`
+restores it by its own key and relinks it to the failed step it repairs, instead of spending a new
+correction.
+
+**Crash boundaries now covered by tests**: step persisted / task missing; task submitted / run not
+updated; two drivers recovering at once; unreadable lookup; completed task; running task; approval
+step; terminal failure; repeated retries; failed run write; orphaned corrective step; mismatched id.
+
+**Limitation.** Recovery happens when the run is driven again (a `POST /runs` with the same
+`runKey`). A `GET` reconciles states but never submits work, by design: reads must not create tasks.
+A run whose stored task vanished externally therefore stays visibly unsettled rather than silently
+recreating it.
+
+## 8. Verdict
 
 | Question | Answer |
 | --- | --- |
-| Can Ax recover after a crash? | **Yes**, for every boundary where something was persisted: it resumes, adopts existing tasks, and converges from task rows. The only loss is one unrecorded model charge. |
+| Can Ax recover after a crash? | **Yes**, for every boundary where something was persisted: it submits a task that was never created, adopts one that was, and converges from task rows. The only loss is one unrecorded model charge. |
 | Can multiple cron executors duplicate execution? | **No.** The claim is atomic and fenced; a losing tick claims nothing. |
 | Can a run claim completion without genuine evidence? | **No.** Eight conditions, each with a negative test, including a digest bound to the task and attempt. |
 | Can it exceed its model budget? | **No material overspend.** It can exceed by at most one in-flight call; every extra call is preceded by a budget check. |

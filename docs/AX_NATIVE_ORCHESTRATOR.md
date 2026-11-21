@@ -40,6 +40,11 @@ Run statuses: `completed` (every step verified or repaired-and-verified), `needs
 `failed`, `budget_exceeded`, `deadline_exceeded`, `running` (no in-process executor: queued for the
 cron job), `error` (planning failed).
 
+Every step is submitted through adopt-or-submit: a persisted step id proves intent, not submission, so
+recovery reads the task and either adopts it or submits the missing one under the **same**
+idempotency key. A step whose id disagrees with its key is refused rather than re-keyed. Resuming a
+run is therefore always safe; a `GET` never submits anything.
+
 `settled` is the field to trust for "is this over?" — not the status. `deadline_exceeded` and
 `running` are both **unsettled**: the driver stopped, the tasks did not. Reading such a run
 reconciles it from its task rows and it becomes `completed` or `failed` on its own. The full crash

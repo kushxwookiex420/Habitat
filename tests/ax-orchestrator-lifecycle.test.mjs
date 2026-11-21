@@ -94,6 +94,7 @@ async function setup({ replies = [], envOverrides = {}, failRunWrites = false } 
   const modelRequests = [];
   const queued = [...replies];
   let failing = failRunWrites;
+  let failingReads = false;
 
   const fetchImpl = async (url, init = {}) => {
     const target = String(url);
@@ -110,6 +111,9 @@ async function setup({ replies = [], envOverrides = {}, failRunWrites = false } 
     const { sql, params = [] } = JSON.parse(init.body || "{}");
     if (failing && /^\s*(INSERT INTO habitat_ax_runs|UPDATE habitat_ax_runs)/i.test(sql)) {
       throw new Error("synthetic D1 write failure");
+    }
+    if (failingReads && /FROM habitat_command_tasks/i.test(sql) && /WHERE id = \?/i.test(sql)) {
+      throw new Error("synthetic D1 read failure");
     }
     const rows = db.prepare(sql).all(...params);
     return { ok: true, status: 200, async json() { return { success: true, result: [{ results: rows }] }; } };
@@ -164,7 +168,20 @@ async function setup({ replies = [], envOverrides = {}, failRunWrites = false } 
     return state.orchestrator;
   };
 
-  return { db, cfg, fetchImpl, tasks, runs, app, commandApi, makeOrchestrator, modelRequests, state };
+  return {
+    db,
+    cfg,
+    fetchImpl,
+    tasks,
+    runs,
+    app,
+    commandApi,
+    makeOrchestrator,
+    modelRequests,
+    state,
+    setFailRunWrites(value) { failing = Boolean(value); },
+    setFailTaskReads(value) { failingReads = Boolean(value); }
+  };
 }
 
 const tickOnce = h => runTick({ env: h.cfg, fetchImpl: h.fetchImpl, log: quiet });
@@ -645,4 +662,326 @@ test("a correctable failure is not repaired when the budget is already spent", a
   assert.equal(res.body.run.status, "budget_exceeded");
   assert.equal(res.body.run.corrections, 0);
   assert.equal((await h.tasks.list({ limit: 50 })).length, 0, "planning alone overran the budget, so nothing ran");
+});
+
+// ------------------------------------------------ missing-submission recovery (Mission 06)
+
+/**
+ * A run record that looks exactly like one written by a process that died after persisting a step
+ * and before submitting its task: the step has its deterministic id, the task does not exist.
+ */
+function runRecord({ runKey, steps, objective = "report runtime health", corrections = 0, deadlineMs = 10_000, plan = null }) {
+  const id = runIdFor(runKey);
+  const at = new Date().toISOString();
+  return {
+    schemaVersion: 2,
+    id,
+    runKey,
+    objective,
+    requestedBy: "ax",
+    status: "submitting",
+    phase: "submitting",
+    code: null,
+    settled: false,
+    deadlineAt: new Date(Date.now() + deadlineMs).toISOString(),
+    plan: plan || [{ objective, adapter: "runtime.health", needsApproval: false }],
+    steps,
+    corrections,
+    usage: { input_tokens: 0, output_tokens: 0 },
+    usageEstimated: false,
+    costUsd: 0,
+    recoveries: 0,
+    createdAt: at,
+    updatedAt: at
+  };
+}
+
+function persistedStep(runKey, index = 0, extra = {}) {
+  const key = runIdFor(runKey) + ":s" + index;
+  return {
+    index,
+    taskId: taskIdForKey(key),
+    key,
+    objective: "report runtime health",
+    adapter: "runtime.health",
+    needsApproval: false,
+    corrective: false,
+    status: "submitting",
+    verified: false,
+    verifyReason: null,
+    evidence: [],
+    error: null,
+    terminal: false,
+    ...extra
+  };
+}
+
+const resume = (h, runKey, objective = "report runtime health") =>
+  invoke(h.app, "POST /ax/command/runs", { headers: auth, body: { objective, runKey } });
+
+test("a step persisted before its task was submitted is recovered, not skipped", async () => {
+  const h = await setup({ envOverrides: { AX_RUN_DEADLINE_MS: "1200", AX_POLL_MS: "40" } });
+  const runKey = "missing-submission";
+  const record = runRecord({ runKey, steps: [persistedStep(runKey)] });
+  await h.runs.create(record);
+  assert.equal((await h.tasks.list({ limit: 50 })).length, 0, "the crash left no command task behind");
+
+  h.makeOrchestrator({ execute: tickExecute(h) });
+  const res = await resume(h, runKey);
+
+  assert.equal(res.statusCode, 201);
+  const run = res.body.run;
+  const tasks = await h.tasks.list({ limit: 50 });
+  assert.equal(tasks.length, 1, "exactly one task was submitted for the persisted step");
+  assert.equal(tasks[0].id, record.steps[0].taskId, "it used the persisted id, not a freshly minted one");
+  assert.equal(tasks[0].status, "done");
+  assert.equal(run.steps[0].taskId, record.steps[0].taskId);
+  assert.equal(run.steps[0].key, record.steps[0].key);
+  assert.equal(run.steps[0].adopted, false, "there was nothing to adopt: this was a submission");
+  assert.equal(run.status, "completed", JSON.stringify({ status: run.status, steps: run.steps }));
+  assert.equal(run.verified, true);
+});
+
+test("a task submitted before the run was updated is adopted, and the id is unchanged", async () => {
+  const h = await setup({ envOverrides: { AX_RUN_DEADLINE_MS: "1200", AX_POLL_MS: "40" } });
+  const runKey = "lost-run-update";
+  const step = persistedStep(runKey);
+  const submitted = await h.commandApi.engine.submit({
+    objective: step.objective,
+    requestedBy: "ax",
+    role: "ax",
+    adapter: step.adapter,
+    idempotencyKey: step.key
+  });
+  assert.equal(submitted.task.id, step.taskId);
+
+  await h.runs.create(runRecord({ runKey, steps: [step] }));
+  h.makeOrchestrator({ execute: tickExecute(h) });
+  const res = await resume(h, runKey);
+
+  assert.equal(res.statusCode, 201);
+  assert.equal(res.body.run.steps[0].adopted, true);
+  assert.equal(res.body.run.steps[0].taskId, step.taskId);
+  assert.equal((await h.tasks.list({ limit: 50 })).length, 1, "no second task was created");
+  assert.equal(res.body.run.status, "completed");
+});
+
+test("two simultaneous recoveries of the same missing submission create one task", async () => {
+  const h = await setup({ envOverrides: { AX_RUN_DEADLINE_MS: "1200", AX_POLL_MS: "40" } });
+  const runKey = "concurrent-recovery";
+  const step = persistedStep(runKey);
+  await h.runs.create(runRecord({ runKey, steps: [step] }));
+  h.makeOrchestrator({ execute: tickExecute(h) });
+
+  const [a, b] = await Promise.all([resume(h, runKey), resume(h, runKey)]);
+  const tasks = await h.tasks.list({ limit: 50 });
+  assert.equal(tasks.length, 1, "the idempotency key held under two drivers");
+  assert.equal(tasks[0].id, step.taskId);
+  for (const res of [a, b]) {
+    assert.ok([201, 409].includes(res.statusCode), "both attempts answer with a run or a conflict: " + res.statusCode);
+    assert.ok(res.body.run, "a conflict still returns the winning run");
+  }
+});
+
+test("a failed task lookup does not trigger a second submission", async () => {
+  const h = await setup({ envOverrides: { AX_RUN_DEADLINE_MS: "600", AX_POLL_MS: "40" } });
+  const runKey = "unreadable-lookup";
+  const step = persistedStep(runKey);
+  await h.runs.create(runRecord({ runKey, steps: [step] }));
+  h.makeOrchestrator({ execute: async () => ({ claimed: 0 }) });
+
+  h.setFailTaskReads(true);
+  const blind = await resume(h, runKey);
+  assert.equal((await h.tasks.list({ limit: 50 })).length, 0, "an unreadable lookup must not be read as \"missing\"");
+  assert.equal(blind.body.run.settled, false);
+  assert.equal(blind.body.run.steps[0].readError, "task_unreadable");
+  assert.notEqual(blind.body.run.status, "completed");
+
+  h.setFailTaskReads(false);
+  const healed = await resume(h, runKey);
+  assert.equal((await h.tasks.list({ limit: 50 })).length, 1, "the retry submitted the missing task once");
+  assert.equal(healed.body.run.steps[0].taskId, step.taskId);
+  assert.equal(healed.body.run.steps[0].readError, undefined);
+});
+
+test("an already completed task is adopted and its evidence verified", async () => {
+  const h = await setup();
+  const runKey = "adopt-completed";
+  const step = persistedStep(runKey);
+  const submitted = await h.commandApi.engine.submit({
+    objective: step.objective, requestedBy: "ax", role: "ax", adapter: step.adapter, idempotencyKey: step.key
+  });
+  assert.equal((await tickOnce(h)).report.tick.completed, 1);
+  const finished = await h.tasks.get(submitted.task.id);
+  assert.equal(finished.status, "done");
+
+  await h.runs.create(runRecord({ runKey, steps: [step] }));
+  h.makeOrchestrator({ execute: async () => ({ claimed: 0 }) });
+  const res = await resume(h, runKey);
+
+  assert.equal(res.body.run.steps[0].adopted, true);
+  assert.equal(res.body.run.steps[0].verified, true);
+  assert.equal(res.body.run.status, "completed");
+  assert.equal((await h.tasks.list({ limit: 50 })).length, 1);
+});
+
+test("a running task is adopted rather than resubmitted, and settles later", async () => {
+  const h = await setup({ envOverrides: { AX_RUN_DEADLINE_MS: "600", AX_POLL_MS: "40" } });
+  const runKey = "adopt-running";
+  const step = persistedStep(runKey);
+  await h.commandApi.engine.submit({
+    objective: step.objective, requestedBy: "ax", role: "ax", adapter: step.adapter, idempotencyKey: step.key
+  });
+  await h.runs.create(runRecord({ runKey, steps: [step] }));
+  h.makeOrchestrator({ execute: async () => ({ claimed: 0 }) });
+
+  const res = await resume(h, runKey);
+  assert.equal(res.body.run.steps[0].adopted, true);
+  assert.equal(res.body.run.steps[0].status, "queued");
+  assert.equal(res.body.run.settled, false, "a queued task is not an outcome");
+  assert.equal((await h.tasks.list({ limit: 50 })).length, 1);
+
+  await tickOnce(h);
+  const later = await invoke(h.app, "GET /ax/command/runs/:id", { headers: auth, params: { id: runIdFor(runKey) } });
+  assert.equal(later.body.run.status, "completed");
+});
+
+test("a persisted approval step is never submitted behind the owner's back", async () => {
+  const h = await setup();
+  const runKey = "approval-gap";
+  const step = persistedStep(runKey, 0, {
+    taskId: null,
+    key: null,
+    needsApproval: true,
+    status: "needs_approval",
+    verifyReason: "needs_approval"
+  });
+  await h.runs.create(runRecord({ runKey, steps: [step] }));
+  h.makeOrchestrator({ execute: tickExecute(h) });
+
+  const res = await resume(h, runKey);
+  assert.equal(res.statusCode, 201);
+  assert.equal(res.body.run.status, "needs_approval");
+  assert.equal(res.body.run.steps[0].taskId, null);
+  assert.equal((await h.tasks.list({ limit: 50 })).length, 0, "nothing was queued");
+});
+
+test("recovery of a terminal failure preserves it instead of resubmitting", async () => {
+  const h = await setup();
+  const runKey = "terminal-failure";
+  const step = persistedStep(runKey);
+  const submitted = await h.commandApi.engine.submit({
+    objective: step.objective, requestedBy: "ax", role: "ax", adapter: step.adapter, idempotencyKey: step.key
+  });
+  const worker = await failingWorker(h, { failTimes: 1 });
+  await worker();
+  assert.equal((await h.tasks.get(submitted.task.id)).status, "failed");
+
+  await h.runs.create(runRecord({ runKey, steps: [step] }));
+  h.makeOrchestrator({ execute: tickExecute(h), overrides: { maxCorrections: 0 } });
+  const res = await resume(h, runKey);
+
+  assert.equal(res.body.run.status, "failed");
+  assert.equal(res.body.run.settled, true);
+  assert.equal(res.body.run.verified, false);
+  assert.equal(res.body.run.steps[0].status, "failed");
+  assert.match(res.body.run.error, /unverified/);
+  assert.equal((await h.tasks.list({ limit: 50 })).length, 1, "the failed task was not replaced");
+});
+
+test("repeated recoveries keep one task id and never create a second task", async () => {
+  const h = await setup({ envOverrides: { AX_RUN_DEADLINE_MS: "500", AX_POLL_MS: "40" } });
+  const runKey = "repeat-recovery";
+  const step = persistedStep(runKey);
+  await h.runs.create(runRecord({ runKey, steps: [step] }));
+  h.makeOrchestrator({ execute: async () => ({ claimed: 0 }) });
+
+  const first = await resume(h, runKey);
+  const second = await resume(h, runKey);
+  const tasks = await h.tasks.list({ limit: 50 });
+  assert.equal(tasks.length, 1);
+  assert.equal(first.body.run.steps[0].taskId, step.taskId);
+  assert.equal(second.body.run.steps[0].taskId, step.taskId);
+});
+
+test("a lost run write reports 503 and the submitted task is adopted, not duplicated", async () => {
+  const h = await setup({ envOverrides: { AX_RUN_DEADLINE_MS: "1200", AX_POLL_MS: "40" } });
+  const runKey = "lost-write";
+  const step = persistedStep(runKey);
+  await h.runs.create(runRecord({ runKey, steps: [step] }));
+  h.makeOrchestrator({ execute: tickExecute(h) });
+
+  h.setFailRunWrites(true);
+  const broken = await resume(h, runKey);
+  assert.equal(broken.statusCode, 503);
+  assert.equal(broken.body.code, "store_unavailable");
+  assert.equal((await h.tasks.list({ limit: 50 })).length, 1, "the task exists even though the run write failed");
+
+  h.setFailRunWrites(false);
+  const healed = await resume(h, runKey);
+  assert.equal(healed.body.run.steps[0].adopted, true);
+  assert.equal((await h.tasks.list({ limit: 50 })).length, 1, "recovery adopted instead of submitting again");
+  assert.equal(healed.body.run.status, "completed");
+});
+
+test("an orphaned corrective step is recovered by its own key, not replaced", async () => {
+  const h = await setup({ envOverrides: { AX_RUN_DEADLINE_MS: "1200", AX_POLL_MS: "40" } });
+  const runKey = "corrective-gap";
+  const step = persistedStep(runKey);
+  const submitted = await h.commandApi.engine.submit({
+    objective: step.objective, requestedBy: "ax", role: "ax", adapter: step.adapter, idempotencyKey: step.key
+  });
+  const worker = await failingWorker(h, { failTimes: 1 });
+  await worker();
+  assert.equal((await h.tasks.get(submitted.task.id)).status, "failed");
+
+  const runId = runIdFor(runKey);
+  const correctiveKey = runId + ":c1";
+  const correctiveId = taskIdForKey(correctiveKey);
+  const failedStep = {
+    ...step,
+    status: "failed",
+    terminal: true,
+    verifyReason: "failed",
+    error: "synthetic adapter failure",
+    correctedBy: correctiveId
+  };
+  const correctiveStep = {
+    index: 1,
+    taskId: correctiveId,
+    key: correctiveKey,
+    objective: "report runtime health",
+    adapter: "runtime.health",
+    needsApproval: false,
+    corrective: true,
+    status: "submitting",
+    verified: false,
+    verifyReason: null,
+    evidence: [],
+    error: null,
+    terminal: false
+  };
+  await h.runs.create(runRecord({ runKey, steps: [failedStep, correctiveStep], corrections: 1 }));
+  h.makeOrchestrator({ execute: tickExecute(h), overrides: { maxCorrections: 2 } });
+
+  const res = await resume(h, runKey);
+  const tasks = await h.tasks.list({ limit: 50 });
+  assert.equal(tasks.length, 2, "the corrective task was submitted once, not replaced");
+  assert.equal(tasks.some(task => task.id === correctiveId), true);
+  assert.equal(res.body.run.corrections, 1, "recovery did not count a new correction");
+  assert.equal(res.body.run.status, "completed", JSON.stringify({ status: res.body.run.status, steps: res.body.run.steps }));
+  assert.equal(res.body.run.steps[1].taskId, correctiveId);
+});
+
+test("a persisted step whose id disagrees with its key is refused, not resubmitted", async () => {
+  const h = await setup();
+  const runKey = "corrupt-step";
+  const step = persistedStep(runKey, 0, { taskId: taskIdForKey("some-other-key") });
+  await h.runs.create(runRecord({ runKey, steps: [step] }));
+  h.makeOrchestrator({ execute: tickExecute(h), overrides: { maxCorrections: 0 } });
+
+  const res = await resume(h, runKey);
+  assert.equal((await h.tasks.list({ limit: 50 })).length, 0, "no task was created under a mismatched id");
+  assert.equal(res.body.run.status, "failed");
+  assert.match(res.body.run.error, /task_id_mismatch/);
 });
