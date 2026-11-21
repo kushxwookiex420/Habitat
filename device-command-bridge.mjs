@@ -2,6 +2,7 @@ import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypt
 import { createD1DeviceCommandRepository } from "./d1-device-command-repository.mjs";
 import { registerHomeBridgeConsole } from "./home-bridge-console.mjs";
 import { registerDeviceHabitat } from "./device-habitat.mjs";
+import { registerUniversalCommandRoutes } from "./command-routes.mjs";
 
 const SAFE_COMMANDS = new Set(["device.status"]);
 const PAIRING_TTL_MS = 10 * 60 * 1000;
@@ -258,6 +259,14 @@ export function registerDeviceCommandBridge(app, {
     registerDeviceHabitat(app, { env, fetchImpl, repository: store });
   } catch (error) {
     console.error("DEVICE_HABITAT_MOUNT_FAILED", String(error?.message || error));
+  }
+
+  // Universal command engine (AX/NEXUS/ORION/SENTINEL/ATLAS). Additive: /ax/command routes only,
+  // its own ax-token guard and its own durable table, so worker-task routes are untouched.
+  try {
+    registerUniversalCommandRoutes(app, { env, fetchImpl });
+  } catch (error) {
+    console.error("UNIVERSAL_COMMAND_MOUNT_FAILED", String(error?.message || error));
   }
 
   return Object.freeze({
