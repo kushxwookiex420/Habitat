@@ -61,8 +61,8 @@ Tables used by this service:
 - `habitat_paired_devices` — per-device token hashes and revocation state
 - `habitat_nexus_workers` — worker heartbeat and counters
 
-Optional tables are created only when their feature is configured: `habitat_content_jobs` and
-`habitat_secret_vault`.
+`habitat_content_jobs` is also created automatically whenever D1 is configured. `habitat_secret_vault`
+is created only when `HABITAT_TOKEN_ENCRYPTION_KEY` is set.
 
 If D1 credentials are present but initialization fails, startup fails closed rather than falling back
 to memory. If the D1 variables are absent, the service starts without durable command storage and
@@ -114,6 +114,12 @@ The blueprint sets `autoDeployTrigger: off`; configuration commits do not silent
 ## Guarded live D1 verification
 
 This is the only live D1 path. It never runs on push and must be pointed at the disposable database.
+
+> **Registration prerequisite:** GitHub only registers a `workflow_dispatch` workflow from the
+> default branch. `nexus-d1-live.yml` exists on `ax-nexus/revision-3-nonprod` but not on `main`, so
+> the workflow is not currently listed in Actions and cannot be manually dispatched. Adding that
+> single workflow to `main` requires a separate reviewed change; do not merge Revision 3 into `main`
+> to unblock it.
 
 1. In GitHub → `kushxwookiex420/Habitat` → **Settings → Secrets and variables → Actions**:
    - Variable `CLOUDFLARE_ACCOUNT_ID`
