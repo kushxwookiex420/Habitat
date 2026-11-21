@@ -1,6 +1,7 @@
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { createD1DeviceCommandRepository } from "./d1-device-command-repository.mjs";
 import { registerHomeBridgeConsole } from "./home-bridge-console.mjs";
+import { registerDeviceHabitat } from "./device-habitat.mjs";
 
 const SAFE_COMMANDS = new Set(["device.status"]);
 const PAIRING_TTL_MS = 10 * 60 * 1000;
@@ -249,6 +250,14 @@ export function registerDeviceCommandBridge(app, {
     registerHomeBridgeConsole(app, { env, fetchImpl });
   } catch (error) {
     console.error("HOME_BRIDGE_CONSOLE_MOUNT_FAILED", String(error?.message || error));
+  }
+
+  // The launcher's Habitat panel reads through this endpoint with its own device token, so the
+  // relay's ax credential never ships inside the APK.
+  try {
+    registerDeviceHabitat(app, { env, fetchImpl, repository: store });
+  } catch (error) {
+    console.error("DEVICE_HABITAT_MOUNT_FAILED", String(error?.message || error));
   }
 
   return Object.freeze({
