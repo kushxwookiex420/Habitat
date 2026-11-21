@@ -15,7 +15,14 @@ The existing `CLOUDFLARE_API_TOKEN` used for Workers AI is a separate credential
 
 ## Schema
 
-Apply `migrations/0001_habitat_tasks.sql` to the new D1 database using the Cloudflare dashboard or Wrangler, or rely on the idempotent `initialize()` DDL. Revision 3's `server.mjs` calls `initialize()` during startup whenever all three D1 values are present, and fails closed if initialization does not succeed. Never point this at production while preparing the non-production service.
+Apply `migrations/0001_habitat_tasks.sql`, then the additive
+`migrations/0003_device_ownership_security.sql`, using the Cloudflare dashboard or Wrangler, or rely
+on the idempotent `initialize()` DDL. Revision 4 adds `habitat_device_ownership`,
+`habitat_pairing_owners`, `habitat_security_audit`, and a nullable `recovery_at` column. It does not
+assign ownership to any existing device; follow the explicit backfill procedure in
+`docs/SECURITY_MODEL.md`. `server.mjs` calls `initialize()` during startup whenever all three D1
+values are present, and fails closed if initialization or the pairing-schema check does not succeed.
+Never point this at production while preparing the non-production service.
 
 ## Safe rollout gates
 
@@ -28,4 +35,4 @@ Do not declare task persistence active until all of these are true:
 5. A real D1-backed task survives a Render restart and can be read back.
 6. Task dispatch has duplicate-execution protection so recovering a task cannot accidentally repeat an external publishing action.
 
-Revision 3 wires the D1 task repository into startup, so the old "in-memory production store" caveat no longer applies to the mounted runtime. The remaining production gates are deployment, a real restart-and-hydration test, and dispatch duplicate-execution protection. This foundation alone is not production acceptance.
+Revision 4 wires the D1 task repository into startup, so the old "in-memory production store" caveat no longer applies to the mounted runtime. The remaining production gates are deployment, a real restart-and-hydration test, an explicitly reviewed ownership backfill, and dispatch duplicate-execution protection. This foundation alone is not production acceptance.

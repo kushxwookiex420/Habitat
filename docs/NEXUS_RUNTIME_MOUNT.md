@@ -1,4 +1,4 @@
-# Nexus runtime mount (Revision 3)
+# Nexus runtime mount (Revision 4)
 
 Status: **source integration complete and tested locally; non-production configuration hardened,
 not deployed.** The Render service and live D1 run remain outstanding because no Render or
@@ -7,8 +7,8 @@ owner runbook.
 
 ## Repository identity
 
-- Authoritative backend: `github.com/kushxwookiex420/Habitat` — flat root, base commit
-  `3ec19af17a37d1eb2e14ff54bee6b3042f220b73`.
+- Authoritative backend: `github.com/kushxwookiex420/Habitat` — flat root. Revision 4 is based on
+  the verified Revision 3 commit `662d6b5f2d1374cb0a8b9447b56ae3015036fdc2`.
 - `github.com/kushxwookiex420/home-launcher` is a **separate** Android/relay repository. It is not
   a rename and must not be used as the Habitat deploy source.
 - The Ax gateway/connector live under `home-launcher` in `integrations/ax-nexus/`; the Habitat
@@ -47,9 +47,19 @@ registerUniversalCommandRoutes  ->  commandApi { engine, store }
   device assigned to that same owner. Missing or ambiguous ownership fails closed.
 - Revocation: a revoked device is never revived by replaying a pairing code. Recovery is an explicit
   owner-device action (`POST /device/owner/devices/:deviceId/unrevoke`) and is restricted to the
-  target's recorded owner. Recovery destroys the old token hash and every old pairing code for the
-  device; the device must complete a fresh pairing. The separately configured Ax bridge credential
-  remains the super-admin revocation path; it is not an owner-device recovery credential.
+  target's recorded owner. A revoked owner cannot enroll devices, and revocation deletes every code
+  the owner issued. Recovery destroys the old token hash and every old pairing code for the device;
+  the device must complete a fresh pairing. The separately configured Ax bridge credential remains
+  the super-admin revocation path; it is not an owner-device recovery credential.
+- Owner lockout: `POST /device/break-glass/devices/:deviceId/unrevoke` requires the separate
+  `HABITAT_BREAK_GLASS_TOKEN`, targets only a revoked owned device, and writes an audit record. It
+  removes the revocation and old credential but never returns a token; a fresh pairing is required.
+- Pairing replay: a consumed code allows one 60-second lost-response recovery, claimed with a
+  conditional update. A third exchange, an expired code, or a recovery by another device fails.
+- Bootstrap: a consumed bootstrap code is never reactivated by restart. The startup seed never
+  clears `consumed_at` or restores a wildcard binding, and a revoked bootstrap owner is skipped.
+- Console: session cookies are `HttpOnly; Secure; SameSite=Strict`; login is rate-limited by client
+  address; login and state-changing routes reject cross-origin browser requests.
 - Pairing: Ax/Control Center minting resolves the single configured owner server-side and refuses
   when several owners are configured. An authenticated owner may mint through
   `POST /device/owner/pairings` only for itself, a new ownerless device, or a device it already owns.
@@ -70,15 +80,18 @@ registerUniversalCommandRoutes  ->  commandApi { engine, store }
 
 ## Deployment (non-production only)
 
-`render.yaml` targets the published branch `ax-nexus/revision-3-nonprod` and declares:
+`render.yaml` targets the non-production branch `ax-nexus/revision-4-security-remediation` and declares:
 
 - name `ax-nexus-habitat-nonprod`, root `.`, region `oregon`, starter
 - build `npm install --omit=dev --ignore-scripts`
 - start `npm start` (runs the syntax check, then `server.mjs`)
 - health `/health`
 - required service variables: `CLOUDFLARE_ACCOUNT_ID`, `HABITAT_D1_DATABASE_ID`,
-  `HABITAT_D1_API_TOKEN`, `HABITAT_AX_BRIDGE_TOKEN`, `HABITAT_OWNER_DEVICE_ID`, and the deliberate
-  activation flag `NEXUS_RUNTIME_ENABLED=true`. Without the flag the worker stays absent.
+  `HABITAT_D1_API_TOKEN`, `HABITAT_AX_BRIDGE_TOKEN`, `HABITAT_OWNER_DEVICE_ID`,
+  `HABITAT_RUNTIME_ENV=nonproduction`, and the deliberate activation flag
+  `NEXUS_RUNTIME_ENABLED=true`. Without the flag the worker stays absent. `HABITAT_RUNTIME_ENV` or
+  `NODE_ENV=production`, or a D1 database matching `HABITAT_PRODUCTION_D1_DATABASE_ID`, disables the
+  runtime and owner enrollment even if the flag is true.
 
 `/health` is the Render liveness check only; it returns 200 even when the optional AI provider is
 not configured. Nexus readiness is `/nexus/runtime`, which requires the bridge token and must report
@@ -89,17 +102,32 @@ production database, token, or Render service.
 
 ## Rollback
 
-Revision 2 remains `artifacts/nexus-runtime-executor/nexus-runtime-executor.patch` in the Ax
-workspace (`2fe8b27d...`), with runtime `38264497...`. To roll back a deployed service, redeploy the
-previous Revision 2 commit (or the last known-good commit) rather than editing files in place. This
-revision changes production/runtime files: `command-routes.mjs`, `device-command-bridge.mjs`,
-`device-habitat.mjs`, `d1-command-task-repository.mjs`, `d1-content-job-repository.mjs`,
-`d1-device-command-repository.mjs`, `d1-dispatch-lease-repository.mjs`, `d1-secret-vault.mjs`,
-`d1-task-repository.mjs`, `nexus-adapters.mjs`, `nexus-adapter-registration.mjs`,
-`nexus-runtime.mjs`, `render-sandbox-compat.mjs`, `server.mjs`, `render.yaml`, and
-  `scripts/d1-live-test.mjs`, `scripts/d1-cleanup.mjs`; tests and docs change with them. Revert all of
-  them together; reverting only `device-command-bridge.mjs` is not sufficient. Recovery changes in
-  `device-command-bridge.mjs` and `d1-device-command-repository.mjs` must be reverted together.
+The verified rollback target is the Revision 3 commit
+`662d6b5f2d1374cb0a8b9447b56ae3015036fdc2` on `ax-nexus/revision-3-nonprod` (the exact baseline
+this branch was created from). The previously cited `2fe8b27d...` artifact/commit is not present in
+this repository and must not be used as a deployment rollback reference.
+
+Procedure, performed only with explicit authorization in the non-production environment:
+
+1. Record the failed Revision 4 commit and deployment ID.
+2. Build and test the Revision 3 commit locally: `npm ci`, `npm run check`, `npm test`.
+3. Deploy that exact commit (or the last verified non-production commit) to a fresh non-production
+   service. Do not edit files in place.
+4. The Revision 4 schema is additive. Rolling back the code leaves `habitat_device_ownership`,
+   `habitat_pairing_owners`, `habitat_security_audit`, and the nullable `recovery_at` column in place;
+   Revision 3 ignores them. Reverting DDL is not required for a code rollback and should not drop
+   ownership evidence.
+5. Re-run the Revision 3 owner/pairing acceptance checks and record the `/health` and
+   `/nexus/runtime` responses before declaring rollback complete.
+
+Revision 4 changed `command-routes.mjs`, `device-command-bridge.mjs`, `device-habitat.mjs`,
+`d1-command-task-repository.mjs`, `d1-content-job-repository.mjs`, `d1-device-command-repository.mjs`,
+`d1-dispatch-lease-repository.mjs`, `d1-secret-vault.mjs`, `d1-task-repository.mjs`,
+`nexus-adapters.mjs`, `nexus-adapter-registration.mjs`, `nexus-runtime.mjs`,
+`render-sandbox-compat.mjs`, `server.mjs`, `render.yaml`, `home-bridge-client.mjs`,
+`home-bridge-console.mjs`, `device-ownership-migration.mjs`, and `migrations/0003_*`; tests and docs
+change with them. Revert the application changes together; reverting only
+`device-command-bridge.mjs` is not sufficient.
 
 ## Still blocked
 

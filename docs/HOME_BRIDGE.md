@@ -8,10 +8,11 @@ Habitat hosts the Home Bridge command center at `/bridge/console`. The relay its
 
 | Secret | Role | What it can do |
 | --- | --- | --- |
-| `HABITAT_AX_BRIDGE_TOKEN` | Habitat operator | Opens the console. Exchanged for an HttpOnly, SameSite=Strict session cookie (8 h, in memory) so no credential is ever stored in browser JavaScript. |
+| `HABITAT_AX_BRIDGE_TOKEN` | Habitat operator | Opens the console. Exchanged for an HttpOnly, Secure, SameSite=Strict session cookie (8 h, in memory) so no credential is ever stored in browser JavaScript. Login attempts are rate-limited by client address. |
 | `HOME_BRIDGE_AX_TOKEN` | relay `ax` | Submit tasks, read task status and replies, list/read shared files, queue allowlisted phone commands, read phone state. |
 | `HOME_BRIDGE_BUFF_TOKEN` | relay `buff` | Read and claim the task queue, post replies with artifacts, upload/update shared files, read files. |
-| `HOME_BRIDGE_URL` | - | Relay base URL. Defaults to the preview deployment. |
+| `HOME_BRIDGE_URL` | - | **Required.** Explicit relay base URL. There is no built-in/default destination; absent or malformed values fail closed without sending a credential. |
+| `HABITAT_CONSOLE_ORIGIN` | Optional | Exact browser origin allowed to submit console logins/mutations (for example `https://service.example`). When omitted, the request's own `Origin` must match its `Host`. |
 | `HABITAT_GITHUB_REPO` | - | Repo whose commits the CLOUD tab lists. Defaults to `kushxwookiex420/home-launcher`. |
 | `GITHUB_TOKEN` | - | Optional; raises the GitHub API rate limit for the commit list. |
 
@@ -55,7 +56,10 @@ credential the installed launcher APK still uses. It is never needed by Habitat.
 | `POST /bridge/console/send` | Queue an allowlisted phone command (`ax` credential). |
 
 Every route except the page itself requires the operator token or a session. Without
-`HABITAT_AX_BRIDGE_TOKEN` the console answers 503 instead of running unauthenticated.
+`HABITAT_AX_BRIDGE_TOKEN` the console answers 503 instead of running unauthenticated. Login and
+state-changing routes reject cross-origin browser requests, set `Secure; HttpOnly; SameSite=Strict`
+cookies, and limit repeated failed logins. Non-browser clients that do not send `Origin` remain
+usable for server-to-server operation.
 
 ## Rotation and revocation
 
@@ -89,5 +93,6 @@ only, so a lost token is replaced, never recovered. Leak response: revoke, mint,
   reports results through `/result`; the console shows "awaiting phone result" until then.
 - The WORKERS tab is derived from relay telemetry (credential presence, queue depth, reply count,
   phone polling, service health). It does not invent worker state.
-- `HOME_BRIDGE_URL` defaults to the preview relay. Point it at the production relay only after that
-  environment is deployed and tested.
+- `HOME_BRIDGE_URL` has no default. Set it explicitly for the intended relay; a missing or malformed
+  value produces a configuration error and no outbound request. Point it at a production relay only
+  after that environment is deployed and tested.

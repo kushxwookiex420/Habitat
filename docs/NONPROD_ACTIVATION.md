@@ -1,16 +1,16 @@
-# Non-production activation (Ax / Nexus Revision 3)
+# Non-production activation (Ax / Nexus Revision 4)
 
-Status: **configuration ready; not provisioned or deployed.** This runbook is for the isolated
-service only. It does not authorize a production deployment, a production D1 query, or a `main`
-merge.
+Status: **Revision 4 security remediation; not provisioned or deployed.** This runbook is for the
+isolated non-production service only. It does not authorize a production deployment, a production
+D1 query, or a `main` merge.
 
 ## Service contract
 
 | Setting | Value |
 |---|---|
 | Repository | `kushxwookiex420/Habitat` |
-| Branch | `ax-nexus/revision-3-nonprod` |
-| Revision 3 baseline | `62f362ab7b53416ffbb1f62695639f16445558a1` |
+| Branch | `ax-nexus/revision-4-security-remediation` |
+| Revision 4 baseline | `662d6b5f2d1374cb0a8b9447b56ae3015036fdc2` (Revision 3) |
 | Service name | `ax-nexus-habitat-nonprod` |
 | Region | Oregon |
 | Root directory | `/` (repository root) |
@@ -33,6 +33,12 @@ this repository, a chat message, a build log, or a screenshot.
 | `HABITAT_D1_API_TOKEN` | Yes | **Yes** | Token scoped to that disposable database only |
 | `HABITAT_AX_BRIDGE_TOKEN` | Yes | **Yes** | New random bearer token for the Ax/Nexus routes |
 | `HABITAT_OWNER_DEVICE_ID` | Yes for owner approvals | No | Exact paired owner device ID |
+| `HABITAT_RUNTIME_ENV` | Yes | No | Must be `nonproduction`; `production` disables the Nexus runtime and device-owner enrollment |
+| `HABITAT_BREAK_GLASS_TOKEN` | Optional | **Yes** | Separate high-entropy credential for audited owner lockout recovery; never the operator token |
+| `HABITAT_CONSOLE_ORIGIN` | Optional | No | Exact console origin for cross-origin protection |
+| `HOME_BRIDGE_URL` | Yes if using the Home Bridge | No | Explicit relay URL; no default |
+| `HOME_BRIDGE_AX_TOKEN` | Yes if using the Home Bridge | **Yes** | Relay `ax` role credential |
+| `HOME_BRIDGE_BUFF_TOKEN` | Yes if using the Home Bridge | **Yes** | Relay `buff` role credential |
 | `HABITAT_DEVICE_PAIRING_BOOTSTRAP_CODE_HASH` | Optional | **Yes** | Lowercase SHA-256 hex of a one-time bootstrap code |
 | `HABITAT_DEVICE_PAIRING_BOOTSTRAP_EXPIRES_AT` | Optional | No | ISO timestamp for that bootstrap code |
 | `HABITAT_TOKEN_ENCRYPTION_KEY` | Optional | **Yes** | Only for the TikTok token vault; not needed for Nexus acceptance |
@@ -44,7 +50,7 @@ for this service; do not reuse the production bridge token.
 
 ## D1 schema and initialization
 
-Revision 3 initializes D1 automatically on startup. Do not run the production migration against the
+Revision 4 initializes D1 automatically on startup. Do not run the production migration against the
 disposable database.
 
 When all three D1 variables are present, `server.mjs` initializes the existing task and dispatch-lease
@@ -57,8 +63,11 @@ Tables used by this service:
 - `habitat_dispatch_leases` — existing dispatch lease fencing
 - `habitat_command_tasks` — universal command/Nexus task records
 - `habitat_device_commands` — device command queue
-- `habitat_device_pairings` — one-time pairing records
+- `habitat_device_pairings` — one-time pairing records, including `recovery_at` for one bounded lost-response retry
 - `habitat_paired_devices` — per-device token hashes and revocation state
+- `habitat_device_ownership` — explicit device-to-owner mapping; **never inferred**
+- `habitat_pairing_owners` — issuer recorded with each pairing code so revocation can invalidate it
+- `habitat_security_audit` — durable ownership, pairing, recovery, revocation and approval events
 - `habitat_nexus_workers` — worker heartbeat and counters
 
 `habitat_content_jobs` is also created automatically whenever D1 is configured. `habitat_secret_vault`
@@ -80,7 +89,9 @@ Nexus is not mounted; that is not an acceptable acceptance state.
    enforces this exact inequality.
 
 No tables need to be created by hand; the service creates them. The guarded workflow can create and
-verify them before the Render service starts.
+verify them before the Render service starts. Apply additive migration
+`migrations/0003_device_ownership_security.sql` when using a migration runner; it deliberately does
+not assign an owner to any legacy device.
 
 ### 2. Create the dedicated D1 API token
 
@@ -100,12 +111,13 @@ Store it directly in Render as `HABITAT_AX_BRIDGE_TOKEN`. It authenticates `/ax/
 
 1. Render → **New → Blueprint**.
 2. Connect `kushxwookiex420/Habitat`.
-3. Select branch `ax-nexus/revision-3-nonprod`. The checked-in `render.yaml` now names this branch;
-   if Render asks for a branch override, use the same value.
+3. Select branch `ax-nexus/revision-4-security-remediation`. The checked-in `render.yaml` names this
+   branch; if Render asks for a branch override, use the same value.
 4. Apply the blueprint. Confirm the service is `ax-nexus-habitat-nonprod`, region Oregon, root `/`,
    and the build/start/health values in the table above.
-5. Enter the five required variables in the service Environment page. Use the disposable database
-   ID and the dedicated token only.
+5. Enter every required variable in the Environment table above, including
+   `HABITAT_RUNTIME_ENV=nonproduction` and the separate `HABITAT_BREAK_GLASS_TOKEN`. Use the
+   disposable database ID and dedicated token only.
 6. Deploy. Record the Render service ID, deploy ID, deployed commit, and the first successful
    `/health` response.
 
@@ -116,7 +128,7 @@ The blueprint sets `autoDeployTrigger: off`; configuration commits do not silent
 This is the only live D1 path. It never runs on push and must be pointed at the disposable database.
 
 > **Registration prerequisite:** GitHub only registers a `workflow_dispatch` workflow from the
-> default branch. `nexus-d1-live.yml` exists on `ax-nexus/revision-3-nonprod` but not on `main`, so
+> default branch. `nexus-d1-live.yml` exists on the non-production branch but not on `main`, so
 > the workflow is not currently listed in Actions and cannot be manually dispatched. Adding that
 > single workflow to `main` requires a separate reviewed change; do not merge Revision 3 into `main`
 > to unblock it.
@@ -232,7 +244,8 @@ valid.
 ## Remaining owner actions
 
 - Cloudflare: create the disposable database and scoped token.
-- Render: create the Blueprint/service and enter the five required variables.
+- Render: create the Blueprint/service and enter every required variable, including the separate
+  break-glass credential and explicit `HABITAT_RUNTIME_ENV=nonproduction`.
 - GitHub: set the three Actions variables and the disposable-only token secret, then run the
   manual workflow.
 - Pair the owner device if owner-only approval tests are required.

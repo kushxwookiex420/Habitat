@@ -7,14 +7,22 @@
 // Tokens stay in this process. They are never returned to the browser, written to logs, or
 // included in error messages. Calls never throw: the caller gets { ok, status, data, error }.
 
-const DEFAULT_BASE_URL = "https://home-bridge-qn2hnd-preview.freebuff.site";
 const DEFAULT_TIMEOUT_MS = 12000;
 
 function cleanBaseUrl(value) {
   const raw = String(value || "").trim().replace(/\/+$/, "");
-  if (!raw) return DEFAULT_BASE_URL;
-  if (!/^https?:\/\//i.test(raw)) return DEFAULT_BASE_URL;
-  return raw;
+  // Never send a server-held relay credential to an implicit destination. The URL must be
+  // configured explicitly; callers fail closed when it is absent or malformed.
+  if (!raw || !/^https?:\/\//i.test(raw)) return "";
+  try {
+    const parsed = new URL(raw);
+    if (!parsed.hostname || parsed.username || parsed.password) return "";
+    const loopback = ["localhost", "127.0.0.1", "[::1]"].includes(parsed.hostname);
+    if (parsed.protocol !== "https:" && !(parsed.protocol === "http:" && loopback)) return "";
+    return parsed.toString().replace(/\/+$/, "");
+  } catch {
+    return "";
+  }
 }
 
 export function createHomeBridgeClient({
@@ -37,6 +45,9 @@ export function createHomeBridgeClient({
   async function call(role, path, { method = "GET", query, body } = {}) {
     if (!configured(role)) {
       return { ok: false, status: 0, error: `no ${role} credential configured`, data: null };
+    }
+    if (!base) {
+      return { ok: false, status: 0, error: "HOME_BRIDGE_URL is not configured", data: null };
     }
     const url = new URL(base + path);
     if (query) {

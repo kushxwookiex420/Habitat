@@ -1,4 +1,4 @@
-# Non-production Habitat service running the Nexus Revision 3 runtime mount.
+# Non-production Habitat service running the Nexus Revision 4 security remediation.
 # This repository is kushxwookiex420/Habitat (flat root). It is NOT home-launcher.
 # No secrets are stored here; every secret is sync:false.
 services:
@@ -7,7 +7,7 @@ services:
     runtime: node
     plan: starter
     region: oregon
-    branch: ax-nexus/revision-3-nonprod
+    branch: ax-nexus/revision-4-security-remediation
     rootDir: .
     buildCommand: npm install --omit=dev --ignore-scripts
     startCommand: npm start
@@ -23,6 +23,16 @@ services:
       - key: HABITAT_AX_BRIDGE_TOKEN
         sync: false
       - key: HABITAT_OWNER_DEVICE_ID
+        sync: false
+      - key: HABITAT_RUNTIME_ENV
+        value: "nonproduction"
+      - key: HABITAT_BREAK_GLASS_TOKEN
+        sync: false
+      - key: HOME_BRIDGE_URL
+        sync: false
+      - key: HOME_BRIDGE_AX_TOKEN
+        sync: false
+      - key: HOME_BRIDGE_BUFF_TOKEN
         sync: false
       - key: NEXUS_RUNTIME_ENABLED
         value: "true"

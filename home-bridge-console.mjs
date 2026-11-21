@@ -22,6 +22,8 @@ import { createHomeBridgeClient } from "./home-bridge-client.mjs";
 const SESSION_COOKIE = "habitat_bridge_session";
 const SESSION_TTL_MS = 8 * 60 * 60 * 1000;
 const GITHUB_CACHE_MS = 60000;
+const LOGIN_WINDOW_MS = 5 * 60 * 1000;
+const LOGIN_MAX_FAILURES = 5;
 
 function safeEqual(left, right) {
   const a = Buffer.from(String(left || ""));
@@ -63,6 +65,7 @@ export function registerHomeBridgeConsole(app, { env = process.env, fetchImpl = 
   const githubRepo = String(env.HABITAT_GITHUB_REPO || "kushxwookiex420/home-launcher").trim();
   const githubToken = String(env.GITHUB_TOKEN || "").trim();
   const sessions = new Map();
+  const loginFailures = new Map();
   const githubCache = { at: 0, data: null };
 
   function pruneSessions(now) {
@@ -91,19 +94,61 @@ export function registerHomeBridgeConsole(app, { env = process.env, fetchImpl = 
   function setSessionCookie(res, id) {
     res.setHeader(
       "Set-Cookie",
-      `${SESSION_COOKIE}=${id}; Path=/bridge/console; HttpOnly; SameSite=Strict; Max-Age=${Math.floor(SESSION_TTL_MS / 1000)}`
+      `${SESSION_COOKIE}=${id}; Path=/bridge/console; HttpOnly; Secure; SameSite=Strict; Max-Age=${Math.floor(SESSION_TTL_MS / 1000)}`
     );
   }
 
+  function clearSessionCookie(res) {
+    res.setHeader("Set-Cookie", `${SESSION_COOKIE}=; Path=/bridge/console; HttpOnly; Secure; SameSite=Strict; Max-Age=0`);
+  }
+
+  function originAllowed(req) {
+    const origin = String(req.headers?.origin || "").trim();
+    // Non-browser clients do not send Origin. Browsers must be same-origin or explicitly
+    // allowlisted; this blocks cross-site form submissions even when SameSite is misbehaving.
+    if (!origin) return true;
+    const configured = String(env.HABITAT_CONSOLE_ORIGIN || "").trim();
+    if (configured) return origin === configured;
+    const host = String(req.headers?.host || "").trim();
+    return Boolean(host) && (origin === `https://${host}` || origin === `http://${host}`);
+  }
+
+  function loginKey(req) {
+    return String(req.ip || req.headers?.["x-forwarded-for"] || req.socket?.remoteAddress || "unknown")
+      .split(",")[0].trim();
+  }
+
+  function requireSameOrigin(req, res, next) {
+    if (!originAllowed(req)) {
+      return res.status(403).json({ ok: false, error: "Cross-origin console request refused." });
+    }
+    return next();
+  }
+
   app.post("/bridge/console/login", (req, res) => {
+    if (!originAllowed(req)) {
+      return res.status(403).json({ ok: false, error: "Cross-origin console login refused." });
+    }
     if (!operatorToken) {
       return res.status(503).json({ ok: false, error: "HABITAT_AX_BRIDGE_TOKEN is not configured; console access is disabled." });
     }
+    const now = Date.now();
+    const key = loginKey(req);
+    const previous = loginFailures.get(key);
+    if (previous && previous.until > now && previous.count >= LOGIN_MAX_FAILURES) {
+      res.setHeader("Retry-After", String(Math.ceil((previous.until - now) / 1000)));
+      return res.status(429).json({ ok: false, error: "Too many failed console login attempts. Try again later." });
+    }
+    if (previous && previous.until <= now) loginFailures.delete(key);
     const supplied = String(req.body?.token || bearer(req) || "").trim();
     if (!safeEqual(supplied, operatorToken)) {
+      const current = loginFailures.get(key) || { count: 0, until: now + LOGIN_WINDOW_MS };
+      current.count += 1;
+      current.until = now + LOGIN_WINDOW_MS;
+      loginFailures.set(key, current);
       return res.status(401).json({ ok: false, error: "Invalid operator token." });
     }
-    const now = Date.now();
+    loginFailures.delete(key);
     pruneSessions(now);
     const id = sessionId();
     sessions.set(id, now + SESSION_TTL_MS);
@@ -111,10 +156,10 @@ export function registerHomeBridgeConsole(app, { env = process.env, fetchImpl = 
     return res.json({ ok: true, expiresInSeconds: Math.floor(SESSION_TTL_MS / 1000) });
   });
 
-  app.post("/bridge/console/logout", (req, res) => {
+  app.post("/bridge/console/logout", requireSameOrigin, (req, res) => {
     const id = cookies(req)[SESSION_COOKIE];
     if (id) sessions.delete(id);
-    res.setHeader("Set-Cookie", `${SESSION_COOKIE}=; Path=/bridge/console; HttpOnly; SameSite=Strict; Max-Age=0`);
+    clearSessionCookie(res);
     return res.json({ ok: true });
   });
 
@@ -283,7 +328,7 @@ export function registerHomeBridgeConsole(app, { env = process.env, fetchImpl = 
 
   // ---- actions -----------------------------------------------------------
 
-  app.post("/bridge/console/tasks", requireOperator, async (req, res) => {
+  app.post("/bridge/console/tasks", requireSameOrigin, requireOperator, async (req, res) => {
     const text = String(req.body?.text || "").trim();
     const title = String(req.body?.title || "").trim().slice(0, 120);
     if (!text) return res.status(400).json({ ok: false, error: "text is required" });
@@ -297,7 +342,7 @@ export function registerHomeBridgeConsole(app, { env = process.env, fetchImpl = 
     });
   });
 
-  app.post("/bridge/console/claim", requireOperator, async (req, res) => {
+  app.post("/bridge/console/claim", requireSameOrigin, requireOperator, async (req, res) => {
     const ids = Array.isArray(req.body?.ids) ? req.body.ids.map((id) => String(id)).slice(0, 50) : [];
     const result = await client.claimTasks(ids);
     return res.status(result.ok ? 200 : 502).json({
@@ -309,7 +354,7 @@ export function registerHomeBridgeConsole(app, { env = process.env, fetchImpl = 
 
   const ALLOWED_PHONE_ACTIONS = new Set(["status", "page", "app", "torch", "clear", "remote", "url"]);
 
-  app.post("/bridge/console/send", requireOperator, async (req, res) => {
+  app.post("/bridge/console/send", requireSameOrigin, requireOperator, async (req, res) => {
     const action = String(req.body?.action || "").trim();
     const arg = String(req.body?.arg || "").trim();
     if (!ALLOWED_PHONE_ACTIONS.has(action)) {
@@ -331,7 +376,7 @@ export function registerHomeBridgeConsole(app, { env = process.env, fetchImpl = 
     res.type("html").send(renderConsole());
   });
 
-  return { client, dashboard, requireOperator };
+  return { client, dashboard, requireOperator, requireSameOrigin };
 }
 
 export function renderConsole() {

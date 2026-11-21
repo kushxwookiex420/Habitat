@@ -134,11 +134,43 @@ test("login issues an HttpOnly session cookie that unlocks the dashboard", async
   assert.equal(login.statusCode, 200);
   const cookie = login.headers["set-cookie"];
   assert.match(cookie, /HttpOnly/);
+  assert.match(cookie, /Secure/);
   assert.match(cookie, /SameSite=Strict/);
   const session = cookie.split(";")[0];
   const dashboard = await invoke(app, "GET /bridge/console/dashboard", { headers: { cookie: session } });
   assert.equal(dashboard.statusCode, 200);
   assert.equal(dashboard.body.phone.online, true);
+});
+
+test("console login and mutations reject cross-origin browser requests", async () => {
+  const { app } = setup();
+  const blocked = await invoke(app, "POST /bridge/console/login", {
+    headers: { origin: "https://evil.test", host: "bridge.test" },
+    body: { token: OPERATOR }
+  });
+  assert.equal(blocked.statusCode, 403);
+  const sameOrigin = await invoke(app, "POST /bridge/console/login", {
+    headers: { origin: "https://bridge.test", host: "bridge.test" },
+    body: { token: OPERATOR }
+  });
+  assert.equal(sameOrigin.statusCode, 200);
+
+  const mutation = await invoke(app, "POST /bridge/console/send", {
+    headers: { ...operator.headers, origin: "https://evil.test", host: "bridge.test" },
+    body: { action: "status" }
+  });
+  assert.equal(mutation.statusCode, 403);
+});
+
+test("repeated wrong logins are rate limited", async () => {
+  const { app } = setup();
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const res = await invoke(app, "POST /bridge/console/login", { body: { token: "wrong" } });
+    assert.equal(res.statusCode, 401);
+  }
+  const limited = await invoke(app, "POST /bridge/console/login", { body: { token: OPERATOR } });
+  assert.equal(limited.statusCode, 429);
+  assert.ok(Number(limited.headers["retry-after"]) > 0);
 });
 
 test("logout invalidates the session", async () => {
