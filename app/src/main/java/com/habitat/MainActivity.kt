@@ -17,37 +17,35 @@ import android.graphics.Color
 import java.util.Locale
 
 class MainActivity : Activity() {
+    companion object { private const val STATE_PAIRING_DIALOG = "pairing_dialog_open" }
+
     private lateinit var input: EditText
     private lateinit var ui: HabitatOverlay
     private lateinit var brain: BrainAdapter
     private lateinit var deviceBridge: AndroidDeviceBridge
     private var deviceBridgeButton: Button? = null
+    private var pairingDialog: AlertDialog? = null
+    private var pairingStatusView: TextView? = null
+    private var pairingButton: Button? = null
+    private var pairingDiagnosticsView: TextView? = null
     private val voiceCode = 700
     private var lastTaskId: String? = null
     private val taskPrefs by lazy { getSharedPreferences("habitat_tasks", MODE_PRIVATE) }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        HabitatCrashHandler.install(this)
         requestWindowFeature(Window.FEATURE_NO_TITLE)
         window.setFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN, WindowManager.LayoutParams.FLAG_FULLSCREEN)
         window.navigationBarColor = Color.BLACK
         deviceBridge = AndroidDeviceBridge(this) { status ->
-            runOnUiThread {
-                deviceBridgeButton?.text = when {
-                    !deviceBridge.isConfigured() -> "LINK"
-                    status == "AX LINK LIVE" -> "LIVE"
-                    status.contains("temporarily unavailable") || status.contains("rejected") -> "OFF"
-                    else -> "AX SET"
-                }
-                if (status.contains("authentication failed") || status.contains("command completed") || status.contains("revoked")) {
-                    Toast.makeText(this, status, Toast.LENGTH_SHORT).show()
-                }
-            }
+            runOnUiThread { onBridgeStatus(status) }
         }
         brain = BrainAdapter(this) {
             deviceBridge.currentToken()?.let { token -> deviceBridge.deviceId to token }
         }
         lastTaskId = taskPrefs.getString("live_system_check_task_id", null)
+        deviceBridge.recordLifecycle("MainActivity created")
 
         val root = FrameLayout(this)
         val space = Habitat3DSurface(this)
@@ -99,7 +97,12 @@ class MainActivity : Activity() {
         val tiktok = Button(this).apply { text = "TT"; textSize = 15f; setTextColor(Color.WHITE); setBackgroundColor(Color.rgb(28, 28, 36)); isAllCaps = false; setOnClickListener { showTikTokPublisherDialog() } }
         composer.addView(tiktok, LinearLayout.LayoutParams(58, 82).apply { leftMargin = 8 })
         val bridgeButton = Button(this).apply {
-            text = if (deviceBridge.isConfigured()) "AX SET" else "LINK"
+            text = when (deviceBridge.linkState()) {
+                AndroidDeviceBridge.LinkState.LIVE -> "LIVE"
+                AndroidDeviceBridge.LinkState.PAIRED_UNVERIFIED -> "VERIFY"
+                AndroidDeviceBridge.LinkState.REVOKED -> "REVOKED"
+                AndroidDeviceBridge.LinkState.UNPAIRED -> "LINK"
+            }
             textSize = 13f
             setTextColor(Color.WHITE)
             setBackgroundColor(Color.rgb(5, 92, 105))
@@ -426,14 +429,89 @@ class MainActivity : Activity() {
             DeviceBridgeScheduler.schedule(this)
         }
         ensureSystemCheckTask()
+        if (savedInstanceState?.getBoolean(STATE_PAIRING_DIALOG, false) == true) {
+            // The activity was recreated while pairing was open. Restore the dialog instead of
+            // abandoning the user mid-pairing.
+            root.post { showDeviceBridgeDialog() }
+        }
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        outState.putBoolean(STATE_PAIRING_DIALOG, pairingDialog?.isShowing == true)
+        super.onSaveInstanceState(outState)
+    }
+
+    private fun diagnosticsReport(): String {
+        val lines = deviceBridge.diagnosticsLines()
+        return buildString {
+            append("DIAGNOSTICS\n")
+            append("Endpoint: ")
+            append(deviceBridge.baseUrl)
+            append("\nLink: ")
+            append(deviceBridge.linkState().name)
+            append("\nConfirmed: ")
+            append(
+                if (deviceBridge.lastConfirmedAt() > 0L) {
+                    java.text.SimpleDateFormat("HH:mm:ss", Locale.US).format(java.util.Date(deviceBridge.lastConfirmedAt()))
+                } else "never"
+            )
+            append("\n")
+            if (lines.isEmpty()) append("No events recorded.")
+            else append(lines.joinToString("\n"))
+        }
+    }
+
+    private fun updateBridgeButton() {
+        deviceBridgeButton?.text = when (deviceBridge.linkState()) {
+            AndroidDeviceBridge.LinkState.LIVE -> "LIVE"
+            AndroidDeviceBridge.LinkState.PAIRED_UNVERIFIED -> "VERIFY"
+            AndroidDeviceBridge.LinkState.REVOKED -> "REVOKED"
+            AndroidDeviceBridge.LinkState.UNPAIRED -> "LINK"
+        }
+    }
+
+    private fun onBridgeStatus(status: String) {
+        updateBridgeButton()
+        val dialog = pairingDialog
+        if (dialog != null && dialog.isShowing) {
+            try {
+                when (deviceBridge.linkState()) {
+                    AndroidDeviceBridge.LinkState.LIVE -> {
+                        pairingStatusView?.text = "Ax authenticated this phone. Link is live."
+                        deviceBridge.recordLifecycle("pairing confirmed by Ax")
+                        dialog.dismiss()
+                        Toast.makeText(this, "Phone linked and authenticated by Ax.", Toast.LENGTH_LONG).show()
+                    }
+                    AndroidDeviceBridge.LinkState.REVOKED -> {
+                        pairingStatusView?.setTextColor(Color.rgb(180, 40, 40))
+                        pairingStatusView?.text = "Ax revoked this phone's link. Pair again with a fresh code."
+                        pairingButton?.isEnabled = true
+                        pairingButton?.text = "Pair phone"
+                    }
+                    else -> pairingStatusView?.text = status
+                }
+                pairingDiagnosticsView?.text = diagnosticsReport()
+            } catch (_: Throwable) {
+                // A recycled dialog view must never crash the polling callback.
+            }
+        }
+        if (status.contains("command completed")) {
+            Toast.makeText(this, status, Toast.LENGTH_SHORT).show()
+        }
     }
 
     private fun runSystemCheck(taskId: String) {
-        ui.setSystemCheckTaskStatus("RUNNING  •  LIVE")
+        ui.setSystemCheckTaskStatus("RUNNING  •  AWAITING WORKER")
         brain.delegateTask(taskId) { result ->
             runOnUiThread {
                 if (result.state == BrainAdapter.State.CONNECTED) {
-                    ui.setSystemCheckTaskStatus("COMPLETE  •  VERIFIED")
+                    // The backend's canonical machine checks decide VERIFIED. An HTTP 200 alone
+                    // must never be presented as a verified check.
+                    if (result.text.contains("VERIFIED PASS")) {
+                        ui.setSystemCheckTaskStatus("COMPLETE  •  VERIFIED")
+                    } else {
+                        ui.setSystemCheckTaskStatus("COMPLETE  •  PARTIAL / BLOCKED")
+                    }
                     ui.addChatMessage("AX", result.text)
                 } else if (result.detail.contains("HTTP 404") || result.detail.contains("task not found", ignoreCase = true)) {
                     ui.setSystemCheckTaskStatus("RECOVERING  •  LIVE TASK")
@@ -491,7 +569,7 @@ class MainActivity : Activity() {
     private fun ensureSystemCheckTask() {
         val existing = lastTaskId
         if (!existing.isNullOrBlank()) {
-            ui.setSystemCheckTaskStatus("VERIFYING  •  LIVE TASK")
+            ui.setSystemCheckTaskStatus("VERIFYING  •  TASK")
             brain.findLatestSystemCheck { recovered ->
                 runOnUiThread {
                     if (recovered.state == BrainAdapter.State.CONNECTED) {
@@ -501,7 +579,7 @@ class MainActivity : Activity() {
                             if (id.isNotBlank()) {
                                 lastTaskId = id
                                 taskPrefs.edit().putString("live_system_check_task_id", id).apply()
-                                ui.setSystemCheckTaskStatus("LOADED  •  LIVE")
+                                ui.setSystemCheckTaskStatus("LOADED  •  TASK FOUND")
                                 return@runOnUiThread
                             }
                         } catch (_: Exception) {}
@@ -524,7 +602,7 @@ class MainActivity : Activity() {
                         if (id.isNotBlank()) {
                             lastTaskId = id
                             taskPrefs.edit().putString("live_system_check_task_id", id).apply()
-                            ui.setSystemCheckTaskStatus("LOADED  •  LIVE")
+                            ui.setSystemCheckTaskStatus("LOADED  •  TASK FOUND")
                             return@runOnUiThread
                         }
                     } catch (_: Exception) {}
@@ -542,7 +620,7 @@ class MainActivity : Activity() {
                                 if (id.isNotBlank()) {
                                     lastTaskId = id
                                     taskPrefs.edit().putString("live_system_check_task_id", id).apply()
-                                    ui.setSystemCheckTaskStatus("LOADED  •  LIVE")
+                                    ui.setSystemCheckTaskStatus("LOADED  •  TASK FOUND")
                                 } else {
                                     ui.setSystemCheckTaskStatus("ERROR  •  NO ID")
                                 }
@@ -571,7 +649,7 @@ class MainActivity : Activity() {
                         if (id.isNotBlank()) {
                             lastTaskId = id
                             taskPrefs.edit().putString("live_system_check_task_id", id).apply()
-                            ui.setSystemCheckTaskStatus("LOADED  •  LIVE")
+                            ui.setSystemCheckTaskStatus("LOADED  •  TASK FOUND")
                         } else ui.setSystemCheckTaskStatus("ERROR  •  NO ID")
                     } catch (_: Exception) {
                         ui.setSystemCheckTaskStatus("ERROR  •  INVALID TASK")
@@ -610,22 +688,39 @@ class MainActivity : Activity() {
             setTextColor(Color.DKGRAY)
             setPadding(0, 10, 0, 0)
         }
+        val diagnosticsView = TextView(this).apply {
+            text = diagnosticsReport()
+            textSize = 11f
+            setTextColor(Color.rgb(80, 80, 80))
+            setPadding(0, 12, 0, 0)
+        }
         panel.addView(device)
         panel.addView(help)
         panel.addView(code)
         panel.addView(status)
+        panel.addView(diagnosticsView)
+        pairingStatusView = status
+        pairingDiagnosticsView = diagnosticsView
 
         val dialog = AlertDialog.Builder(this)
             .setTitle("AX • Secure phone pairing")
-            .setView(panel)
+            .setView(ScrollView(this).apply { addView(panel) })
             .setNegativeButton("Close", null)
             .setNeutralButton("Disconnect", null)
             .setPositiveButton("Pair phone", null)
             .create()
 
+        pairingDialog = dialog
+        dialog.setOnDismissListener {
+            pairingDialog = null
+            pairingStatusView = null
+            pairingButton = null
+            pairingDiagnosticsView = null
+        }
         dialog.setOnShowListener {
             val pairButton = dialog.getButton(AlertDialog.BUTTON_POSITIVE)
             val disconnectButton = dialog.getButton(AlertDialog.BUTTON_NEUTRAL)
+            pairingButton = pairButton
 
             pairButton.setOnClickListener {
                 val value = code.text?.toString()?.trim().orEmpty()
@@ -645,18 +740,22 @@ class MainActivity : Activity() {
                             if (isFinishing || isDestroyed || !dialog.isShowing) return@runOnUiThread
                             try {
                                 if (success) {
-                                    deviceBridgeButton?.text = "AX SET"
+                                    // The credential is stored, but Ax has not authenticated this
+                                    // phone yet. Keep the dialog open and wait for the first
+                                    // authenticated poll instead of claiming success here.
                                     deviceBridge.start()
                                     DeviceBridgeScheduler.schedule(this)
-                                    status.text = "Phone credential saved. Starting secure check-in…"
-                                    Toast.makeText(this, "Phone paired successfully.", Toast.LENGTH_LONG).show()
-                                    dialog.dismiss()
+                                    status.text = reason
+                                    pairButton.text = "Verifying…"
+                                    updateBridgeButton()
                                 } else {
                                     pairButton.isEnabled = true
                                     pairButton.text = "Pair phone"
                                     status.text = "Pairing did not complete. The screen is still open."
                                     code.error = reason.take(180)
+                                    updateBridgeButton()
                                 }
+                                diagnosticsView.text = diagnosticsReport()
                             } catch (uiError: Throwable) {
                                 pairButton.isEnabled = true
                                 pairButton.text = "Pair phone"
@@ -675,7 +774,7 @@ class MainActivity : Activity() {
                 try {
                     deviceBridge.clearCredentials()
                     DeviceBridgeScheduler.cancel(this)
-                    deviceBridgeButton?.text = "LINK"
+                    updateBridgeButton()
                     Toast.makeText(this, "AX phone link disconnected.", Toast.LENGTH_SHORT).show()
                 } catch (error: Throwable) {
                     Toast.makeText(this, "Disconnect error: " + (error.message ?: "unknown"), Toast.LENGTH_LONG).show()
@@ -759,7 +858,14 @@ class MainActivity : Activity() {
     }
 
     override fun onPause() {
-        if (::deviceBridge.isInitialized) deviceBridge.stop()
+        if (::deviceBridge.isInitialized) {
+            // Recorded because the reported pairing failure looked like the app being sent to the
+            // home screen; this distinguishes a pause from a crash on the real device.
+            if (pairingDialog?.isShowing == true) {
+                deviceBridge.recordLifecycle("MainActivity paused while the pairing dialog was open")
+            }
+            deviceBridge.stop()
+        }
         super.onPause()
     }
 

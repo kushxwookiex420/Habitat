@@ -15,10 +15,10 @@ class BrainAdapter(
     data class Result(val state: State, val text: String = "", val detail: String = "")
 
     companion object {
-        private const val LIVE_ENDPOINT = "https://habitat-1-szzd.onrender.com/chat"
-        private const val DROPPILOT_ENDPOINT = "https://habitat-1-szzd.onrender.com/orchestrate/dropilot"
-        private const val VICECITY_ENDPOINT = "https://habitat-1-szzd.onrender.com/orchestrate/vicecity"
-        private const val TASKS_ENDPOINT = "https://habitat-1-szzd.onrender.com/tasks"
+        private val LIVE_ENDPOINT: String get() = BuildConfig.HABITAT_BASE_URL.trimEnd('/') + "/chat"
+        private val DROPPILOT_ENDPOINT: String get() = BuildConfig.HABITAT_BASE_URL.trimEnd('/') + "/orchestrate/dropilot"
+        private val VICECITY_ENDPOINT: String get() = BuildConfig.HABITAT_BASE_URL.trimEnd('/') + "/orchestrate/vicecity"
+        private val TASKS_ENDPOINT: String get() = BuildConfig.HABITAT_BASE_URL.trimEnd('/') + "/tasks"
         private const val PREFS = "habitat_brain"
         private const val HISTORY_KEY = "conversation_history"
         private const val MAX_HISTORY = 20
@@ -685,7 +685,7 @@ class BrainAdapter(
         executor.execute {
             var connection: HttpURLConnection? = null
             try {
-                connection = HabitatNetwork.openConnection("https://habitat-1-szzd.onrender.com/content/publisher/creator-info")
+                connection = HabitatNetwork.openConnection(BuildConfig.HABITAT_BASE_URL.trimEnd('/') + "/content/publisher/creator-info")
                 attachDeviceIdentity(connection)
                 connection.requestMethod = "POST"; connection.connectTimeout = 10000; connection.readTimeout = 30000
                 connection.doOutput = true; connection.setRequestProperty("Content-Type", "application/json")
@@ -709,9 +709,9 @@ class BrainAdapter(
                     put("allowComment", allowComment); put("allowDuet", allowDuet); put("allowStitch", allowStitch)
                     if (title.isNotBlank()) put("title", title)
                 }
-                val approve = postJson("https://habitat-1-szzd.onrender.com/content/jobs/" + jobId + "/approve-publish", payload)
+                val approve = postJson(BuildConfig.HABITAT_BASE_URL.trimEnd('/') + "/content/jobs/" + jobId + "/approve-publish", payload)
                 if (approve.first !in 200..299) { callback(Result(State.ERROR, detail = "Approval HTTP " + approve.first + ": " + approve.second)); return@execute }
-                val publish = postJson("https://habitat-1-szzd.onrender.com/content/jobs/" + jobId + "/publish", payload)
+                val publish = postJson(BuildConfig.HABITAT_BASE_URL.trimEnd('/') + "/content/jobs/" + jobId + "/publish", payload)
                 if (publish.first !in 200..299) { callback(Result(State.ERROR, detail = "Publish HTTP " + publish.first + ": " + publish.second)); return@execute }
                 callback(Result(State.CONNECTED, text = publish.second))
             } catch (e: Exception) { callback(Result(State.ERROR, detail = e.message ?: e.javaClass.simpleName)) }

@@ -4,9 +4,14 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
-    <application android:theme="@style/AppTheme" android:label="Habitat AX Bridge" android:allowBackup="true" android:supportsRtl="true">
+    <application android:theme="@style/AppTheme" android:label="Habitat AX Bridge" android:allowBackup="true" android:usesCleartextTraffic="${usesCleartextTraffic}" android:supportsRtl="true">
         <service android:name=".DeviceBridgeJobService" android:permission="android.permission.BIND_JOB_SERVICE" android:exported="true" />
-        <activity android:name=".MainActivity" android:screenOrientation="portrait" android:exported="true">
+        <!-- configChanges keeps a live pairing dialog alive when the soft keyboard opens or
+             closes. Without it the activity is recreated while the user types a pairing code,
+             the dialog is lost, and the launcher flashes as if the app had closed. -->
+        <activity android:name=".MainActivity" android:screenOrientation="portrait" android:exported="true"
+            android:configChanges="keyboard|keyboardHidden|navigation|screenSize|smallestScreenSize"
+            android:windowSoftInputMode="adjustResize">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />

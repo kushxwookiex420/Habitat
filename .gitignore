@@ -1,0 +1,18 @@
+# Android / Gradle build output and machine-local configuration
+.gradle/
+build/
+app/build/
+local.properties
+*.iml
+.idea/
+captures/
+
+# Node
+node_modules/
+npm-debug.log*
+
+# Local runtime state
+*.sqlite
+*.sqlite-journal
+*.sqlite-wal
+*.log

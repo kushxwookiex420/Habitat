@@ -1,43 +1,57 @@
 package com.habitat
 
+import android.content.Context
+import java.net.HttpURLConnection
+import java.net.URL
+import java.net.UnknownHostException
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.Socket
-import java.net.URL
-import java.net.UnknownHostException
-import java.nio.ByteBuffer
-import java.nio.ByteOrder
 import javax.net.ssl.HttpsURLConnection
+import javax.net.ssl.SNIHostName
+import javax.net.ssl.SSLContext
 import javax.net.ssl.SSLSocket
 import javax.net.ssl.SSLSocketFactory
-import javax.net.ssl.SSLContext
 import javax.net.ssl.SSLSession
-import javax.net.ssl.SNIHostName
 
+/**
+ * HTTP entry point for every Android-to-Ax request.
+ *
+ * The DNS/SNI fallback below exists only for the production host, where an ISP resolver once
+ * failed to answer. Nonproduction builds must use a plain connection so a loopback service can be
+ * reached with the exact URL it was given; the previous version cast every URL to
+ * HttpsURLConnection, which crashed on an http:// nonproduction endpoint.
+ */
 object HabitatNetwork {
-    private const val HABITAT_HOST = "habitat-1-szzd.onrender.com"
+    const val PRODUCTION_HOST = "habitat-1-szzd.onrender.com"
     private const val DNS_PORT = 53
     private val DNS_SERVERS = listOf("1.1.1.1", "8.8.8.8")
 
-    fun openConnection(urlString: String): HttpsURLConnection {
+    fun openConnection(urlString: String): HttpURLConnection {
         val url = URL(urlString)
-        if (!url.protocol.equals("https", ignoreCase = true) ||
-            !url.host.equals(HABITAT_HOST, ignoreCase = true)
-        ) return url.openConnection() as HttpsURLConnection
+        val isProductionHost = url.host.equals(PRODUCTION_HOST, ignoreCase = true)
+        val isHttps = url.protocol.equals("https", ignoreCase = true)
+        if (!isProductionHost || !isHttps) {
+            return url.openConnection() as HttpURLConnection
+        }
 
         return try {
-            InetAddress.getAllByName(HABITAT_HOST)
+            InetAddress.getAllByName(PRODUCTION_HOST)
             url.openConnection() as HttpsURLConnection
         } catch (_: UnknownHostException) {
-            val ip = resolveIpv4(HABITAT_HOST)
-                ?: throw UnknownHostException("$HABITAT_HOST (system DNS and direct DNS fallback both failed)")
+            val ip = resolveIpv4(PRODUCTION_HOST)
+                ?: throw UnknownHostException(
+                    "$PRODUCTION_HOST (system DNS and direct DNS fallback both failed)"
+                )
             val ipUrl = URL("https://" + ip + url.file)
             val connection = ipUrl.openConnection() as HttpsURLConnection
-            try { connection.setRequestProperty("Host", HABITAT_HOST) } catch (_: Exception) {}
-            connection.sslSocketFactory = SniSocketFactory(HABITAT_HOST, ip)
-            connection.hostnameVerifier = HostnameVerifierFor(HABITAT_HOST)
+            try { connection.setRequestProperty("Host", PRODUCTION_HOST) } catch (_: Exception) {}
+            connection.sslSocketFactory = SniSocketFactory(PRODUCTION_HOST, ip)
+            connection.hostnameVerifier = HostnameVerifierFor(PRODUCTION_HOST)
             connection
         }
     }
