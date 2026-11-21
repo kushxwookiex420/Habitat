@@ -64,6 +64,23 @@ export function createD1DeviceCommandRepository({ accountId, databaseId, apiToke
       );
       return Boolean(result[0]?.results?.length);
     },
+    // Used only to explain a failed exchange to the user (expired / already used / unknown).
+    // It never returns or reconstructs the code itself.
+    async findPairing({ codeHash }) {
+      const result = await query(
+        "SELECT code_hash, device_id, created_at, expires_at, consumed_at FROM habitat_device_pairings WHERE code_hash = ? LIMIT 1",
+        [codeHash]
+      );
+      const row = result[0]?.results?.[0];
+      if (!row) return null;
+      return {
+        codeHash: row.code_hash,
+        deviceId: row.device_id,
+        createdAt: row.created_at,
+        expiresAt: row.expires_at,
+        consumedAt: row.consumed_at || null
+      };
+    },
     async registerDevice({ deviceId, tokenHash, createdAt }) {
       await query(
         "INSERT INTO habitat_paired_devices (device_id, token_hash, created_at, last_seen_at, device_json, revoked_at) VALUES (?, ?, ?, NULL, NULL, NULL) " +
