@@ -8,7 +8,7 @@ Habitat hosts the Home Bridge command center at `/bridge/console`. The relay its
 
 | Secret | Role | What it can do |
 | --- | --- | --- |
-| `HABITAT_AX_BRIDGE_TOKEN` | Habitae operator | Opens the console. Exchanged for an HttpOnly, SameSite=Strict session cookie (8 h, in memory) so no credential is ever stored in browser JavaScript. |
+| `HABITAT_AX_BRIDGE_TOKEN` | Habitat operator | Opens the console. Exchanged for an HttpOnly, SameSite=Strict session cookie (8 h, in memory) so no credential is ever stored in browser JavaScript. |
 | `HOME_BRIDGE_AX_TOKEN` | relay `ax` | Submit tasks, read task status and replies, list/read shared files, queue allowlisted phone commands, read phone state. |
 | `HOME_BRIDGE_BUFF_TOKEN` | relay `buff` | Read and claim the task queue, post replies with artifacts, upload/update shared files, read files. |
 | `HOME_BRIDGE_URL` | - | Relay base URL. Defaults to the preview deployment. |
