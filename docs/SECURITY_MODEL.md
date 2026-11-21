@@ -116,3 +116,23 @@ creation and device-scoped chat operations fail closed with `503 owner_unconfigu
 Local tests cover the authorization, pairing, revocation, recovery, migration, audit, and SQL
 paths. They do not prove live Cloudflare D1 behavior, Render deployment, Android behavior, or
 production configuration. Those require separate authorized verification.
+
+## Revision 4.3 — Android link state and environment separation
+
+The Android client no longer treats local state as proof of authentication:
+
+- `PAIRED_UNVERIFIED` means a credential is stored but the backend has not accepted a request with
+  it yet. `LIVE` is set only after an authenticated `/device/commands/next` poll succeeds. `REVOKED`
+  is set only after the backend rejects the credential, and the stored credential is deleted at
+  that point.
+- A task is shown as `VERIFIED` only when the backend's canonical machine checks report a verified
+  result. An HTTP 200 alone is not verification.
+- The production base URL remains the build default. Nonproduction builds must pass
+  `-PhabitatBaseUrl=<url>` explicitly. Debug builds alone permit cleartext HTTP, for loopback
+  testing.
+
+Nonproduction/production database separation is enforced, not documented-only. A nonproduction
+process whose `HABITAT_D1_DATABASE_ID` equals `HABITAT_PRODUCTION_D1_DATABASE_ID` mounts no durable
+device store: pairing, heartbeat, command claim, and command result routes answer `503`, and
+`/health` reports `deviceBridge.environment.productionD1Conflict: true`. This closes a path where
+only the Nexus worker was blocked while the device queue could still write to production data.
