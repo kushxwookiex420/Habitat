@@ -2,6 +2,7 @@ name: Nexus D1 live verification
 
 # One-shot push trigger is restricted to a unique commit message on the
 # non-production branch. Manual dispatch remains available with confirmation.
+# The unique trigger commit runs the current branch head, including the fixture-order fix.
 on:
   workflow_dispatch:
     inputs:
