@@ -1,4 +1,4 @@
-import { createHash, timingSafeEqual } from "node:crypto";
+import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 
 const API = "https://api.cloudflare.com/client/v4";
 
@@ -35,41 +35,76 @@ export function createD1DeviceCommandRepository({ accountId, databaseId, apiToke
   return Object.freeze({
     adapter: "cloudflare-d1",
     durable: true,
+    databaseId: String(databaseId),
     async initialize() {
       await query("CREATE TABLE IF NOT EXISTS habitat_device_commands (id TEXT PRIMARY KEY NOT NULL, device_id TEXT NOT NULL, record_json TEXT NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL, expires_at TEXT NOT NULL)");
       await query("CREATE INDEX IF NOT EXISTS habitat_device_commands_queue ON habitat_device_commands(device_id, status, created_at)");
-      await query("CREATE TABLE IF NOT EXISTS habitat_device_pairings (code_hash TEXT PRIMARY KEY NOT NULL, device_id TEXT NOT NULL, created_at TEXT NOT NULL, expires_at TEXT NOT NULL, consumed_at TEXT)");
+      await query("CREATE TABLE IF NOT EXISTS habitat_device_pairings (code_hash TEXT PRIMARY KEY NOT NULL, device_id TEXT NOT NULL, created_at TEXT NOT NULL, expires_at TEXT NOT NULL, consumed_at TEXT, recovery_at TEXT)");
       await query("CREATE INDEX IF NOT EXISTS habitat_device_pairings_expiry ON habitat_device_pairings(expires_at, consumed_at)");
       await query("CREATE TABLE IF NOT EXISTS habitat_paired_devices (device_id TEXT PRIMARY KEY NOT NULL, token_hash TEXT NOT NULL, created_at TEXT NOT NULL, last_seen_at TEXT, device_json TEXT, revoked_at TEXT)");
       await query("CREATE TABLE IF NOT EXISTS habitat_device_ownership (device_id TEXT PRIMARY KEY NOT NULL, owner_device_id TEXT NOT NULL, assigned_at TEXT NOT NULL)");
+      await query("CREATE INDEX IF NOT EXISTS habitat_device_ownership_owner ON habitat_device_ownership(owner_device_id, device_id)");
       await query("CREATE TABLE IF NOT EXISTS habitat_pairing_owners (code_hash TEXT PRIMARY KEY NOT NULL, owner_device_id TEXT NOT NULL)");
+      await query("CREATE INDEX IF NOT EXISTS habitat_pairing_owners_owner ON habitat_pairing_owners(owner_device_id, code_hash)");
+      await query("CREATE TABLE IF NOT EXISTS habitat_security_audit (id TEXT PRIMARY KEY NOT NULL, occurred_at TEXT NOT NULL, event TEXT NOT NULL, actor_device_id TEXT, target_device_id TEXT, detail_json TEXT NOT NULL)");
+      await query("CREATE INDEX IF NOT EXISTS habitat_security_audit_time ON habitat_security_audit(occurred_at DESC)");
+      // Revision 3 databases created this table without recovery_at. Add it only when absent so
+      // existing installations migrate without dropping pairing rows.
+      try {
+        const info = await query("PRAGMA table_info(habitat_device_pairings)");
+        const columns = (info?.[0]?.results || []).map(row => String(row.name || ""));
+        if (columns.length > 0 && !columns.includes("recovery_at")) {
+          await query("ALTER TABLE habitat_device_pairings ADD COLUMN recovery_at TEXT");
+        }
+      } catch (error) {
+        throw new Error("Unable to verify the device pairing schema: " + String(error?.message || error));
+      }
       return { ok: true, adapter: "cloudflare-d1", durable: true };
     },
     async createPairing({ codeHash, deviceId, createdAt, expiresAt, ownerDeviceId }) {
       if (!ownerDeviceId) throw new Error("A pairing owner is required.");
       await query(
-        "INSERT INTO habitat_device_pairings (code_hash, device_id, created_at, expires_at, consumed_at) VALUES (?, ?, ?, ?, NULL)",
+        "INSERT INTO habitat_device_pairings (code_hash, device_id, created_at, expires_at, consumed_at, recovery_at) VALUES (?, ?, ?, ?, NULL, NULL)",
         [codeHash, deviceId, createdAt, expiresAt]
       );
-      await query(
-        "INSERT INTO habitat_pairing_owners (code_hash, owner_device_id) VALUES (?, ?) " +
-        "ON CONFLICT(code_hash) DO UPDATE SET owner_device_id = excluded.owner_device_id",
-        [codeHash, ownerDeviceId]
-      );
+      try {
+        await query(
+          "INSERT INTO habitat_pairing_owners (code_hash, owner_device_id) VALUES (?, ?) " +
+          "ON CONFLICT(code_hash) DO UPDATE SET owner_device_id = excluded.owner_device_id",
+          [codeHash, ownerDeviceId]
+        );
+      } catch (error) {
+        // Compensate the first insert so a failed owner write cannot leave an ownerless code that
+        // later reports a misleading ownership_missing response.
+        await query("DELETE FROM habitat_device_pairings WHERE code_hash = ?", [codeHash]).catch(() => {});
+        throw error;
+      }
       return true;
     },
     async seedBootstrapPairing({ codeHash, createdAt, expiresAt, ownerDeviceId }) {
       if (!ownerDeviceId) throw new Error("A bootstrap pairing owner is required.");
+      // A consumed bootstrap code is a dead credential. Never reset consumed_at, never restore
+      // the wildcard binding, and never make it usable again merely because the process restarted.
+      // Also leave its issuer untouched: an owner change must not turn an old consumed code into a
+      // recoverable code for a different owner.
+      const existing = await this.findPairing({ codeHash });
+      if (existing?.consumedAt) return true;
       await query(
-        "INSERT INTO habitat_device_pairings (code_hash, device_id, created_at, expires_at, consumed_at) VALUES (?, '*', ?, ?, NULL) " +
-        "ON CONFLICT(code_hash) DO UPDATE SET device_id = '*', created_at = excluded.created_at, expires_at = excluded.expires_at, consumed_at = NULL",
+        "INSERT INTO habitat_device_pairings (code_hash, device_id, created_at, expires_at, consumed_at, recovery_at) VALUES (?, '*', ?, ?, NULL, NULL) " +
+        "ON CONFLICT(code_hash) DO UPDATE SET created_at = excluded.created_at, expires_at = excluded.expires_at " +
+        "WHERE habitat_device_pairings.consumed_at IS NULL",
         [codeHash, createdAt, expiresAt]
       );
-      await query(
-        "INSERT INTO habitat_pairing_owners (code_hash, owner_device_id) VALUES (?, ?) " +
-        "ON CONFLICT(code_hash) DO UPDATE SET owner_device_id = excluded.owner_device_id",
-        [codeHash, ownerDeviceId]
-      );
+      try {
+        await query(
+          "INSERT INTO habitat_pairing_owners (code_hash, owner_device_id) VALUES (?, ?) " +
+          "ON CONFLICT(code_hash) DO UPDATE SET owner_device_id = excluded.owner_device_id",
+          [codeHash, ownerDeviceId]
+        );
+      } catch (error) {
+        await query("DELETE FROM habitat_device_pairings WHERE code_hash = ? AND consumed_at IS NULL", [codeHash]).catch(() => {});
+        throw error;
+      }
       return true;
     },
     async consumePairing({ codeHash, deviceId, consumedAt }) {
@@ -79,11 +114,25 @@ export function createD1DeviceCommandRepository({ accountId, databaseId, apiToke
       );
       return Boolean(result[0]?.results?.length);
     },
+    /**
+     * Claim the one bounded lost-response recovery for a consumed code. The caller must first
+     * verify that the consumed timestamp is inside its recovery window. The conditional UPDATE
+     * makes this exactly-once even when two retries race.
+     */
+    async claimPairingRecovery({ codeHash, deviceId, recoveredAt, consumedAfter }) {
+      const result = await query(
+        "UPDATE habitat_device_pairings SET recovery_at = ? " +
+        "WHERE code_hash = ? AND device_id = ? AND consumed_at IS NOT NULL AND consumed_at >= ? " +
+        "AND recovery_at IS NULL RETURNING code_hash",
+        [recoveredAt, codeHash, deviceId, consumedAfter]
+      );
+      return Boolean(result[0]?.results?.length);
+    },
     // Used only to explain a failed exchange to the user (expired / already used / unknown).
     // It never returns or reconstructs the code itself.
     async findPairing({ codeHash }) {
       const result = await query(
-        "SELECT p.code_hash, p.device_id, p.created_at, p.expires_at, p.consumed_at, o.owner_device_id " +
+        "SELECT p.code_hash, p.device_id, p.created_at, p.expires_at, p.consumed_at, p.recovery_at, o.owner_device_id " +
         "FROM habitat_device_pairings p LEFT JOIN habitat_pairing_owners o ON o.code_hash = p.code_hash " +
         "WHERE p.code_hash = ? LIMIT 1",
         [codeHash]
@@ -96,6 +145,7 @@ export function createD1DeviceCommandRepository({ accountId, databaseId, apiToke
         createdAt: row.created_at,
         expiresAt: row.expires_at,
         consumedAt: row.consumed_at || null,
+        recoveryAt: row.recovery_at || null,
         ownerDeviceId: row.owner_device_id || null
       };
     },
@@ -103,21 +153,22 @@ export function createD1DeviceCommandRepository({ accountId, databaseId, apiToke
       // Never clear revoked_at here. A revoked device must not be revived by replaying a pairing
       // code (or by any other registration path); recovery requires an explicit owner action.
       if (ownerDeviceId) {
-        const existingOwner = await this.getDeviceOwner(deviceId);
-        if (existingOwner && existingOwner !== ownerDeviceId) return false;
+        // Claim ownership with a conditional insert before touching the credential. Two owners
+        // racing the same unowned device cannot both succeed: the loser sees the winner's row and
+        // returns false before its token can overwrite the winner's token.
+        await query(
+          "INSERT INTO habitat_device_ownership (device_id, owner_device_id, assigned_at) VALUES (?, ?, ?) " +
+          "ON CONFLICT(device_id) DO NOTHING",
+          [deviceId, ownerDeviceId, createdAt]
+        );
+        const currentOwner = await this.getDeviceOwner(deviceId);
+        if (currentOwner !== ownerDeviceId) return false;
       }
       await query(
         "INSERT INTO habitat_paired_devices (device_id, token_hash, created_at, last_seen_at, device_json, revoked_at) VALUES (?, ?, ?, NULL, NULL, NULL) " +
         "ON CONFLICT(device_id) DO UPDATE SET token_hash = excluded.token_hash, created_at = excluded.created_at, last_seen_at = NULL, device_json = NULL",
         [deviceId, tokenHash, createdAt]
       );
-      if (ownerDeviceId) {
-        await query(
-          "INSERT INTO habitat_device_ownership (device_id, owner_device_id, assigned_at) VALUES (?, ?, ?) " +
-          "ON CONFLICT(device_id) DO UPDATE SET owner_device_id = excluded.owner_device_id, assigned_at = excluded.assigned_at",
-          [deviceId, ownerDeviceId, createdAt]
-        );
-      }
       return true;
     },
     async getDeviceOwner(deviceId) {
@@ -139,15 +190,29 @@ export function createD1DeviceCommandRepository({ accountId, databaseId, apiToke
       if (!ownerDeviceId) return false;
       const currentOwner = await this.getDeviceOwner(deviceId);
       if (!currentOwner || currentOwner !== ownerDeviceId) return false;
+      return this.recoverRevokedDevice(deviceId);
+    },
+    /** Break-glass/admin recovery: caller is authenticated separately and must be audited. */
+    async unrevokeDeviceByBreakGlass(deviceId) {
+      const currentOwner = await this.getDeviceOwner(deviceId);
+      if (!currentOwner) return false;
+      return this.recoverRevokedDevice(deviceId);
+    },
+    async recoverRevokedDevice(deviceId) {
       // Recovery is not a token reset. Destroy every old pairing code first, then clear the old token
       // hash and revocation. If the first write fails, the device remains revoked and the caller gets
       // an error; a retry can safely finish. A fresh owner-issued pairing is still required.
-      await query("DELETE FROM habitat_device_pairings WHERE device_id = ?", [deviceId]);
       await query(
-        "UPDATE habitat_paired_devices SET revoked_at = NULL, token_hash = '' WHERE device_id = ?",
+        "DELETE FROM habitat_device_pairings WHERE device_id = ? OR code_hash IN " +
+        "(SELECT code_hash FROM habitat_pairing_owners WHERE owner_device_id = ?)",
+        [deviceId, deviceId]
+      );
+      const updated = await query(
+        "UPDATE habitat_paired_devices SET revoked_at = NULL, token_hash = '' " +
+        "WHERE device_id = ? AND revoked_at IS NOT NULL RETURNING device_id",
         [deviceId]
       );
-      return true;
+      return Boolean(updated[0]?.results?.length);
     },
     async verifyDeviceToken(token, deviceId) {
       const result = await query(
@@ -196,9 +261,14 @@ export function createD1DeviceCommandRepository({ accountId, databaseId, apiToke
         [revokedAt, deviceId]
       );
       // A revoked device must never recover with a code it saw before revocation. Remove every
-      // pairing code for this device, including already-consumed codes used for lost-response
-      // recovery, so only a fresh owner-issued code can pair it after recovery.
-      await query("DELETE FROM habitat_device_pairings WHERE device_id = ?", [deviceId]);
+      // pairing code for this device and every code issued by this device as an owner, including
+      // already-consumed recovery rows, so only a fresh active-owner code can pair it afterward.
+      await query(
+        "DELETE FROM habitat_device_pairings WHERE device_id = ? OR code_hash IN " +
+        "(SELECT code_hash FROM habitat_pairing_owners WHERE owner_device_id = ?)",
+        [deviceId, deviceId]
+      );
+      await query("DELETE FROM habitat_pairing_owners WHERE owner_device_id = ?", [deviceId]);
       await query(
         "UPDATE habitat_device_commands SET status = 'cancelled', record_json = json_set(record_json, '$.status', 'cancelled', '$.cancelledAt', ?) WHERE device_id = ? AND status IN ('queued', 'claimed')",
         [revokedAt, deviceId]
@@ -247,6 +317,34 @@ export function createD1DeviceCommandRepository({ accountId, databaseId, apiToke
     async get(id) {
       const result = await query("SELECT record_json FROM habitat_device_commands WHERE id = ? LIMIT 1", [id]);
       return decode(result[0]?.results?.[0] || {});
+    },
+    async audit({ event, actorDeviceId = null, targetDeviceId = null, detail = null } = {}) {
+      const id = "aud_" + randomUUID();
+      const occurredAt = new Date().toISOString();
+      await query(
+        "INSERT INTO habitat_security_audit (id, occurred_at, event, actor_device_id, target_device_id, detail_json) VALUES (?, ?, ?, ?, ?, ?)",
+        [id, occurredAt, String(event || "unknown").slice(0, 120), actorDeviceId || null, targetDeviceId || null, JSON.stringify(detail || {})]
+      );
+      return { ok: true, id, occurredAt };
+    },
+    /**
+     * Controlled legacy backfill. The caller supplies an explicit deviceId -> owner mapping; this
+     * method never infers an owner. It only assigns an existing paired device that has no ownership
+     * row, and it never overwrites an existing owner.
+     */
+    async backfillOwnership({ deviceId, ownerDeviceId, assignedAt = new Date().toISOString() }) {
+      if (!deviceId || !ownerDeviceId) return { ok: false, code: "invalid_mapping" };
+      const result = await query(
+        "INSERT INTO habitat_device_ownership (device_id, owner_device_id, assigned_at) " +
+        "SELECT ?, ?, ? WHERE EXISTS (SELECT 1 FROM habitat_paired_devices WHERE device_id = ?) " +
+        "AND NOT EXISTS (SELECT 1 FROM habitat_device_ownership WHERE device_id = ?) " +
+        "RETURNING device_id",
+        [deviceId, ownerDeviceId, assignedAt, deviceId, deviceId]
+      );
+      if (result[0]?.results?.length) return { ok: true, assigned: true };
+      const existing = await this.getDeviceOwner(deviceId);
+      if (existing) return { ok: false, code: "already_owned", existingOwnerDeviceId: existing };
+      return { ok: false, code: "device_not_paired" };
     },
     async healthCheck() {
       await query("SELECT 1 AS ok");

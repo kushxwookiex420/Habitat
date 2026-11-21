@@ -20,12 +20,39 @@ function fakeD1() {
     const { sql, params = [] } = JSON.parse(options.body);
     calls.push({ sql, params });
     let result = [];
-    if (sql.startsWith("INSERT INTO habitat_device_pairings")) {
-      pairings.set(params[0], { device_id: "*", created_at: params[1], expires_at: params[2], consumed_at: null });
+    if (sql.startsWith("PRAGMA table_info(habitat_device_pairings)")) {
+      result = [{ results: [
+        { name: "code_hash" }, { name: "device_id" }, { name: "created_at" },
+        { name: "expires_at" }, { name: "consumed_at" }, { name: "recovery_at" }
+      ] }];
+    } else if (sql.startsWith("INSERT INTO habitat_device_pairings")) {
+      const existing = pairings.get(params[0]);
+      if (sql.includes("ON CONFLICT(code_hash)")) {
+        // Bootstrap insert: preserve a consumed row exactly as SQLite's partial upsert does.
+        if (!existing) {
+          pairings.set(params[0], { device_id: "*", created_at: params[1], expires_at: params[2], consumed_at: null, recovery_at: null });
+        } else if (!existing.consumed_at) {
+          existing.created_at = params[1];
+          existing.expires_at = params[2];
+        }
+      } else {
+        pairings.set(params[0], { device_id: params[1], created_at: params[2], expires_at: params[3], consumed_at: null, recovery_at: null });
+      }
     } else if (sql.startsWith("INSERT INTO habitat_pairing_owners")) {
       pairingOwners.set(params[0], params[1]);
     } else if (sql.startsWith("INSERT INTO habitat_device_ownership")) {
-      owners.set(params[0], params[1]);
+      if (sql.includes("DO NOTHING")) {
+        if (!owners.has(params[0])) owners.set(params[0], params[1]);
+      } else if (sql.includes("WHERE EXISTS")) {
+        if (devices.has(params[3]) && !owners.has(params[4])) {
+          owners.set(params[0], params[1]);
+          result = [{ results: [{ device_id: params[0] }] }];
+        } else result = [{ results: [] }];
+      } else {
+        owners.set(params[0], params[1]);
+      }
+    } else if (sql.startsWith("INSERT INTO habitat_security_audit")) {
+      result = [{ results: [] }];
     } else if (sql.startsWith("SELECT owner_device_id FROM habitat_device_ownership")) {
       result = [{ results: owners.has(params[0]) ? [{ owner_device_id: owners.get(params[0]) }] : [] }];
     } else if (sql.startsWith("SELECT p.code_hash")) {
@@ -39,6 +66,12 @@ function fakeD1() {
         row.device_id = params[1];
         row.consumed_at = params[0];
         result = [{ results: [{ device_id: row.device_id }] }];
+      } else result = [{ results: [] }];
+    } else if (sql.startsWith("UPDATE habitat_device_pairings SET recovery_at")) {
+      const row = pairings.get(params[1]);
+      if (row && row.device_id === params[2] && row.consumed_at && !row.recovery_at && row.consumed_at >= params[3]) {
+        row.recovery_at = params[0];
+        result = [{ results: [{ code_hash: params[1] }] }];
       } else result = [{ results: [] }];
     } else if (sql.startsWith("INSERT INTO habitat_paired_devices")) {
       const existing = devices.get(params[0]);
@@ -54,10 +87,18 @@ function fakeD1() {
       result = [{ results: row ? [{ revoked_at: row.revoked_at }] : [] }];
     } else if (sql.startsWith("UPDATE habitat_paired_devices SET revoked_at = NULL")) {
       const row = devices.get(params[0]);
-      if (row) { row.revoked_at = null; row.token_hash = ""; }
-      for (const [codeHash, pairing] of pairings) if (pairing.device_id === params[0]) pairings.delete(codeHash);
+      if (row && row.revoked_at) { row.revoked_at = null; row.token_hash = ""; result = [{ results: [{ device_id: params[0] }] }]; }
+      for (const [codeHash, pairing] of pairings) {
+        if (pairing.device_id === params[0] || pairingOwners.get(codeHash) === params[0]) pairings.delete(codeHash);
+      }
+    } else if (sql.startsWith("DELETE FROM habitat_device_pairings WHERE code_hash")) {
+      pairings.delete(params[0]);
     } else if (sql.startsWith("DELETE FROM habitat_device_pairings WHERE device_id")) {
-      for (const [codeHash, pairing] of pairings) if (pairing.device_id === params[0]) pairings.delete(codeHash);
+      for (const [codeHash, pairing] of pairings) {
+        if (pairing.device_id === params[0] || pairingOwners.get(codeHash) === params[0]) pairings.delete(codeHash);
+      }
+    } else if (sql.startsWith("DELETE FROM habitat_pairing_owners WHERE owner_device_id")) {
+      for (const [codeHash, owner] of pairingOwners) if (owner === params[0]) pairingOwners.delete(codeHash);
     } else if (sql.startsWith("SELECT token_hash FROM habitat_paired_devices")) {
       const row = devices.get(params[0]);
       result = [{ results: row && !row.revoked_at ? [{ token_hash: row.token_hash }] : [] }];
@@ -105,13 +146,15 @@ test("D1 device repository stores only hashes, supports one-time bootstrap pairi
   assert.equal(await repo.consumePairing({ codeHash, deviceId: "s26-ultra", consumedAt: now }), true);
   assert.equal(await repo.consumePairing({ codeHash, deviceId: "other-device", consumedAt: now }), false);
 
-  // Re-seeding the same bootstrap digest must restore a fresh, unused wildcard record.
+  // H4: restarting the process and re-seeding the same bootstrap digest must not reactivate a
+  // consumed code, restore its wildcard binding, or make it usable again.
   const renewedAt = new Date(Date.now() + 1000).toISOString();
   const renewedExpiry = new Date(Date.now() + 11 * 60 * 1000).toISOString();
   await repo.seedBootstrapPairing({ codeHash, createdAt: renewedAt, expiresAt: renewedExpiry, ownerDeviceId });
-  assert.equal(fake.pairings.get(codeHash).consumed_at, null);
-  assert.equal(fake.pairings.get(codeHash).expires_at, renewedExpiry);
-  assert.equal(await repo.consumePairing({ codeHash, deviceId: "s26-ultra", consumedAt: renewedAt }), true);
+  assert.equal(fake.pairings.get(codeHash).consumed_at, now);
+  assert.equal(fake.pairings.get(codeHash).device_id, "s26-ultra");
+  assert.equal(await repo.consumePairing({ codeHash, deviceId: "s26-ultra", consumedAt: renewedAt }), false);
+  assert.equal(await repo.consumePairing({ codeHash, deviceId: "second-device", consumedAt: renewedAt }), false);
 
   const token = "device-token-value-not-persisted-raw";
   const tokenHash = createHash("sha256").update(token).digest("hex");
@@ -159,6 +202,70 @@ test("D1 device repository stores only hashes, supports one-time bootstrap pairi
   await repo.registerDevice({ deviceId: "s26-ultra", tokenHash: createHash("sha256").update(freshToken).digest("hex"), createdAt: now, ownerDeviceId });
   assert.equal(await repo.isDevicePaired("s26-ultra"), true);
   assert.equal(await repo.verifyDeviceToken(freshToken, "s26-ultra"), true);
+
+  // H6: explicit legacy ownership backfill never guesses and never overwrites an owner.
+  fake.devices.set("legacy-phone", { device_id: "legacy-phone", token_hash: "legacy-hash", created_at: now, last_seen_at: null, revoked_at: null });
+  assert.equal(await repo.getDeviceOwner("legacy-phone"), null);
+  assert.deepEqual(await repo.backfillOwnership({ deviceId: "legacy-phone", ownerDeviceId, assignedAt: now }), { ok: true, assigned: true });
+  assert.equal(await repo.getDeviceOwner("legacy-phone"), ownerDeviceId);
+  const again = await repo.backfillOwnership({ deviceId: "legacy-phone", ownerDeviceId: "different-owner", assignedAt: now });
+  assert.equal(again.ok, false);
+  assert.equal(again.code, "already_owned");
+  assert.equal(again.existingOwnerDeviceId, ownerDeviceId);
+  const unpaired = await repo.backfillOwnership({ deviceId: "never-paired", ownerDeviceId, assignedAt: now });
+  assert.equal(unpaired.ok, false);
+  assert.equal(unpaired.code, "device_not_paired");
+
+  // H7: break-glass recovery is explicit and revokes the old credential; it never returns a token.
+  await repo.revokeDevice("s26-ultra", now);
+  assert.equal(await repo.isDeviceRevoked("s26-ultra"), true);
+  assert.equal(await repo.unrevokeDeviceByBreakGlass("s26-ultra"), true);
+  assert.equal(await repo.isDeviceRevoked("s26-ultra"), false);
+  assert.equal(await repo.isDevicePaired("s26-ultra"), false, "break-glass requires fresh pairing");
+  const auditResult = await repo.audit({ event: "device.break_glass.unrevoked", targetDeviceId: "s26-ultra" });
+  assert.equal(auditResult.ok, true);
+
   assert.ok(fake.calls.every(call => !JSON.stringify(call).includes(token)));
   assert.ok(fake.calls.every(call => !JSON.stringify(call).includes("test-only-d1-token")));
+});
+
+test("concurrent ownership registration keeps the first owner and first credential", async () => {
+  const fake = fakeD1();
+  const repo = createD1DeviceCommandRepository({
+    accountId: "account", databaseId: "database", apiToken: "test-only-d1-token", fetchImpl: fake.fetchImpl
+  });
+  await repo.initialize();
+  const now = new Date().toISOString();
+  const firstToken = createHash("sha256").update("first-owner-token").digest("hex");
+  const secondToken = createHash("sha256").update("second-owner-token").digest("hex");
+  assert.equal(await repo.registerDevice({ deviceId: "raced", tokenHash: firstToken, createdAt: now, ownerDeviceId: "owner-a" }), true);
+  assert.equal(await repo.registerDevice({ deviceId: "raced", tokenHash: secondToken, createdAt: now, ownerDeviceId: "owner-b" }), false);
+  assert.equal(await repo.getDeviceOwner("raced"), "owner-a");
+  assert.equal(await repo.verifyDeviceToken("first-owner-token", "raced"), true);
+  assert.equal(await repo.verifyDeviceToken("second-owner-token", "raced"), false);
+});
+
+test("a failed ownership write compensates the pairing insert instead of leaving an orphan code", async () => {
+  const fake = fakeD1();
+  let failOnce = true;
+  const fetchImpl = async (url, init) => {
+    const body = JSON.parse(init.body);
+    if (failOnce && body.sql.startsWith("INSERT INTO habitat_pairing_owners")) {
+      failOnce = false;
+      return { ok: false, status: 500, async json() { return { success: false }; } };
+    }
+    return fake.fetchImpl(url, init);
+  };
+  const repo = createD1DeviceCommandRepository({
+    accountId: "account", databaseId: "database", apiToken: "test-only-d1-token", fetchImpl
+  });
+  await repo.initialize();
+  await assert.rejects(repo.createPairing({
+    codeHash: createHash("sha256").update("partial-code").digest("hex"),
+    deviceId: "launcher",
+    createdAt: new Date().toISOString(),
+    expiresAt: new Date(Date.now() + 60000).toISOString(),
+    ownerDeviceId: "owner-phone"
+  }));
+  assert.equal(fake.pairings.size, 0, "the failed owner insert must not leave an ownerless pairing");
 });
