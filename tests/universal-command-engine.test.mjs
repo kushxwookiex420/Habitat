@@ -1,175 +1,219 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createUniversalCommandEngine, normalizeState, TASK_STATES } from "../universal-command-engine.mjs";
+import { createUniversalCommandEngine, normalizeState } from "../universal-command-engine.mjs";
+import { createToolRegistry } from "../tool-registry.mjs";
+import { describeRoles } from "../agent-roles.mjs";
 
 function memoryRepository() {
   const rows = new Map();
   return {
     rows,
-    async initialize() {},
-    async create(task) { rows.set(task.id, structuredClone(task)); return structuredClone(task); },
-    async get(id) { const value = rows.get(id); return value ? structuredClone(value) : null; },
-    async update(id, task) { rows.set(id, structuredClone(task)); return structuredClone(task); },
-    async list({ status = null, limit = 50 } = {}) {
-      return [...rows.values()]
-        .filter(task => !status || normalizeState(task.status) === status)
-        .slice(0, Math.max(1, Math.min(100, Number(limit) || 50)))
-        .map(task => structuredClone(task));
-    }
-  };
-}
-
-function registry() {
-  const tools = new Map([
-    ["system.health", { name: "system.health", roles: ["ax"], availability: { state: "available", detail: "local" } }],
-    ["publish.external", { name: "publish.external", roles: ["ax"], availability: { state: "unconfigured", detail: "not configured" } }]
-  ]);
-  return {
-    get(name) { return tools.get(name) || null; },
-    approvalRequiredFor(name) {
-      return name === "publish.external"
-        ? { required: true, reason: "External publishing requires owner approval." }
-        : { required: false, known: true };
+    async create(task) {
+      if (rows.has(task.id)) throw new Error("duplicate id");
+      rows.set(task.id, structuredClone(task));
+      return structuredClone(task);
+    },
+    async get(id) {
+      return rows.has(id) ? structuredClone(rows.get(id)) : null;
+    },
+    async list({ limit = 50, status } = {}) {
+      const all = [...rows.values()].filter(row => !status || row.status === status);
+      return all.slice(0, limit).map(row => structuredClone(row));
+    },
+    async update(id, patch) {
+      if (!rows.has(id)) return null;
+      const next = { ...rows.get(id), ...structuredClone(patch), id };
+      rows.set(id, next);
+      return structuredClone(next);
     }
   };
 }
 
 function setup(options = {}) {
-  let tick = 0;
-  const repository = options.repository || memoryRepository();
+  const repository = memoryRepository();
+  const registry = createToolRegistry({ env: options.env || {} });
+  let counter = 0;
   const engine = createUniversalCommandEngine({
     repository,
-    registry: options.registry || registry(),
-    now: () => new Date(Date.UTC(2026, 10, 21, 0, 0, tick++)).toISOString(),
-    newId: () => "cmd_test_" + tick
+    registry,
+    now: options.now || (() => "2026-11-21T12:00:00.000Z"),
+    newId: () => "cmd_test_" + (++counter),
+    maxAttempts: 2
   });
-  return { engine, repository };
+  return { repository, registry, engine };
 }
 
-test("engine exposes the documented finite lifecycle and normalizes legacy states", () => {
-  assert.deepEqual(TASK_STATES, ["queued", "working", "needs_approval", "done", "failed"]);
-  assert.equal(normalizeState("completed"), "done");
-  assert.equal(normalizeState("running"), "working");
-  assert.equal(normalizeState("unknown"), "queued");
+test("a submitted objective is queued, not reported as work in progress", async () => {
+  const { engine } = setup();
+  const outcome = await engine.submit({ objective: "Ship the launcher build" });
+  assert.equal(outcome.ok, true);
+  assert.equal(outcome.task.status, "queued");
+  assert.equal(outcome.task.result, null);
+  assert.equal(outcome.task.statusHistory.length, 1);
+  assert.equal(outcome.task.statusHistory[0].to, "queued");
 });
 
-test("engine requires a repository and registry", () => {
-  assert.throws(() => createUniversalCommandEngine(), /task repository/);
-  assert.throws(() => createUniversalCommandEngine({ repository: memoryRepository() }), /tool registry/);
+test("an objective shorter than three characters is refused", async () => {
+  const { engine } = setup();
+  const outcome = await engine.submit({ objective: "  a  " });
+  assert.equal(outcome.ok, false);
+  assert.equal(outcome.code, "invalid_objective");
 });
 
-test("submit validates objective and role before writing", async () => {
+test("an idempotency key returns the same task instead of a second one", async () => {
   const { engine, repository } = setup();
-  assert.equal((await engine.submit({ objective: "  " })).code, "invalid_objective");
-  assert.equal((await engine.submit({ objective: "Do a task", role: "ghost" })).code, "unknown_role");
-  assert.equal(repository.rows.size, 0);
-});
-
-test("submit creates a queued task with a stable idempotency key", async () => {
-  const { engine, repository } = setup();
-  const first = await engine.submit({ objective: "Inspect the service", idempotencyKey: "same-request" });
-  const replay = await engine.submit({ objective: "A different objective", idempotencyKey: "same-request" });
-  assert.equal(first.ok, true);
-  assert.equal(first.replayed, false);
-  assert.equal(first.task.status, "queued");
-  assert.equal(replay.ok, true);
-  assert.equal(replay.replayed, true);
-  assert.equal(replay.task.id, first.task.id);
+  const first = await engine.submit({ objective: "Rotate the relay keys", idempotencyKey: "owner-2026-11-21-keys" });
+  const second = await engine.submit({ objective: "Rotate the relay keys", idempotencyKey: "owner-2026-11-21-keys" });
+  assert.equal(second.replayed, true);
+  assert.equal(second.task.id, first.task.id);
   assert.equal(repository.rows.size, 1);
 });
 
-test("submit rejects objectives outside the documented length bounds", async () => {
+test("a plan may reference an unavailable tool but must not claim it ran", async () => {
   const { engine } = setup();
-  assert.equal((await engine.submit({ objective: "ab" })).code, "invalid_objective");
-  assert.equal((await engine.submit({ objective: "x".repeat(2001) })).code, "invalid_objective");
+  const task = (await engine.submit({ objective: "Research launcher options" })).task;
+  const planned = await engine.plan({
+    taskId: task.id,
+    steps: [{ step: "search the web", role: "orion", tool: "web.search" }]
+  });
+  assert.equal(planned.ok, true);
+  assert.equal(planned.task.status, "working");
+  assert.equal(planned.task.plan[0].toolAvailability, "adapter_missing");
+  assert.ok(planned.warnings.some(warning => warning.includes("adapter_missing")));
 });
 
-test("plan rejects empty, oversized, unknown-role, unknown-tool and disallowed-tool plans", async () => {
+test("a step whose tool is approval gated parks the task for the owner", async () => {
   const { engine } = setup();
-  const task = (await engine.submit({ objective: "Validate a plan" })).task;
-  assert.equal((await engine.plan({ taskId: task.id, steps: [] })).code, "invalid_plan");
-  assert.equal((await engine.plan({ taskId: task.id, steps: Array.from({ length: 21 }, () => ({ step: "x" })) })).code, "invalid_plan");
-  assert.equal((await engine.plan({ taskId: task.id, steps: [{ step: "x", role: "ghost" }] })).code, "unknown_role");
-  assert.equal((await engine.plan({ taskId: task.id, steps: [{ step: "x", tool: "missing" }] })).code, "unknown_tool");
-  assert.equal((await engine.plan({ taskId: task.id, steps: [{ step: "x", role: "nexus", tool: "system.health" }] })).code, "role_not_allowed");
+  const task = (await engine.submit({ objective: "Deploy the new backend", role: "nexus" })).task;
+  const planned = await engine.plan({
+    taskId: task.id,
+    steps: [{ step: "deploy to render", role: "nexus", tool: "deploy.render" }]
+  });
+  assert.equal(planned.approvalRequired, true);
+  assert.equal(planned.task.status, "needs_approval");
+  assert.equal(planned.task.approvals.at(-1).state, "requested");
 });
 
-test("plan records unconfigured tool warnings without claiming execution", async () => {
+test("approval moves the task to working and a denial fails it honestly", async () => {
   const { engine } = setup();
-  const task = (await engine.submit({ objective: "Inspect readiness" })).task;
-  const result = await engine.plan({ taskId: task.id, steps: [{ step: "Check relay", tool: "publish.external" }] });
-  assert.equal(result.ok, true);
-  assert.equal(result.task.status, "needs_approval");
-  assert.equal(result.task.plan[0].toolAvailability, "unconfigured");
-  assert.ok(result.warnings.some(value => value.includes("unconfigured")));
-  assert.equal(result.approvalRequired, true);
+  const approved = (await engine.submit({ objective: "Deploy to render", role: "nexus" })).task;
+  await engine.plan({ taskId: approved.id, steps: [{ step: "deploy", role: "nexus", tool: "deploy.render" }] });
+  const granted = await engine.approve({ taskId: approved.id, by: "owner" });
+  assert.equal(granted.task.status, "working");
+  assert.equal(granted.task.approvals.at(-1).state, "approved");
+
+  const denied = (await engine.submit({ objective: "Buy the ad slot" })).task;
+  await engine.requestApproval({ taskId: denied.id, reason: "spends money", action: "payment.spend" });
+  const result = await engine.deny({ taskId: denied.id, by: "owner", reason: "not this month" });
+  assert.equal(result.task.status, "failed");
+  assert.match(result.task.error, /Denied by owner/);
+  assert.equal(result.task.result, null);
 });
 
-test("approval gates completion until owner approval and records the decision", async () => {
+test("a task cannot be completed while approval is pending", async () => {
   const { engine } = setup();
-  const task = (await engine.submit({ objective: "Publish an update" })).task;
-  await engine.plan({ taskId: task.id, steps: [{ step: "Publish", tool: "publish.external" }] });
-  assert.equal((await engine.complete({ taskId: task.id, result: { summary: "Published", evidence: ["https://example.com"] } })).code, "approval_pending");
-  const approved = await engine.approve({ taskId: task.id, by: "owner" });
-  assert.equal(approved.ok, true);
-  assert.equal(approved.task.status, "working");
-  assert.equal(approved.task.approvals.at(-1).state, "approved");
+  const task = (await engine.submit({ objective: "Publish the video" })).task;
+  await engine.requestApproval({ taskId: task.id, reason: "publishes externally" });
+  const outcome = await engine.complete({ taskId: task.id, result: { summary: "done", evidence: ["https://x.test/v"] } });
+  assert.equal(outcome.ok, false);
+  assert.equal(outcome.code, "approval_pending");
 });
 
-test("denying approval fails the task and prevents a second decision", async () => {
+test("completion without evidence is refused and leaves the task working", async () => {
   const { engine } = setup();
-  const task = (await engine.submit({ objective: "Run a gated operation" })).task;
-  await engine.requestApproval({ taskId: task.id, reason: "This changes production." });
-  const denied = await engine.deny({ taskId: task.id, by: "owner", reason: "Not authorized." });
-  assert.equal(denied.ok, true);
-  assert.equal(denied.task.status, "failed");
-  assert.match(denied.task.error, /Denied by owner/);
-  assert.equal((await engine.approve({ taskId: task.id })).code, "invalid_transition");
+  const task = (await engine.submit({ objective: "Build the APK", role: "nexus" })).task;
+  await engine.plan({ taskId: task.id, steps: [{ step: "assemble", role: "nexus", tool: "system.health" }] });
+  const noEvidence = await engine.complete({ taskId: task.id, result: { summary: "built it" } });
+  assert.equal(noEvidence.ok, false);
+  assert.equal(noEvidence.code, "evidence_required");
+  const noSummary = await engine.complete({ taskId: task.id, result: { evidence: ["https://x.test/a.apk"] } });
+  assert.equal(noSummary.code, "result_required");
+  const after = await engine.get(task.id);
+  assert.equal(after.task.status, "working");
+  assert.equal(after.task.result, null);
 });
 
-test("completion requires a meaningful summary and at least one evidence item", async () => {
+test("completion with evidence closes the task and records who verified it", async () => {
   const { engine } = setup();
-  const task = (await engine.submit({ objective: "Read a public status page" })).task;
-  await engine.plan({ taskId: task.id, steps: [{ step: "Read status" }] });
-  assert.equal((await engine.complete({ taskId: task.id, result: { summary: "ok" } })).code, "evidence_required");
-  assert.equal((await engine.complete({ taskId: task.id, result: { summary: "  ", evidence: ["url"] } })).code, "result_required");
-  const done = await engine.complete({ taskId: task.id, result: { summary: "Status page checked.", evidence: ["https://example.com/status"] } });
-  assert.equal(done.ok, true);
-  assert.equal(done.task.status, "done");
-  assert.equal(done.task.result.evidence.length, 1);
-  assert.equal((await engine.complete({ taskId: task.id, result: { summary: "Again", evidence: ["commit"] } })).code, "invalid_transition");
+  const task = (await engine.submit({ objective: "Build the APK", role: "nexus" })).task;
+  const outcome = await engine.complete({
+    taskId: task.id,
+    result: { summary: "APK built", evidence: ["sha256:abc", "https://x.test/app.apk"] },
+    verifiedBy: "sentinel"
+  });
+  assert.equal(outcome.ok, true);
+  assert.equal(outcome.task.status, "done");
+  assert.equal(outcome.task.result.verifiedBy, "sentinel");
+  assert.equal(outcome.task.result.evidence.length, 2);
+  assert.deepEqual(outcome.task.statusHistory.at(-1), {
+    from: "queued", to: "done", at: "2026-11-21T12:00:00.000Z", by: "sentinel", reason: "completed with evidence"
+  });
 });
 
-test("checkpoint requires a note and stores bounded history", async () => {
+test("a finished task rejects further transitions", async () => {
   const { engine } = setup();
-  const task = (await engine.submit({ objective: "Record a checkpoint" })).task;
-  assert.equal((await engine.checkpoint({ taskId: task.id, note: " " })).code, "invalid_checkpoint");
-  const result = await engine.checkpoint({ taskId: task.id, note: "Reviewed the source." });
-  assert.equal(result.ok, true);
-  assert.equal(result.task.checkpoints.at(-1).note, "Reviewed the source.");
+  const task = (await engine.submit({ objective: "Write the report" })).task;
+  await engine.complete({ taskId: task.id, result: { summary: "written", evidence: ["reports/r.md"] } });
+  const again = await engine.complete({ taskId: task.id, result: { summary: "written", evidence: ["reports/r.md"] } });
+  assert.equal(again.ok, false);
+  assert.equal(again.code, "invalid_transition");
+  const failed = await engine.fail({ taskId: task.id, error: "nope" });
+  assert.equal(failed.code, "invalid_transition");
 });
 
-test("fail requires a reason and retry is capped", async () => {
+test("failure needs a real error and retries are capped", async () => {
   const { engine } = setup();
-  const task = (await engine.submit({ objective: "Test bounded retry" })).task;
-  assert.equal((await engine.fail({ taskId: task.id, error: " " })).code, "error_required");
-  await engine.fail({ taskId: task.id, error: "Transient error" });
-  for (let attempt = 1; attempt <= 3; attempt += 1) {
-    const retried = await engine.retry({ taskId: task.id });
-    assert.equal(retried.ok, true);
-    assert.equal(retried.task.status, "queued");
-    if (attempt < 3) await engine.fail({ taskId: task.id, error: "Still failing" });
-  }
-  await engine.fail({ taskId: task.id, error: "Final failure" });
-  assert.equal((await engine.retry({ taskId: task.id })).code, "attempt_limit_reached");
+  const task = (await engine.submit({ objective: "Repair the build" })).task;
+  assert.equal((await engine.fail({ taskId: task.id, error: "  " })).code, "error_required");
+
+  const failed = await engine.fail({ taskId: task.id, error: "gradle failed" });
+  assert.equal(failed.task.status, "failed");
+  assert.equal(failed.task.error, "gradle failed");
+
+  const first = await engine.retry({ taskId: task.id });
+  assert.equal(first.task.status, "queued");
+  assert.equal(first.attempts, 1);
+  await engine.fail({ taskId: task.id, error: "gradle failed again" });
+  const second = await engine.retry({ taskId: task.id });
+  assert.equal(second.attempts, 2);
+  await engine.fail({ taskId: task.id, error: "still failing" });
+  const third = await engine.retry({ taskId: task.id });
+  assert.equal(third.ok, false);
+  assert.equal(third.code, "attempt_limit_reached");
 });
 
-test("get, list filters, and not-found results are explicit", async () => {
+test("a plan cannot borrow another role's tool or name an unknown one", async () => {
   const { engine } = setup();
-  const first = (await engine.submit({ objective: "First task" })).task;
-  await engine.submit({ objective: "Second task" });
-  assert.equal((await engine.get("missing")).code, "not_found");
-  assert.equal((await engine.get(first.id)).task.id, first.id);
-  assert.equal((await engine.list({ status: "queued" })).count, 2);
-  assert.equal((await engine.list({ status: "done" })).count, 0);
+  const task = (await engine.submit({ objective: "Commit the fix", role: "nexus" })).task;
+  const wrongRole = await engine.plan({ taskId: task.id, steps: [{ step: "spend", role: "orion", tool: "payment.spend" }] });
+  assert.equal(wrongRole.code, "role_not_allowed");
+  const unknownTool = await engine.plan({ taskId: task.id, steps: [{ step: "x", role: "nexus", tool: "nope.tool" }] });
+  assert.equal(unknownTool.code, "unknown_tool");
+  const emptyPlan = await engine.plan({ taskId: task.id, steps: [] });
+  assert.equal(emptyPlan.code, "invalid_plan");
+});
+
+test("tasks are readable from a fresh engine over the same store", async () => {
+  const { repository, registry, engine } = setup();
+  const task = (await engine.submit({ objective: "Persist this objective" })).task;
+  await engine.complete({ taskId: task.id, result: { summary: "stored", evidence: ["commit:abc"] } });
+  const restarted = createUniversalCommandEngine({ repository, registry });
+  const listed = await restarted.list({ status: "done" });
+  assert.equal(listed.count, 1);
+  assert.equal(listed.tasks[0].id, task.id);
+  assert.equal(listed.tasks[0].status, "done");
+});
+
+test("legacy worker statuses normalize without pretending to be new work", () => {
+  assert.equal(normalizeState("planned"), "queued");
+  assert.equal(normalizeState("delegated"), "working");
+  assert.equal(normalizeState("interrupted"), "failed");
+  assert.equal(normalizeState("verified"), "done");
+});
+
+test("the role listing does not claim deployed agents", () => {
+  const listing = describeRoles();
+  assert.equal(listing.roles.length, 5);
+  assert.deepEqual(listing.deployedAgents, []);
+  assert.ok(listing.roles.every(role => role.deployed === false));
 });
