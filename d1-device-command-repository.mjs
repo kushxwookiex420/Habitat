@@ -101,8 +101,12 @@ export function createD1DeviceCommandRepository({ accountId, databaseId, apiToke
       return Boolean(row?.revoked_at);
     },
     async unrevokeDevice(deviceId) {
+      // Recovery is not a token reset. Destroy every old pairing code first, then clear the old token
+      // hash and revocation. If the first write fails, the device remains revoked and the caller gets
+      // an error; a retry can safely finish. A fresh owner-issued pairing is still required.
+      await query("DELETE FROM habitat_device_pairings WHERE device_id = ?", [deviceId]);
       await query(
-        "UPDATE habitat_paired_devices SET revoked_at = NULL WHERE device_id = ?",
+        "UPDATE habitat_paired_devices SET revoked_at = NULL, token_hash = '' WHERE device_id = ?",
         [deviceId]
       );
       return true;
@@ -120,7 +124,7 @@ export function createD1DeviceCommandRepository({ accountId, databaseId, apiToke
     },
     async isDevicePaired(deviceId) {
       const result = await query(
-        "SELECT device_id FROM habitat_paired_devices WHERE device_id = ? AND revoked_at IS NULL LIMIT 1",
+        "SELECT device_id FROM habitat_paired_devices WHERE device_id = ? AND revoked_at IS NULL AND token_hash <> '' LIMIT 1",
         [deviceId]
       );
       return Boolean(result[0]?.results?.length);
@@ -150,10 +154,10 @@ export function createD1DeviceCommandRepository({ accountId, databaseId, apiToke
         "UPDATE habitat_paired_devices SET revoked_at = ? WHERE device_id = ? AND revoked_at IS NULL",
         [revokedAt, deviceId]
       );
-      await query(
-        "UPDATE habitat_device_pairings SET consumed_at = ? WHERE device_id = ? AND consumed_at IS NULL",
-        [revokedAt, deviceId]
-      );
+      // A revoked device must never recover with a code it saw before revocation. Remove every
+      // pairing code for this device, including already-consumed codes used for lost-response
+      // recovery, so only a fresh owner-issued code can pair it after recovery.
+      await query("DELETE FROM habitat_device_pairings WHERE device_id = ?", [deviceId]);
       await query(
         "UPDATE habitat_device_commands SET status = 'cancelled', record_json = json_set(record_json, '$.status', 'cancelled', '$.cancelledAt', ?) WHERE device_id = ? AND status IN ('queued', 'claimed')",
         [revokedAt, deviceId]

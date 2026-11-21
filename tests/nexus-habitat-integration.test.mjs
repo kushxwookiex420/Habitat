@@ -82,7 +82,7 @@ async function invoke(app, key, req = {}) {
   return res;
 }
 
-function harness({ adapters = null, owner = OWNER, withOwnerToken = true, nexusEnabled = true } = {}) {
+function harness({ adapters = null, owner = OWNER, withOwnerToken = true, nexusEnabled = true, queryFaultOnce = false } = {}) {
   const db = new DatabaseSync(":memory:");
   const d1Fetch = async (_url, init) => {
     const { sql, params = [] } = JSON.parse(init.body);
@@ -92,6 +92,14 @@ function harness({ adapters = null, owner = OWNER, withOwnerToken = true, nexusE
   const deviceRepo = createD1DeviceCommandRepository({ accountId: "test", databaseId: "test", apiToken: "test", fetchImpl: d1Fetch });
   const taskRepo = createD1CommandTaskRepository({ accountId: "test", databaseId: "test", apiToken: "test", fetchImpl: d1Fetch });
   const query = createD1Query({ accountId: "test", databaseId: "test", apiToken: "test", fetchImpl: d1Fetch });
+  let injectFault = queryFaultOnce;
+  const queryWithFault = async (sql, params = []) => {
+    if (injectFault && sql.includes("CREATE TABLE IF NOT EXISTS habitat_nexus_workers")) {
+      injectFault = false;
+      throw new Error("transient D1 heartbeat-table failure");
+    }
+    return query(sql, params);
+  };
   const baseAdapters = buildReadOnlyNexusAdapters({
     rootDir: process.cwd(),
     allowedPrefixes: ["src", "tests", "docs", "app/src", "README.md", "package.json"],
@@ -107,7 +115,7 @@ function harness({ adapters = null, owner = OWNER, withOwnerToken = true, nexusE
     },
     repository: deviceRepo,
     taskRepository: taskRepo,
-    query,
+    query: queryWithFault,
     adapters: adapters ? adapters(baseAdapters) : baseAdapters,
     handleSignals: false,
     exitOnSignal: false,
@@ -115,6 +123,17 @@ function harness({ adapters = null, owner = OWNER, withOwnerToken = true, nexusE
   });
   return { app, bridge, db, taskRepo, deviceRepo, adapters: baseAdapters, query };
 }
+
+test("a failed Nexus initialization can be retried without restarting the bridge", async () => {
+  const { bridge } = harness({ queryFaultOnce: true });
+  const first = await bridge.initialize({ startWorker: false });
+  assert.equal(first.ok, true);
+  assert.equal(first.nexus.ok, false);
+  const started = await bridge.startNexusWorker();
+  assert.equal(started.ok, true, JSON.stringify(started));
+  assert.equal(started.started, true);
+  assert.equal(bridge.status().nexus.started, true);
+});
 
 test("the Nexus runtime is disabled unless NEXUS_RUNTIME_ENABLED is exactly true", async () => {
   const { bridge } = harness({ nexusEnabled: false });

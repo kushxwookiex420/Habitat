@@ -42,7 +42,10 @@ registerUniversalCommandRoutes  ->  commandApi { engine, store }
   stay queued instead of being claimed and failed; an unknown adapter is claimed only so the worker
   can fail it with an explicit "no adapter registered" error.
 - Revocation: a revoked device is never revived by replaying a pairing code. Recovery is an explicit
-  owner-device action (`POST /device/owner/devices/:deviceId/unrevoke`).
+  owner-device action (`POST /device/owner/devices/:deviceId/unrevoke`). Recovery destroys the old
+  token hash and every old pairing code for the device; the device must complete a fresh pairing.
+  All configured owner devices are administrators and may restore another configured owner's device;
+  non-owners and revoked owner tokens are refused.
 - Fail closed: no D1/store means no `/nexus/runtime` route, no worker, and command routes answer 503.
 - Shutdown: the runtime attaches SIGTERM/SIGINT handlers; repeated signals are absorbed while the
   in-flight task drains (15 s default). `bridge.shutdown()` is available for embedded callers.
@@ -50,7 +53,7 @@ registerUniversalCommandRoutes  ->  commandApi { engine, store }
 
 ## Tests
 
-- `tests/nexus-habitat-integration.test.mjs` — 9 tests through the real bridge, routes, engine, D1
+- `tests/nexus-habitat-integration.test.mjs` — 10 tests through the real bridge, routes, engine, D1
   repository code, worker, adapters, and the real SQLite engine. SQLite is reached through the
   repository's production HTTP shape (local D1 transport shim), not by replacing runtime logic.
 - `tests/nexus-habitat-lifecycle.test.mjs` — child process sends two SIGTERMs during a mounted
@@ -87,8 +90,9 @@ revision changes production/runtime files: `command-routes.mjs`, `device-command
 `d1-device-command-repository.mjs`, `d1-dispatch-lease-repository.mjs`, `d1-secret-vault.mjs`,
 `d1-task-repository.mjs`, `nexus-adapters.mjs`, `nexus-adapter-registration.mjs`,
 `nexus-runtime.mjs`, `render-sandbox-compat.mjs`, `server.mjs`, `render.yaml`, and
-`scripts/d1-live-test.mjs`, `scripts/d1-cleanup.mjs`; tests and docs change with them. Revert all of
-them together; reverting only `device-command-bridge.mjs` is not sufficient.
+  `scripts/d1-live-test.mjs`, `scripts/d1-cleanup.mjs`; tests and docs change with them. Revert all of
+  them together; reverting only `device-command-bridge.mjs` is not sufficient. Recovery changes in
+  `device-command-bridge.mjs` and `d1-device-command-repository.mjs` must be reverted together.
 
 ## Still blocked
 

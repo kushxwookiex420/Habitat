@@ -39,15 +39,18 @@ function fakeD1() {
     } else if (sql.startsWith("SELECT revoked_at FROM habitat_paired_devices")) {
       const row = devices.get(params[0]);
       result = [{ results: row ? [{ revoked_at: row.revoked_at }] : [] }];
-    } else if (sql === "UPDATE habitat_paired_devices SET revoked_at = NULL WHERE device_id = ?") {
+    } else if (sql.startsWith("UPDATE habitat_paired_devices SET revoked_at = NULL")) {
       const row = devices.get(params[0]);
-      if (row) row.revoked_at = null;
+      if (row) { row.revoked_at = null; row.token_hash = ""; }
+      for (const [codeHash, pairing] of pairings) if (pairing.device_id === params[0]) pairings.delete(codeHash);
+    } else if (sql.startsWith("DELETE FROM habitat_device_pairings WHERE device_id")) {
+      for (const [codeHash, pairing] of pairings) if (pairing.device_id === params[0]) pairings.delete(codeHash);
     } else if (sql.startsWith("SELECT token_hash FROM habitat_paired_devices")) {
       const row = devices.get(params[0]);
       result = [{ results: row && !row.revoked_at ? [{ token_hash: row.token_hash }] : [] }];
     } else if (sql.startsWith("SELECT device_id FROM habitat_paired_devices")) {
       const row = devices.get(params[0]);
-      result = [{ results: row && !row.revoked_at ? [{ device_id: row.device_id }] : [] }];
+      result = [{ results: row && !row.revoked_at && row.token_hash ? [{ device_id: row.device_id }] : [] }];
     } else if (sql.startsWith("UPDATE habitat_paired_devices SET last_seen_at = ?, device_json = ?")) {
       const row = devices.get(params[2]);
       if (row && !row.revoked_at) { row.last_seen_at = params[0]; row.device_json = params[1]; }
@@ -115,6 +118,7 @@ test("D1 device repository stores only hashes, supports one-time bootstrap pairi
   assert.equal(await repo.verifyDeviceToken(token, "s26-ultra"), false);
   assert.equal(await repo.isDevicePaired("s26-ultra"), false);
   assert.equal(await repo.isDeviceRevoked("s26-ultra"), true);
+  assert.equal(fake.pairings.size, 0, "revocation invalidates every pairing code for the device");
 
   // Re-registration must not clear revocation.
   const replacementToken = "replacement-token-not-persisted-raw";
@@ -125,7 +129,13 @@ test("D1 device repository stores only hashes, supports one-time bootstrap pairi
 
   await repo.unrevokeDevice("s26-ultra");
   assert.equal(await repo.isDeviceRevoked("s26-ultra"), false);
-  assert.equal(await repo.verifyDeviceToken(replacementToken, "s26-ultra"), true);
+  assert.equal(await repo.isDevicePaired("s26-ultra"), false);
+  assert.equal(await repo.verifyDeviceToken(replacementToken, "s26-ultra"), false);
+
+  const freshToken = "fresh-token-after-recovery-not-persisted-raw";
+  await repo.registerDevice({ deviceId: "s26-ultra", tokenHash: createHash("sha256").update(freshToken).digest("hex"), createdAt: now });
+  assert.equal(await repo.isDevicePaired("s26-ultra"), true);
+  assert.equal(await repo.verifyDeviceToken(freshToken, "s26-ultra"), true);
   assert.ok(fake.calls.every(call => !JSON.stringify(call).includes(token)));
   assert.ok(fake.calls.every(call => !JSON.stringify(call).includes("test-only-d1-token")));
 });

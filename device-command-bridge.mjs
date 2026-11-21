@@ -145,6 +145,16 @@ export function registerDeviceCommandBridge(app, {
       const now = new Date().toISOString();
       const codeHash = digest(code);
 
+      // Reject a revoked device before consuming or revealing anything about a pairing code. The
+      // same check is repeated in issueToken() to close a revoke racing the exchange.
+      if (typeof store.isDeviceRevoked === "function" && await store.isDeviceRevoked(deviceId)) {
+        return res.status(403).json({
+          ok: false,
+          code: "device_revoked",
+          error: "This device is revoked. An owner must explicitly restore it before pairing again."
+        });
+      }
+
       async function issueToken(recovered) {
         // A revoked device must not be revived by a consumed-code recovery or a fresh code. An
         // owner must explicitly un-revoke it first.
@@ -323,8 +333,11 @@ export function registerDeviceCommandBridge(app, {
       if (typeof store.unrevokeDevice !== "function") {
         return res.status(501).json({ ok: false, error: "This device store cannot un-revoke devices." });
       }
+      if (typeof store.isDeviceRevoked === "function" && !(await store.isDeviceRevoked(targetDeviceId))) {
+        return res.status(409).json({ ok: false, code: "device_not_revoked", error: "Only a revoked device can be restored." });
+      }
       await store.unrevokeDevice(targetDeviceId);
-      return res.json({ ok: true, deviceId: targetDeviceId, revoked: false });
+      return res.json({ ok: true, deviceId: targetDeviceId, revoked: false, requiresPairing: true });
     } catch (error) {
       console.error("DEVICE_UNREVOKE_FAILED", String(error?.message || error));
       return res.status(503).json({ ok: false, error: "Unable to restore the device." });
@@ -528,8 +541,13 @@ export function registerDeviceCommandBridge(app, {
     },
     async startNexusWorker() {
       if (!nexusRuntime) return { ok: false, started: false, reason: nexusMount.reason || "not_mounted" };
-      if (!ready) return { ok: false, started: false, reason: "not_initialized" };
       try {
+        // A deferred startup or a failed initialization is retryable here. This is the path the
+        // server uses after listen(), so a transient D1 failure does not permanently disable work.
+        if (!ready || !nexusInit || nexusInit.ok === false) {
+          nexusInit = await nexusRuntime.initialize({ startWorker: true });
+          return { ok: Boolean(nexusInit?.started), ...nexusInit };
+        }
         const result = await nexusRuntime.startWorker();
         nexusInit = { ...(nexusInit || {}), ...result };
         return { ok: true, ...result };
