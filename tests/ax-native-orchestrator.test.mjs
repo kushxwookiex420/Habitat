@@ -13,6 +13,7 @@ import {
   redact,
   verifyResult
 } from "../ax-orchestrator.mjs";
+import { evidenceDigest } from "../universal-command-engine.mjs";
 import { runTick } from "../scripts/nexus-tick.mjs";
 
 /**
@@ -408,10 +409,22 @@ test("an objective is required before any model call", async () => {
 // ---------------------------------------------------------------- verification semantics
 
 test("verifyResult never trusts a done task without worker evidence", () => {
-  assert.deepEqual(verifyResult(null), { verified: false, reason: "not_done" });
+  assert.equal(verifyResult(null).reason, "missing_task");
   assert.equal(verifyResult({ status: "working" }).verified, false);
-  assert.equal(verifyResult({ status: "done", result: { evidence: [], verifiedBy: "nexus-1" } }).reason, "no_evidence");
-  assert.equal(verifyResult({ status: "done", result: { evidence: ["x"], verifiedBy: "ax" } }).reason, "not_executed_by_nexus");
-  assert.equal(verifyResult({ status: "done", result: { evidence: ["runtime: ok"], verifiedBy: "nexus-1" } }).verified, true);
+  assert.equal(verifyResult({ status: "done", result: { evidence: [], verifiedBy: "nexus-worker1" } }).reason, "no_evidence");
+  assert.equal(verifyResult({ status: "done", result: { evidence: ["x"], verifiedBy: "ax" } }).reason, "invalid_worker_identity");
   assert.equal(verifyResult({ status: "needs_approval" }).reason, "needs_approval");
+
+  // A real completion carries the attempt and the digest the engine wrote for this task.
+  const evidence = ["runtime: ok"];
+  const genuine = {
+    id: "cmd_genuine",
+    status: "done",
+    attempts: 1,
+    claimedBy: "nexus-worker1",
+    statusHistory: [{ to: "working" }, { to: "done", by: "nexus-worker1" }],
+    result: { evidence, verifiedBy: "nexus-worker1", attempt: 1, evidenceDigest: evidenceDigest("cmd_genuine", 1, evidence) }
+  };
+  assert.equal(verifyResult(genuine, { taskId: "cmd_genuine" }).verified, true);
+  assert.equal(verifyResult({ ...genuine, attempts: 2 }).reason, "stale_attempt");
 });

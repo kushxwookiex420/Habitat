@@ -40,6 +40,12 @@ Run statuses: `completed` (every step verified or repaired-and-verified), `needs
 `failed`, `budget_exceeded`, `deadline_exceeded`, `running` (no in-process executor: queued for the
 cron job), `error` (planning failed).
 
+`settled` is the field to trust for "is this over?" — not the status. `deadline_exceeded` and
+`running` are both **unsettled**: the driver stopped, the tasks did not. Reading such a run
+reconciles it from its task rows and it becomes `completed` or `failed` on its own. The full crash
+and deadline semantics, with the defect register behind them, are in
+`docs/AX_EXECUTION_LIFECYCLE.md`.
+
 A corrected failure stays visible in the record: `steps[0].status: "failed"`,
 `steps[0].correctedBy: "<task id>"`, and the corrective step carries `corrective: true`. The run is
 `completed` only because the corrective task produced verified evidence.
@@ -48,7 +54,7 @@ A corrected failure stays visible in the record: `steps[0].status: "failed"`,
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| POST | `/ax/command/runs` | `{objective}` → run record (201). Requires the command token. |
+| POST | `/ax/command/runs` | `{objective, runKey?}` → run record (201). Requires the command token. |
 | GET | `/ax/command/runs?limit=` | recent runs, newest first |
 | GET | `/ax/command/runs/:id` | one run, including its plan, steps, evidence and cost |
 
@@ -72,8 +78,16 @@ change feed, and in `/nexus/runtime` queue counts. There is no second task store
 | `AX_RUN_DEADLINE_MS` | 90000 | a run that has not settled by then reports `deadline_exceeded` |
 | `AX_POLL_MS` | 250 | pause between executions while driving |
 | `AX_RUN_BUDGET_USD` | 0.05 | hard stop on model spend for one run |
-| `AX_PRICE_INPUT_PER_MTOK` | 2.00 | conservative; set to the model's real rate |
-| `AX_PRICE_OUTPUT_PER_MTOK` | 10.00 | conservative; set to the model's real rate |
+| `AX_PRICE_INPUT_PER_MTOK` | 0.10 | `gpt-6-luna` text input, per 1M |
+| `AX_PRICE_OUTPUT_PER_MTOK` | 0.50 | `gpt-6-luna` text output, per 1M |
+| `AX_MAX_OUTPUT_TOKENS` | 700 | caps the completion length of every planning call |
+| `AX_REASONING_EFFORT` | `none` | reasoning tokens are billed as output; empty string omits the field |
+| `AX_FAILED_CALL_COST_USD` | 0.005 | charged when a call fails, times out, or returns no usage |
+| `AX_RECONCILE_AFTER_MS` | 2000 | minimum age before a read reconciles an unsettled run |
+
+Prices are from the official model page (`https://developers.openai.com/api/docs/models/gpt-6-luna`,
+read 2026-11-21): $0.10 input / $0.50 output per 1M text tokens. Cached input ($0.01) is not assumed:
+the planner sends a fresh system prompt and does not rely on cache hits.
 
 The agent also needs the command store (`CLOUDFLARE_ACCOUNT_ID`, `HABITAT_D1_DATABASE_ID`,
 `HABITAT_D1_API_TOKEN`) and the command token or bridge token for callers.
@@ -105,6 +119,11 @@ persisted says `storeError: "run_could_not_be_persisted"`.
   owner's paired device, and the command token is refused with `403 command_token_cannot_approve`.
 - **Bounded spend and bounded work.** `AX_RUN_BUDGET_USD`, `AX_MAX_STEPS`, `AX_MAX_CORRECTIONS` and
   `AX_RUN_DEADLINE_MS` all stop a runaway run; the budget is checked after every model call.
+- **Evidence is bound, not asserted.** A completion carries a digest of `(task id, attempt, evidence)`
+  written by the engine. Verification recomputes it and also requires the claimant, the completion
+  transition and the attempt to agree, so a copied or edited record fails.
+- **Concurrent drivers cannot overwrite each other.** Run writes are compare-and-swap; the loser is
+  told it lost and adopts the winner's record.
 - **Auditable.** Task history lives in `habitat_command_tasks`; the plan and its cost live in
   `habitat_ax_runs`. Neither is overwritten by a later run.
 - **No destructive production changes.** Only read-only adapters are registrable. A destructive
@@ -112,11 +131,12 @@ persisted says `storeError: "run_could_not_be_persisted"`.
 
 ## 6. Cost
 
-Measured by the run, from the API's own token counts. One planning call of 900 input / 220 output
-tokens costs **$0.0040** at the default conservative prices, or about **$0.0002** at a cheap tier's
-published rate. Ten objectives a day is roughly **$1.20/mo** at the conservative price and cents at
-the cheap one. Execution adds nothing. Details and the comparison with option A:
-`docs/AX_ARCHITECTURE_DECISION.md` §3.
+Measured by the run, from the API's own token counts, at the published `gpt-6-luna` rates. One
+planning call of 900 input / 220 output tokens costs **$0.0002**; a repair adds the same. Ten
+objectives a day is about **$0.06/month**. Execution adds nothing. Every run records
+`usage.input_tokens`, `usage.output_tokens`, `costUsd`, and `usageEstimated` when the response
+carried no usage block (in which case `AX_FAILED_CALL_COST_USD` is charged instead of zero).
+Details and the comparison with option A: `docs/AX_ARCHITECTURE_DECISION.md` §3.
 
 ## 7. Making it live (owner actions)
 
@@ -145,7 +165,16 @@ the cheap one. Execution adds nothing. Details and the comparison with option A:
 Until step 6 passes on a deployed service, the only accurate statement is: **the agent is implemented
 and locally proven; it has never called a real model or a real database.**
 
-## 8. Limits
+## 8. Privacy: what reaches OpenAI
+
+The objective text and the names of the three read-only adapters are sent with every planning call;
+a repair call also sends the failed step's objective and its error message. Repository contents, task
+results, evidence, device ids, owner ids and every credential stay out of the prompt. Stored in D1:
+the run record in `habitat_ax_runs` (objective, plan, task ids, evidence, usage, cost) and ordinary
+task rows in `habitat_command_tasks`; no automatic expiry. Errors are redacted before they are
+persisted or returned. This is **not** a promise that objective data stays in D1 — it does not.
+
+## 9. Limits
 
 - The model can mis-plan. The adapter allowlist and the evidence check bound the damage, not the
   quality of the plan.

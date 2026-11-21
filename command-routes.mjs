@@ -356,10 +356,25 @@ export function registerUniversalCommandRoutes(app, {
       console.error("AX_RUN_STORE_INIT_FAILED", String(error?.message || error));
       return res.status(503).json({ ok: false, code: "run_store_unavailable", error: "The Ax run store could not be initialized." });
     }
-    const outcome = await orchestrator.runObjective({ objective, requestedBy: "ax" });
-    // 201 when a run record exists, whatever the run's own outcome: the request succeeded, the
-    // work may not have. `run.status` and `run.verified` carry that distinction.
-    return res.status(201).json({ ok: outcome.ok === true, code: outcome.code ?? null, error: outcome.error ?? null, run: outcome.run });
+    const outcome = await orchestrator.runObjective({
+      objective,
+      requestedBy: "ax",
+      runKey: req.body?.runKey ?? null
+    });
+    // A run that could not be made durable is a server failure, not a created run.
+    if (outcome.code === "store_unavailable") {
+      return res.status(503).json({ ok: false, code: "store_unavailable", error: outcome.error });
+    }
+    // Input mistakes are 400; anything else is 201 because a run record exists. The run's own
+    // status and `verified` flag carry whether the work succeeded.
+    const inputError = ["invalid_objective", "invalid_run_key", "run_key_reused"].includes(outcome.code);
+    return res.status(inputError ? 400 : 201).json({
+      ok: outcome.ok === true,
+      code: outcome.code ?? null,
+      error: outcome.error ?? null,
+      resumed: outcome.resumed === true,
+      run: outcome.run
+    });
   }));
 
   route.get("/ax/command/runs", requireAx, guard(async (req, res) => {

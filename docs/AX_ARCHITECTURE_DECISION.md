@@ -65,7 +65,7 @@ executes it; the orchestrator verifies the stored evidence and reports.
 | Setup effort | Blocked before it starts; if unblocked: Business workspace, OAuth authorization server, connector review | `OPENAI_API_KEY` + `AX_ORCHESTRATOR_ENABLED=true`; run store created on first run |
 | Recurring cost | ChatGPT subscription (Business ≈ $25–30/user/mo) **or** a workspace seat you already have | API tokens only (see §3) + the existing Render/D1 bill |
 | API usage | ChatGPT's own model usage, billed to the subscription | Measured per run: prompt/completion tokens × configured prices, recorded on the run |
-| Security | The command token is stored in a third-party UI; OpenAI sees every objective and result | The key never leaves the service; objectives and evidence stay in D1 |
+| Security | The command token is stored in a third-party UI; OpenAI sees every objective and result | The key never leaves the service, and evidence/results never leave it; **objective text is still sent to OpenAI**, as it is in option A |
 | Autonomy | Model-driven but turn-bound: nothing progresses unless a person keeps the conversation going | A run completes on its own once started; a cron can start runs unattended |
 | Background operation | None. ChatGPT does not call your API while nobody is chatting | Yes, with the cron executor or the in-process tick |
 | No manual relaying | Removes *you* from the loop only while you are in the conversation | Removes you from the loop entirely |
@@ -87,19 +87,20 @@ already built and tested.
 ## 3. Cost
 
 The orchestrator records real token usage per run and prices it with `AX_PRICE_INPUT_PER_MTOK` /
-`AX_PRICE_OUTPUT_PER_MTOK`. Defaults are deliberately conservative (**$2.00 in / $10.00 out per 1M**,
-the published `gpt-6.1-sol` / `gpt-6.2-sol` rate) so an estimate never understates the bill.
+`AX_PRICE_OUTPUT_PER_MTOK`. Defaults are the published `gpt-6-luna` rates (**$0.10 in / $0.50 out per
+1M**, `developers.openai.com/api/docs/models/gpt-6-luna`, read 2026-11-21), with reasoning effort
+forced to `none` so hidden reasoning tokens cannot inflate a plan.
 
 Measured shape of one planning call (from the acceptance test's usage payload, a realistic size):
 900 input tokens, 220 output tokens.
 
-| | Tokens | At $2/$10 per 1M | At $0.10/$0.50 per 1M |
-| --- | --- | --- | --- |
-| One plan | 900 in / 220 out | **$0.0040** | **$0.0002** |
-| One repair call | ~600 in / 200 out | $0.0032 | $0.0002 |
-| One objective (plan only) | | $0.0040 | $0.0002 |
-| One objective with a repair | | $0.0072 | $0.0004 |
-| 10 objectives/day (300/mo) | | ≈ **$1.20/mo** | ≈ **$0.06/mo** |
+| | Tokens | At $0.10/$0.50 per 1M |
+| --- | --- | --- |
+| One plan | 900 in / 220 out | **$0.0002** |
+| One repair call | 900 in / 220 out | **$0.0002** |
+| One objective (plan only) | | $0.0002 |
+| One objective with a repair | | $0.0004 |
+| 10 objectives/day (300/mo) | | ≈ **$0.06/mo** |
 
 Execution itself costs nothing extra: the adapters are local reads. The infrastructure bill is
 unchanged (Render from $1–7/mo, D1 free tier). Prices change; the defaults are a ceiling, and the

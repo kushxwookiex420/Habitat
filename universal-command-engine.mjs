@@ -15,6 +15,24 @@ import { getRole } from "./agent-roles.mjs";
 export const TASK_STATES = Object.freeze(["queued", "working", "needs_approval", "done", "failed", "cancelled"]);
 export const TERMINAL_STATES = Object.freeze(["done", "failed", "cancelled"]);
 
+/**
+ * The id a submission with this idempotency key will receive. Exported so a caller can persist the
+ * id BEFORE submitting, which is what makes recovery adopt the existing task instead of creating a
+ * second one.
+ */
+export function taskIdForKey(key) {
+  return "cmd_" + createHash("sha256").update(String(key), "utf8").digest("hex").slice(0, 24);
+}
+
+/**
+ * Evidence is only meaningful for one task at one attempt. The digest is written by the engine when
+ * it closes a task and recomputed by any verifier, so edited, copied or stale evidence fails.
+ */
+export function evidenceDigest(taskId, attempt, evidence) {
+  const material = [String(taskId), String(Math.max(0, Number(attempt) || 0)), ...(evidence || []).map(String)].join("\n");
+  return "sha256:" + createHash("sha256").update(material, "utf8").digest("hex");
+}
+
 // Records written by the older worker-task routes still read correctly.
 const LEGACY_STATES = Object.freeze({
   planned: "queued",
@@ -154,9 +172,7 @@ function validateObjective(objective) {
     if (!chosen) return failure("unknown_role", `Unknown role "${role}". Use one of the registered roles.`);
 
     const key = String(idempotencyKey || "").trim();
-    const id = key
-      ? "cmd_" + createHash("sha256").update(key, "utf8").digest("hex").slice(0, 24)
-      : newId();
+    const id = key ? taskIdForKey(key) : newId();
 
     if (key) {
       const existing = await load(id);
@@ -350,11 +366,16 @@ function validateObjective(objective) {
     }
 
     const at = now();
+    const delivered = evidence.slice(0, 20);
     task.result = {
       summary: summary.slice(0, 2000),
-      evidence: evidence.slice(0, 20),
+      evidence: delivered,
       verifiedBy: String(verifiedBy || "ax").slice(0, 120),
-      completedAt: at
+      completedAt: at,
+      // Bound to this task and this attempt, so a verifier can prove the evidence belongs to the
+      // execution it is looking at instead of trusting a string that merely starts with "nexus-".
+      attempt: Number(task.attempts || 0),
+      evidenceDigest: evidenceDigest(task.id, task.attempts, delivered)
     };
     task.error = null;
     if (claim) {
