@@ -4,6 +4,7 @@ import {
   PRODUCTION,
   NONPRODUCTION,
   inspectD1Isolation,
+  inspectIsolation,
   resolveRuntimeEnvironment,
   sealProductionD1,
   serviceName
@@ -79,6 +80,46 @@ test("sealing removes production D1 credentials from a nonproduction process onl
   };
   assert.equal(sealProductionD1(production), false);
   assert.equal(production.HABITAT_D1_DATABASE_ID, "prod-d1-id", "production is never sealed");
+});
+
+test("a nonproduction process with D1 but no declared production id is unsafe and sealed", () => {
+  const env = {
+    HABITAT_RUNTIME_ENV: "nonproduction",
+    CLOUDFLARE_ACCOUNT_ID: "account",
+    HABITAT_D1_DATABASE_ID: "unverified-database",
+    HABITAT_D1_API_TOKEN: "token"
+  };
+  const state = inspectIsolation(env);
+  assert.equal(state.productionDatabaseUndeclared, true);
+  assert.equal(state.productionD1Conflict, false);
+  assert.equal(state.unsafe, true);
+  assert.equal(sealProductionD1(env), true);
+  assert.equal(env.HABITAT_D1_DATABASE_ID, undefined);
+
+  const noDatabase = inspectIsolation({ HABITAT_RUNTIME_ENV: "nonproduction" });
+  assert.equal(noDatabase.productionDatabaseUndeclared, false);
+  assert.equal(noDatabase.unsafe, false, "a process without D1 credentials cannot leak production data");
+});
+
+test("a nonproduction bridge with an undeclared production id mounts no device store", () => {
+  const { bridge, errors } = bridgeWith({
+    HABITAT_RUNTIME_ENV: "nonproduction",
+    CLOUDFLARE_ACCOUNT_ID: "account",
+    HABITAT_D1_DATABASE_ID: "unverified-database",
+    HABITAT_D1_API_TOKEN: "token",
+    HABITAT_AX_BRIDGE_TOKEN: AX_TOKEN,
+    HABITAT_OWNER_DEVICE_ID: OWNER_DEVICE_ID
+  });
+  const status = bridge.status();
+  assert.equal(status.ready, false);
+  assert.equal(status.durable, false);
+  assert.equal(status.environment.productionDatabaseUndeclared, true);
+  assert.equal(status.environment.productionD1Conflict, false);
+  assert.equal(status.environment.nexusEnabled, false);
+  assert.equal(
+    errors.some(line => line.includes("DEVICE_COMMAND_BRIDGE_ENVIRONMENT_CONFLICT")),
+    true
+  );
 });
 
 test("the diagnostics endpoint requires the Ax token and names the environment without secrets", async () => {

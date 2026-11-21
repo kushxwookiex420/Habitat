@@ -1,5 +1,5 @@
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
-import { inspectD1Isolation, resolveRuntimeEnvironment, serviceName } from "./environment-identity.mjs";
+import { inspectIsolation, resolveRuntimeEnvironment, serviceName } from "./environment-identity.mjs";
 import { createD1DeviceCommandRepository } from "./d1-device-command-repository.mjs";
 import { registerHomeBridgeConsole } from "./home-bridge-console.mjs";
 import { registerDeviceHabitat } from "./device-habitat.mjs";
@@ -60,22 +60,31 @@ export function registerDeviceCommandBridge(app, {
   // fail-safe production block rather than an implicit non-production assumption.
   const runtimeEnvironment = resolveRuntimeEnvironment(env);
   const productionRuntimeBlocked = runtimeEnvironment === "production";
-  const d1Isolation = inspectD1Isolation(env);
+  const d1Isolation = inspectIsolation(env);
   const productionD1Id = d1Isolation.productionDatabaseId;
   const configuredD1Id = d1Isolation.configuredDatabaseId || String(repository?.databaseId || "").trim();
   const usesProductionD1 = Boolean(productionD1Id && configuredD1Id === productionD1Id);
+  // A nonproduction process that holds D1 credentials without declaring the production database
+  // id cannot prove isolation. Treat it exactly like a conflict rather than trusting it.
+  const productionDatabaseUndeclared = Boolean(
+    !productionRuntimeBlocked && d1Isolation.databaseConfigured && !productionD1Id
+  );
 
   // A nonproduction process whose D1 id equals the declared production id would still pair
   // phones, record heartbeats, and execute well-formed commands against production data. The
   // previous build only disabled the Nexus worker in that misconfiguration, which left the
   // device queue writable. Refuse durable device storage entirely instead, so every device route
   // answers 503 and no write can occur. An injected repository is a test/embedded path.
-  const environmentConflict = Boolean(!repository && !productionRuntimeBlocked && usesProductionD1);
+  const environmentConflict = Boolean(
+    !repository && !productionRuntimeBlocked && (usesProductionD1 || productionDatabaseUndeclared)
+  );
   if (environmentConflict) {
+    const reason = usesProductionD1
+      ? "HABITAT_D1_DATABASE_ID equals HABITAT_PRODUCTION_D1_DATABASE_ID"
+      : "HABITAT_PRODUCTION_D1_DATABASE_ID is not declared, so production isolation cannot be proven";
     log.error?.(
-      "DEVICE_COMMAND_BRIDGE_ENVIRONMENT_CONFLICT: HABITAT_D1_DATABASE_ID equals " +
-      "HABITAT_PRODUCTION_D1_DATABASE_ID; durable device storage is disabled for this " +
-      "nonproduction process"
+      "DEVICE_COMMAND_BRIDGE_ENVIRONMENT_CONFLICT: " + reason +
+      "; durable device storage is disabled for this nonproduction process"
     );
   }
 
@@ -89,7 +98,7 @@ export function registerDeviceCommandBridge(app, {
   }) : null);
 
   const nexusEnabled = String(env.NEXUS_RUNTIME_ENABLED || "").trim().toLowerCase() === "true" &&
-    !productionRuntimeBlocked && !usesProductionD1;
+    !productionRuntimeBlocked && !usesProductionD1 && !productionDatabaseUndeclared;
   const owners = new Set();
   for (const value of [env.HABITAT_OWNER_DEVICE_ID, env.HABITAT_OWNER_DEVICE_IDS]) {
     String(value || "").split(",").map(part => part.trim()).filter(Boolean).forEach(id => owners.add(id));
@@ -754,7 +763,8 @@ export function registerDeviceCommandBridge(app, {
       environment: {
         runtime: runtimeEnvironment,
         production: productionRuntimeBlocked,
-        productionD1Conflict: environmentConflict,
+        productionD1Conflict: !productionRuntimeBlocked && usesProductionD1,
+        productionDatabaseUndeclared,
         productionD1Configured: Boolean(productionD1Id),
         databaseConfigured: Boolean(configuredD1Id),
         durable: Boolean(store?.durable),
@@ -897,7 +907,8 @@ export function registerDeviceCommandBridge(app, {
         environment: {
           runtime: runtimeEnvironment,
           production: productionRuntimeBlocked,
-          productionD1Conflict: environmentConflict,
+          productionD1Conflict: !productionRuntimeBlocked && usesProductionD1,
+          productionDatabaseUndeclared,
           productionD1Configured: Boolean(productionD1Id),
           databaseConfigured: Boolean(configuredD1Id),
           durable: Boolean(store?.durable),

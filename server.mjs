@@ -17,7 +17,7 @@ import { registerPublicPages } from "./public-pages.mjs";
 import { readFile } from "node:fs/promises";
 import { randomBytes } from "node:crypto";
 import { createTaskAuthorizer } from "./task-authorizer.mjs";
-import { inspectD1Isolation, resolveRuntimeEnvironment, sealProductionD1 } from "./environment-identity.mjs";
+import { inspectIsolation, resolveRuntimeEnvironment, sealProductionD1 } from "./environment-identity.mjs";
 
 import express from "express";
 
@@ -33,12 +33,15 @@ const deviceCommandBridge = registerDeviceCommandBridge(app);
 // every repository created afterwards (tasks, content jobs, secret vault, Nexus) is memory-only.
 // A production process (HABITAT_RUNTIME_ENV=production) is never sealed.
 const runtimeEnvironment = resolveRuntimeEnvironment(process.env);
-const d1Isolation = inspectD1Isolation(process.env);
+const isolationState = inspectIsolation(process.env);
 const productionD1Sealed = sealProductionD1(process.env);
 if (productionD1Sealed) {
   console.error(
-    "HABITAT_ENVIRONMENT_CONFLICT: nonproduction process was configured with the production " +
-    "D1 database id; D1 credentials are sealed and no durable storage is mounted"
+    isolationState.productionD1Conflict
+      ? "HABITAT_ENVIRONMENT_CONFLICT: nonproduction process was configured with the production " +
+        "D1 database id; D1 credentials are sealed and no durable storage is mounted"
+      : "HABITAT_ENVIRONMENT_CONFLICT: nonproduction process holds D1 credentials without " +
+        "HABITAT_PRODUCTION_D1_DATABASE_ID, so isolation cannot be proven; D1 credentials are sealed"
   );
 }
 
@@ -579,7 +582,9 @@ app.get("/health", (req, res) => {
     backend: "ready",
     isolation: {
       productionD1Conflict: Boolean(bridgeEnvironment?.productionD1Conflict),
+      productionDatabaseUndeclared: Boolean(bridgeEnvironment?.productionDatabaseUndeclared),
       productionD1Sealed,
+      productionDatabaseConfigured: Boolean(bridgeEnvironment?.productionD1Configured),
       databaseConfigured: Boolean(bridgeEnvironment?.databaseConfigured)
     },
     deviceBridge: {
