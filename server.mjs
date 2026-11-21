@@ -17,6 +17,7 @@ import { registerPublicPages } from "./public-pages.mjs";
 import { readFile } from "node:fs/promises";
 import { randomBytes } from "node:crypto";
 import { createTaskAuthorizer } from "./task-authorizer.mjs";
+import { inspectD1Isolation, resolveRuntimeEnvironment, sealProductionD1 } from "./environment-identity.mjs";
 
 import express from "express";
 
@@ -25,6 +26,21 @@ const app = express();
 app.use(express.json({ limit: "1mb" }));
 
 const deviceCommandBridge = registerDeviceCommandBridge(app);
+
+// -- Nonproduction isolation ---------------------------------------------------------------
+// The bridge above already refused durable device storage if this process names the production
+// database. Sealing goes further: the D1 credentials are removed from the process environment so
+// every repository created afterwards (tasks, content jobs, secret vault, Nexus) is memory-only.
+// A production process (HABITAT_RUNTIME_ENV=production) is never sealed.
+const runtimeEnvironment = resolveRuntimeEnvironment(process.env);
+const d1Isolation = inspectD1Isolation(process.env);
+const productionD1Sealed = sealProductionD1(process.env);
+if (productionD1Sealed) {
+  console.error(
+    "HABITAT_ENVIRONMENT_CONFLICT: nonproduction process was configured with the production " +
+    "D1 database id; D1 credentials are sealed and no durable storage is mounted"
+  );
+}
 
 // Internal loopback calls made by /chat must prove they came from this process. The token is
 // generated per boot and never returned by an endpoint or written to a log.
@@ -552,10 +568,20 @@ app.get("/device/status", async (req, res) => {
 
 app.get("/health", (req, res) => {
   const deviceBridge = deviceCommandBridge.status();
+  const bridgeEnvironment = deviceBridge.environment || null;
   res.json({
     habitat: "online",
+    // Environment identity is deliberately explicit: a monitor can tell a nonproduction service
+    // from production without knowing any secret.
+    service: String(process.env.HABITAT_SERVICE_NAME || "").trim() || "habitat",
+    environment: bridgeEnvironment?.runtime || runtimeEnvironment,
     brain: hasAnyAiProviderKey() ? "ready" : "missing_api_key",
     backend: "ready",
+    isolation: {
+      productionD1Conflict: Boolean(bridgeEnvironment?.productionD1Conflict),
+      productionD1Sealed,
+      databaseConfigured: Boolean(bridgeEnvironment?.databaseConfigured)
+    },
     deviceBridge: {
       ready: deviceBridge.ready,
       durable: deviceBridge.durable,

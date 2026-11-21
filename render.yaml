@@ -1,23 +1,34 @@
-# Non-production Habitat service for Revision 4.3 integration testing.
-# This repository is kushxwookiex420/Habitat (flat root). It is NOT home-launcher.
-# No secrets are stored here; every secret is sync:false and set in the Render dashboard.
+# Non-production Habitat service for Revision 4.4 device integration.
+# Repository: kushxwookiex420/Habitat (flat root). NOT home-launcher.
 #
-# Production is untouched by this file. The service below must never be repointed at the
-# production database: HABITAT_PRODUCTION_D1_DATABASE_ID is declared here so the backend can
-# detect that misconfiguration and refuse durable device storage (see docs/REVISION_4.3_INTEGRATION.md).
+# This file never touches production. Every secret is sync:false and set in the Render dashboard;
+# no credential, token, or database id is stored in this repository.
+#
+# Cost: plan "starter" is a paid Render instance (about USD 7/month at the time of writing).
+# Nothing was provisioned from this file. Free alternatives are listed in
+# docs/REVISION_4.4_NONPROD_DEVICE.md; do not switch to them without the owner's approval.
+#
+# Hard separation: HABITAT_PRODUCTION_D1_DATABASE_ID is declared so this nonproduction process can
+# detect that it points at production. When it does, device storage is refused (503) and the
+# server seals its D1 credentials, so no task, content, secret, or Nexus write can reach production.
 services:
   - type: web
     name: ax-nexus-habitat-nonprod
     runtime: node
     plan: starter
     region: oregon
-    branch: ax-nexus/revision-4.3-integration
+    branch: ax-nexus/revision-4.4-nonprod-device-integration
     rootDir: .
     buildCommand: npm install --omit=dev --ignore-scripts
     startCommand: npm start
     healthCheckPath: /health
     autoDeployTrigger: "off"
     envVars:
+      - key: HABITAT_SERVICE_NAME
+        value: "ax-nexus-habitat-nonprod"
+      # nonproduction is explicit. NODE_ENV alone is never treated as nonproduction.
+      - key: HABITAT_RUNTIME_ENV
+        value: "nonproduction"
       - key: CLOUDFLARE_ACCOUNT_ID
         sync: false
       # Nonproduction database id only. Must differ from HABITAT_PRODUCTION_D1_DATABASE_ID.
@@ -28,14 +39,12 @@ services:
       # Declared so a nonproduction process that points at production fails closed.
       - key: HABITAT_PRODUCTION_D1_DATABASE_ID
         sync: false
+      # Token the Android APK does not hold; used by Ax and the acceptance harness.
       - key: HABITAT_AX_BRIDGE_TOKEN
         sync: false
-      # Exactly one owner device id for pairing-code minting; a comma-separated list is accepted
-      # but only a single owner may mint codes.
+      # Exactly one owner device id is required to mint pairing codes.
       - key: HABITAT_OWNER_DEVICE_IDS
         sync: false
-      - key: HABITAT_RUNTIME_ENV
-        value: "nonproduction"
       - key: HABITAT_BREAK_GLASS_TOKEN
         sync: false
       - key: HOME_BRIDGE_URL
@@ -46,8 +55,11 @@ services:
         sync: false
       - key: NEXUS_RUNTIME_ENABLED
         value: "true"
+      # Optional AI provider keys for /chat; the device bridge does not need them.
+      - key: OPENAI_API_KEY
+        sync: false
       # First-run bootstrap only: SHA-256 (hex) of a one-time owner pairing code, plus its expiry.
-      # Remove both after the owner phone is paired.
+      # Remove both after the S26 Ultra is paired.
       - key: HABITAT_DEVICE_PAIRING_BOOTSTRAP_CODE_HASH
         sync: false
       - key: HABITAT_DEVICE_PAIRING_BOOTSTRAP_EXPIRES_AT

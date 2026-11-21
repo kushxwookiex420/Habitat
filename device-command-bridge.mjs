@@ -1,4 +1,5 @@
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
+import { inspectD1Isolation, resolveRuntimeEnvironment, serviceName } from "./environment-identity.mjs";
 import { createD1DeviceCommandRepository } from "./d1-device-command-repository.mjs";
 import { registerHomeBridgeConsole } from "./home-bridge-console.mjs";
 import { registerDeviceHabitat } from "./device-habitat.mjs";
@@ -55,14 +56,13 @@ export function registerDeviceCommandBridge(app, {
 } = {}) {
   const axToken = String(env.HABITAT_AX_BRIDGE_TOKEN || "");
   const breakGlassToken = String(env.HABITAT_BREAK_GLASS_TOKEN || "").trim();
-  const configuredRuntimeEnvironment = String(env.HABITAT_RUNTIME_ENV || "").trim().toLowerCase();
-  const nodeEnvironment = String(env.NODE_ENV || "").trim().toLowerCase();
   // An explicit HABITAT_RUNTIME_ENV is authoritative. If it is absent, NODE_ENV=production is a
   // fail-safe production block rather than an implicit non-production assumption.
-  const runtimeEnvironment = configuredRuntimeEnvironment || (nodeEnvironment === "production" ? "production" : "nonproduction");
+  const runtimeEnvironment = resolveRuntimeEnvironment(env);
   const productionRuntimeBlocked = runtimeEnvironment === "production";
-  const productionD1Id = String(env.HABITAT_PRODUCTION_D1_DATABASE_ID || "").trim();
-  const configuredD1Id = String(env.HABITAT_D1_DATABASE_ID || repository?.databaseId || "").trim();
+  const d1Isolation = inspectD1Isolation(env);
+  const productionD1Id = d1Isolation.productionDatabaseId;
+  const configuredD1Id = d1Isolation.configuredDatabaseId || String(repository?.databaseId || "").trim();
   const usesProductionD1 = Boolean(productionD1Id && configuredD1Id === productionD1Id);
 
   // A nonproduction process whose D1 id equals the declared production id would still pair
@@ -741,6 +741,38 @@ export function registerDeviceCommandBridge(app, {
     console.error("NEXUS_RUNTIME_MOUNT_FAILED", String(error?.message || error));
   }
 
+  /**
+   * Environment identity and isolation diagnostics.
+   *
+   * Authenticated with the Ax bridge token. It deliberately contains no database id, no token, no
+   * pairing code, and no device identifier: only booleans and this process's runtime version.
+   */
+  app.get("/diagnostics", requireAx, (_req, res) => {
+    res.json({
+      ok: true,
+      service: serviceName(env),
+      environment: {
+        runtime: runtimeEnvironment,
+        production: productionRuntimeBlocked,
+        productionD1Conflict: environmentConflict,
+        productionD1Configured: Boolean(productionD1Id),
+        databaseConfigured: Boolean(configuredD1Id),
+        durable: Boolean(store?.durable),
+        nexusEnabled
+      },
+      deviceBridge: {
+        ready,
+        storeMounted: Boolean(store),
+        perDeviceTokens: true,
+        axTokenConfigured: Boolean(axToken),
+        breakGlassConfigured: Boolean(breakGlassToken),
+        ownerDevicesConfigured: owners.size,
+        pairingBootstrapConfigured: Boolean(String(env.HABITAT_DEVICE_PAIRING_BOOTSTRAP_CODE_HASH || "").trim())
+      },
+      runtime: { node: process.version }
+    });
+  });
+
   let initialized = false;
   let nexusInit = null;
 
@@ -861,9 +893,14 @@ export function registerDeviceCommandBridge(app, {
         axTokenConfigured: Boolean(axToken),
         breakGlassConfigured: Boolean(breakGlassToken),
         perDeviceTokens: true,
+        service: serviceName(env),
         environment: {
           runtime: runtimeEnvironment,
+          production: productionRuntimeBlocked,
           productionD1Conflict: environmentConflict,
+          productionD1Configured: Boolean(productionD1Id),
+          databaseConfigured: Boolean(configuredD1Id),
+          durable: Boolean(store?.durable),
           nexusEnabled
         },
         nexus: nexusRuntime ? { configured: true, ...nexusRuntime.status() } : nexusMount
