@@ -24,9 +24,10 @@ clean (0 conflicts)**, and the targeted suites passed on the merged tree.
 | 2 | #96 | `5aa676d` | 4 | clean | 13 (approval/denial audit, fail-closed) |
 | 3 | #98 | `26fd403` | 3 | clean | 3 (cancellation audit) |
 | 4 | #100 | `f57cd42` | 3 | clean | 4 (refusal audit + write cap) |
-| 5 | #99 | `a059174` | 1 | clean | 5 (restart recovery) |
-| 6 | #101 | `71883cd` | 1 | clean | 7 (concurrency/failed writes) |
-| 7 | #102 | `f0d8d6c` | 2 | clean | 7 (read-only production check) |
+| 5 | #106 | `fad7b99` | 4 | clean | 7 (idempotent audit append) |
+| 6 | #102 | `901fe9d` | 2 | clean | 12 (strict surface + cold-start retry) |
+| 7 | #99 | `a059174` | 1 | clean | 5 (restart recovery) |
+| 8 | #101 | `71883cd` | 1 | clean | 7 (concurrency/failed writes) |
 
 Targeted suites on the merged tree (command routes, audit, restart, concurrency, checker) →
 **54/54 pass, exit 0**.
@@ -49,25 +50,29 @@ The full suite was actually executed on the merged tree, with `node_modules` lin
 
 | Tree | Result |
 |---|---|
-| release + #95, #96, #98, #100, #99, #101, #102 | **825/825 pass, 0 fail, exit 0** |
-| same tree + #97 cherry-pick | **826/826 pass, 0 fail, exit 0** |
-| console + pairing targeted with #97 | **23/23 pass** |
+| release + #95, #96, #98, #100, **#106**, #99, #101, #102 (`901fe9d`) | **841/841 pass, 0 fail, exit 0** |
+| earlier tree without #106 | 825/825 pass |
+| same earlier tree + #97 cherry-pick | 826/826 pass |
+| console + pairing targeted with #97 | 23/23 pass |
 
-An earlier draft predicted 829 from branch arithmetic; measurement corrected it to **825**. Only
-the measured numbers should be used. A first run without `node_modules` showed 5 unrelated files
-failing on the missing `sharp` package — an environment artifact, not an integration failure.
+The exact proposed release tree is the 841-row: all eight commits verified as ancestors in one
+scratch worktree, zero conflicts. An earlier draft predicted 829 from branch arithmetic; only
+measured numbers are used. A run without `node_modules` showed 5 unrelated files failing on the
+missing `sharp` package — an environment artifact, not an integration failure.
 
 ## 4. Merge procedure (owner-authorized)
 
 1. Merge **#95**, then **#96** into the release branch (both independent, clean).
 2. After #96, retarget **#98** to the release branch if GitHub does not, then merge it.
 3. Retarget/merge **#100** to the release branch (it was stacked on #98).
-4. Merge **#99**, **#101**, **#102** in any order (new files; no conflicts).
-5. Run the full suite on the merged release branch and record the real total.
-6. **#97 stays separate.** Only after explicit owner approval, cherry-pick `4b872f6` and re-run the
-   suite; the measured result is 826/826. Do not merge #97 into `main` and assume it reached the
-   release branch.
-7. Only then request a deploy authorization.
+4. Retarget/merge **#106** (stacked on #100); it changes the same repository file and must come after.
+5. Merge **#99**, **#101**, **#102** in any order (new files; no conflicts).
+6. Run the full suite on the merged release branch and record the real total (841 on the exact
+   tree measured here).
+7. **#97 stays separate.** Only after explicit owner approval, cherry-pick `4b872f6` and re-run the
+   suite; its earlier measured result was 826/826 before #106. Do not merge #97 into `main` and
+   assume it reached the release branch.
+8. Only then request a deploy authorization. Use `DEPLOYMENT_CHECKLIST.md`.
 
 Stacked PRs must not be merged "out of order" while their base still points at an unmerged branch;
 retargeting before merge keeps the diff honest.
@@ -125,14 +130,18 @@ activation with its own approval and drill.
 7. **The append retry loop treats every error as contention** (24 rounds with backoff). A D1 outage
    therefore delays an audit write and then throws; an approval that already applied returns 502
    `recorded:false`, which is why reconciliation is required.
-8. **No schema migration is needed.** `habitat_ax_security_events` is created idempotently, has no
+8. **Audit duplicates under a lost D1 response are fixed at the store level (#106).** The stable
+   `sec_…` id is re-read before every insert, so a committed-but-unacknowledged write returns its
+   row instead of appending. A client that retries the whole HTTP request still creates a new id and
+   therefore a new event; request-level idempotency is not included.
+9. **No schema migration is needed.** `habitat_ax_security_events` is created idempotently, has no
    CHECK constraint on `category`/`outcome`, and the new categories (`approval.created`,
    `owner.rejection`, `work.stop_requested`, `command.unauthorized`) fit the existing schema.
    Existing rows keep their hashes; nothing is rewritten.
-9. **Ordering is semantic, not just textual.** #96 introduces the recorder wiring that #98 and #100
+10. **Ordering is semantic, not just textual.** #96 introduces the recorder wiring that #98 and #100
    extend; merging those first would leave their audit branches inert until #96 lands. Merge #96
    before #98/#100 even though all three are conflict-free.
-10. **Rollback is additive.** Reverting the code does not invalidate audit rows or the sequence;
+11. **Rollback is additive.** Reverting the code does not invalidate audit rows or the sequence;
     never delete security events to "clean up" a rollback.
 
 ## 8. Not done by this document
