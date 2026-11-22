@@ -72,6 +72,8 @@ async function request(app, method, requestPath, { headers = {}, body = {}, quer
 
 const OWNER = "owner-s26";
 const OWNER_TOKEN = "owner_token_" + "o".repeat(24);
+const OTHER = "paired-not-owner";
+const OTHER_TOKEN = "paired_token_" + "p".repeat(24);
 
 function taskRecord(id, extra = {}) {
   return { id, objective: "inspect docs", status: "needs_approval", approvals: [{ state: "requested" }], attempts: 1, ...extra };
@@ -95,7 +97,8 @@ async function mountRuntime({ audit, tasks = [taskRecord("cmd_a"), taskRecord("c
     repository,
     query: async () => [{ results: [] }],
     engine,
-    verifyDevice: async (token, deviceId) => deviceId === OWNER && token === OWNER_TOKEN,
+    verifyDevice: async (token, deviceId) =>
+      (deviceId === OWNER && token === OWNER_TOKEN) || (deviceId === OTHER && token === OTHER_TOKEN),
     ownerDeviceId: OWNER,
     audit,
     handleSignals: false,
@@ -105,12 +108,16 @@ async function mountRuntime({ audit, tasks = [taskRecord("cmd_a"), taskRecord("c
   return { app, records };
 }
 
-function decide(app, taskId, approved) {
+function decideAs(app, taskId, approved, { token = OWNER_TOKEN, deviceId = OWNER } = {}) {
   return request(app, "POST", "/device/command/tasks/" + taskId + "/approval", {
-    headers: { authorization: "Bearer " + OWNER_TOKEN },
-    body: { deviceId: OWNER, approved },
+    headers: { authorization: "Bearer " + token },
+    body: { deviceId, approved },
     params: { id: taskId }
   });
+}
+
+function decide(app, taskId, approved) {
+  return decideAs(app, taskId, approved);
 }
 
 function cancelTask(app, taskId) {
@@ -260,7 +267,50 @@ test("an unrecognised audit result is not treated as success", async () => {
   assertAuditFailure(await decide(app, "cmd_a", true), "approved", "working");
 });
 
-// ------------------------------------------------- 3. cancellation audit
+// ------------------------------------------- 3. refused owner decisions
+test("a non-owner decision is refused and audited as command.unauthorized", async () => {
+  const repository = chainRepository();
+  const security = createSecurityEventService({ repository, log: quiet });
+  const { app } = await mountRuntime({ audit: createNexusAuditRecorder(security) });
+
+  const response = await decideAs(app, "cmd_a", true, { token: OTHER_TOKEN, deviceId: OTHER });
+  assert.equal(response.statusCode, 403);
+  assert.equal(repository.events.length, 1, "the refusal produced exactly one security event");
+  const entry = repository.events[0];
+  assert.equal(entry.category, "command.unauthorized");
+  assert.equal(entry.outcome, "denied");
+  assert.equal(entry.taskId, "cmd_a");
+  const evidence = JSON.parse(entry.evidence);
+  assert.equal(evidence.event, "device.command.owner_refused");
+  assert.equal(evidence.reason, "not_owner");
+  assert.equal(verifyEventChain(repository.events).ok, true);
+  assert.equal(JSON.stringify(entry).includes(OTHER_TOKEN), false, "no credential in the audit entry");
+  assert.equal(JSON.stringify(entry).includes(OWNER_TOKEN), false);
+});
+
+test("a decision with an invalid credential is refused and audited without a device identity", async () => {
+  const repository = chainRepository();
+  const security = createSecurityEventService({ repository, log: quiet });
+  const { app } = await mountRuntime({ audit: createNexusAuditRecorder(security) });
+
+  const response = await decideAs(app, "cmd_b", false, { token: "wrong-token", deviceId: OWNER });
+  assert.equal(response.statusCode, 401);
+  assert.equal(repository.events[0].category, "command.unauthorized");
+  const evidence = JSON.parse(repository.events[0].evidence);
+  assert.equal(evidence.event, "device.command.owner_refused");
+  assert.equal(evidence.actorDeviceId, null, "an unverified device id is never recorded as the actor");
+  assert.equal(typeof evidence.reason, "string");
+  assert.equal(verifyEventChain(repository.events).ok, true);
+});
+
+test("an audit outage on a refused decision leaves the refusal status intact", async () => {
+  const { app } = await mountRuntime({ audit: async () => undefined });
+  const response = await decideAs(app, "cmd_a", true, { token: OTHER_TOKEN, deviceId: OTHER });
+  assert.equal(response.statusCode, 403, "a log outage cannot upgrade or hide the refusal");
+  assert.equal(response.body.recorded, undefined, "no audit-success field is added when nothing was recorded");
+});
+
+// ------------------------------------------------- 4. cancellation audit
 test("cancellation maps to work.stop_requested and forms a valid chain", async () => {
   const repository = chainRepository();
   const security = createSecurityEventService({ repository, log: quiet });

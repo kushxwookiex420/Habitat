@@ -87,7 +87,10 @@ const NEXUS_AUDIT_EVENTS = Object.freeze({
   "device.command.denied": { category: "owner.rejection", severity: "medium", outcome: "denied", summary: "NEXUS task approval denied" },
   // A cancellation is an owner decision to stop work, so it belongs in the same chain as an
   // approval or denial rather than only in the task record.
-  "device.command.cancelled": { category: "work.stop_requested", severity: "info", outcome: "allowed", summary: "NEXUS task cancelled by the owner" }
+  "device.command.cancelled": { category: "work.stop_requested", severity: "info", outcome: "allowed", summary: "NEXUS task cancelled by the owner" },
+  // A refused decision changed nothing, but an unauthenticated or non-owner attempt to decide
+  // execution is exactly what the security log exists for.
+  "device.command.owner_refused": { category: "command.unauthorized", severity: "medium", outcome: "denied", summary: "NEXUS owner decision refused" }
 });
 
 export function createNexusAuditRecorder(securityEvents) {
@@ -98,6 +101,7 @@ export function createNexusAuditRecorder(securityEvents) {
     if (!mapping) return { ok: false, code: "unmapped_nexus_audit_event" };
     const taskId = entry?.targetDeviceId ? String(entry.targetDeviceId).slice(0, 160) : null;
     const actorDeviceId = entry?.actorDeviceId ? String(entry.actorDeviceId).slice(0, 160) : null;
+    const reason = entry?.reason ? String(entry.reason).slice(0, 120) : null;
     return securityEvents.record({
       category: mapping.category,
       severity: mapping.severity,
@@ -106,7 +110,7 @@ export function createNexusAuditRecorder(securityEvents) {
       deviceId: actorDeviceId,
       taskId,
       summary: mapping.summary,
-      evidence: JSON.stringify({ event, taskId, actorDeviceId })
+      evidence: JSON.stringify({ event, taskId, actorDeviceId, reason })
     });
   };
 }

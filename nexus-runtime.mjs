@@ -875,10 +875,15 @@ export function registerNexusRuntime(app, {
 
   app.post("/device/command/tasks/:id/approval", async (req, res) => {
     if (!store || !engine || !ready) return unavailable(res);
-    const owner = await authorizeOwner(req);
-    if (!owner.deviceId) return refuseDevice(res, owner.reason);
-    const { deviceId } = owner;
     const taskId = String(req.params?.id || "").trim();
+    const owner = await authorizeOwner(req);
+    if (!owner.deviceId) {
+      // A refused decision changed nothing, but an unauthenticated or non-owner attempt to decide
+      // execution is a security event. Audit is best-effort: a log outage must not change the 403.
+      await recordAudit({ event: "device.command.owner_refused", actorDeviceId: null, targetDeviceId: taskId, reason: owner.reason });
+      return refuseDevice(res, owner.reason);
+    }
+    const { deviceId } = owner;
     const approved = req.body?.approved;
     if (!taskId || typeof approved !== "boolean") {
       return res.status(400).json({ ok: false, error: "taskId and a boolean approved field are required." });
@@ -928,10 +933,13 @@ export function registerNexusRuntime(app, {
 
   app.post("/device/command/tasks/:id/cancel", async (req, res) => {
     if (!store || !engine || !ready) return unavailable(res);
-    const owner = await authorizeOwner(req);
-    if (!owner.deviceId) return refuseDevice(res, owner.reason);
-    const { deviceId } = owner;
     const taskId = String(req.params?.id || "").trim();
+    const owner = await authorizeOwner(req);
+    if (!owner.deviceId) {
+      await recordAudit({ event: "device.command.owner_refused", actorDeviceId: null, targetDeviceId: taskId, reason: owner.reason });
+      return refuseDevice(res, owner.reason);
+    }
+    const { deviceId } = owner;
     if (!taskId) return res.status(400).json({ ok: false, error: "taskId is required." });
     try {
       const task = await store.get(taskId);
