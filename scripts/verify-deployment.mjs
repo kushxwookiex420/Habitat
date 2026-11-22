@@ -97,7 +97,7 @@ export function evaluateDeployment({ health, openapi, routes, expectedCommit = n
   } else if (healthStatus !== 200) {
     status = "UNHEALTHY";
     blockers.push("/health answered HTTP " + healthStatus + ".");
-  } else if (routeList.some(route => route.classification === "missing")) {
+  } else if (mission17Missing.length > 0) {
     status = "OUTDATED";
     blockers.push("Mission 17 routes are absent: " + mission17Missing.join(", ") + ".");
   } else if (expected && match === false) {
