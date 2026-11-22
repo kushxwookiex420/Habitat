@@ -123,3 +123,20 @@ What Mission 14 added that staging will exercise:
 
 The exact owner sequence is unchanged and is reproduced in `docs/HABITAT_ACTIVATION_RUNBOOK.md` §1.
 No production database was contacted, read or modified.
+
+---
+
+## Mission 15 addendum — 2026-11-22
+
+**Staging again not run.** All six staging variables are still absent from this environment, so
+`npm run staging:demo -- write` returned `staging_not_configured` with exit code `2` before any
+network request. Production was not contacted.
+
+Mission 15 added no new migration; `0006_ax_nexus_messages.sql` remains the last one required before
+the staging write. The staging sequence is unchanged and reproduced in
+`docs/HABITAT_ACTIVATION_RUNBOOK.md` §1. Mission 15's activation proof is **local HTTP only**
+(`npm run activation:live`, `release/mission-15-live-activation.json`) and must not be cited as
+staging evidence.
+
+Owner action: create a disposable staging D1 database, apply `0001`–`0006`, supply the six
+`STAGING_*` names in the staging environment only, then run `write` and a separate `verify`.

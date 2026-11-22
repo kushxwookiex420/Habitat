@@ -80,13 +80,15 @@ const REQUIRED_DOCUMENTS = [
   "docs/AGENT_CAPABILITY_MATRIX.md",
   "docs/HABITAT_ACTIVATION_RUNBOOK.md",
   "docs/RENDER_MISSION_14_READINESS.md",
-  "docs/ANDROID_MISSION_14_DEVICE_TEST.md"
+  "docs/ANDROID_MISSION_14_DEVICE_TEST.md",
+  "docs/NEXUS_MISSION_15.md"
 ];
 const REQUIRED_ARTIFACTS = [
   "release/demo-evidence.json",
   "release/perf-mission-12.json",
   "release/mission-13-evidence.json",
-  "release/mission-14-evidence.json"
+  "release/mission-14-evidence.json",
+  "release/mission-15-live-activation.json"
 ];
 const REQUIRED_MIGRATIONS = [
   "0001_habitat_tasks.sql",
