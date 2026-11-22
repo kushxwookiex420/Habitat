@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-11-22T08:00:16.400Z",
+  "generatedAt": "2026-11-22T08:06:06.679Z",
   "origin": "https://habitat-1-szzd.onrender.com",
   "health": {
     "status": 200,
@@ -29,6 +29,7 @@
     "work_stop",
     "agents_revoke"
   ],
+  "mission19Present": false,
   "routes": [
     {
       "key": "work",
