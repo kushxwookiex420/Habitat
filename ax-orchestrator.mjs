@@ -367,6 +367,9 @@ export function createAxOrchestrator({
       costUsd: 0,
       model: config.model,
       prices: config.prices,
+      // Why this provider answered, which ones were skipped and why a fallback happened. Recorded
+      // with the run so a cost or outage question can be answered from history, not from a log.
+      providerDecision: null,
       memory: { used: false, recalled: 0, context: null, citations: [], kinds: {}, error: null },
       memoryUpdate: null,
       error: null,
@@ -550,6 +553,7 @@ export function createAxOrchestrator({
       run.memory.error = "memory_not_configured";
     }
     const result = await planner.plan({ objective: run.objective, adapters: allowedAdapters, memoryContext });
+    run.providerDecision = result.decision || null;
     charge(run, result);
     // Budget is judged before the outcome: a failed call still cost money, and a run that spent
     // past its budget must say so rather than blame the planner.
@@ -773,6 +777,7 @@ export function createAxOrchestrator({
         adapters: allowedAdapters,
         memoryContext: run.memory?.context || null
       });
+      if (correction.decision) run.providerDecision = correction.decision;
       charge(run, correction);
       // Persist the charge immediately: a crash after a paid call must not make it free.
       await persist(run);

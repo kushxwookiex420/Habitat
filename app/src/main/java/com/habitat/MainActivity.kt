@@ -19,11 +19,17 @@ import android.graphics.Color
 import java.util.Locale
 
 class MainActivity : Activity() {
+    companion object {
+        private const val STATE_PAIRING_DIALOG_OPEN = "pairing_dialog_open"
+        private const val PAIRING_BUTTON_TIMEOUT_MS = 30_000L
+    }
+
     private lateinit var input: EditText
     private lateinit var ui: HabitatOverlay
     private lateinit var brain: BrainAdapter
     private lateinit var deviceBridge: AndroidDeviceBridge
     private var deviceBridgeButton: Button? = null
+    private var pairingDialogOpen = false
     private val voiceCode = 700
     private var lastTaskId: String? = null
     private val taskPrefs by lazy { getSharedPreferences("habitat_tasks", MODE_PRIVATE) }
@@ -440,6 +446,15 @@ class MainActivity : Activity() {
             DeviceBridgeScheduler.schedule(this)
         }
         ensureSystemCheckTask()
+        // A system recreation during pairing must not leave the owner without the screen they were
+        // using. The manifest declares configChanges for the common cases; this covers a real
+        // process/Activity recreation and tells the owner why the code has to be re-entered.
+        if (savedInstanceState?.getBoolean(STATE_PAIRING_DIALOG_OPEN) == true) {
+            root.post {
+                showDeviceBridgeDialog()
+                Toast.makeText(this, "Pairing screen restored. Re-enter the code if it was rejected.", Toast.LENGTH_LONG).show()
+            }
+        }
     }
 
     private fun runSystemCheck(taskId: String) {
@@ -651,10 +666,20 @@ class MainActivity : Activity() {
                 pairButton.text = "Connecting…"
                 status.text = "Contacting Habitat securely. Keep this screen open…"
                 code.error = null
+                // Never leave the control disabled forever if the network callback is lost.
+                val resetButton = Runnable {
+                    if (!isFinishing && !isDestroyed && dialog.isShowing && !pairButton.isEnabled) {
+                        pairButton.isEnabled = true
+                        pairButton.text = "Pair phone"
+                        status.text = "No answer from Habitat yet. You can retry; the code stays valid until it expires."
+                    }
+                }
+                pairButton.postDelayed(resetButton, PAIRING_BUTTON_TIMEOUT_MS)
 
                 try {
                     deviceBridge.pair(value) { success, reason ->
                         runOnUiThread {
+                            pairButton.removeCallbacks(resetButton)
                             // Activity can be recreated while the request is in flight.
                             if (isFinishing || isDestroyed || !dialog.isShowing) return@runOnUiThread
                             try {
@@ -697,7 +722,14 @@ class MainActivity : Activity() {
                 dialog.dismiss()
             }
         }
+        pairingDialogOpen = true
+        dialog.setOnDismissListener { pairingDialogOpen = false }
         dialog.show()
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        outState.putBoolean(STATE_PAIRING_DIALOG_OPEN, pairingDialogOpen)
     }
 
     private fun showTikTokPublisherDialog() {

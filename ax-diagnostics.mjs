@@ -66,6 +66,9 @@ export function createAxDiagnostics({
   presence = null,
   deviceBridge = null,
   sandbox = null,
+  // Optional Mission 10 capability report (objectives, agents, incidents). It is awaited because
+  // those counts come from durable stores; a failure is reported, never replaced with zeros.
+  capabilities = null,
   timeoutMs = DEFAULT_PROBE_TIMEOUT_MS,
   now = () => new Date().toISOString()
 } = {}) {
@@ -127,6 +130,15 @@ export function createAxDiagnostics({
       }, { timeoutMs })
     ]);
 
+    let capabilityReport = null;
+    if (capabilities) {
+      try {
+        capabilityReport = typeof capabilities === "function" ? await capabilities() : capabilities;
+      } catch (error) {
+        capabilityReport = { status: "unavailable", detail: safeMessage(error?.message) || "capability_probe_failed" };
+      }
+    }
+
     const config = resolve(providerConfig);
     const agent = resolve(orchestrator);
     const providers = config?.summary
@@ -184,6 +196,7 @@ export function createAxDiagnostics({
         ? { ...notificationProbe.value, channels: ["inbox"], externalTransport: false }
         : { status: "unavailable", detail: notificationProbe.code, channels: ["inbox"], externalTransport: false },
       deviceBridge: deviceProbe.ok ? deviceProbe.value : { status: "unavailable", detail: deviceProbe.code },
+      capabilities: capabilityReport || { status: "not_configured" },
       secretsExposed: false
     };
   };

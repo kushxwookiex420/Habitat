@@ -178,6 +178,28 @@ export function createD1DeviceCommandRepository({ accountId, databaseId, apiToke
       const result = await query("SELECT record_json FROM habitat_device_commands WHERE id = ? LIMIT 1", [id]);
       return decode(result[0]?.results?.[0] || {});
     },
+    /** Recent command receipts for one device. Read-only; used to derive states honestly. */
+    async listCommands({ deviceId = null, limit = 20 } = {}) {
+      const safeLimit = Math.max(1, Math.min(50, Math.floor(Number(limit) || 20)));
+      const result = deviceId
+        ? await query("SELECT record_json FROM habitat_device_commands WHERE device_id = ? ORDER BY created_at DESC LIMIT ?", [String(deviceId), safeLimit])
+        : await query("SELECT record_json FROM habitat_device_commands ORDER BY created_at DESC LIMIT ?", [safeLimit]);
+      return (result[0]?.results || []).map(decode).filter(Boolean);
+    },
+    /** Latest pairing row for a device. The code hash is never returned. */
+    async latestPairing({ deviceId = null } = {}) {
+      const result = deviceId
+        ? await query("SELECT device_id, created_at, expires_at, consumed_at FROM habitat_device_pairings WHERE device_id = ? ORDER BY created_at DESC LIMIT 1", [String(deviceId)])
+        : await query("SELECT device_id, created_at, expires_at, consumed_at FROM habitat_device_pairings ORDER BY created_at DESC LIMIT 1");
+      const row = result[0]?.results?.[0];
+      if (!row) return null;
+      return {
+        deviceId: row.device_id,
+        createdAt: row.created_at,
+        expiresAt: row.expires_at,
+        consumedAt: row.consumed_at || null
+      };
+    },
     async healthCheck() {
       await query("SELECT 1 AS ok");
       return { ok: true, adapter: "cloudflare-d1", durable: true };

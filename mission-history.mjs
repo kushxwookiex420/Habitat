@@ -41,6 +41,8 @@ export function missionFromRun(run, notifications = []) {
     code: run.code || null,
     error: run.error ? clean(run.error, 400) : null,
     model: run.model || null,
+    // The planner's decision record: selected provider, skipped providers and fallback reasons.
+    providerDecision: run.providerDecision || null,
     costUsd: Number(run.costUsd || 0),
     usage: run.usage || { input_tokens: 0, output_tokens: 0 },
     createdAt: run.createdAt || null,

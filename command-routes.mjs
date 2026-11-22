@@ -5,6 +5,8 @@ import { createUniversalCommandEngine } from "./universal-command-engine.mjs";
 import { describeRoles } from "./agent-roles.mjs";
 import { applyMemoryImport, deriveMemoryCandidates } from "./ax-memory-import.mjs";
 import { buildMissionHistory, missionSummary } from "./mission-history.mjs";
+import { memoryInsights } from "./ax-memory-insights.mjs";
+import { auditPairingLifecycle, capabilityManifest, deriveDeviceState, pairingGuidance } from "./ax-device-capabilities.mjs";
 
 /**
  * The universal command API.
@@ -21,7 +23,13 @@ const STATUS_BY_CODE = Object.freeze({
   not_found: 404,
   invalid_transition: 409,
   approval_pending: 409,
-  attempt_limit_reached: 409
+  attempt_limit_reached: 409,
+  approval_required: 409,
+  verification_required: 409,
+  objective_conflict: 409,
+  budget_exhausted: 409,
+  objective_terminal: 409,
+  key_reused: 409
 });
 
 function bearer(req) {
@@ -110,7 +118,16 @@ export function registerUniversalCommandRoutes(app, {
   // Optional notification service and diagnostics/producer views supplied by the mounted runtime.
   notificationProvider = null,
   diagnosticsProvider = null,
-  providerStatusProvider = null
+  providerStatusProvider = null,
+  // Mission 10 capabilities. Each is a provider so a surface that is not mounted answers 503
+  // instead of inventing state. None of these owns a second task store.
+  objectiveProvider = null,
+  agentProvider = null,
+  recoveryProvider = null,
+  incidentProvider = null,
+  deviceStateProvider = null,
+  circuitProvider = null,
+  budgetProvider = null
 } = {}) {
   // Two credentials, two permission sets. The bridge token is device-capable and predates this
   // work. The command token may only reach /ax/command, and it can never satisfy an owner action.
@@ -290,6 +307,25 @@ export function registerUniversalCommandRoutes(app, {
       return res.status(502).json({ ok: false, error: "The command engine could not complete the request." });
     }
   };
+
+  // Capabilities that own their own durable store (objectives, agents, incidents) do not need the
+  // command-task table to be initialised, but they must still fail closed with a typed answer.
+  const serviceGuard = fn => async (req, res) => {
+    try {
+      return await fn(req, res);
+    } catch (error) {
+      console.error("COMMAND_SERVICE_ROUTE_FAILED", String(error?.message || error));
+      return res.status(502).json({ ok: false, error: "The capability could not complete the request." });
+    }
+  };
+
+  function resolveService(provider) {
+    try {
+      return typeof provider === "function" ? provider() : provider;
+    } catch {
+      return null;
+    }
+  }
 
   // Register command routes through a wrapper that stamps the envelope on every reply, including
   // auth and storage failures written by requireAx and ready().
@@ -827,12 +863,20 @@ export function registerUniversalCommandRoutes(app, {
     } catch {
       providers = null;
     }
+    const breaker = resolveService(circuitProvider);
+    const budget = resolveService(budgetProvider);
     res.json({
       ok: true,
       providers: providers || { enabled: false, code: "provider_not_configured", primary: null, fallbacks: [] },
+      circuit: breaker && typeof breaker.snapshot === "function" ? breaker.snapshot() : [],
+      budget: budget || null,
       health: {
         checked: false,
         note: "Configuration only. This endpoint makes no model call, so it cannot report an account as healthy."
+      },
+      decisions: {
+        recorded: true,
+        note: "A run's planner result carries a decision record naming the provider that answered, every skipped provider and why fallback occurred."
       }
     });
   });
@@ -843,6 +887,351 @@ export function registerUniversalCommandRoutes(app, {
     }
     const diagnostics = await diagnosticsProvider();
     res.json({ ok: true, diagnostics });
+  }));
+
+  // ------------------------------------------------------------------ Mission 10 capabilities
+  //
+  // Objectives are the durable mission lifecycle; agents are real bounded handlers; recovery is
+  // read-only scanning plus allowlisted reversible repairs; device state is derived from durable
+  // rows. Every one of these answers 503 when its surface is not mounted, and none of them can mark
+  // work complete without evidence.
+  const objectives = () => resolveService(objectiveProvider);
+  const agents = () => resolveService(agentProvider);
+  const recoveryService = () => resolveService(recoveryProvider);
+  const incidentService = () => resolveService(incidentProvider);
+  const deviceSnapshot = () => resolveService(deviceStateProvider);
+
+  function capabilityUnavailable(res, code, message) {
+    res.status(503).json({ ok: false, code, error: message });
+  }
+
+  function objectiveReply(res, outcome, created = false) {
+    if (outcome?.ok) return res.status(created ? 201 : 200).json(outcome);
+    const status = STATUS_BY_CODE[outcome?.code] || 400;
+    return res.status(status).json({ ok: false, code: outcome?.code || "invalid_request", error: outcome?.error || "The objective could not be updated." });
+  }
+
+  route.post("/ax/command/objectives", requireAx, serviceGuard(async (req, res) => {
+    const service = objectives();
+    if (!service) return capabilityUnavailable(res, "objectives_not_configured", "Durable objectives are not mounted on this service.");
+    const outcome = await service.create({
+      objective: req.body?.objective,
+      requestedBy: "ax",
+      key: req.body?.key ?? null,
+      criteria: req.body?.criteria,
+      budgetUsd: req.body?.budgetUsd,
+      deadlineAt: req.body?.deadlineAt ?? null,
+      priority: req.body?.priority || "normal"
+    });
+    return objectiveReply(res, outcome, !outcome.replayed);
+  }));
+
+  route.get("/ax/command/objectives", requireAx, serviceGuard(async (req, res) => {
+    const service = objectives();
+    if (!service) return capabilityUnavailable(res, "objectives_not_configured", "Durable objectives are not mounted on this service.");
+    const status = req.query?.status || null;
+    const list = await service.list({ status, limit: req.query?.limit });
+    const summary = list.reduce((counts, item) => {
+      counts[item.status] = (counts[item.status] || 0) + 1;
+      return counts;
+    }, {});
+    res.json({ ok: true, count: list.length, byStatus: summary, objectives: list.map(item => service.summary(item)) });
+  }));
+
+  route.get("/ax/command/objectives/:id", requireAx, serviceGuard(async (req, res) => {
+    const service = objectives();
+    if (!service) return capabilityUnavailable(res, "objectives_not_configured", "Durable objectives are not mounted on this service.");
+    const objective = await service.get(req.params.id);
+    if (!objective) return reply(res, { ok: false, code: "not_found", error: "No objective with that id." });
+    res.json({ ok: true, objective, summary: service.summary(objective) });
+  }));
+
+  route.post("/ax/command/objectives/:id/understand", requireAx, serviceGuard(async (req, res) => {
+    const service = objectives();
+    if (!service) return capabilityUnavailable(res, "objectives_not_configured", "Durable objectives are not mounted on this service.");
+    objectiveReply(res, await service.understand(req.params.id, {
+      summary: req.body?.summary,
+      constraints: req.body?.constraints,
+      missingInformation: req.body?.missingInformation,
+      questions: req.body?.questions,
+      by: "ax"
+    }));
+  }));
+
+  route.post("/ax/command/objectives/:id/plan", requireAx, serviceGuard(async (req, res) => {
+    const service = objectives();
+    if (!service) return capabilityUnavailable(res, "objectives_not_configured", "Durable objectives are not mounted on this service.");
+    objectiveReply(res, await service.plan(req.params.id, {
+      steps: req.body?.steps,
+      provider: req.body?.provider ?? null,
+      estimatedCostUsd: req.body?.estimatedCostUsd,
+      risk: req.body?.risk,
+      permissions: req.body?.permissions,
+      by: "ax"
+    }));
+  }));
+
+  route.post("/ax/command/objectives/:id/request-approval", requireAx, serviceGuard(async (req, res) => {
+    const service = objectives();
+    if (!service) return capabilityUnavailable(res, "objectives_not_configured", "Durable objectives are not mounted on this service.");
+    objectiveReply(res, await service.requestApproval(req.params.id, { reason: req.body?.reason || null, by: "ax" }));
+  }));
+
+  route.post("/ax/command/objectives/:id/authorize", requireAx, serviceGuard(async (req, res) => {
+    const deviceId = await authorizeOwnerAction(req, res, "Objective authorization");
+    if (!deviceId) return undefined;
+    const service = objectives();
+    if (!service) return capabilityUnavailable(res, "objectives_not_configured", "Durable objectives are not mounted on this service.");
+    // The proof is derived from the owner device and the objective, so a double tap is an idempotent
+    // replay rather than a second authorization record.
+    const outcome = await service.authorize(req.params.id, {
+      approvalId: req.body?.approvalId || "owner-approval:" + req.params.id + ":" + deviceId,
+      by: "owner:" + deviceId,
+      budgetUsd: req.body?.budgetUsd ?? null
+    });
+    if (outcome?.ok !== false) {
+      await recordAudit({ event: "objective.authorized", actorDeviceId: deviceId, targetDeviceId: req.params.id });
+    }
+    objectiveReply(res, outcome);
+  }));
+
+  route.post("/ax/command/objectives/:id/deny", requireAx, serviceGuard(async (req, res) => {
+    const deviceId = await authorizeOwnerAction(req, res, "Objective denial");
+    if (!deviceId) return undefined;
+    const service = objectives();
+    if (!service) return capabilityUnavailable(res, "objectives_not_configured", "Durable objectives are not mounted on this service.");
+    const outcome = await service.deny(req.params.id, { by: "owner:" + deviceId, reason: req.body?.reason || null });
+    if (outcome?.ok !== false) {
+      await recordAudit({ event: "objective.denied", actorDeviceId: deviceId, targetDeviceId: req.params.id });
+    }
+    objectiveReply(res, outcome);
+  }));
+
+  route.post("/ax/command/objectives/:id/start", requireAx, serviceGuard(async (req, res) => {
+    const service = objectives();
+    if (!service) return capabilityUnavailable(res, "objectives_not_configured", "Durable objectives are not mounted on this service.");
+    objectiveReply(res, await service.start(req.params.id, { by: "ax" }));
+  }));
+
+  route.post("/ax/command/objectives/:id/tasks", requireAx, serviceGuard(async (req, res) => {
+    const service = objectives();
+    if (!service) return capabilityUnavailable(res, "objectives_not_configured", "Durable objectives are not mounted on this service.");
+    objectiveReply(res, await service.attachTask(req.params.id, {
+      taskId: req.body?.taskId,
+      agent: req.body?.agent ?? null,
+      step: req.body?.step ?? null,
+      by: "ax"
+    }));
+  }));
+
+  route.post("/ax/command/objectives/:id/evidence", requireAx, serviceGuard(async (req, res) => {
+    const service = objectives();
+    if (!service) return capabilityUnavailable(res, "objectives_not_configured", "Durable objectives are not mounted on this service.");
+    objectiveReply(res, await service.addEvidence(req.params.id, { items: req.body?.items, by: "ax" }));
+  }));
+
+  route.post("/ax/command/objectives/:id/checkpoint", requireAx, serviceGuard(async (req, res) => {
+    const service = objectives();
+    if (!service) return capabilityUnavailable(res, "objectives_not_configured", "Durable objectives are not mounted on this service.");
+    objectiveReply(res, await service.checkpoint(req.params.id, { note: req.body?.note, taskIds: req.body?.taskIds, by: "ax" }));
+  }));
+
+  route.post("/ax/command/objectives/:id/verify", requireAx, serviceGuard(async (req, res) => {
+    const service = objectives();
+    if (!service) return capabilityUnavailable(res, "objectives_not_configured", "Durable objectives are not mounted on this service.");
+    const current = await service.get(req.params.id);
+    if (!current) return reply(res, { ok: false, code: "not_found", error: "No objective with that id." });
+    if (current.status === "executing") {
+      const moved = await service.transition(req.params.id, "verifying", { by: "ax", reason: "evidence verification started" });
+      if (moved.ok !== true) return objectiveReply(res, moved);
+    }
+    objectiveReply(res, await service.verify(req.params.id, { checks: req.body?.checks, by: "ax" }));
+  }));
+
+  route.post("/ax/command/objectives/:id/complete", requireAx, serviceGuard(async (req, res) => {
+    const service = objectives();
+    if (!service) return capabilityUnavailable(res, "objectives_not_configured", "Durable objectives are not mounted on this service.");
+    objectiveReply(res, await service.complete(req.params.id, { summary: req.body?.summary || null, by: "ax" }));
+  }));
+
+  route.post("/ax/command/objectives/:id/fail", requireAx, serviceGuard(async (req, res) => {
+    const service = objectives();
+    if (!service) return capabilityUnavailable(res, "objectives_not_configured", "Durable objectives are not mounted on this service.");
+    objectiveReply(res, await service.fail(req.params.id, { error: req.body?.error, code: req.body?.code || null, by: "ax" }));
+  }));
+
+  route.post("/ax/command/objectives/:id/cancel", requireAx, serviceGuard(async (req, res) => {
+    const deviceId = await authorizeOwnerAction(req, res, "Objective cancellation");
+    if (!deviceId) return undefined;
+    const service = objectives();
+    if (!service) return capabilityUnavailable(res, "objectives_not_configured", "Durable objectives are not mounted on this service.");
+    const outcome = await service.cancel(req.params.id, { by: "owner:" + deviceId, reason: req.body?.reason || "cancelled by owner" });
+    if (outcome?.ok !== false) {
+      await recordAudit({ event: "objective.cancelled", actorDeviceId: deviceId, targetDeviceId: req.params.id });
+    }
+    objectiveReply(res, outcome);
+  }));
+
+  route.post("/ax/command/objectives/:id/recover", requireAx, serviceGuard(async (req, res) => {
+    const service = objectives();
+    if (!service) return capabilityUnavailable(res, "objectives_not_configured", "Durable objectives are not mounted on this service.");
+    objectiveReply(res, await service.recover(req.params.id, { by: "ax", reason: req.body?.reason || "recovered after interruption" }));
+  }));
+
+  // ------------------------------------------------------------------------ specialized agents
+  // The objective drives the existing Ax run path. This is the integration point between the
+  // durable lifecycle and the task engine: one dispatch, one deterministic run key, tasks attached
+  // to the objective. It never completes the objective; acceptance checks still decide that.
+  route.post("/ax/command/objectives/:id/dispatch", requireAx, serviceGuard(async (req, res) => {
+    const service = objectives();
+    if (!service) return capabilityUnavailable(res, "objectives_not_configured", "Durable objectives are not mounted on this service.");
+    const orchestrator = orchestratorUnavailable(res);
+    if (!orchestrator) return undefined;
+    const objective = await service.get(req.params.id);
+    if (!objective) return reply(res, { ok: false, code: "not_found", error: "No objective with that id." });
+    if (objective.status !== "executing") {
+      return objectiveReply(res, { ok: false, code: "invalid_transition", error: "Start the objective before dispatching work.", from: objective.status });
+    }
+    const outcome = await orchestrator.runObjective({
+      objective: objective.objective,
+      requestedBy: "ax",
+      // Deterministic per objective, so a retried dispatch resumes the same run instead of forking.
+      runKey: "objective:" + objective.id
+    });
+    const run = outcome?.run || null;
+    if (run) {
+      for (const step of run.steps || []) {
+        if (step.taskId) await service.attachTask(objective.id, { taskId: step.taskId, agent: step.agent || null, step: step.index });
+      }
+      if (Array.isArray(run.evidence) && run.evidence.length) {
+        await service.addEvidence(objective.id, { items: run.evidence.map(line => ({ summary: line, source: "run:" + run.id })) });
+      }
+      await service.checkpoint(objective.id, {
+        note: "Ax run " + run.id + " dispatched from this objective",
+        taskIds: (run.steps || []).map(step => step.taskId).filter(Boolean)
+      });
+    }
+    res.status(outcome?.code === "store_unavailable" ? 503 : 200).json({
+      ok: outcome?.ok === true,
+      code: outcome?.code || null,
+      run,
+      objective: await service.get(objective.id)
+    });
+  }));
+
+  route.get("/ax/command/agents", requireAx, serviceGuard(async (_req, res) => {
+    const runtime = agents();
+    if (!runtime) return capabilityUnavailable(res, "agents_not_configured", "The agent runtime is not mounted on this service.");
+    res.json({ ok: true, agents: runtime.capabilityMatrix(), limits: runtime.limits, delegations: runtime.delegations() });
+  }));
+
+  route.post("/ax/command/agents/select", requireAx, serviceGuard(async (req, res) => {
+    const runtime = agents();
+    if (!runtime) return capabilityUnavailable(res, "agents_not_configured", "The agent runtime is not mounted on this service.");
+    const objective = String(req.body?.objective || "").trim();
+    if (!objective) return reply(res, { ok: false, code: "invalid_objective", error: "An objective is required." });
+    res.json({ ok: true, selection: runtime.selectAgent(objective) });
+  }));
+
+  route.post("/ax/command/agents/delegate", requireAx, serviceGuard(async (req, res) => {
+    const runtime = agents();
+    if (!runtime) return capabilityUnavailable(res, "agents_not_configured", "The agent runtime is not mounted on this service.");
+    const outcome = await runtime.delegateAndReview({
+      objective: req.body?.objective,
+      role: req.body?.role || null,
+      depth: Math.max(0, Math.min(3, Number(req.body?.depth) || 0)),
+      chain: Array.isArray(req.body?.chain) ? req.body.chain.slice(0, 8) : [],
+      budgetUsd: req.body?.budgetUsd
+    });
+    res.status(outcome.envelope?.code === "unknown_agent" ? 400 : 200).json({ ok: outcome.ok === true, ...outcome });
+  }));
+
+  // --------------------------------------------------------------- phone state and capabilities
+  async function readDeviceSnapshot(res) {
+    // The provider is awaited, not invoked through resolveService: that helper calls synchronous
+    // factories, and this one returns a promise from an async store read.
+    const provider = typeof deviceStateProvider === "function" ? deviceStateProvider : null;
+    if (!provider) {
+      capabilityUnavailable(res, "device_state_not_configured", "Phone state is not mounted on this service.");
+      return null;
+    }
+    let snapshot;
+    try {
+      snapshot = await provider();
+    } catch (error) {
+      console.error("DEVICE_STATE_PROBE_FAILED", String(error?.message || error));
+      capabilityUnavailable(res, "device_state_unavailable", "Phone state could not be read.");
+      return null;
+    }
+    if (!snapshot || snapshot.ok === false) {
+      capabilityUnavailable(res, "device_state_unavailable", snapshot?.error || "Phone state could not be read.");
+      return null;
+    }
+    return snapshot;
+  }
+
+  route.get("/ax/command/device/capabilities", requireAx, serviceGuard(async (_req, res) => {
+    const snapshot = await readDeviceSnapshot(res);
+    if (!snapshot) return undefined;
+    res.json({ ok: true, capabilities: capabilityManifest({ device: snapshot.device }), manifestOnly: !snapshot.device });
+  }));
+
+  route.get("/ax/command/device/state", requireAx, serviceGuard(async (_req, res) => {
+    const snapshot = await readDeviceSnapshot(res);
+    if (!snapshot) return undefined;
+    const state = deriveDeviceState({ device: snapshot.device, commands: snapshot.commands || [], now: Date.now() });
+    const pairing = snapshot.pairing ? auditPairingLifecycle({ pairing: snapshot.pairing, device: snapshot.device, now: Date.now() }) : null;
+    res.json({
+      ok: true,
+      state,
+      pairing,
+      guidance: pairing?.code ? pairingGuidance(pairing.code) : null
+    });
+  }));
+
+  route.get("/ax/command/device/pairing/audit", requireAx, serviceGuard(async (_req, res) => {
+    const snapshot = await readDeviceSnapshot(res);
+    if (!snapshot) return undefined;
+    const audit = auditPairingLifecycle({ pairing: snapshot.pairing || null, device: snapshot.device || null, now: Date.now() });
+    res.json({ ok: true, audit, guidance: pairingGuidance(audit.code) });
+  }));
+
+  // ------------------------------------------------------------ monitoring and safe recovery
+  route.get("/ax/command/recovery/incidents", requireAx, serviceGuard(async (req, res) => {
+    const service = incidentService();
+    if (!service) return capabilityUnavailable(res, "incidents_not_configured", "Incident history is not mounted on this service.");
+    const listed = await service.list({ status: req.query?.status || "open", limit: req.query?.limit });
+    if (listed.ok === false) return capabilityUnavailable(res, listed.code, "Incident history could not be read.");
+    res.json({ ok: true, ...listed });
+  }));
+
+  route.post("/ax/command/recovery/scan", requireAx, serviceGuard(async (_req, res) => {
+    const service = recoveryService();
+    if (!service) return capabilityUnavailable(res, "recovery_not_configured", "Self-monitoring is not mounted on this service.");
+    const report = await service.scanAndRecord();
+    res.json({ ok: true, report });
+  }));
+
+  route.post("/ax/command/recovery/incidents/:id/recover", requireAx, serviceGuard(async (req, res) => {
+    const deviceId = await authorizeOwnerAction(req, res, "Incident recovery");
+    if (!deviceId) return undefined;
+    const service = recoveryService();
+    if (!service) return capabilityUnavailable(res, "recovery_not_configured", "Self-monitoring is not mounted on this service.");
+    const outcome = await service.recover(req.params.id, { action: req.body?.action || null, by: "owner:" + deviceId });
+    if (outcome?.ok !== false) {
+      await recordAudit({ event: "incident.recovered", actorDeviceId: deviceId, targetDeviceId: req.params.id, action: req.body?.action || null });
+    }
+    res.status(outcome.ok ? 200 : STATUS_BY_CODE[outcome.code] || 400).json(outcome);
+  }));
+
+  // ------------------------------------------------------------------ memory intelligence
+  route.get("/ax/command/memory/insights", requireAx, serviceGuard(async (req, res) => {
+    const repository = memoryRepository();
+    if (!repository) return memoryUnavailable(res);
+    const project = projectOf(req);
+    const entries = await repository.list({ project, limit: 200 });
+    const insights = memoryInsights({ entries, objective: String(req.query?.q || ""), now: Date.now() });
+    res.json({ ok: true, project, insights });
   }));
 
   return { engine, registry: registryInstance, store: () => store };

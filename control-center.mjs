@@ -18,7 +18,7 @@ const STYLES = `
 :root{color-scheme:dark;--bg:#04070e;--panel:rgba(10,20,32,.82);--panel2:rgba(13,26,41,.92);--line:rgba(67,227,208,.22);--teal:#43e3d0;--teal2:#8ff6ea;--violet:#9d7bff;--text:#e9f7f8;--muted:#9fb6c4;--warn:#ffc861;--bad:#ff7a85;--good:#57e39b}
 *{box-sizing:border-box}
 html,body{margin:0;min-height:100%}
-body{background:var(--bg);color:var(--text);font:16px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;-webkit-font-smoothing:antialiased;padding-bottom:calc(150px + env(safe-area-inset-bottom))}
+body{background:var(--bg);color:var(--text);font:16px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;-webkit-font-smoothing:antialiased;padding-bottom:calc(196px + env(safe-area-inset-bottom))}
 #brain{position:fixed;inset:0;width:100%;height:100%;z-index:0;opacity:.92;pointer-events:none}
 body::before{content:"";position:fixed;inset:0;z-index:0;pointer-events:none;background:radial-gradient(120% 80% at 50% 0%,rgba(24,58,74,.5) 0,transparent 60%),radial-gradient(80% 60% at 100% 100%,rgba(80,50,140,.28) 0,transparent 70%)}
 header,main{position:relative;z-index:1}
@@ -65,8 +65,8 @@ textarea{min-height:96px;resize:vertical}
 .error{border:1px solid rgba(255,122,133,.35);background:rgba(255,122,133,.08);border-radius:13px;padding:13px;font-size:13.5px;color:#ffd9dd}
 .line{height:1px;background:rgba(255,255,255,.08);margin:12px 0}
 details summary{cursor:pointer;color:var(--teal2);font-size:13.5px;padding:6px 0}
-nav{position:fixed;left:0;right:0;bottom:0;z-index:5;display:grid;grid-template-columns:repeat(4,1fr);grid-auto-rows:auto;gap:2px;background:rgba(5,11,18,.96);border-top:1px solid var(--line);padding:7px 6px calc(7px + env(safe-area-inset-bottom));backdrop-filter:blur(18px)}
-nav button{appearance:none;background:transparent;border:0;color:var(--muted);padding:5px 2px;border-radius:11px;font-size:11.5px;font-weight:700;letter-spacing:.02em;min-height:56px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;cursor:pointer}
+nav{position:fixed;left:0;right:0;bottom:0;z-index:5;display:grid;grid-template-columns:repeat(5,1fr);grid-auto-rows:auto;gap:2px;background:rgba(5,11,18,.96);border-top:1px solid var(--line);padding:7px 6px calc(7px + env(safe-area-inset-bottom));backdrop-filter:blur(18px)}
+nav button{appearance:none;background:transparent;border:0;color:var(--muted);padding:4px 2px;border-radius:11px;font-size:10.5px;font-weight:700;letter-spacing:.02em;min-height:52px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;cursor:pointer}
 nav button[aria-selected="true"]{color:var(--teal2);background:rgba(67,227,208,.1)}
 nav svg{width:20px;height:20px;stroke:currentColor;fill:none;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
 #gate{position:fixed;inset:0;z-index:20;display:grid;place-items:center;padding:20px;background:rgba(3,7,12,.88);backdrop-filter:blur(8px)}
@@ -74,7 +74,7 @@ nav svg{width:20px;height:20px;stroke:currentColor;fill:none;stroke-width:1.7;st
 #gate.hidden{display:none}
 #toast{position:fixed;left:16px;right:16px;bottom:calc(158px + env(safe-area-inset-bottom));z-index:30;background:rgba(10,25,36,.96);border:1px solid var(--line);border-radius:13px;padding:12px 14px;font-size:13.5px;color:var(--text);transform:translateY(140%);transition:transform .22s ease}
 #toast.show{transform:none}
-@media(min-width:720px){nav{grid-template-columns:repeat(7,1fr);max-width:760px;margin:0 auto;border-radius:18px 18px 0 0;border:1px solid var(--line)}body{padding-bottom:96px}}
+@media(min-width:720px){nav{grid-template-columns:repeat(10,1fr);max-width:900px;margin:0 auto;border-radius:18px 18px 0 0;border:1px solid var(--line)}body{padding-bottom:96px}}
 @media(prefers-reduced-motion:reduce){#brain{opacity:.35}}
 `;
 
@@ -85,6 +85,9 @@ const ICONS = {
   memory: '<ellipse cx="12" cy="6" rx="7" ry="3"/><path d="M5 6v12c0 1.7 3.1 3 7 3s7-1.3 7-3V6"/>',
   approvals: '<path d="M5 13l4 4 10-11"/>',
   missions: '<path d="M4 19V5m0 14h16M8 15V9m4 6V7m4 8v-4"/>',
+  agents: '<circle cx="7" cy="7" r="2.4"/><circle cx="17" cy="7" r="2.4"/><circle cx="12" cy="17" r="2.4"/><path d="M9 8.4l2 6M15 8.4l-2 6M9.4 7h5.2"/>',
+  device: '<rect x="7" y="3" width="10" height="18" rx="2.5"/><path d="M10.5 18h3"/>',
+  recovery: '<path d="M20 12a8 8 0 1 1-2.4-5.7"/><path d="M20 4v5h-5"/>',
   health: '<path d="M3 12h4l2-5 3 10 2-5h7"/>'
 };
 
@@ -107,11 +110,13 @@ export function renderControlCenter({ version = "unknown" } = {}) {
     "<style>" + STYLES + "</style></head><body>" +
     '<canvas id="brain" aria-hidden="true"></canvas>' +
     "<header><div class=\"brand\"><span class=\"mark\">H</span><span>HABITAT · NEXUS</span></div>" +
+    '<span class="chip" id="activity" title="Active verified-state work. Idle means no unsettled mission was observed."><span class="dot" id="activity-dot"></span><span id="activity-text">idle</span></span>' +
     '<span class="chip" id="conn"><span class="dot" id="conn-dot"></span><span id="conn-text">Not connected</span></span></header>' +
     '<main><h1>Control center</h1><p class="sub" id="panel-sub">Live operational state. Nothing here is simulated.</p><div id="panel" role="tabpanel"></div></main>' +
     '<nav role="tablist" aria-label="Control center sections">' +
     navButton("chat", "Chat") + navButton("workers", "Workers") + navButton("tasks", "Tasks") + navButton("memory", "Memory") +
-    navButton("approvals", "Approvals") + navButton("missions", "Missions") + navButton("health", "Health") +
+    navButton("approvals", "Approvals") + navButton("missions", "Missions") + navButton("agents", "Agents") +
+    navButton("device", "Device") + navButton("recovery", "Recovery") + navButton("health", "Health") +
     "</nav>" +
     '<div id="gate"><div class="sheet" role="dialog" aria-modal="true" aria-labelledby="gate-title">' +
     '<h2 id="gate-title" style="margin:0 0 6px;font-size:18px">Connect to Ax</h2>' +
@@ -136,7 +141,7 @@ function clientApp() {
   const TOKEN_KEY = "habitat.ax.token";
   const OWNER_ID_KEY = "habitat.owner.id";
   const OWNER_TOKEN_KEY = "habitat.owner.token";
-  const TABS = ["chat", "workers", "tasks", "memory", "approvals", "missions", "health"];
+  const TABS = ["chat", "workers", "tasks", "memory", "approvals", "missions", "agents", "device", "recovery", "health"];
   const state = { tab: "chat", timer: null, busy: false };
 
   const $ = id => document.getElementById(id);
@@ -213,6 +218,19 @@ function clientApp() {
     $("conn-text").textContent = text;
   }
 
+  /**
+   * The brain's activity follows observed runs, never a timer. With no unsettled run it says idle;
+   * the visual itself keeps a slow idle rotation, which is a visual, not a claim of work.
+   */
+  function setActivity(activeRuns, detail) {
+    const count = Math.max(0, Number(activeRuns) || 0);
+    window.__habitatActivity = { level: Math.min(1, count / 3), activeRuns: count, detail: detail || null, at: Date.now() };
+    const text = $("activity-text");
+    if (text) text.textContent = count ? count + " active" : "idle";
+    const dot = $("activity-dot");
+    if (dot) dot.className = "dot " + (count ? "ok" : "");
+  }
+
   function statusClass(value) {
     const text = String(value || "").toLowerCase();
     if (["ok", "ready", "reachable", "available", "completed", "verified", "delivered", "true", "running"].includes(text)) return "good";
@@ -262,6 +280,9 @@ function clientApp() {
       memory: "Approved memory with provenance, confidence and history.",
       approvals: "Owner-gated actions waiting for authorization.",
       missions: "Reconstructed from durable run records and notifications.",
+      agents: "Capability manifests: implemented and available are different claims.",
+      device: "Topology and pairing state of the paired phone, with each state derived separately.",
+      recovery: "Durable incidents and the reversible repairs the owner can authorize.",
       health: "Probe results, provider configuration and subsystem status."
     };
     sub.textContent = labels[state.tab] || "";
@@ -271,6 +292,7 @@ function clientApp() {
     } catch (error) {
       panel.replaceChildren(errorCard(error));
       setConnection("bad", error && error.status === 401 ? "Token refused" : "Degraded");
+      setActivity(0, "state unavailable");
     }
     const periodic = state.tab !== "chat" && state.tab !== "memory";
     if (periodic && token()) state.timer = setInterval(() => { if (!state.busy) render(); }, 15000);
@@ -312,7 +334,8 @@ function clientApp() {
     const target = card || panel.querySelector(".card:last-child");
     if (!target) return;
     try {
-      const data = await api("/ax/command/runs?limit=8");
+              const data = await api("/ax/command/runs?limit=8");
+        setActivity((data.runs || []).filter(run => run && !run.settled).length);
       target.replaceChildren(el("h2", { text: "Recent runs" }), missionList(data.runs || [], true));
     } catch (error) {
       target.replaceChildren(el("h2", { text: "Recent runs" }), errorCard(error));
@@ -453,6 +476,22 @@ function clientApp() {
       row("Active entries", String(stats.stats && stats.stats.active || 0)),
       row("Deleted entries", String(stats.stats && stats.stats.deleted || 0)),
       row("Kinds in use", String(Object.keys((stats.stats && stats.stats.byKind) || {}).length)));
+    let insightsCard;
+    try {
+      const insights = await api("/ax/command/memory/insights?q=" + encodeURIComponent("project decisions"));
+      const report = insights.insights || {};
+      insightsCard = el("div", { class: "card" }, el("h2", { text: "Memory health" }),
+        row("Records assessed", String(report.total || 0)),
+        row("Stale (review due)", String((report.stale || []).length), (report.stale || []).length ? "warn" : "good"),
+        row("Expiring within 7 days", String((report.expiringSoon || []).length)),
+        row("Possible conflicts", String((report.conflicts || []).length), (report.conflicts || []).length ? "bad" : "good"));
+      for (const conflict of (report.conflicts || []).slice(0, 3)) {
+        insightsCard.appendChild(el("p", { class: "small", text: conflict.kind + ": " + conflict.a.key + " vs " + conflict.b.key + " — owner review required" }));
+      }
+      insightsCard.appendChild(el("p", { class: "small muted", text: "Lexical ranking only. Conflicts are surfaced, never overwritten; an expiry date is a review reminder, not an automatic deletion." }));
+    } catch (error) {
+      insightsCard = el("div", { class: "card" }, el("h2", { text: "Memory health" }), errorCard(error));
+    }
     const search = el("form", { class: "card" },
       el("h2", { text: "Search" }),
       el("label", { for: "mem-q", text: "Statement, key or tag" }),
@@ -493,7 +532,7 @@ function clientApp() {
         sessionStorage.setItem(OWNER_TOKEN_KEY, $("owner-token").value.trim());
         notify("Owner credential stored for this tab");
       } })));
-    panel.replaceChildren(statCard, search, results, owner);
+    panel.replaceChildren(statCard, insightsCard, search, results, owner);
   }
 
   async function renderMissions() {
@@ -506,8 +545,23 @@ function clientApp() {
       row("Failed", String(summary.failed || 0), summary.failed ? "bad" : ""),
       row("Recovered", String(summary.recovered || 0)),
       row("Total cost", "$" + Number(summary.costUsd || 0).toFixed(4)));
+    let objectivesCard;
+    try {
+      const objectives = await api("/ax/command/objectives?limit=20");
+      const items = objectives.objectives || [];
+      objectivesCard = el("div", { class: "card" }, el("h2", { text: "Objectives · " + items.length }),
+        el("p", { class: "small muted", text: "Durable mission lifecycles. Completion requires verified acceptance criteria; a plan cannot reach completed." }));
+      if (!items.length) objectivesCard.appendChild(el("div", { class: "empty", text: "No objectives recorded. Create one through the API; this page does not invent missions." }));
+      for (const item of items.slice(0, 8)) {
+        objectivesCard.appendChild(el("div", { class: "row" },
+          el("span", { class: "k" }, el("strong", { text: item.objective.slice(0, 90) }), el("div", { class: "small muted", text: item.id + " · criteria " + item.criteria.met + "/" + item.criteria.required + " · $" + Number(item.costUsd || 0).toFixed(4) })),
+          el("span", { class: "v" }, pill(item.status))));
+      }
+    } catch (error) {
+      objectivesCard = el("div", { class: "card" }, el("h2", { text: "Objectives" }), errorCard(error));
+    }
     if (!missions.length) {
-      panel.replaceChildren(summaryCard, el("div", { class: "card" }, el("div", { class: "empty", text: "No mission history is recorded yet." })));
+      panel.replaceChildren(summaryCard, objectivesCard, el("div", { class: "card" }, el("div", { class: "empty", text: "No mission history is recorded yet." })));
       return;
     }
     const list = el("div", { class: "list" });
@@ -537,7 +591,108 @@ function clientApp() {
           el("p", { text: note.body }),
           el("p", { class: "small muted", text: note.channel + " · " + note.type + " · " + note.createdAt + (note.attempts ? " · attempts " + note.attempts : "") }))))
       : el("div", { class: "empty", text: "No notifications recorded. In-app records are the only delivery channel; no push provider is configured." }));
-    panel.replaceChildren(summaryCard, el("div", { class: "card" }, el("h2", { text: "Missions" }), list), notificationCard);
+    panel.replaceChildren(summaryCard, objectivesCard, el("div", { class: "card" }, el("h2", { text: "Missions" }), list), notificationCard);
+  }
+
+  async function renderAgents() {
+    const data = await api("/ax/command/agents");
+    const intro = el("div", { class: "card" }, el("h2", { text: "Agent capability matrix" }),
+      el("p", { class: "small muted", text: "Implemented means the handler exists in this build. Available means its dependency is mounted right now. Ax reviews every delegated result before using it." }));
+    const matrix = el("div", { class: "list" });
+    for (const agent of data.agents || []) {
+      matrix.appendChild(el("details", { class: "item" },
+        el("summary", {}, agent.name + " — " + (agent.available ? "available" : "needs " + (agent.missingCapability || "a dependency"))),
+        el("p", { class: "small muted", text: agent.purpose }),
+        row("Implemented", agent.implemented ? "yes" : "no", agent.implemented ? "good" : "bad"),
+        row("Available", agent.available ? "yes" : "no", agent.available ? "good" : "warn"),
+        row("Permissions", agent.permissions.join(", ")),
+        row("Forbidden", agent.forbidden.join(", ")),
+        el("p", { class: "small muted", text: agent.approvalRequired.length ? "Approval required: " + agent.approvalRequired.join(", ") : "No approval-gated action in this manifest." })));
+    }
+    panel.replaceChildren(intro, matrix,
+      el("p", { class: "small muted", text: "Delegations recorded by this process: " + Number(data.delegations || 0) + " · max depth " + (data.limits ? data.limits.maxDepth : "?") + "." }));
+  }
+
+  async function renderDevice() {
+    const [snapshot, capabilities] = await Promise.all([
+      api("/ax/command/device/state"),
+      api("/ax/command/device/capabilities")
+    ]);
+    const state = snapshot.state || {};
+    const states = state.states || {};
+    const connection = el("div", { class: "card" }, el("h2", { text: "Phone connection states" }),
+      row("Device", state.deviceId || "none paired"),
+      row("Last check-in", state.secondsSinceCheckIn === null || state.secondsSinceCheckIn === undefined ? "never" : state.secondsSinceCheckIn + "s ago"),
+      row("Credential revoked", state.revoked ? "yes" : "no", state.revoked ? "bad" : "good"),
+      el("p", { class: "small muted", text: "Each state is derived separately. Registered is not connected; a completed command is not an independent verification." }));
+    for (const [key, value] of Object.entries(states)) {
+      const label = key.replace(/([A-Z])/g, " $1");
+      connection.appendChild(row(label, value.value + " — " + value.basis, value.value === "yes" ? "good" : value.value === "no" ? "bad" : "warn"));
+    }
+    const pairing = snapshot.pairing || null;
+    const pairingCard = el("div", { class: "card" }, el("h2", { text: "Pairing audit" }),
+      row("Stage", pairing ? pairing.stage : "not available", pairing ? statusClass(pairing.stage) : ""),
+      row("Code returned", "never"),
+      el("p", { class: "small muted", text: (pairing && pairing.ownerAction) || snapshot.guidance || "No pairing row to audit." }));
+    const capabilityCard = el("div", { class: "card" }, el("h2", { text: "Phone capabilities" }));
+    for (const capability of capabilities.capabilities || []) {
+      capabilityCard.appendChild(row(capability.label, capability.implemented ? (capability.available ? "available" : "blocked: " + capability.blockedReason) : "not implemented" + (capability.requiresApproval ? " · approval required" : ""), capability.implemented && capability.available ? "good" : "warn"));
+    }
+    capabilityCard.appendChild(el("p", { class: "small muted", text: "Unimplemented actions are listed so Ax knows what the phone cannot do. The agent has no shell, file or messaging path." }));
+    panel.replaceChildren(connection, pairingCard, capabilityCard);
+  }
+
+  async function renderRecovery() {
+    const data = await api("/ax/command/recovery/incidents?status=open");
+    const scan = el("button", { class: "btn", type: "button", text: "Scan now", onclick: async event => {
+      const button = event.currentTarget;
+      button.disabled = true;
+      button.textContent = "Scanning…";
+      try {
+        const report = await api("/ax/command/recovery/scan", { method: "POST" });
+        notify("Scan observed " + report.report.findings.length + " finding(s)");
+        render();
+      } catch (error) {
+        panel.replaceChildren(errorCard(error));
+      }
+    } });
+    const intro = el("div", { class: "card" }, el("h2", { text: "Operational incidents" }),
+      el("p", { class: "small muted", text: "Findings come from live probes. Repairs are limited to reversible actions; nothing here deploys, migrates, deletes data or changes a permission." }),
+      el("div", { class: "actions" }, scan));
+    const incidents = data.incidents || [];
+    if (!incidents.length) {
+      panel.replaceChildren(intro, el("div", { class: "card" }, el("div", { class: "empty", text: "No open incidents. That is the result of a scan, not a promise that nothing is wrong." })));
+      return;
+    }
+    const list = el("div", { class: "list" });
+    for (const incident of incidents) {
+      const recover = el("button", {
+        class: "btn danger",
+        type: "button",
+        text: incident.safeAction ? "Run " + incident.safeAction : "Needs owner decision",
+        disabled: !incident.safeAction || undefined,
+        onclick: async () => {
+          try {
+            await ownerApi("/ax/command/recovery/incidents/" + encodeURIComponent(incident.id) + "/recover", {
+              method: "POST",
+              body: { action: incident.safeAction }
+            });
+            notify("Recovery verified and recorded");
+            render();
+          } catch (error) {
+            notify(error.code || "recovery_failed");
+          }
+        }
+      });
+      list.appendChild(el("div", { class: "item" },
+        el("div", { class: "top" }, el("strong", { text: incident.title }), pill(incident.severity)),
+        el("p", { text: incident.detail || incident.kind }),
+        el("p", { class: "small muted", text: incident.kind + " · seen " + Number(incident.occurrences || 1) + "x · first " + (incident.firstObservedAt || "unknown") }),
+        incident.recommendation ? el("p", { class: "small", text: incident.recommendation }) : null,
+        incident.recovery ? el("p", { class: "small muted", text: "Last repair: " + incident.recovery.action + " · verified " + (incident.recovery.verification && incident.recovery.verification.verified ? "yes" : "no") }) : null,
+        el("div", { class: "actions" }, recover)));
+    }
+    panel.replaceChildren(intro, list);
   }
 
   async function renderHealth() {
@@ -600,6 +755,9 @@ function clientApp() {
     memory: renderMemory,
     approvals: renderApprovals,
     missions: renderMissions,
+    agents: renderAgents,
+    device: renderDevice,
+    recovery: renderRecovery,
     health: renderHealth
   };
 
@@ -881,9 +1039,12 @@ function startBrain() {
   const started = performance.now();
   function frame(now) {
     const time = (now - started) / 1000;
+    // Activity comes from the last observed run list. It changes speed and pulse, and is never used
+    // to imply that work is happening when no unsettled mission was seen.
+    const activity = Math.max(0, Math.min(1, Number(window.__habitatActivity && window.__habitatActivity.level) || 0));
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
     const aspect = canvas.width / Math.max(1, canvas.height);
-    const angle = reduce ? 0.5 : time * 0.16;
+    const angle = reduce ? 0.5 : time * (0.09 + activity * 0.2);
     const matrix = multiply(
       perspective(0.9, aspect, 0.1, 10),
       multiply(translation(0, 0.02, -2.12), multiply(rotationX(-0.22), rotationY(angle + 0.22)))
@@ -904,7 +1065,7 @@ function startBrain() {
 
     gl.useProgram(pointProgram);
     gl.uniformMatrix4fv(gl.getUniformLocation(pointProgram, "uMatrix"), false, matrix);
-    gl.uniform1f(gl.getUniformLocation(pointProgram, "uTime"), time);
+    gl.uniform1f(gl.getUniformLocation(pointProgram, "uTime"), time * (0.6 + activity * 1.8));
     // Point size is in device pixels, so scale it by the backing-store ratio to keep the neurons
     // the same apparent size on a high-density phone screen.
     gl.uniform1f(gl.getUniformLocation(pointProgram, "uScale"), Math.min(window.devicePixelRatio || 1, 2));

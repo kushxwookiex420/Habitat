@@ -441,6 +441,79 @@ const PLAN_SCHEMA = Object.freeze({
  * primary attempt is real spend and must consume the run budget, otherwise failover would make the
  * budget unbounded.
  */
+/**
+ * Per-provider circuit breaker.
+ *
+ * A provider that keeps failing transiently should not be tried on every request: each attempt costs
+ * money and time. After `failureThreshold` consecutive transient failures the circuit opens for
+ * `cooldownMs`, then allows exactly one trial. A success closes it; a failure re-opens it.
+ *
+ * This is deliberately separate from configuration. A configured key can still be behind an open
+ * circuit, and the snapshot says so instead of reporting the provider as healthy.
+ */
+export function createProviderCircuitBreaker({
+  failureThreshold = 3,
+  cooldownMs = 60_000,
+  now = () => Date.now()
+} = {}) {
+  const states = new Map();
+  const threshold = Math.max(1, Math.floor(Number(failureThreshold) || 3));
+  const cooldown = Math.max(0, Number(cooldownMs) || 0);
+
+  function entry(name) {
+    if (!states.has(name)) states.set(name, { failures: 0, openedAt: null, halfOpen: false, trials: 0, lastCode: null, updatedAt: null });
+    return states.get(name);
+  }
+
+  function allow(name) {
+    const state = entry(String(name));
+    if (state.openedAt === null) return true;
+    if (now() - state.openedAt >= cooldown) {
+      state.halfOpen = true;
+      return true;
+    }
+    return false;
+  }
+
+  function record(name, { ok = false, code = null } = {}) {
+    const state = entry(String(name));
+    state.updatedAt = new Date(now()).toISOString();
+    state.lastCode = code ? String(code).slice(0, 80) : null;
+    if (ok) {
+      state.failures = 0;
+      state.openedAt = null;
+      state.halfOpen = false;
+      state.trials += 1;
+      return { ok: true, state: "closed" };
+    }
+    state.trials += 1;
+    state.failures += 1;
+    if (state.failures >= threshold || state.halfOpen) {
+      state.openedAt = now();
+      state.halfOpen = false;
+    }
+    return { ok: false, state: state.openedAt === null ? "closed" : "open" };
+  }
+
+  function snapshot() {
+    return [...states.entries()].map(([name, state]) => ({
+      provider: name,
+      state: state.openedAt === null ? "closed" : now() - state.openedAt >= cooldown ? "half_open" : "open",
+      failures: state.failures,
+      trials: state.trials,
+      lastCode: state.lastCode,
+      openedAt: state.openedAt ? new Date(state.openedAt).toISOString() : null
+    }));
+  }
+
+  function reset(name = null) {
+    if (name === null) states.clear();
+    else states.delete(String(name));
+  }
+
+  return Object.freeze({ allow, record, snapshot, reset, failureThreshold: threshold, cooldownMs: cooldown });
+}
+
 export function createFailoverPlanner({
   providers,
   fetchImpl = fetch,
@@ -449,7 +522,9 @@ export function createFailoverPlanner({
   maxSteps = 4,
   maxOutputTokens = 700,
   reasoningEffort = "none",
-  failedCallCostUsd = 0.005
+  failedCallCostUsd = 0.005,
+  breaker = null,
+  now = () => new Date().toISOString()
 } = {}) {
   const candidates = (providers || []).filter(provider => PROVIDERS[provider?.name]);
   if (!candidates.length) throw new Error("A failover planner needs at least one known provider.");
@@ -469,13 +544,29 @@ export function createFailoverPlanner({
 
   async function run(method, input) {
     const attempts = [];
+    const decisions = [];
     let costUsd = 0;
     let estimated = false;
+    let sawFallback = false;
     for (const { provider, planner } of planners) {
       if (!provider.apiKey) {
+        decisions.push({ provider: provider.name, decision: "skipped", reason: "unconfigured", at: now() });
         attempts.push({ provider: provider.name, code: provider.name + "_unconfigured", costUsd: 0 });
+        sawFallback = sawFallback || attempts.length > 1;
         continue;
       }
+      if (breaker && typeof breaker.allow === "function" && !breaker.allow(provider.name)) {
+        decisions.push({ provider: provider.name, decision: "skipped", reason: "circuit_open", at: now() });
+        attempts.push({ provider: provider.name, code: "circuit_open", costUsd: 0 });
+        sawFallback = sawFallback || attempts.length > 1;
+        continue;
+      }
+      decisions.push({
+        provider: provider.name,
+        decision: "attempted",
+        reason: attempts.length === 0 ? "primary" : "fallback_after_transient_failure",
+        at: now()
+      });
       const result = await planner[method](input);
       costUsd += Number(result.costUsd || 0);
       estimated = estimated || Boolean(result.estimated);
@@ -484,12 +575,35 @@ export function createFailoverPlanner({
         code: result.ok ? null : result.code,
         costUsd: Number(result.costUsd || 0)
       });
-      if (result.ok) return { ...result, costUsd, estimated, attempts };
+      if (result.ok) {
+        breaker?.record(provider.name, { ok: true });
+        decisions.push({ provider: provider.name, decision: "selected", reason: "plan_accepted", at: now() });
+        // The decision record is what makes a fallback explainable: it names the provider that
+        // answered, every one that was skipped, and why the failing ones were retried.
+        return {
+          ...result,
+          costUsd,
+          estimated,
+          attempts,
+          decision: { selected: provider.name, fallbackOccurred: sawFallback, decisions }
+        };
+      }
+      breaker?.record(provider.name, { ok: false, code: result.code });
       if (!shouldFallback(result)) {
         // A malformed plan, invalid JSON or a rejected adapter is not a transient provider failure.
         // Trying another provider would spend more credits on the same bad answer.
-        return { ...result, costUsd, estimated, attempts, fallbackSkipped: "non_transient" };
+        decisions.push({ provider: provider.name, decision: "stopped", reason: "non_transient", at: now() });
+        return {
+          ...result,
+          costUsd,
+          estimated,
+          attempts,
+          fallbackSkipped: "non_transient",
+          decision: { selected: null, fallbackOccurred: sawFallback, decisions }
+        };
       }
+      decisions.push({ provider: provider.name, decision: "fallback", reason: result.code || "transient_failure", at: now() });
+      sawFallback = true;
     }
     return {
       ok: false,
@@ -497,7 +611,8 @@ export function createFailoverPlanner({
       costUsd,
       estimated: true,
       attempts,
-      provider: null
+      provider: null,
+      decision: { selected: null, fallbackOccurred: sawFallback, decisions }
     };
   }
 
@@ -508,7 +623,8 @@ export function createFailoverPlanner({
     },
     correct(input) {
       return run("correct", input);
-    }
+    },
+    breaker: breaker ? () => breaker.snapshot() : null
   });
 }
 
@@ -521,7 +637,7 @@ export function createFailoverPlanner({
  */
 export function createAxPlannerFromProviderConfig(
   config,
-  { fetchImpl = fetch, prices = DEFAULT_PRICES, maxSteps = 4, maxOutputTokens = 700, reasoningEffort = "none", timeoutMs = MODEL_TIMEOUT_MS, failedCallCostUsd = 0.005 } = {}
+  { fetchImpl = fetch, prices = DEFAULT_PRICES, maxSteps = 4, maxOutputTokens = 700, reasoningEffort = "none", timeoutMs = MODEL_TIMEOUT_MS, failedCallCostUsd = 0.005, breaker = null } = {}
 ) {
   if (!config?.enabled) {
     const code = config?.code || "orchestrator_disabled";
@@ -536,6 +652,7 @@ export function createAxPlannerFromProviderConfig(
     maxOutputTokens,
     reasoningEffort,
     timeoutMs,
-    failedCallCostUsd
+    failedCallCostUsd,
+    breaker
   });
 }

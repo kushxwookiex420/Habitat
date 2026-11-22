@@ -8,6 +8,7 @@ import { buildReadOnlyNexusAdapters, READ_ONLY_ADAPTER_NAMES, READ_ONLY_ADAPTER_
 import { createAxOrchestrator, resolveAxOrchestratorConfig } from "./ax-orchestrator.mjs";
 import {
   createAxPlannerFromProviderConfig,
+  createProviderCircuitBreaker,
   describeProviderStatus,
   resolveAxProviderConfig
 } from "./ax-providers.mjs";
@@ -17,6 +18,11 @@ import { createAxMemoryContext } from "./ax-memory-context.mjs";
 import { createD1AxNotificationRepository } from "./d1-ax-notification-repository.mjs";
 import { createNotificationService } from "./ax-notifications.mjs";
 import { createAxDiagnostics } from "./ax-diagnostics.mjs";
+import { createObjectiveService } from "./ax-objectives.mjs";
+import { createD1AxObjectiveRepository } from "./ax-objective-repository.mjs";
+import { createAgentRuntime } from "./ax-agents.mjs";
+import { createIncidentService, createOperationalMonitor, createRecoveryService } from "./ax-recovery.mjs";
+import { createD1AxIncidentRepository } from "./ax-incident-repository.mjs";
 import { detectSandbox } from "./nexus-sandbox.mjs";
 
 const SAFE_COMMANDS = new Set(["device.status"]);
@@ -69,6 +75,8 @@ export function registerDeviceCommandBridge(app, {
   // database as every other store, so memory and notifications can never point somewhere else.
   memoryRepository = null,
   notificationRepository = null,
+  objectiveRepository = null,
+  incidentRepository = null,
   handleSignals = false,
   exitOnSignal = false,
   log = console
@@ -102,6 +110,27 @@ export function registerDeviceCommandBridge(app, {
   }) : null);
   const notifications = notificationStore ? createNotificationService({ repository: notificationStore, project: memoryProject, log }) : null;
   const memoryContext = memoryStore ? createAxMemoryContext({ repository: memoryStore, project: memoryProject, log }) : null;
+
+  // Mission 10 additive stores: durable objective lifecycles and incident history. Both live on the
+  // same D1 database as everything else and neither replaces a task table.
+  const objectiveStore = objectiveRepository || (hasD1 ? createD1AxObjectiveRepository({
+    accountId: env.CLOUDFLARE_ACCOUNT_ID,
+    databaseId: env.HABITAT_D1_DATABASE_ID,
+    apiToken: env.HABITAT_D1_API_TOKEN,
+    fetchImpl
+  }) : null);
+  const objectives = objectiveStore ? createObjectiveService({ repository: objectiveStore, log }) : null;
+  const incidentStore = incidentRepository || (hasD1 ? createD1AxIncidentRepository({
+    accountId: env.CLOUDFLARE_ACCOUNT_ID,
+    databaseId: env.HABITAT_D1_DATABASE_ID,
+    apiToken: env.HABITAT_D1_API_TOKEN,
+    fetchImpl
+  }) : null);
+  const incidents = incidentStore ? createIncidentService({ repository: incidentStore, log }) : null;
+  const circuitBreaker = createProviderCircuitBreaker({
+    failureThreshold: Number(env.AX_CIRCUIT_FAILURES) || 3,
+    cooldownMs: Number(env.AX_CIRCUIT_COOLDOWN_MS) || 60_000
+  });
 
   function requireAx(req, res, next) {
     if (!axToken || !safeEqual(bearer(req), axToken)) {
@@ -389,6 +418,10 @@ export function registerDeviceCommandBridge(app, {
   // "not resolved yet"; a resolved failure is cached as null or a disabled descriptor.
   let axOrchestrator;
   let commandApi = null;
+  // Resolved after mounting, because diagnostics probe the engine and runtime this function builds.
+  let diagnosticsRef = () => ({ status: "not_ready", note: "Diagnostics are not mounted yet." });
+  let agentRuntimeRef = null;
+  let recoveryRef = null;
   try {
     commandApi = registerUniversalCommandRoutes(app, {
       env,
@@ -418,20 +451,20 @@ export function registerDeviceCommandBridge(app, {
       providerStatusProvider: () => describeProviderStatus(resolveAxProviderConfig(env)),
       // Diagnostics are assembled per request: every subsystem is probed, and a probe failure is
       // reported as unavailable rather than turning into a false green status.
-      diagnosticsProvider: () => createAxDiagnostics({
-        env,
-        version: env.HABITAT_VERSION || "0.5.0",
-        project: memoryProject,
-        engine: commandApi?.engine || null,
-        memory: memoryStore,
-        notifications,
-        providerConfig: resolveAxProviderConfig(env),
-        orchestrator: () => (axOrchestrator === undefined ? { enabled: false, code: "orchestrator_not_resolved" } : axOrchestrator),
-        presence: () => nexusRuntime,
-        // A function, so diagnostics read the bridge's state at request time rather than at mount.
-        deviceBridge: () => ({ ready, durable: Boolean(store?.durable), axTokenConfigured: Boolean(axToken), perDeviceTokens: true }),
-        sandbox: () => detectSandbox()
-      })(),
+      diagnosticsProvider: () => diagnosticsRef(),
+      // Mission 10 surfaces. Each provider closure reads the mounted state at request time.
+      objectiveProvider: () => objectives,
+      agentProvider: () => resolveAgents(),
+      recoveryProvider: () => resolveRecovery(),
+      incidentProvider: () => incidents,
+      deviceStateProvider: () => deviceSnapshot(),
+      circuitProvider: () => circuitBreaker,
+      budgetProvider: () => ({
+        currency: "USD",
+        runBudgetUsd: resolveAxOrchestratorConfig(env).budgetUsd,
+        enforced: ["per_run", "per_objective"],
+        note: "Budgets are enforced before/after paid calls. A configured budget is not a record of spend; see the objective and run records."
+      }),
       orchestratorProvider: () => {
         if (axOrchestrator !== undefined) return axOrchestrator;
         axOrchestrator = null;
@@ -478,7 +511,10 @@ export function registerDeviceCommandBridge(app, {
                 maxSteps: axConfig.maxSteps,
                 maxOutputTokens: axConfig.maxOutputTokens,
                 reasoningEffort: axConfig.reasoningEffort,
-                failedCallCostUsd: axConfig.failedCallCostUsd
+                failedCallCostUsd: axConfig.failedCallCostUsd,
+                // A provider that keeps failing transiently is skipped for a cooldown instead of
+                // being paid for on every request. The decision is visible in the run record.
+                breaker: circuitBreaker
               }),
               runs: runStore,
               // Approved memory is retrieved before planning and written back after verification.
@@ -556,6 +592,181 @@ export function registerDeviceCommandBridge(app, {
     console.error("NEXUS_RUNTIME_MOUNT_FAILED", String(error?.message || error));
   }
 
+  /** One agent runtime per process: delegation counters and limits must be shared, not per request. */
+  function resolveAgents() {
+    if (agentRuntimeRef) return agentRuntimeRef;
+    agentRuntimeRef = createAgentRuntime({
+      log,
+      dependencies: {
+        memory: memoryContext,
+        diagnostics: () => diagnosticsRef(),
+        device: { state: () => deviceSnapshot() },
+        adapters: READ_ONLY_ADAPTER_NAMES.slice(),
+        allowedAdapters: READ_ONLY_ADAPTER_NAMES.slice(),
+        sideEffectsEnabled: false,
+        // No research or engineering transport is configured in this deployment. Those agents
+        // report capability_unavailable rather than fabricating a result.
+        research: null,
+        engineering: null
+      }
+    });
+    return agentRuntimeRef;
+  }
+
+  /** The server's honest view of the phone: one device row, its recent receipts and last pairing. */
+  async function deviceSnapshot({ deviceId = null } = {}) {
+    if (!store || !ready) return { ok: false, error: "device_bridge_not_ready" };
+    let rows = [];
+    try {
+      rows = await store.listDevices();
+    } catch (error) {
+      return { ok: false, error: "device_store_unavailable: " + String(error?.message || error).slice(0, 120) };
+    }
+    const active = rows.filter(row => !row.revoked_at);
+    const ordered = (active.length ? active : rows).slice().sort((a, b) => Date.parse(b.last_seen_at || b.created_at || 0) - Date.parse(a.last_seen_at || a.created_at || 0));
+    const chosen = deviceId ? rows.find(row => row.device_id === deviceId) || null : ordered[0] || null;
+    if (!chosen) return { ok: true, device: null, commands: [], pairing: null };
+    let commands = [];
+    let pairing = null;
+    try {
+      if (typeof store.listCommands === "function") commands = await store.listCommands({ deviceId: chosen.device_id, limit: 20 });
+      if (typeof store.latestPairing === "function") pairing = await store.latestPairing({ deviceId: chosen.device_id });
+    } catch {
+      // Receipts are optional context for the derived state; the device row is still returned.
+    }
+    return { ok: true, device: chosen, commands, pairing };
+  }
+
+  /**
+   * Monitoring and safe recovery. Repairs are listed here explicitly so an audit can see exactly
+   * which reversible actions exist; nothing destructive is registered.
+   */
+  function resolveRecovery() {
+    if (!incidents) return null;
+    if (recoveryRef) return recoveryRef;
+    const monitor = createOperationalMonitor({
+      engine: commandApi?.engine || null,
+      orchestrator: {
+        listRuns: async options => {
+          const agent = axOrchestrator;
+          return agent && agent.enabled ? agent.listRuns(options) : [];
+        }
+      },
+      presence: async () => {
+        if (nexusRuntime && typeof nexusRuntime.presence === "function") return nexusRuntime.presence();
+        return {
+          executor: { configured: false, started: false, state: "not_mounted", reason: nexusMount.reason },
+          heartbeat: { verified: false, liveWorkers: 0, asleep: true },
+          queue: { ok: false, error: "executor_not_mounted" },
+          canExecute: false
+        };
+      },
+      devices: async () => (store && ready ? store.listDevices() : []),
+      notifications,
+      log
+    });
+    const repairs = {
+      reconcile_run: async ({ incident }) => {
+        const runId = String(incident.subject || "").replace(/^run:/, "");
+        const agent = axOrchestrator;
+        if (!agent || !agent.enabled || !runId) return { ok: false, detail: "the Ax run store is not available" };
+        const run = await agent.getRun(runId);
+        if (!run) return { ok: false, detail: "run not found" };
+        return {
+          ok: true,
+          verified: run.settled === true || run.status === "completed",
+          detail: "run reconciled: status=" + run.status + " settled=" + Boolean(run.settled)
+        };
+      },
+      probe_subsystems: async () => {
+        const report = await diagnosticsRef();
+        const statuses = ["database", "memory", "providers", "scheduler", "deviceBridge"]
+          .map(key => key + "=" + (report?.[key]?.status || report?.[key]?.state || "unknown"));
+        return { ok: true, verified: true, detail: "probed: " + statuses.join(", ") };
+      },
+      start_scheduler: async () => {
+        if (!nexusRuntime) return { ok: false, detail: "the NEXUS runtime is not mounted" };
+        await nexusRuntime.startWorker();
+        const presence = typeof nexusRuntime.presence === "function" ? await nexusRuntime.presence() : null;
+        return {
+          ok: true,
+          verified: Boolean(presence?.executor?.started),
+          detail: "worker started=" + Boolean(presence?.executor?.started)
+        };
+      },
+      request_device_checkin: async () => {
+        if (!store || !ready) return { ok: false, detail: "device storage is not ready" };
+        const snapshot = await deviceSnapshot();
+        if (!snapshot.device) return { ok: false, detail: "no paired device to ask" };
+        const command = {
+          id: "dc_" + randomUUID(),
+          deviceId: snapshot.device.device_id,
+          type: "device.status",
+          payload: {},
+          status: "queued",
+          createdAt: new Date().toISOString(),
+          expiresAt: new Date(Date.now() + 5 * 60 * 1000).toISOString()
+        };
+        await store.enqueue(command);
+        return { ok: true, verified: true, detail: "check-in queued as " + command.id + "; execution is not yet confirmed" };
+      },
+      notify_owner: async ({ incident }) => {
+        if (!notifications) return { ok: false, detail: "notification storage is not available" };
+        const recorded = await notifications.record({
+          type: "system.recovery",
+          severity: "warning",
+          title: "Incident needs attention: " + incident.title,
+          body: (incident.detail || incident.kind) + " Safe action: " + (incident.safeAction || "none") + ".",
+          dedupeKey: "incident:" + incident.id,
+          ref: incident.id
+        });
+        return { ok: recorded.ok === true, verified: recorded.ok === true, detail: recorded.ok ? "notification recorded (inbox)" : "notification failed" };
+      }
+    };
+    recoveryRef = createRecoveryService({ monitor, incidents, repairs, log });
+    return recoveryRef;
+  }
+
+  // Assigned here so diagnostics can probe the engine and runtime mounted above.
+  diagnosticsRef = () => createAxDiagnostics({
+    env,
+    version: env.HABITAT_VERSION || "0.5.0",
+    project: memoryProject,
+    engine: commandApi?.engine || null,
+    memory: memoryStore,
+    notifications,
+    providerConfig: resolveAxProviderConfig(env),
+    orchestrator: () => (axOrchestrator === undefined ? { enabled: false, code: "orchestrator_not_resolved" } : axOrchestrator),
+    presence: () => nexusRuntime,
+    deviceBridge: () => ({ ready, durable: Boolean(store?.durable), axTokenConfigured: Boolean(axToken), perDeviceTokens: true }),
+    sandbox: () => detectSandbox(),
+    capabilities: async () => {
+      const [objectiveRows, incidentRows] = await Promise.all([
+        objectives ? objectives.list({ limit: 100 }) : Promise.resolve([]),
+        incidents ? incidents.list({ status: "open", limit: 50 }) : Promise.resolve({ ok: false, incidents: [] })
+      ]);
+      const matrix = resolveAgents().capabilityMatrix();
+      return {
+        status: "checked",
+        objectives: {
+          available: Boolean(objectives),
+          total: objectiveRows.length,
+          byStatus: objectiveRows.reduce((counts, item) => {
+            counts[item.status] = (counts[item.status] || 0) + 1;
+            return counts;
+          }, {})
+        },
+        agents: {
+          implemented: matrix.length,
+          available: matrix.filter(agent => agent.available).map(agent => agent.id),
+          unavailable: matrix.filter(agent => !agent.available).map(agent => agent.id)
+        },
+        incidents: { available: Boolean(incidents), open: (incidentRows.incidents || []).length },
+        circuit: circuitBreaker.snapshot()
+      };
+    }
+  })();
+
   let initialized = false;
   let nexusInit = null;
 
@@ -585,7 +796,7 @@ export function registerDeviceCommandBridge(app, {
       await store.initialize();
       // Additive schema for memory and notifications. A failure is reported and leaves device
       // commands usable, because neither is a prerequisite for executing a task.
-      for (const [label, repository] of [["AX_MEMORY", memoryStore], ["AX_NOTIFICATIONS", notificationStore]]) {
+      for (const [label, repository] of [["AX_MEMORY", memoryStore], ["AX_NOTIFICATIONS", notificationStore], ["AX_OBJECTIVES", objectiveStore], ["AX_INCIDENTS", incidentStore]]) {
         if (!repository || typeof repository.initialize !== "function") continue;
         try {
           await repository.initialize();
