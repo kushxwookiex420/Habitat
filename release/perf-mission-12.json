@@ -1,6 +1,6 @@
 {
   "ok": true,
-  "generatedAt": "2026-11-22T03:31:14.735Z",
+  "generatedAt": "2026-11-22T04:01:57.490Z",
   "environment": {
     "node": "v26.13.1",
     "platform": "linux",
@@ -14,45 +14,45 @@
   "samples": {
     "reservationMs": {
       "samples": 100,
-      "p50Ms": 0.191,
-      "p95Ms": 0.407,
-      "maxMs": 0.698,
-      "meanMs": 0.223
+      "p50Ms": 0.19,
+      "p95Ms": 0.39,
+      "maxMs": 0.669,
+      "meanMs": 0.201
     },
     "settlementMs": {
       "samples": 100,
-      "p50Ms": 0.296,
-      "p95Ms": 0.498,
-      "maxMs": 0.976,
-      "meanMs": 0.329
+      "p50Ms": 0.292,
+      "p95Ms": 0.517,
+      "maxMs": 0.808,
+      "meanMs": 0.338
     },
     "repositoryReadMs": {
       "samples": 200,
-      "p50Ms": 0.135,
-      "p95Ms": 0.205,
-      "maxMs": 0.492,
-      "meanMs": 0.145
+      "p50Ms": 0.131,
+      "p95Ms": 0.207,
+      "maxMs": 0.514,
+      "meanMs": 0.142
     },
     "securityAppendMs": {
       "samples": 200,
       "p50Ms": 0.018,
-      "p95Ms": 0.052,
-      "maxMs": 1.255,
+      "p95Ms": 0.062,
+      "maxMs": 1.41,
       "meanMs": 0.032
     },
     "securityVerify200Ms": {
       "samples": 20,
-      "p50Ms": 0.441,
-      "p95Ms": 1.112,
-      "maxMs": 1.301,
-      "meanMs": 0.591
+      "p50Ms": 0.447,
+      "p95Ms": 1.318,
+      "maxMs": 1.344,
+      "meanMs": 0.6
     },
     "schedulerTickMs": {
       "samples": 20,
-      "p50Ms": 0.542,
-      "p95Ms": 1.685,
-      "maxMs": 1.724,
-      "meanMs": 0.684
+      "p50Ms": 0.556,
+      "p95Ms": 0.817,
+      "maxMs": 2.729,
+      "meanMs": 0.68
     }
   },
   "data": {

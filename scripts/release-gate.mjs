@@ -18,6 +18,9 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const args = new Set(process.argv.slice(2));
 const skipTests = args.has("--skip-tests");
 const skipAndroid = args.has("--skip-android");
+// Check-only mode validates the exact checkout and the committed manifest without rewriting it.
+// This is what lets the gate run on the release-record commit instead of only on the code commit.
+const checkOnly = args.has("--check");
 
 const REQUIRED_ENV = [
   { name: "HABITAT_AX_COMMAND_TOKEN", purpose: "Ax command credential" },
@@ -34,9 +37,9 @@ const REQUIRED_ENV = [
 function run(command, commandArgs, options = {}) {
   try {
     const stdout = execFileSync(command, commandArgs, {
-      cwd: ROOT,
       encoding: "utf8",
       timeout: options.timeoutMs || 240_000,
+      cwd: options.cwd || ROOT,
       env: { ...process.env, ...(options.env || {}) },
       stdio: ["ignore", "pipe", "pipe"]
     });
@@ -64,9 +67,14 @@ const REQUIRED_DOCUMENTS = [
   "docs/NEXUS_MISSION_12.md",
   "docs/SECURITY_REVIEW_MISSION_12.md",
   "docs/STAGING_VALIDATION.md",
-  "docs/ANDROID_DEVICE_VALIDATION.md"
+  "docs/ANDROID_DEVICE_VALIDATION.md",
+  "docs/NEXUS_MISSION_13.md",
+  "docs/NEXUS_MISSION_13_BASELINE.md",
+  "docs/STAGING_VALIDATION_RESULTS.md",
+  "docs/ANDROID_MISSION_13_DEVICE_TEST.md",
+  "docs/RENDER_INTEGRATION_READINESS.md"
 ];
-const REQUIRED_ARTIFACTS = ["release/demo-evidence.json", "release/perf-mission-12.json"];
+const REQUIRED_ARTIFACTS = ["release/demo-evidence.json", "release/perf-mission-12.json", "release/mission-13-evidence.json"];
 const REQUIRED_MIGRATIONS = [
   "0001_habitat_tasks.sql",
   "0002_habitat_command_tasks.sql",
@@ -76,6 +84,77 @@ const REQUIRED_MIGRATIONS = [
 ];
 
 /** Artifact and schema presence is a release requirement, not a formality. */
+/** A release-record commit may change only release metadata and documentation. */
+export function releaseOnlyChanges(files = []) {
+  return files.length > 0 && files.every(file => /^(release\/|docs\/)/.test(file));
+}
+
+/**
+ * The manifest names the code commit the gate actually tested. A later commit that only records
+ * that manifest is acceptable, but a manifest naming an unrelated or older code commit is not.
+ */
+export async function checkManifestConsistency({ root = ROOT, commit, manifest = null } = {}) {
+  if (!manifest || !/^[a-f0-9]{40}$/.test(String(manifest.commit || ""))) {
+    return { ok: false, reason: "release/manifest.json is missing or has no resolved commit" };
+  }
+  if (manifest.releaseReady !== true) {
+    return { ok: false, reason: "the committed manifest was not release-ready" };
+  }
+  if (manifest.commit === commit) return { ok: true, commit, relation: "same-commit" };
+  const diff = run("git", ["diff", "--name-only", manifest.commit + ".." + commit], { cwd: root });
+  if (!diff.ok) return { ok: false, reason: "cannot compare the manifest commit with HEAD" };
+  const files = diff.stdout.split(/\r?\n/).filter(Boolean);
+  const releaseOnly = releaseOnlyChanges(files);
+  return {
+    ok: releaseOnly,
+    commit,
+    validatedCommit: manifest.commit,
+    relation: releaseOnly ? "release-record-only" : "code-changed-after-validation",
+    changedSinceValidation: files.slice(0, 40),
+    reason: releaseOnly ? null : "code changed after the manifest was generated; rerun the gate"
+  };
+}
+
+/**
+ * Evidence claims are parsed, not trusted by filename. A document may say NOT RUN / BUILD ONLY,
+ * which is honest and passes as a documented blocker. A document claiming verified staging or a
+ * physical device must carry the identifiers that only a real run produces.
+ */
+export async function checkEvidenceClaims(root = ROOT) {
+  const read = async file => {
+    try { return await readFile(path.join(root, file), "utf8"); } catch { return ""; }
+  };
+  const staging = await read("docs/STAGING_VALIDATION_RESULTS.md");
+  const android = await read("docs/ANDROID_MISSION_13_DEVICE_TEST.md");
+  const line = (source, label) => {
+    const match = source.match(new RegExp("^" + label + ":\\s*(.+)$", "m"));
+    return match ? match[1].trim() : "";
+  };
+  const checks = [];
+  const stagingStatus = line(staging, "Staging status");
+  if (/^STAGING VERIFIED/i.test(stagingStatus)) {
+    checks.push({ name: "staging database identity recorded", ok: Boolean(line(staging, "Staging database fingerprint")) });
+    checks.push({ name: "staging write process recorded", ok: Boolean(line(staging, "Write process")) });
+    checks.push({ name: "staging verify process recorded", ok: Boolean(line(staging, "Verify process")) });
+    checks.push({ name: "staging audit head recorded", ok: /^[a-f0-9]{64}$/i.test(line(staging, "Audit head")) });
+  } else if (/^(NOT RUN|BLOCKED)/i.test(stagingStatus)) {
+    checks.push({ name: "staging blocker has an owner action", ok: Boolean(line(staging, "Owner action")) });
+  } else {
+    checks.push({ name: "staging status is explicit", ok: false });
+  }
+  const androidStatus = line(android, "Android physical status");
+  if (/^PHYSICAL S26 ULTRA VERIFIED/i.test(androidStatus)) {
+    checks.push({ name: "physical device model recorded", ok: Boolean(line(android, "Device model")) });
+    checks.push({ name: "physical serial hash recorded", ok: Boolean(line(android, "Serial hash")) });
+    checks.push({ name: "physical checks recorded", ok: /\b1[0-9]\s*\/\s*1[0-9]\b/.test(line(android, "Checks passed")) });
+  } else if (/^(BUILD ONLY|BLOCKED)/i.test(androidStatus)) {
+    checks.push({ name: "physical-device blocker has an owner action", ok: Boolean(line(android, "Owner action")) });
+  } else {
+    checks.push({ name: "Android physical status is explicit", ok: false });
+  }
+  return { ok: checks.every(item => item.ok), checks, stagingStatus, androidStatus };
+}
+
 export async function checkReleaseInputs(root = ROOT) {
   const checks = [];
   for (const file of [...REQUIRED_DOCUMENTS, ...REQUIRED_ARTIFACTS]) {
@@ -185,6 +264,16 @@ export async function runReleaseGate() {
 
   // These are the adversarial invariants, not a repeat of the whole suite. They run even when the
   // operator asked to skip the long suite, because a release may not skip its security checks.
+  const evidence = await checkEvidenceClaims(ROOT);
+  add("staging and physical evidence claims", evidence);
+
+  let committedManifest = null;
+  try { committedManifest = JSON.parse(await readFile(path.join(ROOT, "release", "manifest.json"), "utf8")); } catch { committedManifest = null; }
+  const manifestConsistency = checkOnly
+    ? await checkManifestConsistency({ commit, manifest: committedManifest })
+    : { ok: true, commit, relation: "generated-now" };
+  add("release manifest matches the validated commit", manifestConsistency);
+
   const critical = run("node", ["--test", "tests/ax-adversarial-accounting.test.mjs", "tests/ax-adversarial-security.test.mjs", "tests/ax-adversarial-transports.test.mjs", "tests/ax-adversarial-auth.test.mjs", "tests/ax-scheduler-multiprocess.test.mjs", "tests/d1-http-compat-mission-12.test.mjs"]);
   add("critical adversarial suites", { ok: critical.ok, detail: critical.ok ? "exit 0" : (critical.stdout + critical.stderr).slice(-1200) });
 
@@ -210,12 +299,18 @@ export async function runReleaseGate() {
   const apk = android?.apk || (await exists("app/build/outputs/apk/debug/app-debug.apk") ? "app/build/outputs/apk/debug/app-debug.apk" : null);
 
   const manifest = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     generatedAt: new Date().toISOString(),
     commit,
     branch: run("git", ["rev-parse", "--abbrev-ref", "HEAD"]).stdout.trim(),
     checks,
     releaseReady: checks.every(check => check.ok && check.skipped !== true),
+    evidenceLevels: {
+      ci: "not yet verified for this manifest until the workflow run on the final head is green",
+      staging: evidence.stagingStatus || "unknown",
+      physicalDevice: evidence.androidStatus || "unknown",
+      controlCenter: "local real authenticated backend harness (in-memory); not staging or production"
+    },
     schema: {
       migrations: migrations.files,
       currentVersion: "0005",
@@ -227,8 +322,9 @@ export async function runReleaseGate() {
     artifacts: { apk, demoEvidence: (await exists("release/demo-evidence.json")) ? "release/demo-evidence.json" : null },
     knownLimitations: [
       "No production or staging deployment was performed.",
+      "No disposable staging D1 credentials or owner approval id were available; staging is not verified.",
       "Migration 0005 has not been applied to D1.",
-      "Android is compile-verified; the pairing fix has not run on a physical device.",
+      "Android is compile-verified; no emulator or physical S26 Ultra test was run.",
       "No live model provider call is made by the gate or by tests.",
       "Research/engineering transports require AX_AGENT_LOCAL_ROOT and stay off by default.",
       "Scheduler runs only when an external trigger or an owner calls its tick endpoint."
@@ -240,8 +336,10 @@ export async function runReleaseGate() {
     ]
   };
 
-  await mkdir(path.join(ROOT, "release"), { recursive: true });
-  await writeFile(path.join(ROOT, "release", "manifest.json"), JSON.stringify(manifest, null, 2) + "\n", "utf8");
+  if (!checkOnly) {
+    await mkdir(path.join(ROOT, "release"), { recursive: true });
+    await writeFile(path.join(ROOT, "release", "manifest.json"), JSON.stringify(manifest, null, 2) + "\n", "utf8");
+  }
   return manifest;
 }
 
@@ -249,6 +347,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   const manifest = await runReleaseGate();
   console.log(JSON.stringify({
     releaseReady: manifest.releaseReady,
+    mode: checkOnly ? "check-only" : "write-manifest",
     commit: manifest.commit,
     checks: manifest.checks.map(check => ({ name: check.name, ok: check.ok, skipped: check.skipped === true })),
     manifest: "release/manifest.json"
