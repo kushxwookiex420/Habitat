@@ -103,3 +103,23 @@ Pass criteria: process 2 exits 0, objective is completed and verified, reserved 
 ## Production boundary
 
 Production D1 was not contacted. No production migration, seed, cleanup or secret change was made. Staging results must never be copied into the production manifest without a separate production run.
+
+---
+
+## Mission 14 addendum — 2026-11-22
+
+**Mission 14 did not run staging either, for the same reason.** The environment still contains none
+of the six staging variable names, no disposable D1 database and no owner approval id. The harness
+was executed again and refused before any network call, so this document remains
+`Staging status: NOT RUN — owner-blocked`.
+
+What Mission 14 added that staging will exercise:
+
+1. Migration `0006_ax_nexus_messages.sql` (additive, idempotent; validated locally against SQLite,
+   22/22 migration checks).
+2. The message channel (`/ax/command/messages`, `/ax/nexus/*`) with its own durable table.
+3. An autonomy pass inside the scheduler tick that drains messages and dispatches eligible
+   objectives.
+
+The exact owner sequence is unchanged and is reproduced in `docs/HABITAT_ACTIVATION_RUNBOOK.md` §1.
+No production database was contacted, read or modified.

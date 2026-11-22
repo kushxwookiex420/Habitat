@@ -114,6 +114,111 @@ export function buildAxOpenApiSpec({ origin = "https://habitat-1-szzd.onrender.c
       }
     },
     paths: {
+      "/ax/command/messages": {
+        post: {
+          operationId: "sendNexusMessage",
+          summary: "Send a message to NEXUS",
+          description:
+            "Stores a durable, correlated message for the NEXUS runtime and returns its id. Reusing an idempotencyKey returns the same message. kind=task must name one read-only adapter from the deployment allowlist; the message channel cannot execute arbitrary commands.",
+          "x-openai-isConsequential": false,
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  required: ["kind", "body", "idempotencyKey"],
+                  properties: {
+                    kind: { type: "string", enum: ["task", "question", "note"] },
+                    body: { type: "string", maxLength: 4000 },
+                    objective: { type: "string", maxLength: 2000, description: "Required for kind=task." },
+                    adapter: { type: "string", description: "Read-only adapter name, required for kind=task." },
+                    correlationId: { type: "string", description: "Thread id; generated when omitted." },
+                    idempotencyKey: { type: "string", maxLength: 160 },
+                    project: { type: "string" }
+                  }
+                }
+              }
+            }
+          },
+          responses: {
+            "201": { description: "Message stored and queued" },
+            "200": { description: "Replayed: the idempotency key already named this message" },
+            "400": errorResponse("Invalid kind, body, objective, adapter or idempotency key"),
+            "401": errorResponse("Missing or invalid command token"),
+            "403": errorResponse("Adapter is not on the read-only allowlist"),
+            "429": errorResponse("Per-origin rate limit reached"),
+            "503": errorResponse("The message channel is not mounted")
+          }
+        },
+        get: {
+          operationId: "listNexusMessages",
+          summary: "List messages",
+          description: "Most recently updated messages, newest first.",
+          parameters: [
+            { name: "status", in: "query", required: false, schema: { type: "string" } },
+            { name: "correlationId", in: "query", required: false, schema: { type: "string" } },
+            { name: "limit", in: "query", required: false, schema: { type: "integer", minimum: 1, maximum: 200 } }
+          ],
+          responses: {
+            "200": { description: "A bounded list of messages" },
+            "401": errorResponse("Missing or invalid command token"),
+            "503": errorResponse("The message channel is not mounted")
+          }
+        }
+      },
+      "/ax/command/messages/thread/{correlationId}": {
+        get: {
+          operationId: "getNexusThread",
+          summary: "Retrieve a whole exchange by correlation id",
+          description:
+            "Returns every message in the thread oldest first, plus a terminal summary and any question waiting for Ax's decision.",
+          parameters: [
+            {
+              name: "correlationId",
+              in: "path",
+              required: true,
+              schema: { type: "string", maxLength: 120 }
+            }
+          ],
+          responses: {
+            "200": { description: "The thread, its terminal results and any awaiting decision" },
+            "400": errorResponse("Invalid correlation id"),
+            "401": errorResponse("Missing or invalid command token"),
+            "503": errorResponse("The message channel is not mounted")
+          }
+        }
+      },
+      "/ax/command/messages/{id}/answer": {
+        post: {
+          operationId: "answerNexusQuestion",
+          summary: "Answer a NEXUS question or approval request",
+          description: "Answers a message whose status is awaiting_answer. A question may be answered once.",
+          "x-openai-isConsequential": true,
+          parameters: [
+            { name: "id", in: "path", required: true, schema: { type: "string" } }
+          ],
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  required: ["answer"],
+                  properties: { answer: { type: "string", maxLength: 4000 } }
+                }
+              }
+            }
+          },
+          responses: {
+            "200": { description: "The answer is recorded" },
+            "401": errorResponse("Missing or invalid command token"),
+            "404": errorResponse("No message with that id"),
+            "409": errorResponse("The message is not awaiting an answer"),
+            "503": errorResponse("The message channel is not mounted")
+          }
+        }
+      },
       "/ax/command/tasks": {
         post: {
           operationId: "submitTask",

@@ -29,6 +29,7 @@ const REQUIRED_ENV = [
   { name: "CLOUDFLARE_ACCOUNT_ID", purpose: "D1 account" },
   { name: "HABITAT_D1_DATABASE_ID", purpose: "D1 database" },
   { name: "HABITAT_D1_API_TOKEN", purpose: "D1 API token" },
+  { name: "AX_NEXUS_TOKEN", purpose: "NEXUS message surface credential" },
   { name: "AX_SCHEDULER_TOKEN", purpose: "external scheduler credential", optional: true },
   { name: "HABITAT_PUBLIC_ORIGIN", purpose: "canonical public origin", optional: true },
   { name: "AX_AGENT_LOCAL_ROOT", purpose: "enable local research/engineering transports", optional: true }
@@ -72,15 +73,28 @@ const REQUIRED_DOCUMENTS = [
   "docs/NEXUS_MISSION_13_BASELINE.md",
   "docs/STAGING_VALIDATION_RESULTS.md",
   "docs/ANDROID_MISSION_13_DEVICE_TEST.md",
-  "docs/RENDER_INTEGRATION_READINESS.md"
+  "docs/RENDER_INTEGRATION_READINESS.md",
+  "docs/NEXUS_MISSION_14.md",
+  "docs/AX_NEXUS_COMMUNICATION.md",
+  "docs/AUTONOMOUS_EXECUTION.md",
+  "docs/AGENT_CAPABILITY_MATRIX.md",
+  "docs/HABITAT_ACTIVATION_RUNBOOK.md",
+  "docs/RENDER_MISSION_14_READINESS.md",
+  "docs/ANDROID_MISSION_14_DEVICE_TEST.md"
 ];
-const REQUIRED_ARTIFACTS = ["release/demo-evidence.json", "release/perf-mission-12.json", "release/mission-13-evidence.json"];
+const REQUIRED_ARTIFACTS = [
+  "release/demo-evidence.json",
+  "release/perf-mission-12.json",
+  "release/mission-13-evidence.json",
+  "release/mission-14-evidence.json"
+];
 const REQUIRED_MIGRATIONS = [
   "0001_habitat_tasks.sql",
   "0002_habitat_command_tasks.sql",
   "0003_ax_memory_notifications.sql",
   "0004_ax_objectives_incidents.sql",
-  "0005_ax_security_scheduler.sql"
+  "0005_ax_security_scheduler.sql",
+  "0006_ax_nexus_messages.sql"
 ];
 
 /** Artifact and schema presence is a release requirement, not a formality. */
@@ -125,7 +139,8 @@ export async function checkEvidenceClaims(root = ROOT) {
     try { return await readFile(path.join(root, file), "utf8"); } catch { return ""; }
   };
   const staging = await read("docs/STAGING_VALIDATION_RESULTS.md");
-  const android = await read("docs/ANDROID_MISSION_13_DEVICE_TEST.md");
+  // Mission 14 supersedes the Mission 13 Android sheet; the older file stays as history.
+  const android = (await read("docs/ANDROID_MISSION_14_DEVICE_TEST.md")) || (await read("docs/ANDROID_MISSION_13_DEVICE_TEST.md"));
   const line = (source, label) => {
     const match = source.match(new RegExp("^" + label + ":\\s*(.+)$", "m"));
     return match ? match[1].trim() : "";
@@ -170,6 +185,14 @@ export async function checkReleaseInputs(root = ROOT) {
   checks.push({ name: "0005 has security events table", ok: /habitat_ax_security_events/.test(schema) });
   checks.push({ name: "0005 has scheduler table", ok: /habitat_ax_scheduler/.test(schema) });
   checks.push({ name: "migration 0005 is additive", ok: /CREATE TABLE IF NOT EXISTS/i.test(schema) && !/\bDROP\b/i.test(schema) });
+
+  // Mission 14: the message channel schema must be present and additive, and its routes must be
+  // authenticated by the NEXUS credential. A release that lost either would pass every older check.
+  let messagesSchema = "";
+  try { messagesSchema = await readFile(path.join(root, "migrations", "0006_ax_nexus_messages.sql"), "utf8"); } catch { messagesSchema = ""; }
+  checks.push({ name: "0006 has the message table", ok: /CREATE TABLE IF NOT EXISTS habitat_ax_messages/i.test(messagesSchema) });
+  checks.push({ name: "0006 has the correlation index", ok: /habitat_ax_messages_correlation/i.test(messagesSchema) });
+  checks.push({ name: "migration 0006 is additive", ok: /CREATE TABLE IF NOT EXISTS/i.test(messagesSchema) && !/\bDROP\b/i.test(messagesSchema) });
   return { ok: checks.every(item => item.ok), checks };
 }
 
@@ -193,6 +216,33 @@ async function routeAuthCheck() {
     routes: routes.length,
     unguarded,
     note: "Static check only: every command route registration names requireAx or requireScheduler on the same line."
+  };
+}
+
+/**
+ * Mission 14: every NEXUS message route must name requireNexus on its registration line. This is a
+ * static check, deliberately narrow: it catches a route added without the NEXUS credential.
+ */
+async function nexusAuthCheck() {
+  const source = await readFile(path.join(ROOT, "command-routes.mjs"), "utf8");
+  const lines = source.split(/\r?\n/);
+  const routes = [];
+  for (const [index, line] of lines.entries()) {
+    const match = line.match(/nexusRoute\.(get|post)\("(\/ax\/nexus[^"]*)"/);
+    if (!match) continue;
+    routes.push({
+      method: match[1].toUpperCase(),
+      path: match[2],
+      guarded: /requireNexus/.test(line),
+      line: index + 1
+    });
+  }
+  const unguarded = routes.filter(route => !route.guarded);
+  return {
+    ok: unguarded.length === 0 && routes.length > 0,
+    routes: routes.length,
+    unguarded,
+    note: "Static check only: every NEXUS route registration names requireNexus on the same line."
   };
 }
 
@@ -259,6 +309,9 @@ export async function runReleaseGate() {
   const routeAuth = await routeAuthCheck();
   add("command route authentication", routeAuth);
 
+  const nexusAuth = await nexusAuthCheck();
+  add("NEXUS message route authentication", nexusAuth);
+
   const releaseInputs = await checkReleaseInputs(ROOT);
   add("required release inputs and migrations", releaseInputs);
 
@@ -276,6 +329,14 @@ export async function runReleaseGate() {
 
   const critical = run("node", ["--test", "tests/ax-adversarial-accounting.test.mjs", "tests/ax-adversarial-security.test.mjs", "tests/ax-adversarial-transports.test.mjs", "tests/ax-adversarial-auth.test.mjs", "tests/ax-scheduler-multiprocess.test.mjs", "tests/d1-http-compat-mission-12.test.mjs"]);
   add("critical adversarial suites", { ok: critical.ok, detail: critical.ok ? "exit 0" : (critical.stdout + critical.stderr).slice(-1200) });
+
+  // The channel and the complete-system acceptance test are release requirements, not optional
+  // extras: without them the "Ax can talk to NEXUS" claim has no evidence.
+  const channel = run("node", ["--test", "tests/ax-message-channel.test.mjs", "tests/ax-nexus-e2e.test.mjs"]);
+  add("Ax-NEXUS channel and complete-system acceptance", {
+    ok: channel.ok,
+    detail: channel.ok ? "exit 0 (12 tests)" : (channel.stdout + channel.stderr).slice(-1600)
+  });
 
   if (skipAndroid) {
     add("Android compilation", { ok: true, skipped: true, reason: "--skip-android was supplied" });
@@ -309,12 +370,14 @@ export async function runReleaseGate() {
       ci: "not yet verified for this manifest until the workflow run on the final head is green",
       staging: evidence.stagingStatus || "unknown",
       physicalDevice: evidence.androidStatus || "unknown",
-      controlCenter: "local real authenticated backend harness (in-memory); not staging or production"
+      controlCenter: "local real authenticated backend harness (in-memory); not staging or production",
+      messaging: "local integration evidence only (D1-shaped SQLite, simulated model transport); not staging",
+      autonomy: "local integration evidence only (scheduler tick + real engine + read-only adapter)"
     },
     schema: {
       migrations: migrations.files,
-      currentVersion: "0005",
-      newInThisMission: ["0005_ax_security_scheduler.sql"],
+      currentVersion: "0006",
+      newInThisMission: ["0006_ax_nexus_messages.sql"],
       appliedToProduction: false,
       note: "Validate against D1 before applying; SQLite proves SQL shape and idempotence, not D1 parity."
     },
@@ -323,8 +386,11 @@ export async function runReleaseGate() {
     knownLimitations: [
       "No production or staging deployment was performed.",
       "No disposable staging D1 credentials or owner approval id were available; staging is not verified.",
-      "Migration 0005 has not been applied to D1.",
+      "Migrations 0005 and 0006 have not been applied to D1.",
       "Android is compile-verified; no emulator or physical S26 Ultra test was run.",
+      "The Ax-NEXUS channel is locally proven; no Ax client is connected to a deployed origin.",
+      "Autonomy requires a trigger; a sleeping Render Free service is not continuously autonomous.",
+      "Message delivery is at-least-once and restricted to read-only adapters.",
       "No live model provider call is made by the gate or by tests.",
       "Research/engineering transports require AX_AGENT_LOCAL_ROOT and stay off by default.",
       "Scheduler runs only when an external trigger or an owner calls its tick endpoint."
@@ -332,6 +398,7 @@ export async function runReleaseGate() {
     rollback: [
       "Deploy the previous commit; migration 0005 is additive and no other schema was altered.",
       "Dropping habitat_ax_security_events or habitat_ax_scheduler removes only Mission 11 history.",
+      "Migration 0006 is additive; leaving habitat_ax_messages in place after a rollback is harmless.",
       "Do not roll back by deleting task, objective or memory tables."
     ]
   };

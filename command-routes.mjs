@@ -131,7 +131,10 @@ export function registerUniversalCommandRoutes(app, {
   // Mission 11 operational surfaces. Same rule: absent means 503, never an invented status.
   securityProvider = null,
   schedulerProvider = null,
-  projectProvider = null
+  projectProvider = null,
+  // Mission 14: the durable Ax <-> NEXUS message channel. Absent, its routes answer 503 rather than
+  // pretending a channel exists.
+  messageProvider = null
 } = {}) {
   // Two credentials, two permission sets. The bridge token is device-capable and predates this
   // work. The command token may only reach /ax/command, and it can never satisfy an owner action.
@@ -139,6 +142,7 @@ export function registerUniversalCommandRoutes(app, {
   // the response time. An empty credential never matches: the API fails closed when unconfigured.
   const bridgeToken = String(env.HABITAT_AX_BRIDGE_TOKEN || "").trim();
   const commandToken = String(env.HABITAT_AX_COMMAND_TOKEN || "").trim();
+  const nexusToken = String(env.AX_NEXUS_TOKEN || "").trim();
   const anyAxToken = Boolean(bridgeToken || commandToken);
   function axRole(req) {
     const token = bearer(req);
@@ -794,6 +798,213 @@ export function registerUniversalCommandRoutes(app, {
     }
     reply(res, outcome);
   }));
+
+  // ---------------------------------------------------------- Ax <-> NEXUS message channel
+  //
+  // The durable, bidirectional channel. Ax submits and reads; only the NEXUS credential may
+  // acknowledge, report progress, complete, fail or ask a question. A message can name only a
+  // read-only adapter from the deployment's allowlist, so this endpoint cannot execute arbitrary
+  // commands. The channel is a separate store from the task engine; it never invents a task row.
+  const messageChannel = () => resolveService(messageProvider);
+
+  function messagesUnavailable(res) {
+    res.status(503).json({
+      ok: false,
+      code: "message_channel_not_configured",
+      error: "The Ax-NEXUS message channel is not mounted on this service; no message was stored."
+    });
+  }
+
+  const MESSAGE_STATUS_BY_CODE = Object.freeze({
+    not_found: 404,
+    invalid_transition: 409,
+    message_conflict: 409,
+    invalid_direction: 409,
+    rate_limited: 429,
+    evidence_required: 400,
+    adapter_not_allowed: 403
+  });
+
+  function messageReply(res, outcome, created = false) {
+    if (outcome?.ok) return res.status(created ? 201 : 200).json(outcome);
+    const status = MESSAGE_STATUS_BY_CODE[outcome?.code] || 400;
+    return res.status(status).json({
+      ok: false,
+      code: outcome?.code || "invalid_request",
+      error: outcome?.error || "The message could not be stored.",
+      ...(outcome?.retryAfterMs ? { retryAfterMs: outcome.retryAfterMs } : {})
+    });
+  }
+
+  route.post("/ax/command/messages", requireAx, serviceGuard(async (req, res) => {
+    const channel = messageChannel();
+    if (!channel) return messagesUnavailable(res);
+    // `from` is decided here by the authenticated surface, never by the request body.
+    const outcome = await channel.submit({
+      kind: req.body?.kind,
+      body: req.body?.body ?? req.body?.message,
+      objective: req.body?.objective,
+      adapter: req.body?.adapter ?? null,
+      correlationId: req.body?.correlationId ?? null,
+      idempotencyKey: req.body?.idempotencyKey,
+      from: "ax",
+      client: req.axRole === "command" ? "ax-command-token" : "ax-bridge-token",
+      project: req.body?.project ?? null
+    });
+    return messageReply(res, outcome, !outcome.replayed);
+  }));
+
+  route.get("/ax/command/messages", requireAx, serviceGuard(async (req, res) => {
+    const channel = messageChannel();
+    if (!channel) return messagesUnavailable(res);
+    const messages = await channel.list({
+      status: req.query?.status || null,
+      correlationId: req.query?.correlationId || null,
+      from: req.query?.from || null,
+      limit: req.query?.limit
+    });
+    res.json({ ok: true, count: messages.length, messages });
+  }));
+
+  // Before the :id route: a correlation id is not a message id and must not be read as one.
+  route.get("/ax/command/messages/thread/:correlationId", requireAx, serviceGuard(async (req, res) => {
+    const channel = messageChannel();
+    if (!channel) return messagesUnavailable(res);
+    messageReply(res, await channel.thread({ correlationId: req.params.correlationId, limit: req.query?.limit }));
+  }));
+
+  route.get("/ax/command/messages/:id", requireAx, serviceGuard(async (req, res) => {
+    const channel = messageChannel();
+    if (!channel) return messagesUnavailable(res);
+    const message = await channel.get(req.params.id);
+    if (!message) return reply(res, { ok: false, code: "not_found", error: "No message with that id." });
+    res.json({ ok: true, message });
+  }));
+
+  route.post("/ax/command/messages/:id/answer", requireAx, serviceGuard(async (req, res) => {
+    const channel = messageChannel();
+    if (!channel) return messagesUnavailable(res);
+    messageReply(res, await channel.answer({
+      id: req.params.id,
+      answer: req.body?.answer,
+      by: req.axRole === "command" ? "ax-command-token" : "ax-bridge-token"
+    }));
+  }));
+
+  // ------------------------------------------------------------ NEXUS runtime surface
+  //
+  // A credential distinct from Ax's. The direction of a message is decided by which guard admitted
+  // the call, so Ax cannot post as NEXUS and NEXUS cannot submit as Ax. When AX_NEXUS_TOKEN is
+  // unset the surface fails closed with 503 instead of accepting the bridge token.
+  function requireNexus(req, res, next) {
+    if (!nexusToken) {
+      return res.status(503).json({
+        ok: false,
+        code: "nexus_auth_unconfigured",
+        error: "NEXUS message surface is unavailable: set AX_NEXUS_TOKEN on this service."
+      });
+    }
+    const presented = String(req.headers?.["x-nexus-token"] || "") || bearer(req);
+    if (!safeEqual(presented, nexusToken)) {
+      recordSecurity({ category: "auth.failure", severity: "medium", outcome: "denied", actor: "nexus", summary: "Rejected NEXUS message call with no valid credential" });
+      return res.status(401).json({ ok: false, code: "invalid_nexus_token", error: "NEXUS message authentication required." });
+    }
+    req.nexusRole = "nexus";
+    return next();
+  }
+
+  const nexusRoute = {
+    get: (path, ...handlers) => app.get(path, ...withEnvelopeList(handlers)),
+    post: (path, ...handlers) => app.post(path, ...withEnvelopeList(handlers))
+  };
+
+  nexusRoute.get("/ax/nexus/channel", requireNexus, async (_req, res) => {
+    const channel = messageChannel();
+    if (!channel) return messagesUnavailable(res);
+    res.json({
+      ok: true,
+      channel: {
+        ...(await channel.stats()),
+        allowedAdapters: channel.allowedAdapters,
+        limits: channel.limits,
+        states: channel.states
+      }
+    });
+  });
+
+  nexusRoute.get("/ax/nexus/inbox", requireNexus, async (req, res) => {
+    const channel = messageChannel();
+    if (!channel) return messagesUnavailable(res);
+    const statuses = String(req.query?.status || "queued,acknowledged,working,awaiting_answer").split(",").map(item => item.trim()).filter(Boolean);
+    const batches = await Promise.all(statuses.map(status => channel.list({ status, from: "ax", limit: req.query?.limit, order: "oldest" })));
+    const messages = batches.flat().sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)));
+    res.json({ ok: true, count: messages.length, statuses, messages });
+  });
+
+  nexusRoute.post("/ax/nexus/messages/:id/acknowledge", requireNexus, async (req, res) => {
+    const channel = messageChannel();
+    if (!channel) return messagesUnavailable(res);
+    messageReply(res, await channel.acknowledge({ id: req.params.id, executor: req.body?.executor || "nexus", note: req.body?.note || null }));
+  });
+
+  nexusRoute.post("/ax/nexus/messages/:id/progress", requireNexus, async (req, res) => {
+    const channel = messageChannel();
+    if (!channel) return messagesUnavailable(res);
+    messageReply(res, await channel.progress({ id: req.params.id, note: req.body?.note || null, percent: req.body?.percent ?? null }));
+  });
+
+  nexusRoute.post("/ax/nexus/messages/:id/complete", requireNexus, async (req, res) => {
+    const channel = messageChannel();
+    if (!channel) return messagesUnavailable(res);
+    messageReply(res, await channel.complete({
+      id: req.params.id,
+      summary: req.body?.summary || null,
+      evidence: req.body?.evidence,
+      taskId: req.body?.taskId || null,
+      runId: req.body?.runId || null
+    }));
+  });
+
+  nexusRoute.post("/ax/nexus/messages/:id/fail", requireNexus, async (req, res) => {
+    const channel = messageChannel();
+    if (!channel) return messagesUnavailable(res);
+    messageReply(res, await channel.fail({
+      id: req.params.id,
+      code: req.body?.code || "message_failed",
+      message: req.body?.message || null,
+      retryable: req.body?.retryable === true
+    }));
+  });
+
+  nexusRoute.post("/ax/nexus/messages/ask", requireNexus, async (req, res) => {
+    const channel = messageChannel();
+    if (!channel) return messagesUnavailable(res);
+    messageReply(res, await channel.ask({
+      correlationId: req.body?.correlationId,
+      question: req.body?.question ?? req.body?.body,
+      options: req.body?.options,
+      objectiveId: req.body?.objectiveId || null,
+      requiresDecision: req.body?.requiresDecision !== false,
+      kind: req.body?.kind || "question"
+    }), true);
+  });
+
+  nexusRoute.post("/ax/nexus/messages/notify", requireNexus, async (req, res) => {
+    const channel = messageChannel();
+    if (!channel) return messagesUnavailable(res);
+    messageReply(res, await channel.notifyAx({
+      correlationId: req.body?.correlationId || null,
+      body: req.body?.body,
+      kind: req.body?.kind || "note",
+      metadata: req.body?.metadata || null
+    }), true);
+  });
+
+  nexusRoute.get("/ax/nexus/thread/:correlationId", requireNexus, async (req, res) => {
+    const channel = messageChannel();
+    if (!channel) return messagesUnavailable(res);
+    messageReply(res, await channel.thread({ correlationId: req.params.correlationId, limit: req.query?.limit }));
+  });
 
   // ------------------------------------------------------- notifications and history
   const notificationService = () => {

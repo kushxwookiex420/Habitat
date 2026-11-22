@@ -30,6 +30,9 @@ export function createSchedulerService({
   objectives = null,
   runs = null,
   notifications = null,
+  // Mission 14: one bounded autonomy pass per tick. It is a callback, not a second scheduler: the
+  // lease above still decides who runs, and the callback owns its own idempotency.
+  autonomy = null,
   now = () => new Date().toISOString(),
   nowMs = () => Date.now(),
   leaseMs = SCHEDULER_LIMITS.leaseMs,
@@ -148,6 +151,49 @@ export function createSchedulerService({
           }
         }
       }
+      // Autonomous execution rides the same lease as recovery: at most one tick can advance queued
+      // messages or eligible objectives at a time. A failure here is reported, never retried
+      // blindly, and never changes a message to completed.
+      let autonomyResult = null;
+      if (typeof autonomy === "function") {
+        try {
+          autonomyResult = await autonomy();
+          if (autonomyResult && autonomyResult.ok === false) {
+            findings.push({
+              kind: "autonomy.unavailable",
+              severity: "warning",
+              subject: "autonomy",
+              title: "Autonomous execution did not run",
+              detail: String(autonomyResult.code || autonomyResult.reason || "unknown"),
+              recommendation: "Inspect the message channel and the run store; nothing was completed.",
+              safeAction: null
+            });
+          }
+          const deadLettered = Number(autonomyResult?.messages?.deadLettered || 0);
+          if (deadLettered > 0) {
+            findings.push({
+              kind: "autonomy.dead_letter",
+              severity: "high",
+              subject: "messages",
+              title: deadLettered + " message(s) dead-lettered",
+              detail: "The retry limit was reached; an owner decision is required.",
+              recommendation: "Read the message thread and requeue only with the owner.",
+              safeAction: null
+            });
+          }
+        } catch (error) {
+          log.error?.("AX_SCHEDULER_AUTONOMY_FAILED", clean(error?.message, 160));
+          autonomyResult = { ok: false, code: "autonomy_failed" };
+          findings.push({
+            kind: "autonomy.failed",
+            severity: "high",
+            subject: "autonomy",
+            title: "Autonomous pass failed",
+            detail: clean(error?.message, 200),
+            safeAction: null
+          });
+        }
+      }
       findings.push(...await stuckObjectives());
       findings.push(...await expiredApprovals());
       const high = findings.filter(item => ["high", "critical"].includes(item.severity));
@@ -182,6 +228,7 @@ export function createSchedulerService({
           summary: recoveryResult.report?.summary || null
         } : null,
         reconciledReservations: reconciled,
+        autonomy: autonomyResult,
         notification,
         startedAt: new Date(startedAtMs).toISOString(),
         finishedAt: now(),

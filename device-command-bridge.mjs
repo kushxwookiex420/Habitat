@@ -30,6 +30,9 @@ import { createD1SchedulerRepository } from "./ax-scheduler-repository.mjs";
 import { createProjectRegistry } from "./ax-projects.mjs";
 import { resolveAgentTransports } from "./ax-agent-transports.mjs";
 import { detectSandbox } from "./nexus-sandbox.mjs";
+import { createD1AxMessageRepository } from "./d1-ax-message-repository.mjs";
+import { createMessageChannel } from "./ax-message-channel.mjs";
+import { autonomousPolicy, dispatchObjective } from "./ax-objective-dispatch.mjs";
 
 const SAFE_COMMANDS = new Set(["device.status"]);
 const PAIRING_TTL_MS = 10 * 60 * 1000;
@@ -85,6 +88,9 @@ export function registerDeviceCommandBridge(app, {
   incidentRepository = null,
   securityRepository = null,
   schedulerRepository = null,
+  // Mission 14: the durable Ax <-> NEXUS message store. On a deployment it is created on the same
+  // D1 database as every other additive store; embedders and tests may inject one.
+  messageRepository = null,
   handleSignals = false,
   exitOnSignal = false,
   log = console
@@ -150,6 +156,22 @@ export function registerDeviceCommandBridge(app, {
     apiToken: env.HABITAT_D1_API_TOKEN,
     fetchImpl
   }) : null);
+  // The Ax <-> NEXUS message channel. Only read-only adapters are allowed through it, and the
+  // channel never executes anything itself: the scheduler's autonomy pass does, under a lease.
+  const messageStore = messageRepository || (hasD1 ? createD1AxMessageRepository({
+    accountId: env.CLOUDFLARE_ACCOUNT_ID,
+    databaseId: env.HABITAT_D1_DATABASE_ID,
+    apiToken: env.HABITAT_D1_API_TOKEN,
+    fetchImpl
+  }) : null);
+  const messages = messageStore ? createMessageChannel({
+    repository: messageStore,
+    allowedAdapters: READ_ONLY_ADAPTER_NAMES,
+    security: securityEvents,
+    notifications,
+    project: memoryProject,
+    log
+  }) : null;
   let schedulerRef = null;
   function resolveScheduler() {
     if (!schedulerStore) return null;
@@ -167,9 +189,108 @@ export function registerDeviceCommandBridge(app, {
         }
       },
       notifications,
+      // One bounded autonomy pass per tick, under the same lease as recovery.
+      autonomy: () => runAutonomy(),
       log
     });
     return schedulerRef;
+  }
+
+  /**
+   * Autonomous execution, run once per scheduler tick while the tick lease is held.
+   *
+   * 1. Drain the Ax message channel: submit queued messages through the same idempotent engine key,
+   *    reconcile working ones from their task rows, and dead-letter after the retry limit.
+   * 2. Advance objectives that are eligible under `autonomousPolicy`: owner-authorized work, or a
+   *    low-risk plan that needs no approval and names no prohibited permission.
+   *
+   * Nothing here approves anything, spends outside a reservation, or completes an objective. A
+   * failure is reported in the tick report and retried on a later tick, never silently swallowed.
+   */
+  async function runAutonomy() {
+    const report = { ok: true, messages: null, objectives: null };
+    if (messages) {
+      try {
+        report.messages = await messages.drain({
+          execute: async message => {
+            if (!commandApi?.engine) {
+              return { ok: false, code: "executor_unavailable", message: "The command engine is not mounted.", retryable: true };
+            }
+            const submitted = await commandApi.engine.submit({
+              objective: message.objective || message.body,
+              requestedBy: "ax",
+              role: "ax",
+              adapter: message.adapter,
+              // Deterministic per message: a crash after the claim re-submits the same key and the
+              // engine returns the original task instead of creating a second one.
+              idempotencyKey: "message:" + message.id
+            });
+            if (submitted.ok !== true) {
+              return {
+                ok: false,
+                code: submitted.code || "submit_failed",
+                message: submitted.error || null,
+                retryable: submitted.code !== "adapter_not_allowed"
+              };
+            }
+            return { ok: true, taskId: submitted.task.id };
+          },
+          check: async message => {
+            if (!commandApi?.engine || !message.taskId) return { status: "working" };
+            const read = await commandApi.engine.get(message.taskId);
+            if (!read || read.ok === false || !read.task) return { status: "working" };
+            const task = read.task;
+            if (task.status === "done") {
+              return { status: "done", result: { summary: task.result?.summary || "adapter completed", evidence: task.result?.evidence || [] } };
+            }
+            if (task.status === "failed" || task.status === "cancelled") {
+              return { status: "failed", error: { code: task.status, message: task.error || null }, retryable: false };
+            }
+            return { status: "working" };
+          }
+        });
+      } catch (error) {
+        log.error?.("AX_AUTONOMY_MESSAGE_DRAIN_FAILED", String(error?.message || error).slice(0, 160));
+        report.messages = { ok: false, code: "message_drain_failed" };
+      }
+    }
+
+    const orchestrator = typeof orchestratorResolver === "function" ? orchestratorResolver() : null;
+    if (objectives && orchestrator?.enabled) {
+      const advanced = [];
+      let rows = [];
+      try {
+        rows = await objectives.list({ limit: 20 });
+      } catch (error) {
+        report.objectives = { ok: false, code: "objective_list_failed" };
+      }
+      for (const row of rows) {
+        const policy = autonomousPolicy(row);
+        if (!policy.ok) continue;
+        try {
+          const started = await objectives.start(row.id, { by: "nexus-autonomy" });
+          if (started.ok !== true) {
+            advanced.push({ id: row.id, ok: false, code: started.code || "start_failed" });
+            continue;
+          }
+          const dispatched = await dispatchObjective({
+            objectives,
+            orchestrator,
+            objectiveId: row.id,
+            recordSecurity: entry => securityEvents?.record(entry),
+            by: "nexus-autonomy"
+          });
+          advanced.push({ id: row.id, ok: dispatched.ok === true, code: dispatched.code || null, runId: dispatched.run?.id || null });
+        } catch (error) {
+          log.error?.("AX_AUTONOMY_OBJECTIVE_FAILED", String(error?.message || error).slice(0, 160));
+          advanced.push({ id: row.id, ok: false, code: "autonomy_error" });
+        }
+      }
+      report.objectives = { ok: true, examined: rows.length, advanced };
+    } else if (objectives) {
+      report.objectives = { ok: false, code: orchestrator?.code || "orchestrator_not_resolved", reason: "objective autonomy needs a configured Ax run store" };
+    }
+    return report;
   }
   const projects = createProjectRegistry({ objectives, memory: memoryContext });
   const agentTransports = resolveAgentTransports(env);
@@ -482,6 +603,9 @@ export function registerDeviceCommandBridge(app, {
   // Resolved on the first run request, once the engine and the runtime exist. `undefined` means
   // "not resolved yet"; a resolved failure is cached as null or a disabled descriptor.
   let axOrchestrator;
+  // Captured from the provider closure below so the autonomy pass can resolve the orchestrator
+  // without waiting for an HTTP request to do it first.
+  let orchestratorResolver = null;
   let commandApi = null;
   // Resolved after mounting, because diagnostics probe the engine and runtime this function builds.
   let diagnosticsRef = () => ({ status: "not_ready", note: "Diagnostics are not mounted yet." });
@@ -533,7 +657,7 @@ export function registerDeviceCommandBridge(app, {
         enforced: ["per_run", "per_objective"],
         note: "Budgets are enforced before/after paid calls. A configured budget is not a record of spend; see the objective and run records."
       }),
-      orchestratorProvider: () => {
+      orchestratorProvider: (orchestratorResolver = () => {
         if (axOrchestrator !== undefined) return axOrchestrator;
         axOrchestrator = null;
         try {
@@ -603,7 +727,9 @@ export function registerDeviceCommandBridge(app, {
           axOrchestrator = { enabled: false, code: "orchestrator_init_failed", error: String(error?.message || error) };
         }
         return axOrchestrator;
-      }
+      }),
+      // Mission 14: the durable Ax <-> NEXUS message channel.
+      messageProvider: () => messages
     });
   } catch (error) {
     console.error("UNIVERSAL_COMMAND_MOUNT_FAILED", String(error?.message || error));
@@ -848,6 +974,9 @@ export function registerDeviceCommandBridge(app, {
   let nexusInit = null;
 
   return Object.freeze({
+    // Read-only accessor for embedders and tests; the channel itself is only reachable through the
+    // authenticated routes.
+    messageChannel: () => messages,
     async initialize({ startWorker = true } = {}) {
       if (initialized) {
         // A deferred or failed Nexus startup is retryable without restarting the process.
@@ -873,7 +1002,7 @@ export function registerDeviceCommandBridge(app, {
       await store.initialize();
       // Additive schema for memory and notifications. A failure is reported and leaves device
       // commands usable, because neither is a prerequisite for executing a task.
-      for (const [label, repository] of [["AX_MEMORY", memoryStore], ["AX_NOTIFICATIONS", notificationStore], ["AX_OBJECTIVES", objectiveStore], ["AX_INCIDENTS", incidentStore], ["AX_SECURITY_EVENTS", securityStore], ["AX_SCHEDULER", schedulerStore]]) {
+      for (const [label, repository] of [["AX_MEMORY", memoryStore], ["AX_NOTIFICATIONS", notificationStore], ["AX_OBJECTIVES", objectiveStore], ["AX_INCIDENTS", incidentStore], ["AX_SECURITY_EVENTS", securityStore], ["AX_SCHEDULER", schedulerStore], ["AX_MESSAGES", messageStore]]) {
         if (!repository || typeof repository.initialize !== "function") continue;
         try {
           await repository.initialize();

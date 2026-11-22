@@ -365,6 +365,9 @@ test("the OpenAPI document is public, valid and carries no credential", async ()
   assert.equal(res.body.schemaVersion, undefined, "the envelope must not corrupt the document");
   assert.deepEqual(Object.keys(res.body.paths).sort(), [
     "/ax/command/events",
+    "/ax/command/messages",
+    "/ax/command/messages/thread/{correlationId}",
+    "/ax/command/messages/{id}/answer",
     "/ax/command/presence",
     "/ax/command/tasks",
     "/ax/command/tasks/{id}",

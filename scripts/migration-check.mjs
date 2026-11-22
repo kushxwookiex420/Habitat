@@ -54,7 +54,8 @@ export async function runMigrationChecks() {
       "habitat_ax_objectives",
       "habitat_ax_incidents",
       "habitat_ax_security_events",
-      "habitat_ax_scheduler"
+      "habitat_ax_scheduler",
+      "habitat_ax_messages"
     ]) {
       check("fresh table " + name, freshTables.includes(name));
     }
@@ -62,7 +63,9 @@ export async function runMigrationChecks() {
       "habitat_ax_objectives_status",
       "habitat_ax_incidents_fingerprint",
       "habitat_ax_security_events_seq",
-      "habitat_ax_security_events_category"
+      "habitat_ax_security_events_category",
+      "habitat_ax_messages_correlation",
+      "habitat_ax_messages_status_updated"
     ]) {
       check("fresh index " + name, freshIndexes.includes(name));
     }
@@ -109,7 +112,7 @@ export async function runMigrationChecks() {
   const upgrade = new DatabaseSync(":memory:");
   try {
     const before = files.filter(file => Number(file.name.slice(0, 4)) <= 4);
-    const after = files.filter(file => Number(file.name.slice(0, 4)) === 5);
+    const after = files.filter(file => Number(file.name.slice(0, 4)) >= 5);
     await applyAll(upgrade, before);
     upgrade.prepare("INSERT INTO habitat_command_tasks (id, record_json, status, updated_at) VALUES (?, ?, ?, ?)")
       .run("task_legacy", JSON.stringify({ id: "task_legacy", status: "queued" }), "queued", new Date().toISOString());
@@ -118,6 +121,7 @@ export async function runMigrationChecks() {
     check("upgrade preserves existing task data", row?.record_json?.includes("task_legacy"));
     check("upgrade adds security events table", tables(upgrade).includes("habitat_ax_security_events"));
     check("upgrade adds scheduler table", tables(upgrade).includes("habitat_ax_scheduler"));
+    check("upgrade adds the Ax-NEXUS message table", tables(upgrade).includes("habitat_ax_messages"));
   } finally {
     upgrade.close();
   }

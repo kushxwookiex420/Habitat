@@ -9,8 +9,8 @@ android {
         applicationId = "com.habitat.axbridge"
         minSdk = 26
         targetSdk = 35
-        versionCode = 84
-        versionName = "0.8.4"
+        versionCode = 85
+        versionName = "0.8.5"
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17

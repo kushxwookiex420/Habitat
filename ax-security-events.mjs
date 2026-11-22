@@ -32,7 +32,15 @@ export const SECURITY_CATEGORIES = Object.freeze([
   "recovery.suspicious",
   "sensitive.action",
   "credential.rotation",
-  "route.denied"
+  "route.denied",
+  // Mission 14: the Ax <-> NEXUS message channel is auditable end to end.
+  "ax.message.submitted",
+  "ax.message.acknowledged",
+  "ax.message.completed",
+  "ax.message.failed",
+  "ax.message.dead_letter",
+  "ax.message.question",
+  "ax.message.answered"
 ]);
 
 export const SECURITY_SEVERITIES = Object.freeze(["info", "low", "medium", "high", "critical"]);
