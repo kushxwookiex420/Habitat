@@ -310,6 +310,19 @@ test("an audit outage on a refused decision leaves the refusal status intact", a
   assert.equal(response.body.recorded, undefined, "no audit-success field is added when nothing was recorded");
 });
 
+test("a refusal-audit flood is bounded so bad tokens cannot exhaust the log", async () => {
+  const repository = chainRepository();
+  const security = createSecurityEventService({ repository, log: quiet });
+  const { app } = await mountRuntime({ audit: createNexusAuditRecorder(security) });
+
+  for (let index = 0; index < 14; index += 1) {
+    const response = await decideAs(app, "cmd_a", true, { token: "wrong-token", deviceId: OWNER });
+    assert.equal(response.statusCode, 401, "every attempt is still refused");
+  }
+  assert.equal(repository.events.length, 10, "the refusal audit is capped per window");
+  assert.equal(verifyEventChain(repository.events).ok, true);
+});
+
 // ------------------------------------------------- 4. cancellation audit
 test("cancellation maps to work.stop_requested and forms a valid chain", async () => {
   const repository = chainRepository();
