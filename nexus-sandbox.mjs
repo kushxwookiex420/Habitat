@@ -33,7 +33,17 @@ export const SANDBOX_LIMITS = Object.freeze({
   openFiles: 256
 });
 
-const REQUIRED = ["/usr/bin/unshare", "/usr/bin/setpriv", "/usr/bin/prlimit", "/usr/sbin/chroot", "/usr/bin/mount", "/bin/sh", "/usr/bin/env"];
+// Resolved across the usual prefixes: current Ubuntu merges /usr/sbin into /usr/bin, and older
+// images keep chroot under /usr/sbin, so a fixed path silently disables the sandbox on one of them.
+const HOST_TOOLS = Object.freeze({
+  unshare: ["/usr/bin/unshare", "/bin/unshare"],
+  setpriv: ["/usr/bin/setpriv", "/bin/setpriv"],
+  prlimit: ["/usr/bin/prlimit", "/bin/prlimit"],
+  chroot: ["/usr/sbin/chroot", "/usr/bin/chroot", "/sbin/chroot", "/bin/chroot"],
+  mount: ["/usr/bin/mount", "/bin/mount"],
+  sh: ["/bin/sh", "/usr/bin/sh"],
+  env: ["/usr/bin/env", "/bin/env"]
+});
 
 let cached = null;
 
@@ -46,9 +56,14 @@ async function exists(candidate) {
   }
 }
 
-function probeNamespaces(timeoutMs) {
+async function resolveTool(candidates) {
+  for (const candidate of candidates) if (await exists(candidate)) return candidate;
+  return null;
+}
+
+function probeNamespaces(unsharePath, shPath, timeoutMs) {
   return new Promise(resolve => {
-    const child = spawn("/usr/bin/unshare", ["-r", "-m", "-p", "-f", "-n", "/bin/sh", "-c", "echo probe-ok"], {
+    const child = spawn(unsharePath, ["-r", "-m", "-p", "-f", "-n", shPath, "-c", "echo probe-ok"], {
       stdio: ["ignore", "pipe", "pipe"],
       timeout: timeoutMs,
       env: { PATH: "/usr/local/bin:/usr/bin:/bin" }
@@ -66,17 +81,22 @@ function probeNamespaces(timeoutMs) {
 export async function detectSandbox({ timeoutMs = 5000 } = {}) {
   if (cached) return cached;
   const missing = [];
-  for (const binary of REQUIRED) if (!(await exists(binary))) missing.push(binary);
+  const tools = {};
+  for (const [name, candidates] of Object.entries(HOST_TOOLS)) {
+    const found = await resolveTool(candidates);
+    if (found) tools[name] = found;
+    else missing.push(name + " (" + candidates.join(" or ") + ")");
+  }
   if (!(await exists(SETUP_SCRIPT))) missing.push(SETUP_SCRIPT);
   if (process.platform !== "linux") missing.push("linux");
   if (missing.length) {
-    cached = Object.freeze({ available: false, backend: SANDBOX_BACKEND, missing, reason: "missing primitives: " + missing.join(", ") });
+    cached = Object.freeze({ available: false, backend: SANDBOX_BACKEND, missing, tools, reason: "missing primitives: " + missing.join(", ") });
     return cached;
   }
-  const probe = await probeNamespaces(timeoutMs);
+  const probe = await probeNamespaces(tools.unshare, tools.sh, timeoutMs);
   cached = Object.freeze(probe.ok
-    ? { available: true, backend: SANDBOX_BACKEND, missing: [], reason: "user/mount/pid/net namespaces available" }
-    : { available: false, backend: SANDBOX_BACKEND, missing: [], reason: "namespace probe failed: " + probe.reason });
+    ? { available: true, backend: SANDBOX_BACKEND, missing: [], tools, reason: "user/mount/pid/net namespaces available" }
+    : { available: false, backend: SANDBOX_BACKEND, missing: [], tools, reason: "namespace probe failed: " + probe.reason });
   return cached;
 }
 
@@ -183,7 +203,7 @@ export async function runSandboxed({ sourceDir, allowedPrefixes, command, args =
       "/bin/sh", SETUP_SCRIPT, base,
       String(limits.memoryBytes), String(limits.nproc), String(limits.fileBytes),
       String(limits.workBytes), String(limits.tmpBytes), String(limits.cpuSeconds), String(limits.openFiles),
-      sandboxPath, runtimeDir, command, ...args.map(String)
+      sandboxPath, runtimeDir, verdict.tools.chroot, verdict.tools.sh, command, ...args.map(String)
     ];
 
     return await new Promise(resolve => {
@@ -193,7 +213,7 @@ export async function runSandboxed({ sourceDir, allowedPrefixes, command, args =
       let timedOut = false;
       let limitsExceeded = null;
       let settled = false;
-      const child = spawn("/usr/bin/unshare", argsList, {
+      const child = spawn(verdict.tools.unshare, argsList, {
         stdio: ["ignore", "pipe", "pipe"],
         detached: true,
         env: { PATH: "/usr/local/bin:/usr/bin:/bin", HOME: "/tmp" }

@@ -7,7 +7,7 @@
 # $5 work tmpfs bytes    $6 tmp tmpfs bytes   $7 cpu seconds
 # $8 open files
 # $9 sandbox PATH       $10 runtime dir to expose read-only (empty when it is already /usr)
-# $11 command            $12... arguments
+# $11 resolved chroot    $12 resolved shell     $13 command  $14... arguments
 set -eu
 
 base=$1
@@ -20,7 +20,9 @@ cpu=$7
 nofile=$8
 sandbox_path=$9
 runtime_dir=${10}
-shift 10
+chroot_bin=${11}
+shell_bin=${12}
+shift 12
 
 root="$base/root"
 checkout="$base/checkout"
@@ -52,10 +54,10 @@ fi
 
 # Enter the isolated root, drop every capability and set no_new_privs, apply kernel rlimits, clear
 # the environment entirely, then run the allowlisted command from the isolated checkout.
-exec /usr/sbin/chroot "$root" /usr/bin/setpriv \
+exec "$chroot_bin" "$root" /usr/bin/setpriv \
   --no-new-privs --bounding-set=-all --inh-caps=-all --ambient-caps=-all \
   /usr/bin/prlimit \
   --as="$memory" --nproc="$pids" --fsize="$fsize" --cpu="$cpu" --nofile="$nofile" \
   /usr/bin/env -i \
   PATH="$sandbox_path" HOME=/work TMPDIR=/tmp CI=1 NODE_ENV=test \
-  /bin/sh -c 'cd /work && exec "$@"' sh "$@"
+  "$shell_bin" -c 'cd /work && exec "$@"' sh "$@"
