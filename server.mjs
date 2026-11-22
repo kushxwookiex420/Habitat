@@ -1,4 +1,5 @@
 import { buildCapabilityStatus } from "./capability-status.mjs";
+import { nexusMessageSurfaceStatus } from "./command-routes.mjs";
 import { registerDeviceCommandBridge } from "./device-command-bridge.mjs";
 import { claimTaskDispatch } from "./task-dispatch-guard.mjs";
 import { createD1TaskRepository } from "./d1-task-repository.mjs";
@@ -565,6 +566,9 @@ app.get("/health", (req, res) => {
     // mounted; `configured=true, started=false` means it is mounted but has not started. Neither
     // changes the health response, so Render readiness never depends on the worker.
     nexus: deviceBridge.nexus || null,
+    // The NEXUS message-surface credential is separate from the executor above. This boolean lets
+    // a verifier confirm AX_NEXUS_TOKEN reached the process without presenting or logging it.
+    nexusMessageSurface: nexusMessageSurfaceStatus(process.env),
     // Public, non-sensitive pointers. Full probe-based diagnostics require the Ax credential at
     // GET /ax/command/diagnostics; this endpoint never claims a subsystem is healthy.
     version: process.env.HABITAT_VERSION || "0.5.0",

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { registerUniversalCommandRoutes } from "../command-routes.mjs";
+import { registerUniversalCommandRoutes, nexusMessageSurfaceStatus } from "../command-routes.mjs";
 
 function makeApp() {
   const routes = new Map();
@@ -461,6 +461,15 @@ test("a verified device with no configured owner is a 503 misconfiguration, not 
   assert.equal(res.body.code, "owner_unconfigured");
   assert.match(res.body.error, /HABITAT_OWNER_DEVICE_IDS/);
   assert.equal(repository.rows.get("cmd_noowner").status, "working", "nothing was modified");
+});
+
+test("health reports the NEXUS message-surface credential without exposing it", () => {
+  assert.deepEqual(nexusMessageSurfaceStatus({}), { configured: false, code: "nexus_auth_unconfigured" });
+  assert.deepEqual(nexusMessageSurfaceStatus({ AX_NEXUS_TOKEN: "   " }), { configured: false, code: "nexus_auth_unconfigured" });
+  const secret = "s".repeat(64);
+  const present = nexusMessageSurfaceStatus({ AX_NEXUS_TOKEN: secret });
+  assert.deepEqual(present, { configured: true, code: null });
+  assert.equal(JSON.stringify(present).includes(secret), false, "the status must never contain the token");
 });
 
 test("Ax routes cannot plan, checkpoint or request approval on a worker-owned task", async () => {
