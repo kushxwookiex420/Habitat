@@ -2,10 +2,10 @@
   "schemaVersion": 1,
   "mission": "17",
   "title": "NEXUS autonomous work cycle acceptance",
-  "generatedAt": "2026-11-22T07:36:36.285Z",
-  "finishedAt": "2026-11-22T07:36:36.756Z",
-  "commit": "ab726322897ddee2b33aa4be4aeda1e08df3a42e",
-  "head": "16451d89685c70a9be2ac1feef335571efb599e0",
+  "generatedAt": "2026-11-22T07:39:50.163Z",
+  "finishedAt": "2026-11-22T07:39:50.673Z",
+  "commit": "51a8ab6c8d1e43860775777aaaeebf908bc432e0",
+  "head": "51a8ab6c8d1e43860775777aaaeebf908bc432e0",
   "branch": "ax-nexus/revision-4.6-nexus-mainline-integration",
   "node": "v26.13.1",
   "suites": [
@@ -13,8 +13,8 @@
     "tests/ax-nexus-e2e.test.mjs"
   ],
   "summary": {
-    "checked": 13,
-    "passed": 13,
+    "checked": 14,
+    "passed": 14,
     "failed": 0,
     "exitCode": 0
   },
@@ -66,6 +66,10 @@
     {
       "ok": true,
       "name": "10: a multi-agent objective reaches a verified completion with memory, audit and a result message"
+    },
+    {
+      "ok": true,
+      "name": "11: an operator stop halts the mission between steps and a later run resumes it"
     },
     {
       "ok": true,
