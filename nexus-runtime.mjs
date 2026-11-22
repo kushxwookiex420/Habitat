@@ -949,8 +949,19 @@ export function registerNexusRuntime(app, {
           status: outcome.status || null
         });
       }
-      await recordAudit({ event: "device.command.cancelled", actorDeviceId: deviceId, targetDeviceId: taskId });
-      return res.json({ ok: true, taskId, status: "cancelled" });
+      const audited = await recordAudit({ event: "device.command.cancelled", actorDeviceId: deviceId, targetDeviceId: taskId });
+      if (!audited.ok) {
+        // The stop already took effect; say so, but do not report an unauditable cancellation as
+        // a clean success.
+        return res.status(502).json({
+          ok: false,
+          recorded: false,
+          taskId,
+          status: "cancelled",
+          error: "The cancellation was applied but could not be recorded in the security audit log."
+        });
+      }
+      return res.json({ ok: true, recorded: audited.recorded !== false, taskId, status: "cancelled" });
     } catch (error) {
       console.error("DEVICE_CANCEL_FAILED", String(error?.message || error));
       return res.status(502).json({ ok: false, error: "Could not cancel the task." });
