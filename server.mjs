@@ -14,6 +14,7 @@ import { createD1SecretVault } from "./d1-secret-vault.mjs";
 import { registerTikTokOAuth } from "./tiktok-oauth.mjs";
 import { registerShopifyOAuth } from "./shopify-oauth.mjs";
 import { registerPublicPages } from "./public-pages.mjs";
+import { registerControlCenter } from "./control-center.mjs";
 import { readFile } from "node:fs/promises";
 
 import express from "express";
@@ -25,6 +26,9 @@ app.use(express.json({ limit: "1mb" }));
 const deviceCommandBridge = registerDeviceCommandBridge(app);
 
 registerPublicPages(app);
+// Operational control center. The page is public but carries no data; every value it shows comes
+// from an authenticated Ax route with a token the owner enters in the browser.
+registerControlCenter(app, { version: process.env.HABITAT_VERSION || "0.5.0" });
 registerProductDemoResearch(app);
 registerPromotionEngine(app);
 registerProductDemoRenderer(app);
@@ -561,6 +565,10 @@ app.get("/health", (req, res) => {
     // mounted; `configured=true, started=false` means it is mounted but has not started. Neither
     // changes the health response, so Render readiness never depends on the worker.
     nexus: deviceBridge.nexus || null,
+    // Public, non-sensitive pointers. Full probe-based diagnostics require the Ax credential at
+    // GET /ax/command/diagnostics; this endpoint never claims a subsystem is healthy.
+    version: process.env.HABITAT_VERSION || "0.5.0",
+    controlCenter: "/control",
     provider: "multi-provider",
     model,
     free_brain: true
