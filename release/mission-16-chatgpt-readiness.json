@@ -1,0 +1,1308 @@
+{
+  "schemaVersion": 1,
+  "mission": 16,
+  "generatedAt": "2026-11-22T06:01:14.050Z",
+  "commit": "841ed093b00f6f158a401ceda1a5348f1c9ffef5",
+  "evidenceLevels": {
+    "contract": "implemented and validated locally",
+    "http": "local real HTTP over a real TCP socket in a separate Node process",
+    "storage": "node:sqlite behind a D1-shaped fetch shim (not D1, not staging)",
+    "chatgpt": "not connected; no request from OpenAI was made or claimed"
+  },
+  "checks": [
+    {
+      "name": "OpenAPI document satisfies its own contract",
+      "ok": true,
+      "detail": []
+    },
+    {
+      "name": "route table is introspectable (non-empty)",
+      "ok": true,
+      "detail": {
+        "routes": 84
+      }
+    },
+    {
+      "name": "documented operations all exist in the real route table",
+      "ok": true,
+      "detail": []
+    },
+    {
+      "name": "every documented operation is on the authenticated /ax/command surface",
+      "ok": true,
+      "detail": [
+        {
+          "method": "GET",
+          "path": "/ax/command/events",
+          "operationId": "getEvents"
+        },
+        {
+          "method": "GET",
+          "path": "/ax/command/messages",
+          "operationId": "listNexusMessages"
+        },
+        {
+          "method": "POST",
+          "path": "/ax/command/messages",
+          "operationId": "sendNexusMessage"
+        },
+        {
+          "method": "POST",
+          "path": "/ax/command/messages/{id}/answer",
+          "operationId": "answerNexusQuestion"
+        },
+        {
+          "method": "GET",
+          "path": "/ax/command/messages/thread/{correlationId}",
+          "operationId": "getNexusThread"
+        },
+        {
+          "method": "GET",
+          "path": "/ax/command/presence",
+          "operationId": "getPresence"
+        },
+        {
+          "method": "GET",
+          "path": "/ax/command/tasks",
+          "operationId": "listTasks"
+        },
+        {
+          "method": "POST",
+          "path": "/ax/command/tasks",
+          "operationId": "submitTask"
+        },
+        {
+          "method": "GET",
+          "path": "/ax/command/tasks/{id}",
+          "operationId": "getTask"
+        },
+        {
+          "method": "GET",
+          "path": "/ax/command/tools",
+          "operationId": "listTools"
+        }
+      ]
+    },
+    {
+      "name": "the NEXUS surface is absent from the Ax document",
+      "ok": true,
+      "detail": [
+        "/ax/command/messages",
+        "/ax/command/messages/thread/{correlationId}",
+        "/ax/command/messages/{id}/answer",
+        "/ax/command/tasks",
+        "/ax/command/tasks/{id}",
+        "/ax/command/events",
+        "/ax/command/presence",
+        "/ax/command/tools"
+      ]
+    },
+    {
+      "name": "the document carries no credential",
+      "ok": true,
+      "detail": []
+    },
+    {
+      "name": "openapi.json is public over HTTPS-terminated HTTP (200, no credential)",
+      "ok": true,
+      "detail": {
+        "status": 200,
+        "contentType": "application/json; charset=utf-8",
+        "body": {
+          "openapi": "3.1.0",
+          "info": {
+            "title": "Habitat — Ax command bridge",
+            "version": "1.0.0",
+            "description": "Submit objectives to NEXUS, follow their progress with a cursor, and read the evidence they produced. Read-only execution only."
+          },
+          "servers": [
+            {
+              "url": "https://127.0.0.1:38807"
+            }
+          ],
+          "security": [
+            {
+              "bearerAuth": []
+            }
+          ],
+          "components": {
+            "securitySchemes": {
+              "bearerAuth": {
+                "type": "http",
+                "scheme": "bearer"
+              }
+            },
+            "schemas": {
+              "Error": {
+                "type": "object",
+                "required": [
+                  "schemaVersion",
+                  "ok",
+                  "code",
+                  "error"
+                ],
+                "properties": {
+                  "schemaVersion": {
+                    "type": "integer",
+                    "const": 1
+                  },
+                  "ok": {
+                    "type": "boolean",
+                    "const": false
+                  },
+                  "code": {
+                    "type": "string"
+                  },
+                  "error": {
+                    "type": "string"
+                  }
+                }
+              },
+              "SubmitRequest": {
+                "type": "object",
+                "required": [
+                  "objective",
+                  "idempotencyKey"
+                ],
+                "properties": {
+                  "objective": {
+                    "type": "string",
+                    "maxLength": 2000,
+                    "description": "What NEXUS should do, in one sentence. It cannot name a side-effecting adapter."
+                  },
+                  "role": {
+                    "type": "string",
+                    "enum": [
+                      "ax",
+                      "atlas",
+                      "orion",
+                      "sentinel"
+                    ],
+                    "default": "ax",
+                    "description": "Which role owns the objective. Ax submits as ax."
+                  },
+                  "adapter": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "description": "Optional tool name such as runtime.health. Omit to let NEXUS choose; a task with no adapter waits for a human."
+                  },
+                  "idempotencyKey": {
+                    "type": "string",
+                    "maxLength": 128,
+                    "description": "Unique per objective. Reusing it on a retry returns the original task instead of creating a duplicate."
+                  }
+                }
+              },
+              "Task": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  },
+                  "objective": {
+                    "type": "string"
+                  },
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "queued",
+                      "working",
+                      "needs_approval",
+                      "done",
+                      "failed",
+                      "cancelled",
+                      "blocked"
+                    ]
+                  },
+                  "role": {
+                    "type": "string"
+                  },
+                  "adapter": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "attempts": {
+                    "type": "integer"
+                  },
+                  "createdAt": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "updatedAt": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "error": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "result": {
+                    "type": [
+                      "object",
+                      "null"
+                    ],
+                    "properties": {
+                      "summary": {
+                        "type": "string"
+                      },
+                      "evidence": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      "verifiedBy": {
+                        "type": "string",
+                        "description": "Worker id that produced the evidence."
+                      }
+                    }
+                  },
+                  "statusHistory": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "from": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "to": {
+                          "type": "string"
+                        },
+                        "at": {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        "by": {
+                          "type": "string"
+                        },
+                        "reason": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "paths": {
+            "/ax/command/messages": {
+              "post": {
+                "operationId": "sendNexusMessage",
+                "summary": "Send a message to NEXUS",
+                "description": "Stores a durable, correlated message for the NEXUS runtime and returns its id. Reusing an idempotencyKey returns the same message. kind=task must name one read-only adapter from the deployment allowlist; the message channel cannot execute arbitrary commands.",
+                "x-openai-isConsequential": false,
+                "requestBody": {
+                  "required": true,
+                  "content": {
+                    "application/json": {
+                      "schema": {
+                        "type": "object",
+                        "required": [
+                          "kind",
+                          "body",
+                          "idempotencyKey"
+                        ],
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "enum": [
+                              "task",
+                              "question",
+                              "note"
+                            ]
+                          },
+                          "body": {
+                            "type": "string",
+                            "maxLength": 4000
+                          },
+                          "objective": {
+                            "type": "string",
+                            "maxLength": 2000,
+                            "description": "Required for kind=task."
+                          },
+                          "adapter": {
+                            "type": "string",
+                            "description": "Read-only adapter name, required for kind=task."
+                          },
+                          "correlationId": {
+                            "type": "string",
+                            "description": "Thread id; generated when omitted."
+                          },
+                          "idempotencyKey": {
+                            "type": "string",
+                            "maxLength": 160
+                          },
+                          "project": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                "responses": {
+                  "200": {
+                    "description": "Replayed: the idempotency key already named this message"
+                  },
+                  "201": {
+                    "description": "Message stored and queued"
+                  },
+                  "400": {
+                    "description": "Invalid kind, body, objective, adapter or idempotency key",
+                    "content": {
+                      "application/json": {
+                        "schema": {
+                          "$ref": "#/components/schemas/Error"
+                        }
+                      }
+                    }
+                  },
+                  "401": {
+                    "description": "Missing or invalid command token",
+                    "content": {
+                      "application/json": {
+                        "schema": {
+                          "$ref": "#/components/schemas/Error"
+                        }
+                      }
+                    }
+                  },
+                  "403": {
+                    "description": "Adapter is not on the read-only allowlist",
+                    "content": {
+                      "application/json": {
+                        "schema": {
+                          "$ref": "#/components/schemas/Error"
+                        }
+                      }
+                    }
+                  },
+                  "429": {
+                    "description": "Per-origin rate limit reached",
+                    "content": {
+                      "application/json": {
+                        "schema": {
+                          "$ref": "#/components/schemas/Error"
+                        }
+                      }
+                    }
+                  },
+                  "503": {
+                    "description": "The message channel is not mounted",
+                    "content": {
+                      "application/json": {
+                        "schema": {
+                          "$ref": "#/components/schemas/Error"
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              "get": {
+                "operationId": "listNexusMessages",
+                "summary": "List messages",
+                "description": "Most recently updated messages, newest first.",
+                "parameters": [
+                  {
+                    "name": "status",
+                    "in": "query",
+                    "required": false,
+                    "schema": {
+                      "type": "string"
+                    }
+                  },
+                  {
+                    "name": "correlationId",
+                    "in": "query",
+                    "required": false,
+                    "schema": {
+                      "type": "string"
+                    }
+                  },
+                  {
+                    "name": "limit",
+                    "in": "query",
+                    "required": false,
+                    "schema": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 200
+                    }
+                  }
+                ],
+                "responses": {
+                  "200": {
+                    "description": "A bounded list of messages"
+                  },
+                  "401": {
+                    "description": "Missing or invalid command token",
+                    "content": {
+                      "application/json": {
+                        "schema": {
+                          "$ref": "#/components/schemas/Error"
+                        }
+                      }
+                    }
+                  },
+                  "503": {
+                    "description": "The message channel is not mounted",
+                    "content": {
+                      "application/json": {
+                        "schema": {
+                          "$ref": "#/components/schemas/Error"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "/ax/command/messages/thread/{correlationId}": {
+              "get": {
+                "operationId": "getNexusThread",
+                "summary": "Retrieve a whole exchange by correlation id",
+                "description": "Returns every message in the thread oldest first, plus a terminal summary and any question waiting for Ax's decision.",
+                "parameters": [
+                  {
+                    "name": "correlationId",
+                    "in": "path",
+                    "required": true,
+                    "schema": {
+                      "type": "string",
+                      "maxLength": 120
+                    }
+                  }
+                ],
+                "responses": {
+                  "200": {
+                    "description": "The thread, its terminal results and any awaiting decision"
+                  },
+                  "400": {
+                    "description": "Invalid correlation id",
+                    "content": {
+                      "application/json": {
+                        "schema": {
+                          "$ref": "#/components/schemas/Error"
+                        }
+                      }
+                    }
+                  },
+                  "401": {
+                    "description": "Missing or invalid command token",
+                    "content": {
+                      "application/json": {
+                        "schema": {
+                          "$ref": "#/components/schemas/Error"
+                        }
+                      }
+                    }
+                  },
+                  "503": {
+                    "description": "The message channel is not mounted",
+                    "content": {
+                      "application/json": {
+                        "schema": {
+                          "$ref": "#/components/schemas/Error"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "/ax/command/messages/{id}/answer": {
+              "post": {
+                "operationId": "answerNexusQuestion",
+                "summary": "Answer a NEXUS question or approval request",
+                "description": "Answers a message whose status is awaiting_answer. A question may be answered once.",
+                "x-openai-isConsequential": true,
+                "parameters": [
+                  {
+                    "name": "id",
+                    "in": "path",
+                    "required": true,
+                    "schema": {
+                      "type": "string"
+                    }
+                  }
+                ],
+                "requestBody": {
+                  "required": true,
+                  "content": {
+                    "application/json": {
+                      "schema": {
+                        "type": "object",
+                        "required": [
+                          "answer"
+                        ],
+                        "properties": {
+                          "answer": {
+                            "type": "string",
+                            "maxLength": 4000
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                "responses": {
+                  "200": {
+                    "description": "The answer is recorded"
+                  },
+                  "401": {
+                    "description": "Missing or invalid command token",
+                    "content": {
+                      "application/json": {
+                        "schema": {
+                          "$ref": "#/components/schemas/Error"
+                        }
+                      }
+                    }
+                  },
+                  "404": {
+                    "description": "No message with that id",
+                    "content": {
+                      "application/json": {
+                        "schema": {
+                          "$ref": "#/components/schemas/Error"
+                        }
+                      }
+                    }
+                  },
+                  "409": {
+                    "description": "The message is not awaiting an answer",
+                    "content": {
+                      "application/json": {
+                        "schema": {
+                          "$ref": "#/components/schemas/Error"
+                        }
+                      }
+                    }
+                  },
+                  "503": {
+                    "description": "The message channel is not mounted",
+                    "content": {
+                      "application/json": {
+                        "schema": {
+                          "$ref": "#/components/schemas/Error"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "/ax/command/tasks": {
+              "post": {
+                "operationId": "submitTask",
+                "summary": "Submit an objective",
+                "description": "Creates a command task owned by Ax and returns its id immediately. Reusing an idempotencyKey returns the same task.",
+                "x-openai-isConsequential": true,
+                "requestBody": {
+                  "required": true,
+                  "content": {
+                    "application/json": {
+                      "schema": {
+                        "$ref": "#/components/schemas/SubmitRequest"
+                      }
+                    }
+                  }
+                },
+                "responses": {
+                  "200": {
+                    "description": "Replayed: the idempotency key already named this task",
+                    "content": {
+                      "application/json": {
+                        "schema": {
+                          "type": "object",
+                          "properties": {
+                            "schemaVersion": {
+                              "type": "integer",
+                              "const": 1
+                            },
+                            "ok": {
+                              "type": "boolean"
+                            },
+                            "replayed": {
+                              "type": "boolean",
+                              "const": true
+                            },
+                            "task": {
+                              "$ref": "#/components/schemas/Task"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "201": {
+                    "description": "Task accepted",
+                    "content": {
+                      "application/json": {
+                        "schema": {
+                          "type": "object",
+                          "properties": {
+                            "schemaVersion": {
+                              "type": "integer",
+                              "const": 1
+                            },
+                            "ok": {
+                              "type": "boolean",
+                              "const": true
+                            },
+                            "task": {
+                              "$ref": "#/components/schemas/Task"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "400": {
+                    "description": "Invalid objective or role",
+                    "content": {
+                      "application/json": {
+                        "schema": {
+                          "$ref": "#/components/schemas/Error"
+                        }
+                      }
+                    }
+                  },
+                  "401": {
+                    "description": "Missing or invalid command token",
+                    "content": {
+                      "application/json": {
+                        "schema": {
+                          "$ref": "#/components/schemas/Error"
+                        }
+                      }
+                    }
+                  },
+                  "503": {
+                    "description": "Command API or storage is not configured",
+                    "content": {
+                      "application/json": {
+                        "schema": {
+                          "$ref": "#/components/schemas/Error"
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              "get": {
+                "operationId": "listTasks",
+                "summary": "List recent tasks",
+                "description": "Most recently updated command tasks, optionally filtered by status.",
+                "parameters": [
+                  {
+                    "name": "status",
+                    "in": "query",
+                    "required": false,
+                    "schema": {
+                      "type": "string",
+                      "enum": [
+                        "queued",
+                        "working",
+                        "needs_approval",
+                        "done",
+                        "failed",
+                        "cancelled"
+                      ]
+                    },
+                    "description": "Only return tasks in this state."
+                  },
+                  {
+                    "name": "limit",
+                    "in": "query",
+                    "required": false,
+                    "schema": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 200,
+                      "default": 50
+                    },
+                    "description": "Maximum tasks to return."
+                  }
+                ],
+                "responses": {
+                  "200": {
+                    "description": "Tasks, newest first",
+                    "content": {
+                      "application/json": {
+                        "schema": {
+                          "type": "object"
+                        }
+                      }
+                    }
+                  },
+                  "401": {
+                    "description": "Missing or invalid command token",
+                    "content": {
+                      "application/json": {
+                        "schema": {
+                          "$ref": "#/components/schemas/Error"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "/ax/command/tasks/{id}": {
+              "get": {
+                "operationId": "getTask",
+                "summary": "Read one task",
+                "description": "Returns the task's current state, its history, its error if it failed, and result.evidence when it completed.",
+                "parameters": [
+                  {
+                    "name": "id",
+                    "in": "path",
+                    "required": true,
+                    "schema": {
+                      "type": "string"
+                    },
+                    "description": "The task id returned by submitTask."
+                  }
+                ],
+                "responses": {
+                  "200": {
+                    "description": "The task",
+                    "content": {
+                      "application/json": {
+                        "schema": {
+                          "type": "object",
+                          "properties": {
+                            "schemaVersion": {
+                              "type": "integer",
+                              "const": 1
+                            },
+                            "ok": {
+                              "type": "boolean",
+                              "const": true
+                            },
+                            "task": {
+                              "$ref": "#/components/schemas/Task"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "401": {
+                    "description": "Missing or invalid command token",
+                    "content": {
+                      "application/json": {
+                        "schema": {
+                          "$ref": "#/components/schemas/Error"
+                        }
+                      }
+                    }
+                  },
+                  "404": {
+                    "description": "No task with that id",
+                    "content": {
+                      "application/json": {
+                        "schema": {
+                          "$ref": "#/components/schemas/Error"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "/ax/command/events": {
+              "get": {
+                "operationId": "getEvents",
+                "summary": "Read changes since a cursor",
+                "description": "Tasks whose state changed after the cursor, oldest first. Pass nextSince and nextAfterId back to continue.",
+                "parameters": [
+                  {
+                    "name": "since",
+                    "in": "query",
+                    "required": false,
+                    "schema": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "description": "ISO-8601 timestamp from a previous nextSince."
+                  },
+                  {
+                    "name": "afterId",
+                    "in": "query",
+                    "required": false,
+                    "schema": {
+                      "type": "string"
+                    },
+                    "description": "Task id from a previous nextAfterId, breaking ties in the same millisecond."
+                  },
+                  {
+                    "name": "limit",
+                    "in": "query",
+                    "required": false,
+                    "schema": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 200,
+                      "default": 50
+                    },
+                    "description": "Maximum changed tasks per page."
+                  }
+                ],
+                "responses": {
+                  "200": {
+                    "description": "Changed tasks with a cursor for the next page",
+                    "content": {
+                      "application/json": {
+                        "schema": {
+                          "type": "object",
+                          "properties": {
+                            "schemaVersion": {
+                              "type": "integer",
+                              "const": 1
+                            },
+                            "ok": {
+                              "type": "boolean",
+                              "const": true
+                            },
+                            "events": {
+                              "type": "array",
+                              "items": {
+                                "type": "object"
+                              }
+                            },
+                            "nextSince": {
+                              "type": "string",
+                              "format": "date-time"
+                            },
+                            "nextAfterId": {
+                              "type": "string"
+                            },
+                            "hasMore": {
+                              "type": "boolean"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "400": {
+                    "description": "since is not an ISO-8601 timestamp",
+                    "content": {
+                      "application/json": {
+                        "schema": {
+                          "$ref": "#/components/schemas/Error"
+                        }
+                      }
+                    }
+                  },
+                  "401": {
+                    "description": "Missing or invalid command token",
+                    "content": {
+                      "application/json": {
+                        "schema": {
+                          "$ref": "#/components/schemas/Error"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "/ax/command/presence": {
+              "get": {
+                "operationId": "getPresence",
+                "summary": "Ask whether NEXUS is available",
+                "description": "Reports the executor state, heartbeat freshness and queue depth. A sleeping or unstarted executor is reported as such, never as success.",
+                "responses": {
+                  "200": {
+                    "description": "Availability facts",
+                    "content": {
+                      "application/json": {
+                        "schema": {
+                          "type": "object",
+                          "properties": {
+                            "schemaVersion": {
+                              "type": "integer",
+                              "const": 1
+                            },
+                            "ok": {
+                              "type": "boolean",
+                              "const": true
+                            },
+                            "presence": {
+                              "type": "object",
+                              "properties": {
+                                "reachable": {
+                                  "type": "boolean"
+                                },
+                                "canExecute": {
+                                  "type": "boolean",
+                                  "description": "True only when a heartbeat is fresh; a stale one means nothing is running."
+                                },
+                                "executor": {
+                                  "type": "object"
+                                },
+                                "heartbeat": {
+                                  "type": "object"
+                                },
+                                "queue": {
+                                  "type": "object"
+                                },
+                                "observedAt": {
+                                  "type": "string",
+                                  "format": "date-time"
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "401": {
+                    "description": "Missing or invalid command token",
+                    "content": {
+                      "application/json": {
+                        "schema": {
+                          "$ref": "#/components/schemas/Error"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "/ax/command/tools": {
+              "get": {
+                "operationId": "listTools",
+                "summary": "List available adapters",
+                "description": "The read-only adapters a task may name. Side-effecting adapters are absent by design.",
+                "responses": {
+                  "200": {
+                    "description": "Adapter summary",
+                    "content": {
+                      "application/json": {
+                        "schema": {
+                          "type": "object"
+                        }
+                      }
+                    }
+                  },
+                  "401": {
+                    "description": "Missing or invalid command token",
+                    "content": {
+                      "application/json": {
+                        "schema": {
+                          "$ref": "#/components/schemas/Error"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "openapi.json is application/json",
+      "ok": true,
+      "detail": "application/json; charset=utf-8"
+    },
+    {
+      "name": "served document declares OpenAPI 3.1.0",
+      "ok": true,
+      "detail": "3.1.0"
+    },
+    {
+      "name": "served document passes the structure and route checks",
+      "ok": true,
+      "detail": []
+    },
+    {
+      "name": "served document has unique operation ids",
+      "ok": true,
+      "detail": [
+        {
+          "method": "GET",
+          "path": "/ax/command/events",
+          "operationId": "getEvents"
+        },
+        {
+          "method": "GET",
+          "path": "/ax/command/messages",
+          "operationId": "listNexusMessages"
+        },
+        {
+          "method": "POST",
+          "path": "/ax/command/messages",
+          "operationId": "sendNexusMessage"
+        },
+        {
+          "method": "POST",
+          "path": "/ax/command/messages/{id}/answer",
+          "operationId": "answerNexusQuestion"
+        },
+        {
+          "method": "GET",
+          "path": "/ax/command/messages/thread/{correlationId}",
+          "operationId": "getNexusThread"
+        },
+        {
+          "method": "GET",
+          "path": "/ax/command/presence",
+          "operationId": "getPresence"
+        },
+        {
+          "method": "GET",
+          "path": "/ax/command/tasks",
+          "operationId": "listTasks"
+        },
+        {
+          "method": "POST",
+          "path": "/ax/command/tasks",
+          "operationId": "submitTask"
+        },
+        {
+          "method": "GET",
+          "path": "/ax/command/tasks/{id}",
+          "operationId": "getTask"
+        },
+        {
+          "method": "GET",
+          "path": "/ax/command/tools",
+          "operationId": "listTools"
+        }
+      ]
+    },
+    {
+      "name": "every advertised operation answers 401 without a credential",
+      "ok": true,
+      "detail": []
+    },
+    {
+      "name": "presence answers 401 for a wrong credential",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "name": "Ax credential reads presence (200, reachable)",
+      "ok": true,
+      "detail": {
+        "schemaVersion": 1,
+        "ok": true,
+        "presence": {
+          "reachable": true,
+          "executor": {
+            "configured": false,
+            "started": false,
+            "state": "not_mounted",
+            "reason": "disabled_by_config"
+          },
+          "heartbeat": {
+            "verified": false,
+            "liveWorkers": 0,
+            "asleep": true,
+            "lastHeartbeatAgeSeconds": null
+          },
+          "queue": {
+            "ok": false,
+            "error": "executor_not_mounted"
+          },
+          "canExecute": false,
+          "observedAt": "2026-11-22T06:01:14.021Z"
+        }
+      }
+    },
+    {
+      "name": "Ax credential lists adapters (200)",
+      "ok": true,
+      "detail": 200
+    },
+    {
+      "name": "Ax submits a note over the real socket (201, sent, from ax)",
+      "ok": true,
+      "detail": {
+        "schemaVersion": 1,
+        "ok": true,
+        "replayed": false,
+        "message": {
+          "id": "msg_9e566c4b8aff3d7fb53d9e65",
+          "schemaVersion": 1,
+          "correlationId": "mission16-874487a6",
+          "project": "habitat",
+          "from": "ax",
+          "to": "nexus",
+          "origin": {
+            "client": "ax-command-token",
+            "role": "ax-client"
+          },
+          "kind": "note",
+          "status": "sent",
+          "objective": null,
+          "adapter": null,
+          "body": "mission 16 readiness probe",
+          "taskId": null,
+          "runId": null,
+          "idempotencyKey": "mission16-a8ef056a6cccbbce",
+          "attempts": 0,
+          "maxAttempts": 3,
+          "result": null,
+          "error": null,
+          "evidence": [],
+          "timeline": [
+            {
+              "at": "2026-11-22T06:01:14.025Z",
+              "from": "ax",
+              "to": "nexus",
+              "type": "submitted",
+              "status": "sent",
+              "note": null
+            }
+          ],
+          "createdAt": "2026-11-22T06:01:14.025Z",
+          "updatedAt": "2026-11-22T06:01:14.025Z",
+          "acknowledgedAt": null,
+          "completedAt": null
+        },
+        "correlationId": "mission16-874487a6"
+      }
+    },
+    {
+      "name": "a repeated send replays the same message instead of duplicating",
+      "ok": true,
+      "detail": {
+        "status": 200,
+        "replayed": true,
+        "sameId": true
+      }
+    },
+    {
+      "name": "the thread is retrievable by correlation id",
+      "ok": true,
+      "detail": {
+        "schemaVersion": 1,
+        "ok": true,
+        "correlationId": "mission16-874487a6",
+        "count": 1,
+        "messages": [
+          {
+            "id": "msg_9e566c4b8aff3d7fb53d9e65",
+            "schemaVersion": 1,
+            "correlationId": "mission16-874487a6",
+            "project": "habitat",
+            "from": "ax",
+            "to": "nexus",
+            "origin": {
+              "client": "ax-command-token",
+              "role": "ax-client"
+            },
+            "kind": "note",
+            "status": "sent",
+            "objective": null,
+            "adapter": null,
+            "body": "mission 16 readiness probe",
+            "taskId": null,
+            "runId": null,
+            "idempotencyKey": "mission16-a8ef056a6cccbbce",
+            "attempts": 0,
+            "maxAttempts": 3,
+            "result": null,
+            "error": null,
+            "evidence": [],
+            "timeline": [
+              {
+                "at": "2026-11-22T06:01:14.025Z",
+                "from": "ax",
+                "to": "nexus",
+                "type": "submitted",
+                "status": "sent",
+                "note": null
+              }
+            ],
+            "createdAt": "2026-11-22T06:01:14.025Z",
+            "updatedAt": "2026-11-22T06:01:14.025Z",
+            "acknowledgedAt": null,
+            "completedAt": null
+          }
+        ],
+        "terminal": [
+          {
+            "id": "msg_9e566c4b8aff3d7fb53d9e65",
+            "kind": "note",
+            "status": "sent",
+            "result": null,
+            "error": null
+          }
+        ],
+        "awaitingDecision": []
+      }
+    },
+    {
+      "name": "the Ax credential is refused on the NEXUS surface (401)",
+      "ok": true,
+      "detail": 401
+    },
+    {
+      "name": "the NEXUS credential is refused on the Ax surface (401)",
+      "ok": true,
+      "detail": 401
+    },
+    {
+      "name": "the NEXUS credential reaches its own surface (200)",
+      "ok": true,
+      "detail": 200
+    },
+    {
+      "name": "request validation refuses an incomplete task (4xx)",
+      "ok": true,
+      "detail": 400
+    }
+  ],
+  "summary": {
+    "passed": 22,
+    "failed": 0,
+    "total": 22,
+    "ok": true
+  },
+  "documentedOperations": [
+    "getEvents",
+    "listNexusMessages",
+    "sendNexusMessage",
+    "answerNexusQuestion",
+    "getNexusThread",
+    "getPresence",
+    "listTasks",
+    "submitTask",
+    "getTask",
+    "listTools"
+  ],
+  "routeTable": {
+    "routes": 84,
+    "documented": 10,
+    "excluded": 74
+  },
+  "specSha256": "e813be668c6dcfe1cbf0897708328c25c60d1e6d13405845c10e5c16ca4fba01",
+  "notes": [
+    "No token, D1 credential or provider key is written to this file.",
+    "No Render, Cloudflare or OpenAI endpoint was contacted.",
+    "The document is checked against the routes the real command module registers."
+  ]
+}
