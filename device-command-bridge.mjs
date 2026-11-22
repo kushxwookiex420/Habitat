@@ -82,23 +82,30 @@ function sanitizeDeviceDetails(value) {
  * the non-secret identifiers stay in `evidence`. Returning the sink's own result is deliberate: the
  * runtime treats `ok:false` as an audit failure and refuses to report the decision as successful.
  */
+const NEXUS_AUDIT_EVENTS = Object.freeze({
+  "device.command.approved": { category: "approval.created", severity: "info", outcome: "allowed", summary: "NEXUS task approval accepted" },
+  "device.command.denied": { category: "owner.rejection", severity: "medium", outcome: "denied", summary: "NEXUS task approval denied" },
+  // A cancellation is an owner decision to stop work, so it belongs in the same chain as an
+  // approval or denial rather than only in the task record.
+  "device.command.cancelled": { category: "work.stop_requested", severity: "info", outcome: "allowed", summary: "NEXUS task cancelled by the owner" }
+});
+
 export function createNexusAuditRecorder(securityEvents) {
   return async entry => {
     if (!securityEvents) return { ok: false, code: "security_log_not_configured" };
     const event = String(entry?.event || "");
-    const approved = event === "device.command.approved";
-    const denied = event === "device.command.denied";
-    if (!approved && !denied) return { ok: false, code: "unmapped_nexus_audit_event" };
+    const mapping = Object.hasOwn(NEXUS_AUDIT_EVENTS, event) ? NEXUS_AUDIT_EVENTS[event] : null;
+    if (!mapping) return { ok: false, code: "unmapped_nexus_audit_event" };
     const taskId = entry?.targetDeviceId ? String(entry.targetDeviceId).slice(0, 160) : null;
     const actorDeviceId = entry?.actorDeviceId ? String(entry.actorDeviceId).slice(0, 160) : null;
     return securityEvents.record({
-      category: approved ? "approval.created" : "owner.rejection",
-      severity: approved ? "info" : "medium",
-      outcome: approved ? "allowed" : "denied",
+      category: mapping.category,
+      severity: mapping.severity,
+      outcome: mapping.outcome,
       actor: actorDeviceId ? "device:" + actorDeviceId : "nexus",
       deviceId: actorDeviceId,
       taskId,
-      summary: approved ? "NEXUS task approval accepted" : "NEXUS task approval denied",
+      summary: mapping.summary,
       evidence: JSON.stringify({ event, taskId, actorDeviceId })
     });
   };

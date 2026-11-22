@@ -86,6 +86,7 @@ async function mountRuntime({ audit, tasks = [taskRecord("cmd_a"), taskRecord("c
   const engine = {
     async approve(input) { return { ok: true, task: { id: input.taskId, status: "working" } }; },
     async deny(input) { return { ok: true, task: { id: input.taskId, status: "failed" } }; },
+    async cancel(input) { return { ok: true, task: { id: input.taskId, status: "cancelled" } }; },
     async list() { return { ok: true, tasks: [] }; }
   };
   const app = makeApp();
@@ -108,6 +109,14 @@ function decide(app, taskId, approved) {
   return request(app, "POST", "/device/command/tasks/" + taskId + "/approval", {
     headers: { authorization: "Bearer " + OWNER_TOKEN },
     body: { deviceId: OWNER, approved },
+    params: { id: taskId }
+  });
+}
+
+function cancelTask(app, taskId) {
+  return request(app, "POST", "/device/command/tasks/" + taskId + "/cancel", {
+    headers: { authorization: "Bearer " + OWNER_TOKEN },
+    body: { deviceId: OWNER },
     params: { id: taskId }
   });
 }
@@ -249,4 +258,43 @@ test("a throwing audit sink cannot produce an apparently successful decision", a
 test("an unrecognised audit result is not treated as success", async () => {
   const { app } = await mountRuntime({ audit: async () => ({ ok: "true" }) });
   assertAuditFailure(await decide(app, "cmd_a", true), "approved", "working");
+});
+
+// ------------------------------------------------- 3. cancellation audit
+test("cancellation maps to work.stop_requested and forms a valid chain", async () => {
+  const repository = chainRepository();
+  const security = createSecurityEventService({ repository, log: quiet });
+  const record = createNexusAuditRecorder(security);
+
+  const result = await record({ event: "device.command.cancelled", actorDeviceId: OWNER, targetDeviceId: "cmd_c" });
+  assert.equal(result.ok, true);
+  assert.equal(repository.events[0].category, "work.stop_requested");
+  assert.equal(repository.events[0].summary, "NEXUS task cancelled by the owner");
+  assert.equal(repository.events[0].taskId, "cmd_c");
+  assert.equal(JSON.parse(repository.events[0].evidence).event, "device.command.cancelled");
+  assert.equal(verifyEventChain(repository.events).ok, true);
+});
+
+test("an audited cancellation is recorded and reported as recorded", async () => {
+  const repository = chainRepository();
+  const security = createSecurityEventService({ repository, log: quiet });
+  const { app } = await mountRuntime({ audit: createNexusAuditRecorder(security) });
+
+  const response = await cancelTask(app, "cmd_a");
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.body.status, "cancelled");
+  assert.equal(response.body.recorded, true);
+  assert.equal(repository.events[0].category, "work.stop_requested");
+  assert.equal(verifyEventChain(repository.events).ok, true);
+});
+
+test("an unauditable cancellation reports 502 while preserving the applied state", async () => {
+  const { app } = await mountRuntime({ audit: async () => undefined });
+
+  const response = await cancelTask(app, "cmd_a");
+  assert.equal(response.statusCode, 502);
+  assert.equal(response.body.ok, false);
+  assert.equal(response.body.recorded, false);
+  assert.equal(response.body.status, "cancelled");
+  assert.match(response.body.error, /could not be recorded in the security audit log/);
 });
