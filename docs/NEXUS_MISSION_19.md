@@ -59,8 +59,9 @@ deliberately unchanged: the contract excludes operator routes (`agents`, `object
 
 Deploy **the branch head that contains this document** — it is `dfcfcf7` plus Mission 18 evidence
 plus the tested fixes above. Confirm the exact SHA with `git rev-parse HEAD` on this branch and use
-that value in the Render "deploy a specific commit" field. The minimum acceptable runtime is
-`dfcfcf7`; deploying anything older omits Mission 17 and cannot satisfy Mission 19.
+that value in the Render "deploy a specific commit" field. `dfcfcf7` is the minimum for the Mission
+17 routes, but it predates the health commit field and the restore route, so it verifies as
+`UNKNOWN` rather than `CURRENT`; deploy the head. Anything older omits Mission 17 entirely.
 
 ## 2. Phase 2 — deployment preparation
 

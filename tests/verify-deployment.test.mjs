@@ -94,6 +94,20 @@ test("a Mission 17 route answering 404 marks the deployment OUTDATED even when h
   assert.ok(report.blockers.some(line => /Mission 17 routes are absent/.test(line)));
 });
 
+test("an absent optional restore route is reported but does not make Mission 17 outdated", async () => {
+  const fetchImpl = async (url, options = {}) => {
+    const pathname = new URL(url).pathname;
+    if (pathname === "/health") return response(200, { version: "0.5.0", commit: "c713d5d" });
+    if (pathname === "/ax/command/openapi.json") return response(200, { openapi: "3.1.0", paths: {} });
+    if (pathname === "/ax/command/agents/restore") return response(404, { error: "Cannot POST" });
+    return response(401, { ok: false });
+  };
+  const report = await verifyDeployment({ origin: "https://habitat.example.test", expectedCommit: "c713d5d", fetchImpl });
+  assert.equal(report.mission17Present, true);
+  assert.equal(report.mission19Present, false);
+  assert.equal(report.status, "CURRENT", "a Mission 17 deployment is still current without the optional restore route");
+});
+
 test("an unauthenticated 401 still proves the route is deployed", async () => {
   const { fetchImpl } = fakeFetch({ routeStatus: 401, authenticated: false });
   const report = await verifyDeployment({ origin: "https://habitat.example.test", token: "refused-token", fetchImpl });

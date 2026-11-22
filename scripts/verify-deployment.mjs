@@ -81,6 +81,10 @@ export function evaluateDeployment({ health, openapi, routes, expectedCommit = n
   const mission17 = routeList.filter(route => MISSION_17_ROUTES.some(item => item.key === route.key));
   const mission17Present = mission17.length === MISSION_17_ROUTES.length && mission17.every(route => route.deployed === true);
   const mission17Missing = mission17.filter(route => route.deployed !== true).map(route => route.key);
+  // Mission 19's restore route is an optional capability: its absence must be reported, but it does
+  // not make a Mission 17 deployment outdated.
+  const restore = routeList.find(route => route.key === MISSION_19_ROUTE.key) || null;
+  const mission19Present = restore?.deployed === true;
 
   const openapiStatus = Number(openapi?.status || 0);
   const operations = Number(openapi?.operations || 0);
@@ -120,6 +124,7 @@ export function evaluateDeployment({ health, openapi, routes, expectedCommit = n
     commitMatches: match,
     mission17Present,
     mission17Missing,
+    mission19Present,
     routes: routeList,
     openapi: { status: openapiStatus, operations, openapi: openapi?.json?.openapi || null },
     nexus: body?.nexus || null,
@@ -252,6 +257,7 @@ async function main() {
     expectedCommit: report.expectedCommit,
     mission17Present: report.mission17Present,
     mission17Missing: report.mission17Missing,
+    mission19Present: report.mission19Present,
     openapiOperations: report.openapi?.operations,
     authenticated: report.authenticated?.credentialAccepted,
     blockers: report.blockers
@@ -269,3 +275,4 @@ async function main() {
 if (process.argv[1] && import.meta.url === new URL("file://" + path.resolve(process.argv[1])).href) {
   await main();
 }
+
