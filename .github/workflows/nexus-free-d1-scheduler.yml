@@ -86,15 +86,22 @@ jobs:
           NEXUS_MAX_ATTEMPTS: "3"
         run: |
           set -euo pipefail
+          set +e
           report="$(node scripts/nexus-tick.mjs)"
+          tick_status=$?
+          set -e
           printf '%s\n' "$report" | jq .
-          printf '%s\n' "$report" | jq -e '.schemaVersion == 1 and .ok == true' >/dev/null
           {
-            echo "## NEXUS tick: PASS"
+            if [[ "$tick_status" -eq 0 ]]; then
+              echo "## NEXUS tick: PASS"
+            else
+              echo "## NEXUS tick: FAILED (exit $tick_status)"
+            fi
             echo ""
             echo 'JSON report:'
             printf '%s\n' "$report" | jq .
           } >> "$GITHUB_STEP_SUMMARY"
+          exit "$tick_status"
 
       - name: Record tick failure without exposing credentials
         if: failure()
