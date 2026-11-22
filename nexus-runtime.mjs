@@ -820,6 +820,23 @@ export function registerNexusRuntime(app, {
     }
   }
 
+  // Refusal auditing is best-effort and bounded. The endpoints are public, so an unauthenticated
+  // caller could otherwise force one append per request and burn the free-tier D1 write budget.
+  // Past the budget the refusal is still enforced; only the audit write is skipped for this window.
+  const REFUSAL_AUDIT_WINDOW_MS = 60_000;
+  const REFUSAL_AUDIT_MAX = 10;
+  const refusalAudit = { windowStart: 0, count: 0 };
+  async function auditRefusal(entry) {
+    const at = Date.now();
+    if (at - refusalAudit.windowStart >= REFUSAL_AUDIT_WINDOW_MS) {
+      refusalAudit.windowStart = at;
+      refusalAudit.count = 0;
+    }
+    if (refusalAudit.count >= REFUSAL_AUDIT_MAX) return { ok: false, recorded: false, reason: "rate_limited" };
+    refusalAudit.count += 1;
+    return recordAudit(entry);
+  }
+
   async function authorizeOwner(req) {
     const device = await deviceFrom(req);
     if (!device.deviceId) return device;
@@ -875,10 +892,15 @@ export function registerNexusRuntime(app, {
 
   app.post("/device/command/tasks/:id/approval", async (req, res) => {
     if (!store || !engine || !ready) return unavailable(res);
-    const owner = await authorizeOwner(req);
-    if (!owner.deviceId) return refuseDevice(res, owner.reason);
-    const { deviceId } = owner;
     const taskId = String(req.params?.id || "").trim();
+    const owner = await authorizeOwner(req);
+    if (!owner.deviceId) {
+      // A refused decision changed nothing, but an unauthenticated or non-owner attempt to decide
+      // execution is a security event. Audit is best-effort: a log outage must not change the 403.
+      await auditRefusal({ event: "device.command.owner_refused", actorDeviceId: null, targetDeviceId: taskId, reason: owner.reason });
+      return refuseDevice(res, owner.reason);
+    }
+    const { deviceId } = owner;
     const approved = req.body?.approved;
     if (!taskId || typeof approved !== "boolean") {
       return res.status(400).json({ ok: false, error: "taskId and a boolean approved field are required." });
@@ -928,10 +950,13 @@ export function registerNexusRuntime(app, {
 
   app.post("/device/command/tasks/:id/cancel", async (req, res) => {
     if (!store || !engine || !ready) return unavailable(res);
-    const owner = await authorizeOwner(req);
-    if (!owner.deviceId) return refuseDevice(res, owner.reason);
-    const { deviceId } = owner;
     const taskId = String(req.params?.id || "").trim();
+    const owner = await authorizeOwner(req);
+    if (!owner.deviceId) {
+      await auditRefusal({ event: "device.command.owner_refused", actorDeviceId: null, targetDeviceId: taskId, reason: owner.reason });
+      return refuseDevice(res, owner.reason);
+    }
+    const { deviceId } = owner;
     if (!taskId) return res.status(400).json({ ok: false, error: "taskId is required." });
     try {
       const task = await store.get(taskId);
