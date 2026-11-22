@@ -74,8 +74,10 @@ test("security repository assigns unique sequences through D1 under concurrent a
   assert.equal(integrity.checked, 8);
 
   const duplicate = { ...chain[0], id: "sec_dup_d1" };
-  await repository.append(duplicate);
-  await assert.rejects(() => repository.append(duplicate));
+  const firstAppend = await repository.append(duplicate);
+  const replay = await repository.append(duplicate);
+  assert.equal(replay.seq, firstAppend.seq, "a replayed append returns the committed event");
+  assert.equal((await repository.chain({ limit: 100 })).length, 9, "a replay does not append a second row");
 });
 
 test("scheduler repository acquires, completes and reports status through D1", async () => {

@@ -23,11 +23,11 @@ test("100 concurrent appends produce one contiguous chain and no duplicate ids",
   assert.equal((await log.integrity()).ok, true);
 });
 
-test("a replayed event id is refused by the store instead of appending twice", async () => {
+test("a replayed event id with different content is refused by the store", async () => {
   const { repository } = logAt();
   const event = { id: "sec_fixed", category: "auth.failure", severity: "low", outcome: "denied", createdAt: "2026-11-22T00:00:00.000Z", summary: "one" };
   await repository.append(event);
-  await assert.rejects(() => repository.append({ ...event, summary: "two" }), /already_exists/);
+  await assert.rejects(() => repository.append({ ...event, summary: "two" }), /security_event_id_conflict/);
   assert.equal(repository._rows.length, 1);
 });
 
