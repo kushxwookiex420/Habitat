@@ -95,6 +95,16 @@ function reply(res, outcome) {
   });
 }
 
+// Non-sensitive description of the NEXUS message-surface credential. /health uses this so an
+// operator can confirm whether AX_NEXUS_TOKEN reached the running process without presenting it,
+// and without confusing that credential with the NEXUS executor (NEXUS_RUNTIME_ENABLED).
+export function nexusMessageSurfaceStatus(env) {
+  const configured = Boolean(String(env?.AX_NEXUS_TOKEN || "").trim());
+  return configured
+    ? { configured: true, code: null }
+    : { configured: false, code: "nexus_auth_unconfigured" };
+}
+
 export function registerUniversalCommandRoutes(app, {
   env = process.env,
   fetchImpl = fetch,
