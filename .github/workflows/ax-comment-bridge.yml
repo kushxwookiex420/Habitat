@@ -7,6 +7,10 @@ name: Ax comment bridge
 # hand with workflow_dispatch, but it will not fire on its own until it reaches `main`.
 # Manual dispatch is available on any branch, so the bridge can still be exercised and proven.
 #
+# Dry-run policy: an `issue_comment` event runs for real (the allowlist, batch bound, processed
+# marker and fail-closed forward are the safety mechanism), while `workflow_dispatch` defaults to
+# dry_run: true and only writes when dry_run is explicitly set to false.
+#
 # Cost: GitHub-hosted standard runners are free for public repositories. This repo is public, so
 # the job costs $0. It uses no third-party API, no model and no paid service.
 
@@ -60,13 +64,28 @@ jobs:
           HABITAT_BASE_URL: ${{ vars.HABITAT_BASE_URL }}
           HABITAT_AX_COMMAND_TOKEN: ${{ secrets.HABITAT_AX_COMMAND_TOKEN }}
           INPUT_DRY_RUN: ${{ inputs.dry_run }}
+          EVENT_NAME: ${{ github.event_name }}
           REF_NAME: ${{ github.ref_name }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           set -euo pipefail
+          # Dry-run policy lives in one function so tests/ax-comment-bridge-workflow.test.mjs can run
+          # this exact text instead of a copy of it:
+          #   issue_comment     -> real run. The owner/addressing allowlist, the bounded batch, the
+          #                        exactly-once marker and the fail-closed forward are what make that
+          #                        safe; an absent `inputs.dry_run` must never silently make it a no-op.
+          #   workflow_dispatch -> dry run unless dry_run was explicitly set to false.
+          #   anything else     -> dry run.
+          should_dry_run() {
+            case "${1:-}" in
+              workflow_dispatch) [[ "${2:-true}" != "false" ]] ;;
+              issue_comment) return 1 ;;
+              *) return 0 ;;
+            esac
+          }
           args=(--owner "${{ github.repository_owner }}" --repo "${{ github.event.repository.name || 'Habitat' }}" --pr 93)
           if [[ "$REF_NAME" == "$DEFAULT_BRANCH" ]]; then args+=(--default-branch-active); fi
-          if [[ "${INPUT_DRY_RUN:-true}" == "true" ]]; then args+=(--dry-run); fi
+          if should_dry_run "$EVENT_NAME" "${INPUT_DRY_RUN:-}"; then args+=(--dry-run); fi
           set +e
           report="$(node scripts/ax-comment-bridge.mjs "${args[@]}")"
           status=$?
