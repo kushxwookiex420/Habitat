@@ -69,7 +69,7 @@ async function probeStatus(fetchImpl, url, timeoutMs) {
 export async function runReadOnlyChecks({
   baseUrl = DEFAULT_BASE_URL,
   fetchImpl = fetch,
-  timeoutMs = 15_000,
+  timeoutMs = 30_000,
   expectCommit = null,
   requireMessageSurface = false
 } = {}) {
@@ -77,15 +77,27 @@ export async function runReadOnlyChecks({
   const checks = [];
   const add = (name, ok, detail) => checks.push({ name, ok, detail });
 
+  // A free-tier deployment can take longer than one timeout to wake. A timed-out GET is
+  // idempotent, so retry it once before declaring the deployment unreachable.
   let health;
-  try {
-    health = await getJson(fetchImpl, base + "/health", timeoutMs);
-  } catch (error) {
-    add("health reachable", false, String(error?.message || error).slice(0, 200));
-    return { ok: false, checks, unreachable: true, commit: null, nexus: null };
+  let healthAttempts = 0;
+  for (;;) {
+    healthAttempts += 1;
+    try {
+      health = await getJson(fetchImpl, base + "/health", timeoutMs);
+      break;
+    } catch (error) {
+      const aborted = error?.name === "AbortError" || /abort/i.test(String(error?.message || ""));
+      if (aborted && healthAttempts < 2) {
+        await new Promise(resolve => setTimeout(resolve, 2_000));
+        continue;
+      }
+      add("health reachable", false, String(error?.message || error).slice(0, 200) + (healthAttempts > 1 ? " (after " + healthAttempts + " attempts)" : ""));
+      return { ok: false, checks, unreachable: true, commit: null, nexus: null };
+    }
   }
 
-  add("health reachable", health.status === 200, "HTTP " + health.status);
+  add("health reachable", health.status === 200, "HTTP " + health.status + (healthAttempts > 1 ? " (retried after cold start)" : ""));
   if (health.status !== 200) return { ok: false, checks, commit: null, nexus: null };
 
   const body = health.body || {};
@@ -141,12 +153,12 @@ export async function runReadOnlyChecks({
 }
 
 function parseArgs(argv) {
-  const options = { baseUrl: DEFAULT_BASE_URL, expectCommit: null, timeoutMs: 15_000, json: false, requireMessageSurface: false };
+  const options = { baseUrl: DEFAULT_BASE_URL, expectCommit: null, timeoutMs: 30_000, json: false, requireMessageSurface: false };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === "--base-url") options.baseUrl = argv[++index];
     else if (arg === "--expect-commit") options.expectCommit = argv[++index];
-    else if (arg === "--timeout-ms") options.timeoutMs = Number(argv[++index] || 0) || 15_000;
+    else if (arg === "--timeout-ms") options.timeoutMs = Number(argv[++index] || 0) || 30_000;
     else if (arg === "--json") options.json = true;
     else if (arg === "--require-message-surface") options.requireMessageSurface = true;
     else if (arg === "--help" || arg === "-h") {

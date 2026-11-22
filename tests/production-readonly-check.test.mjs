@@ -148,3 +148,35 @@ test("strict mode passes on a configured surface, and the default tolerates abse
   assert.equal(strict.ok, true);
   assert.equal(strict.checks.find(entry => entry.name === "message-surface is deployed and configured").ok, true);
 });
+
+test("a cold-start abort on health is retried once, then passes", async () => {
+  const calls = [];
+  const fake = fakeFetch(healthyRoutes());
+  const base = fake.impl;
+  const impl = async (url, options) => {
+    calls.push(new URL(url).pathname);
+    if (calls.filter(path => path === "/health").length === 1) {
+      const error = new Error("This operation was aborted");
+      error.name = "AbortError";
+      throw error;
+    }
+    return base(url, options);
+  };
+  const result = await runReadOnlyChecks({ baseUrl: BASE, fetchImpl: impl, timeoutMs: 10 });
+
+  assert.equal(result.ok, true);
+  assert.equal(calls.filter(path => path === "/health").length, 2);
+  assert.match(result.checks[0].detail, /retried after cold start/);
+});
+
+test("a non-timeout failure is not retried", async () => {
+  let healthCalls = 0;
+  const impl = async (url) => {
+    if (new URL(url).pathname === "/health") healthCalls += 1;
+    throw new Error("connect ECONNREFUSED");
+  };
+  const result = await runReadOnlyChecks({ baseUrl: BASE, fetchImpl: impl });
+
+  assert.equal(result.ok, false);
+  assert.equal(healthCalls, 1);
+});
