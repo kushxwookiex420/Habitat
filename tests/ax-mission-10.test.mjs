@@ -296,7 +296,9 @@ test("agents expose a capability matrix and delegate real bounded work", async (
   const { app } = build();
   const matrix = await invoke(app, "GET /ax/command/agents", { headers: auth });
   assert.equal(matrix.statusCode, 200);
-  assert.equal(matrix.body.agents.length, 7);
+  // Mission 17 added the Director and Verification roles, which are assigned by the work cycle
+  // rather than auto-routed from keywords.
+  assert.equal(matrix.body.agents.length, 9);
   assert.ok(matrix.body.agents.some(agent => agent.id === "memory" && agent.available));
   assert.ok(matrix.body.agents.some(agent => agent.id === "research" && !agent.available));
 

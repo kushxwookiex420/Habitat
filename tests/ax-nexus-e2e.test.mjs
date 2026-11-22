@@ -1,5 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { registerDeviceCommandBridge } from "../device-command-bridge.mjs";
 import { runTick } from "../scripts/nexus-tick.mjs";
@@ -406,4 +409,82 @@ test("an approval-gated objective is never started autonomously and the command 
   const final = await invoke(h.app, "GET /ax/command/objectives/:id", { headers: axAuth, params: { id: objectiveId } });
   assert.equal(final.body.objective.status, "planned");
   assert.equal(final.body.accounting.spentUsd, 0);
+});
+
+// ------------------------------------------------- 2. an autonomous multi-agent mission
+
+test("the scheduler completes an agent-oriented mission autonomously and verifies it", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "nexus17-e2e-"));
+  await writeFile(
+    path.join(root, "README.md"),
+    "# Evidence\n\nThe runtime persists objectives and evidence before it reports a verified result.\n"
+  );
+  try {
+    const db = new DatabaseSync(":memory:");
+    const h = await mountBridge({ db, plan: PLAN, envOverrides: { AX_AGENT_LOCAL_ROOT: root } });
+
+    const created = await invoke(h.app, "POST /ax/command/objectives", {
+      headers: axAuth,
+      body: {
+        objective: "Research the README.md evidence and audit the adapter allowlist",
+        criteria: [
+          "Repository evidence cites README.md with evidence",
+          "The adapter allowlist was audited"
+        ],
+        budgetUsd: 0.05
+      }
+    });
+    assert.equal(created.statusCode, 201, JSON.stringify(created.body));
+    const objectiveId = created.body.objective.id;
+
+    const understood = await invoke(h.app, "POST /ax/command/objectives/:id/understand", {
+      headers: axAuth,
+      params: { id: objectiveId },
+      body: { summary: "Research repository evidence and audit the adapter allowlist" }
+    });
+    assert.equal(understood.statusCode, 200, JSON.stringify(understood.body));
+
+    const planned = await invoke(h.app, "POST /ax/command/objectives/:id/plan", {
+      headers: axAuth,
+      params: { id: objectiveId },
+      body: {
+        steps: [
+          { objective: "Recall approved project memory for the mission", agent: "memory" },
+          { objective: "Gather citable evidence from README.md in the repository", agent: "research" },
+          { objective: "Audit the adapter allowlist and permissions", agent: "security" },
+          { objective: "Independently check the evidence against every criterion", agent: "verification" }
+        ],
+        risk: "low",
+        permissions: []
+      }
+    });
+    assert.equal(planned.statusCode, 200, JSON.stringify(planned.body));
+
+    // No dispatch call, no manual start: the scheduler's autonomy pass owns the mission.
+    const tick = await invoke(h.app, "POST /ax/command/scheduler/tick", {
+      headers: axAuth,
+      body: { trigger: "mission-17-e2e" }
+    });
+    assert.equal(tick.statusCode, 200, JSON.stringify(tick.body));
+    const advanced = tick.body.autonomy?.objectives?.advanced || [];
+    const entry = advanced.find(item => item.id === objectiveId);
+    assert.ok(entry, JSON.stringify(tick.body.autonomy));
+    assert.equal(entry.ok, true, JSON.stringify(entry));
+    assert.equal(entry.missionStatus, "completed");
+
+    const final = await invoke(h.app, "GET /ax/command/objectives/:id", { headers: axAuth, params: { id: objectiveId } });
+    assert.equal(final.body.objective.status, "completed");
+    assert.equal(final.body.objective.verification.verified, true);
+    assert.ok(final.body.objective.evidence.length >= 4);
+    assert.ok(final.body.objective.evidence.some(item => /README\.md#L\d+/.test(item.summary)));
+
+    // A later tick does not run a completed mission again.
+    const again = await invoke(h.app, "POST /ax/command/scheduler/tick", {
+      headers: axAuth,
+      body: { trigger: "mission-17-e2e-repeat" }
+    });
+    assert.equal((again.body.autonomy?.objectives?.advanced || []).some(item => item.id === objectiveId), false);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });

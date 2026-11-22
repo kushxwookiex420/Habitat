@@ -42,7 +42,8 @@ test("the published document is a valid OpenAPI 3.1 description", () => {
 
 test("the document describes only endpoints the real module registers", () => {
   const routeKeys = expressRouteKeys(mountRoutes());
-  assert.equal(routeKeys.length, 84);
+  // 84 through Mission 16, plus the three Mission 17 mission-work routes.
+  assert.equal(routeKeys.length, 87);
   const parity = compareSpecToRoutes(spec(), routeKeys);
   assert.equal(parity.ok, true, parity.errors.join("\n"));
   assert.equal(parity.documented.length, 10);

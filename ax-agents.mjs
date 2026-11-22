@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { planMissionSteps, missionTerms, MISSION_ROLE_IDS } from "./ax-mission-plan.mjs";
 
 /**
  * Specialized agent runtime.
@@ -23,7 +24,7 @@ import { createHash } from "node:crypto";
  * delegations, a wall-clock deadline and a per-delegation cost ceiling.
  */
 
-export const AGENT_IDS = Object.freeze(["research", "engineering", "security", "operations", "memory", "content", "device"]);
+export const AGENT_IDS = Object.freeze(["director", "research", "engineering", "security", "operations", "memory", "verification", "content", "device"]);
 
 export const AGENT_LIMITS = Object.freeze({
   maxDepth: 2,
@@ -44,6 +45,22 @@ const SENSITIVE_ACTION = /^(publish|purchase|refund|deploy|account\.|device\.(de
  * instead of returning a generic failure.
  */
 export const AGENT_MANIFESTS = Object.freeze({
+  /**
+   * Director decomposes an objective. It deliberately has no model dependency: the routing rule is
+   * deterministic, so a plan can be reviewed and replayed, and a mission cannot be invented into
+   * existence by a prompt.
+   */
+  director: Object.freeze({
+    id: "director",
+    name: "Director",
+    purpose: "Decompose an objective into ordered work for the specialists that can actually do it.",
+    requires: null,
+    permissions: ["plan.write", "agent.route"],
+    forbidden: ["publish", "purchase", "deploy", "credential.read"],
+    approvalRequired: [],
+    produces: "ordered mission plan",
+    maxProviderCostUsd: 0
+  }),
   research: Object.freeze({
     id: "research",
     name: "Research",
@@ -99,6 +116,22 @@ export const AGENT_MANIFESTS = Object.freeze({
     produces: "cited memory context",
     maxProviderCostUsd: 0
   }),
+  /**
+   * Verification is independent of the agents that produced the work. It re-reads the stored
+   * evidence against the acceptance criteria and returns checks the objective service can record. It
+   * may reject a result, but it can never approve an action or complete an objective by itself.
+   */
+  verification: Object.freeze({
+    id: "verification",
+    name: "Verification",
+    purpose: "Independently check recorded evidence against acceptance criteria and reject unsupported claims.",
+    requires: null,
+    permissions: ["verification.read", "verification.verify"],
+    forbidden: ["verification.override", "publish", "purchase", "deploy", "credential.read"],
+    approvalRequired: [],
+    produces: "acceptance checks",
+    maxProviderCostUsd: 0
+  }),
   content: Object.freeze({
     id: "content",
     name: "Content",
@@ -123,7 +156,11 @@ export const AGENT_MANIFESTS = Object.freeze({
   })
 });
 
-/** Deterministic routing. Distinct objectives land on distinct agents. */
+/**
+ * Deterministic routing. Distinct objectives land on distinct agents. `director` and `verification`
+ * are intentionally absent: they are assigned by role, never guessed from keywords, because a
+ * verification request must not be routed to the agent that wrote the work.
+ */
 const ROUTING = Object.freeze([
   { agent: "research", weight: 3, pattern: /\b(research|source|compare|investigate|find out|cite|market|competitor)\b/i },
   { agent: "engineering", weight: 3, pattern: /\b(code|repo|test|build|bug|refactor|implement|typescript|kotlin|fix)\b/i },
@@ -179,8 +216,14 @@ export function createAgentRuntime({
   now = () => new Date().toISOString()
 } = {}) {
   const config = { ...AGENT_LIMITS, ...limits };
-  const startedAt = Date.now();
   let delegations = 0;
+  const scopes = new Map();
+
+  function scopeOf(name) {
+    const key = clean(name, 160) || "process";
+    if (!scopes.has(key)) scopes.set(key, { startedAt: Date.now(), delegations: 0 });
+    return scopes.get(key);
+  }
 
   function available(id) {
     const manifest = AGENT_MANIFESTS[id];
@@ -228,6 +271,87 @@ export function createAgentRuntime({
     if (!manifest) return { ok: false, code: "unknown_agent" };
     if (!available(id)) return unavailable(id, "dependency_not_configured");
     const timeoutMs = Math.min(config.maxWallClockMs, 15_000);
+
+    if (id === "director") {
+      const context = input.context && typeof input.context === "object" ? input.context : {};
+      const plan = planMissionSteps({
+        objective: input.objective,
+        criteria: Array.isArray(context.criteria) ? context.criteria : [],
+        capabilities: context.capabilities && typeof context.capabilities === "object" ? context.capabilities : {}
+      });
+      const capabilityLine = MISSION_ROLE_IDS
+        .map(role => role + "=" + (plan.capabilities[role] ? "available" : "unavailable"))
+        .join(", ");
+      return {
+        ok: true,
+        summary: "Planned " + plan.steps.length + " step(s): " + plan.steps.map(step => step.agent).join(" -> ") +
+          ". Missing capabilities: " + (plan.missingCapabilities.join(", ") || "none") + ".",
+        confidence: plan.missingCapabilities.length ? 0.5 : 0.85,
+        evidence: [
+          {
+            summary: "plan: " + plan.steps.map((step, index) => (index + 1) + ":" + step.agent + ":" + step.objective).join(" | "),
+            source: "agent:director"
+          },
+          { summary: "capabilities: " + capabilityLine, source: "agent:director" }
+        ],
+        plan,
+        limitations: ["Deterministic routing from the objective text, criteria and mounted capabilities; no model was consulted."]
+      };
+    }
+
+    if (id === "verification") {
+      const context = input.context && typeof input.context === "object" ? input.context : {};
+      const criteria = Array.isArray(context.criteria) ? context.criteria.slice(0, 12) : [];
+      const evidence = Array.isArray(context.evidence) ? context.evidence.slice(0, 60) : [];
+      if (criteria.length === 0) {
+        return { ok: false, code: "criteria_required", agent: "verification", evidence: [], confidence: 0 };
+      }
+      const usable = evidence.filter(item => item && typeof item.id === "string" && typeof item.summary === "string" && item.summary.trim().length >= 8);
+      const checks = criteria.map(criterion => {
+        const criterionId = clean(criterion.id, 64);
+        const wanted = missionTerms(criterion.statement, 8);
+        const scored = usable
+          .map(item => {
+            const summary = item.summary.toLowerCase();
+            const score = wanted.reduce((total, term) => total + (summary.includes(term) ? 1 : 0), 0);
+            return { item, score };
+          })
+          // Two independent terms are required when the criterion has them; a single shared word is
+          // too weak to call evidence coverage.
+          .filter(entry => entry.score >= (wanted.length >= 2 ? 2 : 1))
+          .sort((a, b) => b.score - a.score)
+          .slice(0, 3);
+        if (!scored.length) {
+          return { criterionId, evidenceIds: [], passed: false, detail: "no stored evidence matched this criterion" };
+        }
+        return {
+          criterionId,
+          evidenceIds: scored.map(entry => entry.item.id),
+          passed: true,
+          detail: "matched " + scored.length + " evidence item(s) on " + wanted.filter(term => scored[0].item.summary.toLowerCase().includes(term)).slice(0, 4).join(", ")
+        };
+      });
+      const failed = checks.filter(check => !check.passed);
+      return {
+        ok: true,
+        passed: failed.length === 0,
+        summary: "Checked " + checks.length + " acceptance criterion/criteria against " + usable.length +
+          " stored evidence item(s); " + failed.length + " unmet.",
+        confidence: 0.75,
+        evidence: [
+          {
+            summary: "verification: " + checks.map(check => check.criterionId + "=" + (check.passed ? "met" : "unmet")).join(", "),
+            source: "agent:verification"
+          },
+          {
+            summary: "evidence reviewed: " + usable.length + " item(s) with ids and summaries",
+            source: "agent:verification"
+          }
+        ],
+        checks,
+        limitations: ["Keyword relevance between a criterion and the recorded evidence; this is not a semantic proof."]
+      };
+    }
 
     if (id === "security") {
       const adapters = Array.isArray(dependencies.adapters) ? dependencies.adapters.slice(0, 40) : [];
@@ -287,13 +411,19 @@ export function createAgentRuntime({
       const recalled = await dependencies.memory.recall({ objective: input.objective });
       if (!recalled?.ok) return unavailable(id, recalled?.code || "memory_recall_failed");
       const citations = Array.isArray(recalled.citations) ? recalled.citations.slice(0, 10) : [];
+      // An empty result is a real observation, not a missing capability. It carries one honest
+      // evidence line so the mission continues and verification can still reject work that needed
+      // a prior decision.
+      const evidence = citations.length
+        ? citations.map(citation => ({ summary: "memory " + citation.key + " v" + citation.version + " from " + citation.source, source: "agent:memory" }))
+        : [{ summary: "no approved memory entry matched this objective", source: "agent:memory" }];
       return {
         ok: true,
         summary: citations.length
           ? "Recalled " + citations.length + " approved memory record(s) for the objective."
           : "No approved memory matched the objective.",
         confidence: citations.length ? 0.8 : 0.5,
-        evidence: citations.map(citation => ({ summary: "memory " + citation.key + " v" + citation.version + " from " + citation.source, source: "agent:memory" })),
+        evidence,
         citations,
         limitations: ["Keyword + metadata ranking; this is not semantic retrieval."]
       };
@@ -336,7 +466,11 @@ export function createAgentRuntime({
         ok: true,
         summary: clean(result?.summary, AGENT_LIMITS.maxSummary) || "Research transport returned no summary.",
         confidence: Number.isFinite(Number(result?.confidence)) ? Number(result.confidence) : 0.5,
-        evidence: sources.map(source => ({ summary: clean(source.title || source.url, 300), source: "agent:research", digest: digest(source.url || source.title) })),
+        evidence: sources.map(source => ({
+          summary: clean((source.title || source.url) + " | " + (source.excerpt || ""), 300),
+          source: "agent:research",
+          digest: digest(source.url || source.title)
+        })),
         sources,
         limitations: ["Source verification is limited to what the transport returned."]
       };
@@ -360,6 +494,7 @@ export function createAgentRuntime({
         digest: String(file.digest).slice(0, 64)
       });
     }
+    const failedCommands = commands.filter(command => Number(command.exitCode ?? -1) !== 0);
     return {
       ok: result?.ok !== false && evidence.length > 0,
       code: result?.ok === false ? "engineering_check_failed" : null,
@@ -368,6 +503,20 @@ export function createAgentRuntime({
       evidence,
       files,
       commands,
+      // A defect is reported with the failing check and a proposed correction. Nothing is written:
+      // the transport is read-only, so the proposal stays an owner-gated recommendation.
+      proposedCorrection: failedCommands.length
+        ? {
+            applied: false,
+            requiresApproval: true,
+            failingChecks: failedCommands.map(command => ({
+              command: clean(command.command, 200),
+              exitCode: Number(command.exitCode ?? -1),
+              stderrTail: clean(command.stderrTail, 500)
+            })),
+            proposal: "Repair the failing check(s) above, then rerun the same allowlisted command before claiming a fix."
+          }
+        : null,
       limitations: ["Only allowlisted read-only adapter commands can run; no write path exists."]
     };
   }
@@ -376,7 +525,7 @@ export function createAgentRuntime({
    * Delegate once. Depth, cycles, total delegations, wall clock and cost are checked before the
    * handler runs; the result is a signed envelope Ax must review before accepting.
    */
-  async function delegate({ objective, role = null, depth = 0, chain = [], budgetUsd = AGENT_LIMITS.maxDelegationCostUsd } = {}) {
+  async function delegate({ objective, role = null, depth = 0, chain = [], budgetUsd = AGENT_LIMITS.maxDelegationCostUsd, context = null, scope = "process" } = {}) {
     const text = clean(objective, 1000);
     if (text.length < 8) return { ok: false, code: "invalid_objective" };
     const selected = role || selectAgent(text).agent;
@@ -389,11 +538,15 @@ export function createAgentRuntime({
     if (history.includes(selected)) {
       return { ok: false, code: "circular_delegation", agent: selected, chain: history.concat(selected) };
     }
+    // Budgets are per scope, not per process. A long-lived service that owns many missions must not
+    // run out of delegations after twelve of them; one run still cannot exceed its own ceiling.
+    const scopeState = scopeOf(scope);
+    scopeState.delegations += 1;
     delegations += 1;
-    if (delegations > config.maxDelegations) {
+    if (scopeState.delegations > config.maxDelegations) {
       return { ok: false, code: "delegation_budget_exhausted", agent: selected, maxDelegations: config.maxDelegations };
     }
-    if (Date.now() - startedAt > config.maxWallClockMs) {
+    if (Date.now() - scopeState.startedAt > config.maxWallClockMs) {
       return { ok: false, code: "delegation_time_exceeded", agent: selected };
     }
     const amount = Number(budgetUsd);
@@ -404,7 +557,7 @@ export function createAgentRuntime({
     let outcome;
     try {
       outcome = await withTimeout(
-        runHandler(selected, { objective: text }),
+        runHandler(selected, { objective: text, context: context && typeof context === "object" ? context : null }),
         config.maxWallClockMs,
         "agent_timeout"
       );
@@ -438,6 +591,10 @@ export function createAgentRuntime({
       degraded: Array.isArray(outcome?.degraded) ? outcome.degraded.slice(0, 10) : [],
       draft: outcome?.draft || null,
       state: outcome?.state || null,
+      plan: outcome?.plan || null,
+      checks: Array.isArray(outcome?.checks) ? outcome.checks.slice(0, 12) : null,
+      passed: typeof outcome?.passed === "boolean" ? outcome.passed : null,
+      proposedCorrection: outcome?.proposedCorrection || null,
       costUsd: Math.min(amount, Number(outcome?.costUsd || 0)),
       provider: clean(outcome?.provider, 64) || null
     };
@@ -521,6 +678,12 @@ export function createAgentRuntime({
     delegateAndReview,
     review,
     available,
+    // A resumable mission can clear its own budget without touching any other mission's counters.
+    resetScope: name => {
+      const key = clean(name, 160) || "process";
+      scopes.delete(key);
+      return { ok: true, scope: key };
+    },
     limits: Object.freeze({ ...config }),
     delegations: () => delegations
   });

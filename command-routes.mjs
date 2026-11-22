@@ -134,7 +134,9 @@ export function registerUniversalCommandRoutes(app, {
   projectProvider = null,
   // Mission 14: the durable Ax <-> NEXUS message channel. Absent, its routes answer 503 rather than
   // pretending a channel exists.
-  messageProvider = null
+  messageProvider = null,
+  // Mission 17: the agent work cycle that turns an objective into specialist work and verifies it.
+  workProvider = null
 } = {}) {
   // Two credentials, two permission sets. The bridge token is device-capable and predates this
   // work. The command token may only reach /ax/command, and it can never satisfy an owner action.
@@ -1461,6 +1463,39 @@ export function registerUniversalCommandRoutes(app, {
       objective: resolvedObjective,
       accounting: resolvedObjective ? service.accountingOf(resolvedObjective) : null
     });
+  }));
+
+  // ------------------------------------------------------------------- mission work cycle
+  // One objective -> ordered specialist work -> independent verification -> completion.
+  // The cycle never approves anything and never completes an objective whose criteria did not pass.
+  route.post("/ax/command/objectives/:id/work", requireAx, serviceGuard(async (req, res) => {
+    const service = objectives();
+    if (!service) return capabilityUnavailable(res, "objectives_not_configured", "Durable objectives are not mounted on this service.");
+    const cycle = typeof workProvider === "function" ? workProvider() : null;
+    if (!cycle) return capabilityUnavailable(res, "work_cycle_not_configured", "The NEXUS work cycle is not mounted on this service.");
+    const outcome = await cycle.run({
+      objectiveId: req.params.id,
+      by: "ax",
+      correlationId: req.body?.correlationId || null
+    });
+    res.status(outcome.ok === true ? 200 : (STATUS_BY_CODE[outcome.code] || 409)).json(outcome);
+  }));
+
+  route.post("/ax/command/objectives/:id/work/stop", requireAx, serviceGuard(async (req, res) => {
+    const service = objectives();
+    if (!service) return capabilityUnavailable(res, "objectives_not_configured", "Durable objectives are not mounted on this service.");
+    const cycle = typeof workProvider === "function" ? workProvider() : null;
+    if (!cycle) return capabilityUnavailable(res, "work_cycle_not_configured", "The NEXUS work cycle is not mounted on this service.");
+    const outcome = await cycle.stop({ objectiveId: req.params.id, by: "ax", reason: req.body?.reason || "stopped through the Ax command API" });
+    res.status(outcome.ok === true ? 200 : (STATUS_BY_CODE[outcome.code] || 409)).json(outcome);
+  }));
+
+  route.post("/ax/command/agents/revoke", requireAx, serviceGuard(async (req, res) => {
+    const cycle = typeof workProvider === "function" ? workProvider() : null;
+    if (!cycle) return capabilityUnavailable(res, "work_cycle_not_configured", "The NEXUS work cycle is not mounted on this service.");
+    const outcome = cycle.revoke({ by: "ax", reason: req.body?.reason || "agent permissions revoked through the Ax command API" });
+    await recordAudit({ event: "agents.revoked", actorDeviceId: "ax", targetDeviceId: null });
+    res.json(outcome);
   }));
 
   route.get("/ax/command/agents", requireAx, serviceGuard(async (_req, res) => {

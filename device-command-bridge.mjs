@@ -21,6 +21,7 @@ import { createAxDiagnostics } from "./ax-diagnostics.mjs";
 import { createObjectiveService } from "./ax-objectives.mjs";
 import { createD1AxObjectiveRepository } from "./ax-objective-repository.mjs";
 import { createAgentRuntime } from "./ax-agents.mjs";
+import { createWorkCycle } from "./ax-work-cycle.mjs";
 import { createIncidentService, createOperationalMonitor, createRecoveryService } from "./ax-recovery.mjs";
 import { createD1AxIncidentRepository } from "./ax-incident-repository.mjs";
 import { createSecurityEventService } from "./ax-security-events.mjs";
@@ -271,6 +272,23 @@ export function registerDeviceCommandBridge(app, {
           const started = await objectives.start(row.id, { by: "nexus-autonomy" });
           if (started.ok !== true) {
             advanced.push({ id: row.id, ok: false, code: started.code || "start_failed" });
+            continue;
+          }
+          // An agent-oriented plan is driven by the mission work cycle, not by the adapter
+          // dispatcher: the two never share a run. The cycle owns its own lease, so a mission that
+          // is already running answers `work_cycle_busy` and is retried on a later tick.
+          const agentPlan = Array.isArray(row.plan?.steps) && row.plan.steps.length > 0 &&
+            row.plan.steps.every(step => step.agent && !step.adapter);
+          const cycle = agentPlan ? resolveWorkCycle() : null;
+          if (cycle) {
+            const mission = await cycle.run({ objectiveId: row.id, by: "nexus-autonomy" });
+            advanced.push({
+              id: row.id,
+              ok: mission.ok === true,
+              code: mission.code || null,
+              runId: null,
+              missionStatus: mission.status || null
+            });
             continue;
           }
           const dispatched = await dispatchObjective({
@@ -610,6 +628,7 @@ export function registerDeviceCommandBridge(app, {
   // Resolved after mounting, because diagnostics probe the engine and runtime this function builds.
   let diagnosticsRef = () => ({ status: "not_ready", note: "Diagnostics are not mounted yet." });
   let agentRuntimeRef = null;
+  let workCycleRef = null;
   let recoveryRef = null;
   try {
     commandApi = registerUniversalCommandRoutes(app, {
@@ -644,6 +663,7 @@ export function registerDeviceCommandBridge(app, {
       // Mission 10 surfaces. Each provider closure reads the mounted state at request time.
       objectiveProvider: () => objectives,
       agentProvider: () => resolveAgents(),
+      workProvider: () => resolveWorkCycle(),
       recoveryProvider: () => resolveRecovery(),
       incidentProvider: () => incidents,
       securityProvider: () => securityEvents,
@@ -814,6 +834,25 @@ export function registerDeviceCommandBridge(app, {
       }
     });
     return agentRuntimeRef;
+  }
+
+  /**
+   * The mission work cycle: objective -> specialist agents -> independent verification -> result.
+   * Built lazily from the same services the routes already use, so there is exactly one objective
+   * store, one agent runtime, one message channel and one security log per process.
+   */
+  function resolveWorkCycle() {
+    if (workCycleRef) return workCycleRef;
+    if (!objectives) return null;
+    workCycleRef = createWorkCycle({
+      objectives,
+      agents: resolveAgents(),
+      memory: memoryContext,
+      messages,
+      security: securityEvents,
+      log
+    });
+    return workCycleRef;
   }
 
   /** The server's honest view of the phone: one device row, its recent receipts and last pairing. */
