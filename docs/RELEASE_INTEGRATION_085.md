@@ -31,30 +31,31 @@ clean (0 conflicts)**, and the targeted suites passed on the merged tree.
 Targeted suites on the merged tree (command routes, audit, restart, concurrency, checker) →
 **54/54 pass, exit 0**.
 
-**#97** (`4b872f6`, Control Center pairing panel) is based on `main`; cherry-picking it onto the
-release branch was verified clean. It is not part of the release merge sequence above unless the
-pairing panel is wanted in the same deploy.
+**#97** (`4b872f6`, Control Center pairing panel) is based on `main`. Cherry-picking it onto the
+release branch is clean and was measured at **826/826** with dependencies installed, but it is
+**held separate** and is not part of the merge sequence. Its base is `main`, so merging it as-is
+would not deliver it to the release branch; that needs an owner-approved cherry-pick.
 
-**#103** (`46d33c6`, Android upgrade plan + checksum verifier) targets `main` and is documentation
-and tooling; it does not ship to the server.
+**#103** (`46d33c6`, Android upgrade plan, signing investigation and checksum verifier) targets
+`main` and is documentation and tooling; it does not ship to the server.
 
-## 3. Expected post-merge test total
+## 3. Measured merged-tree total
 
-Branch-tip measurements on top of `57a5123` (789 tests):
+Branch-tip totals on top of `57a5123` (789 tests): 802 (#96), 805 (#98 stacked), 809 (#100
+stacked), 794 (#99), 796 (#101), 796 (#102). Those tips cannot simply be added: shared test files
+are replaced, so the real total is smaller than the arithmetic suggested.
 
-| Branch | Tip total |
+The full suite was actually executed on the merged tree, with `node_modules` linked:
+
+| Tree | Result |
 |---|---|
-| #96 | 802 |
-| #98 (stacked) | 805 |
-| #100 (stacked) | 809 |
-| #99 | 794 |
-| #101 | 796 |
-| #102 | 796 |
+| release + #95, #96, #98, #100, #99, #101, #102 | **825/825 pass, 0 fail, exit 0** |
+| same tree + #97 cherry-pick | **826/826 pass, 0 fail, exit 0** |
+| console + pairing targeted with #97 | **23/23 pass** |
 
-After merging #95 (+\u200b1), #96, #98, #100, #99, #101, #102 the full suite is expected to report
-**829 tests**. This is an expectation, not evidence: the merged tree still requires an actual
-`node --test tests/*.test.mjs` run before any deploy. The targeted 54/54 run is the evidence
-gathered so far.
+An earlier draft predicted 829 from branch arithmetic; measurement corrected it to **825**. Only
+the measured numbers should be used. A first run without `node_modules` showed 5 unrelated files
+failing on the missing `sharp` package — an environment artifact, not an integration failure.
 
 ## 4. Merge procedure (owner-authorized)
 
@@ -63,8 +64,9 @@ gathered so far.
 3. Retarget/merge **#100** to the release branch (it was stacked on #98).
 4. Merge **#99**, **#101**, **#102** in any order (new files; no conflicts).
 5. Run the full suite on the merged release branch and record the real total.
-6. Optional: cherry-pick `4b872f6` (#97) and re-run the console tests if the pairing panel is in
-   scope for the same release.
+6. **#97 stays separate.** Only after explicit owner approval, cherry-pick `4b872f6` and re-run the
+   suite; the measured result is 826/826. Do not merge #97 into `main` and assume it reached the
+   release branch.
 7. Only then request a deploy authorization.
 
 Stacked PRs must not be merged "out of order" while their base still points at an unmerged branch;
@@ -113,7 +115,25 @@ activation with its own approval and drill.
    up to that per instance.
 4. **No real worker activation:** the executor stays off, so none of this exercises a live claim in
    production.
-5. **Android 0.8.5 is not device-verified**; the pairing single-flight fix is compile-verified only.
+5. **Android 0.8.5 is not device-verified**; the pairing single-flight fix is compile- and
+   JVM-test-verified only.
+6. **Audit duplicates are possible under network uncertainty.** `append()` reads the head, then
+   inserts; if D1 commits the row but the response is lost, the retry reads its own row as head and
+   appends a second event. The chain stays valid and sequence stays unique, but an approval can be
+   logged twice. There is no idempotency key; operators should treat duplicate audit rows as
+   possible and not as a second action.
+7. **The append retry loop treats every error as contention** (24 rounds with backoff). A D1 outage
+   therefore delays an audit write and then throws; an approval that already applied returns 502
+   `recorded:false`, which is why reconciliation is required.
+8. **No schema migration is needed.** `habitat_ax_security_events` is created idempotently, has no
+   CHECK constraint on `category`/`outcome`, and the new categories (`approval.created`,
+   `owner.rejection`, `work.stop_requested`, `command.unauthorized`) fit the existing schema.
+   Existing rows keep their hashes; nothing is rewritten.
+9. **Ordering is semantic, not just textual.** #96 introduces the recorder wiring that #98 and #100
+   extend; merging those first would leave their audit branches inert until #96 lands. Merge #96
+   before #98/#100 even though all three are conflict-free.
+10. **Rollback is additive.** Reverting the code does not invalidate audit rows or the sequence;
+    never delete security events to "clean up" a rollback.
 
 ## 8. Not done by this document
 
