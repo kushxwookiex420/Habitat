@@ -83,7 +83,8 @@ const REQUIRED_DOCUMENTS = [
   "docs/ANDROID_MISSION_14_DEVICE_TEST.md",
   "docs/NEXUS_MISSION_15.md",
   "docs/CHATGPT_CONNECTION_READINESS.md",
-  "docs/NEXUS_MISSION_18_LIVE_READINESS.md"
+  "docs/NEXUS_MISSION_18_LIVE_READINESS.md",
+  "docs/NEXUS_MISSION_19.md"
 ];
 const REQUIRED_ARTIFACTS = [
   "release/demo-evidence.json",
@@ -92,7 +93,8 @@ const REQUIRED_ARTIFACTS = [
   "release/mission-14-evidence.json",
   "release/mission-15-live-activation.json",
   "release/mission-16-chatgpt-readiness.json",
-  "release/mission-18-live-readiness.json"
+  "release/mission-18-live-readiness.json",
+  "release/mission-19-deployment-verification.json"
 ];
 const REQUIRED_MIGRATIONS = [
   "0001_habitat_tasks.sql",

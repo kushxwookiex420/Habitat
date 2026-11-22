@@ -496,11 +496,20 @@ test("11: an operator stop halts the mission between steps and a later run resum
     assert.equal(h.calls.engineering, 0, "the step after the stop never ran");
     assert.ok(h.securityEvents.some(entry => entry.category === "work.stop_requested"));
 
+    // Mission 19: the stop now interrupts the in-flight agent. Its unfinished result is discarded,
+    // so there is no research evidence to reuse and the resumed run performs the step again.
+    const interrupted = await h.objectives.get(objective.id);
+    assert.equal(
+      interrupted.evidence.filter(item => item.agent === "research").length,
+      0,
+      "the interrupted agent's result is never persisted (an earlier memory step may remain)"
+    );
+
     h.hooks.onResearch = null;
     const resumed = await h.cycle.run({ objectiveId: objective.id, by: "test" });
     assert.equal(resumed.ok, true, JSON.stringify(resumed));
     assert.equal(resumed.status, "completed");
-    assert.equal(h.calls.research, 1, "the pre-stop research evidence was reused");
+    assert.equal(h.calls.research, 2, "the interrupted research step ran again instead of reusing a discarded result");
   } finally {
     await h.cleanup();
   }

@@ -26,6 +26,12 @@ export const SECURITY_CATEGORIES = Object.freeze([
   "command.unauthorized",
   "command.sensitive",
   "agent.permission_violation",
+  // Mission 18/19: an operator stop and an agent revocation are audit events, not console lines.
+  // They must be accepted by this list or the work cycle's `record` call is refused silently.
+  "agent.revoked",
+  "agent.restored",
+  "work.stop_requested",
+  "work.interrupted",
   "secret.detected",
   "budget.exhausted",
   "sandbox.refusal",

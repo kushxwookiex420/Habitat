@@ -86,6 +86,28 @@ function leaseEntry(objective) {
  * @param {object} [options.security]  security event service (record)
  * @param {object} [options.log]
  */
+/**
+ * Await a promise, but let an operator stop win immediately. The agent call keeps running in the
+ * background until its own timeout, yet its result is discarded: nothing from an aborted step is
+ * persisted as evidence. This is what makes a stop interrupt an in-flight agent without pretending
+ * the agent returned.
+ */
+function raceWithAbort(promise, signal) {
+  if (!signal) return Promise.resolve(promise).then(value => ({ value }), error => ({ error }));
+  if (signal.aborted) {
+    Promise.resolve(promise).catch(() => {});
+    return Promise.resolve({ aborted: true });
+  }
+  return new Promise(resolve => {
+    const onAbort = () => resolve({ aborted: true });
+    signal.addEventListener("abort", onAbort, { once: true });
+    Promise.resolve(promise).then(
+      value => { signal.removeEventListener("abort", onAbort); resolve({ value }); },
+      error => { signal.removeEventListener("abort", onAbort); resolve({ error }); }
+    );
+  });
+}
+
 export function createWorkCycle({
   objectives,
   agents,
@@ -106,7 +128,9 @@ export function createWorkCycle({
   }
   const config = { ...WORK_CYCLE_LIMITS, ...limits };
   const stopped = new Set();
+  const controllers = new Map();
   let revoked = false;
+  let revocationLoaded = false;
 
   function audit(entry) {
     if (!security || typeof security.record !== "function") return;
@@ -114,6 +138,40 @@ export function createWorkCycle({
       Promise.resolve(security.record(entry)).catch(() => {});
     } catch {
       // An audit failure must not decide the mission outcome.
+    }
+  }
+
+  async function auditAwait(entry) {
+    if (!security || typeof security.record !== "function") return { ok: false, code: "security_log_not_configured" };
+    try {
+      const recorded = await security.record(entry);
+      return recorded && typeof recorded === "object" ? recorded : { ok: false, code: "security_store_unavailable" };
+    } catch {
+      return { ok: false, code: "security_store_unavailable" };
+    }
+  }
+
+  /**
+   * Load the durable revocation state once per process. Revocation is written as a hash-chained
+   * security event, so a deploy or a Render sleep does not silently restore agent permissions; an
+   * explicit `agents/restore` records the matching event. Without a readable audit log the state
+   * stays process-local and the response says so instead of claiming durability.
+   */
+  async function hydrateRevocation() {
+    if (revocationLoaded) return;
+    revocationLoaded = true;
+    if (!security || security.available !== true || typeof security.list !== "function") return;
+    try {
+      const [revokedPage, restoredPage] = await Promise.all([
+        security.list({ category: "agent.revoked", limit: 1 }),
+        security.list({ category: "agent.restored", limit: 1 })
+      ]);
+      const lastRevoked = revokedPage?.events?.[0] || null;
+      const lastRestored = restoredPage?.events?.[0] || null;
+      if (lastRevoked && (!lastRestored || lastRevoked.seq > lastRestored.seq)) revoked = true;
+    } catch {
+      // An unreadable audit log must not grant execution, but it also must not crash the cycle.
+      // The process keeps whatever in-memory state it already had.
     }
   }
 
@@ -174,11 +232,18 @@ export function createWorkCycle({
 
   function stopRequested(objective, startedAtMs) {
     const checkpoints = Array.isArray(objective?.checkpoints) ? objective.checkpoints : [];
-    return checkpoints.some(entry => {
-      if (!String(entry?.note || "").startsWith("work:stop:")) return false;
-      const at = Date.parse(entry.at || 0);
-      return Number.isFinite(at) && at >= startedAtMs;
-    });
+    let lastStop = 0;
+    let lastResume = 0;
+    for (const entry of checkpoints) {
+      const at = Date.parse(entry?.at || 0);
+      if (!Number.isFinite(at)) continue;
+      const note = String(entry?.note || "");
+      // A stop only belongs to the run it interrupted; a stop from an earlier run must not block a
+      // new mission, and an explicit resume consumes the stop even when both land in one millisecond.
+      if (note.startsWith("work:stop:") && at >= startedAtMs) lastStop = Math.max(lastStop, at);
+      if (note.startsWith("work:resume:")) lastResume = Math.max(lastResume, at);
+    }
+    return lastStop > 0 && lastStop > lastResume;
   }
 
   function checkInterrupted(objectiveId, startedAtMs, objective) {
@@ -309,7 +374,7 @@ export function createWorkCycle({
     return { ok: true, steps: steps.length };
   }
 
-  async function runStep({ objective, step, index, memoryContext, startedAtMs, report }) {
+  async function runStep({ objective, step, index, memoryContext, startedAtMs, report, signal = null }) {
     const result = {
       index,
       key: "step" + index,
@@ -348,16 +413,29 @@ export function createWorkCycle({
     let review = null;
     for (let attempt = 1; attempt <= config.maxAttempts; attempt += 1) {
       result.attempts = attempt;
-      const outcome = await agents.delegateAndReview({
-        objective: clean(step.objective, 1000),
-        role: step.agent,
-        context: {
-          criteria: (objective.criteria || []).map(item => ({ id: item.id, statement: item.statement, required: item.required })),
-          memoryContext,
-          evidence: (objective.evidence || []).map(item => ({ id: item.id, summary: item.summary, source: item.source, agent: item.agent }))
-        },
-        scope: "mission:" + objective.id + ":" + startedAtMs
-      });
+      const raced = await raceWithAbort(
+        agents.delegateAndReview({
+          objective: clean(step.objective, 1000),
+          role: step.agent,
+          context: {
+            criteria: (objective.criteria || []).map(item => ({ id: item.id, statement: item.statement, required: item.required })),
+            memoryContext,
+            evidence: (objective.evidence || []).map(item => ({ id: item.id, summary: item.summary, source: item.source, agent: item.agent }))
+          },
+          scope: "mission:" + objective.id + ":" + startedAtMs,
+          signal: signal || null
+        }),
+        signal
+      );
+      if (raced.aborted) {
+        result.status = "stopped";
+        result.code = "work_stopped";
+        result.reason = "An operator stopped the work cycle while this agent was running; the unfinished result was discarded.";
+        return result;
+      }
+      const outcome = raced.error
+        ? { ok: false, envelope: { code: "agent_failed" }, review: { accepted: false, code: "agent_failed" } }
+        : (raced.value || { ok: false, envelope: { code: "agent_failed" }, review: { accepted: false, code: "agent_failed" } });
       envelope = outcome.envelope || null;
       review = outcome.review || null;
       if (outcome.ok === true) break;
@@ -507,6 +585,9 @@ export function createWorkCycle({
       return { ...report, code: lease.code, lease: lease.lease || null, error: lease.code === "work_cycle_busy" ? "Another work cycle holds this objective." : "The lease could not be claimed." };
     }
     report.lease = { owner, expiresAtMs: lease.lease?.expiresAtMs || null };
+    await hydrateRevocation();
+    const controller = new AbortController();
+    controllers.set(report.objectiveId, controller);
     // A stop belongs to the run it interrupted. The durable stop checkpoint is timestamped, so a
     // later run starts after it and is still correctly refused only for stops issued during itself.
     stopped.delete(report.objectiveId);
@@ -532,6 +613,10 @@ export function createWorkCycle({
         const recovered = await objectives.recover(objective.id, { by: "nexus-work-cycle", reason: "resuming an interrupted mission" });
         if (recovered.ok !== true) return { ...report, code: recovered.code || "recovery_failed" };
         objective = recovered.objective;
+        // Consume any stop issued before this resume. Without this marker, a stop recorded in the
+        // same millisecond as the resumed run's start would refuse the run it was not meant for.
+        await objectives.checkpoint(objective.id, { note: "work:resume:" + startedAtMs, by: "nexus-work-cycle" });
+        objective = await load(objective.id) || objective;
       }
 
       if (objective.deadlineAt && Date.parse(objective.deadlineAt) <= nowMs()) {
@@ -616,7 +701,7 @@ export function createWorkCycle({
             return { ...report, code: "deadline_exceeded", status: "failed" };
           }
 
-          const stepResult = await runStep({ objective: latest, step, index, memoryContext, startedAtMs, report });
+          const stepResult = await runStep({ objective: latest, step, index, memoryContext, startedAtMs, report, signal: controller.signal });
           report.steps.push(stepResult);
 
           if (stepResult.status === "needs_approval") {
@@ -767,6 +852,7 @@ export function createWorkCycle({
       log.error?.("WORK_CYCLE_FAILED", redact(error?.message || error, 200));
       return { ...report, code: "work_cycle_failed", error: "The work cycle failed unexpectedly.", durationMs: nowMs() - startedAtMs };
     } finally {
+      controllers.delete(report.objectiveId);
       await releaseLease(report.objectiveId, owner).catch(() => false);
     }
   }
@@ -780,6 +866,8 @@ export function createWorkCycle({
     const id = clean(objectiveId, 160);
     if (!id) return { ok: false, code: "objective_id_required" };
     stopped.add(id);
+    const controller = controllers.get(id) || null;
+    if (controller && !controller.signal.aborted) controller.abort();
     const recorded = await objectives.checkpoint(id, {
       note: "work:stop:" + ownerTag(by),
       by: clean(by, 120) || "owner"
@@ -796,28 +884,60 @@ export function createWorkCycle({
     return {
       ok: recorded.ok !== false,
       code: recorded.ok === false ? recorded.code || "stop_not_recorded" : "stop_requested",
-      note: "A running cycle stops before its next step; an in-flight agent call finishes within its timeout. The owner's cancel route is still the terminal action."
+      interrupted: Boolean(controller),
+      note: controller
+        ? "The running agent was interrupted; its unfinished result is discarded. The stop is durable in the checkpoint history."
+        : "No cycle is running in this process. The stop is durable in the checkpoint history and the next run honours it."
     };
   }
 
-  /** Revoke agent execution for the whole process. Reversible only by a restart or a new cycle. */
-  function revoke({ by = "owner", reason = "agent permissions revoked" } = {}) {
+  /** Revoke agent execution. Persisted as a security event so a restart does not clear it. */
+  async function revoke({ by = "owner", reason = "agent permissions revoked" } = {}) {
     revoked = true;
-    audit({
+    const recorded = await auditAwait({
       category: "agent.revoked",
       severity: "high",
-      outcome: "recorded",
+      outcome: "allowed",
       actor: clean(by, 120) || "owner",
       summary: clean(reason, 200),
-      evidence: null
+      evidence: "durable agent revocation"
     });
-    return { ok: true, revoked: true, note: "New steps are refused in this process. Durable agent permissions are not stored, so an owner cancel remains the terminal action." };
+    return {
+      ok: true,
+      revoked: true,
+      durable: recorded.ok === true,
+      note: recorded.ok === true
+        ? "New agent steps are refused, and this revocation survives a restart until an explicit agents/restore."
+        : "New agent steps are refused in this process only; the durable audit log was not writable."
+    };
+  }
+
+  /** Restore agent execution explicitly; records the matching durable audit event. */
+  async function restore({ by = "owner", reason = "agent permissions restored" } = {}) {
+    revoked = false;
+    const recorded = await auditAwait({
+      category: "agent.restored",
+      severity: "high",
+      outcome: "allowed",
+      actor: clean(by, 120) || "owner",
+      summary: clean(reason, 200),
+      evidence: "durable agent restoration"
+    });
+    return {
+      ok: true,
+      revoked: false,
+      durable: recorded.ok === true,
+      note: recorded.ok === true
+        ? "Agent steps are allowed again; the restoration is recorded in the audit log."
+        : "Agent steps are allowed in this process only; the durable audit log was not writable."
+    };
   }
 
   return Object.freeze({
     run,
     stop,
     revoke,
+    restore,
     revoked: () => revoked,
     limits: Object.freeze({ ...config }),
     plan: input => agents.delegateAndReview({

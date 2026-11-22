@@ -1493,15 +1493,32 @@ export function registerUniversalCommandRoutes(app, {
   route.post("/ax/command/agents/revoke", requireAx, serviceGuard(async (req, res) => {
     const cycle = typeof workProvider === "function" ? workProvider() : null;
     if (!cycle) return capabilityUnavailable(res, "work_cycle_not_configured", "The NEXUS work cycle is not mounted on this service.");
-    const outcome = cycle.revoke({ by: "ax", reason: req.body?.reason || "agent permissions revoked through the Ax command API" });
+    const outcome = await cycle.revoke({ by: "ax", reason: req.body?.reason || "agent permissions revoked through the Ax command API" });
     await recordAudit({ event: "agents.revoked", actorDeviceId: "ax", targetDeviceId: null });
+    res.json(outcome);
+  }));
+
+  // Restoration is explicit and audited: a durable revocation must not expire on its own.
+  route.post("/ax/command/agents/restore", requireAx, serviceGuard(async (req, res) => {
+    const cycle = typeof workProvider === "function" ? workProvider() : null;
+    if (!cycle) return capabilityUnavailable(res, "work_cycle_not_configured", "The NEXUS work cycle is not mounted on this service.");
+    if (typeof cycle.restore !== "function") return capabilityUnavailable(res, "work_cycle_not_configured", "This deployment does not support restoring agent permissions yet.");
+    const outcome = await cycle.restore({ by: "ax", reason: req.body?.reason || "agent permissions restored through the Ax command API" });
+    await recordAudit({ event: "agents.restored", actorDeviceId: "ax", targetDeviceId: null });
     res.json(outcome);
   }));
 
   route.get("/ax/command/agents", requireAx, serviceGuard(async (_req, res) => {
     const runtime = agents();
     if (!runtime) return capabilityUnavailable(res, "agents_not_configured", "The agent runtime is not mounted on this service.");
-    res.json({ ok: true, agents: runtime.capabilityMatrix(), limits: runtime.limits, delegations: runtime.delegations() });
+    const cycle = typeof workProvider === "function" ? workProvider() : null;
+    res.json({
+      ok: true,
+      agents: runtime.capabilityMatrix(),
+      limits: runtime.limits,
+      delegations: runtime.delegations(),
+      revoked: typeof cycle?.revoked === "function" ? cycle.revoked() : null
+    });
   }));
 
   route.post("/ax/command/agents/select", requireAx, serviceGuard(async (req, res) => {

@@ -457,9 +457,13 @@ export function createAgentRuntime({
       };
     }
 
+    if (input?.signal?.aborted) {
+      return { ok: false, code: "aborted", agent: id, evidence: [], confidence: 0, limitations: ["The operator stopped this agent before it returned."] };
+    }
+
     if (id === "research") {
       const run = dependencies.research;
-      const result = await run({ objective: input.objective, query: input.query || input.objective });
+      const result = await run({ objective: input.objective, query: input.query || input.objective, signal: input.signal || null });
       if (result?.ok === false) return unavailable(id, result.code || result.error || "research_transport_failed");
       const sources = Array.isArray(result?.sources) ? result.sources.slice(0, 8) : [];
       return {
@@ -478,7 +482,7 @@ export function createAgentRuntime({
 
     // engineering
     const run = dependencies.engineering;
-    const result = await run({ objective: input.objective, files: input.files || [] });
+    const result = await run({ objective: input.objective, files: input.files || [], signal: input.signal || null });
     const commands = Array.isArray(result?.commands) ? result.commands.slice(0, 10) : [];
     const files = Array.isArray(result?.files) ? result.files.slice(0, 8) : [];
     const evidence = commands.map(command => ({
@@ -525,7 +529,7 @@ export function createAgentRuntime({
    * Delegate once. Depth, cycles, total delegations, wall clock and cost are checked before the
    * handler runs; the result is a signed envelope Ax must review before accepting.
    */
-  async function delegate({ objective, role = null, depth = 0, chain = [], budgetUsd = AGENT_LIMITS.maxDelegationCostUsd, context = null, scope = "process" } = {}) {
+  async function delegate({ objective, role = null, depth = 0, chain = [], budgetUsd = AGENT_LIMITS.maxDelegationCostUsd, context = null, scope = "process", signal = null } = {}) {
     const text = clean(objective, 1000);
     if (text.length < 8) return { ok: false, code: "invalid_objective" };
     const selected = role || selectAgent(text).agent;
@@ -557,7 +561,7 @@ export function createAgentRuntime({
     let outcome;
     try {
       outcome = await withTimeout(
-        runHandler(selected, { objective: text, context: context && typeof context === "object" ? context : null }),
+        runHandler(selected, { objective: text, context: context && typeof context === "object" ? context : null, signal }),
         config.maxWallClockMs,
         "agent_timeout"
       );

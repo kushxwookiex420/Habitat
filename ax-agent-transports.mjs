@@ -94,11 +94,13 @@ export function createRepositoryResearchTransport({
 } = {}) {
   if (!root) throw new Error("The repository research transport needs a root directory.");
 
-  async function research({ objective, query = null } = {}) {
+  async function research({ objective, query = null, signal = null } = {}) {
+    if (signal?.aborted) return { ok: false, code: "aborted", summary: "Research was stopped before it read a file.", sources: [], confidence: 0, scanned: 0 };
     const wanted = terms(query || objective);
     const files = await listTextFiles(root, maxFiles);
     const scored = [];
     for (const file of files) {
+      if (signal?.aborted) return { ok: false, code: "aborted", summary: "Research was stopped while scanning the repository.", sources: [], confidence: 0, scanned: files.length };
       let content;
       try {
         const info = await stat(file);
@@ -161,12 +163,13 @@ export function createRepositoryResearchTransport({
   return research;
 }
 
-function runCommand({ command, args = [], cwd, timeoutMs = 60_000, env = {}, now }) {
+function runCommand({ command, args = [], cwd, timeoutMs = 60_000, env = {}, now, signal = null }) {
   return new Promise(resolve => {
     const startedAt = Date.now();
     let stdout = "";
     let stderr = "";
     let settled = false;
+    let aborted = false;
     let child;
     try {
       child = spawn(command, args, {
@@ -181,14 +184,26 @@ function runCommand({ command, args = [], cwd, timeoutMs = 60_000, env = {}, now
       resolve({ exitCode: null, signal: null, stdout: "", stderr: String(error?.message || error), durationMs: 0, timedOut: false });
       return;
     }
-    const timer = setTimeout(() => {
-      if (settled) return;
+    const killTree = () => {
       try {
         if (process.platform !== "win32" && child.pid) process.kill(-child.pid, "SIGKILL");
         else child.kill("SIGKILL");
       } catch {
         try { child.kill("SIGKILL"); } catch { /* already gone */ }
       }
+    };
+    const onAbort = () => {
+      if (settled) return;
+      aborted = true;
+      killTree();
+    };
+    if (signal) {
+      if (signal.aborted) onAbort();
+      else signal.addEventListener("abort", onAbort, { once: true });
+    }
+    const timer = setTimeout(() => {
+      if (settled) return;
+      killTree();
     }, timeoutMs);
     const append = (current, chunk) => (current + chunk.toString()).slice(-MAX_OUTPUT_TAIL);
     child.stdout.on("data", chunk => { stdout = append(stdout, chunk); });
@@ -197,19 +212,22 @@ function runCommand({ command, args = [], cwd, timeoutMs = 60_000, env = {}, now
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      resolve({ exitCode: null, signal: null, stdout, stderr: append(stderr, String(error?.message || error)), durationMs: Date.now() - startedAt, timedOut: false });
+      if (signal) signal.removeEventListener("abort", onAbort);
+      resolve({ exitCode: null, signal: null, stdout, stderr: append(stderr, String(error?.message || error)), durationMs: Date.now() - startedAt, timedOut: false, aborted });
     });
-    child.on("close", (code, signal) => {
+    child.on("close", (code, exitSignal) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      if (signal) signal.removeEventListener("abort", onAbort);
       resolve({
         exitCode: typeof code === "number" ? code : null,
-        signal: signal || null,
+        signal: exitSignal || null,
         stdout,
         stderr,
         durationMs: Date.now() - startedAt,
-        timedOut: signal === "SIGKILL" || Date.now() - startedAt >= timeoutMs,
+        timedOut: !aborted && (exitSignal === "SIGKILL" || Date.now() - startedAt >= timeoutMs),
+        aborted,
         observedAt: now()
       });
     });
@@ -275,7 +293,10 @@ export function createRepositoryEngineeringTransport({
     return [...new Set(matches)].slice(0, 6);
   }
 
-  async function run({ objective } = {}) {
+  async function run({ objective, signal = null } = {}) {
+    if (signal?.aborted) {
+      return { ok: false, summary: "Engineering was stopped before it inspected a file.", confidence: 0, files: [], commands: [], aborted: true, limitations: ["The operator stopped this agent before it returned."] };
+    }
     const files = [];
     for (const candidate of candidatePaths(objective)) {
       try {
@@ -289,7 +310,7 @@ export function createRepositoryEngineeringTransport({
       const file = files.find(item => item.digest && !item.error)?.path || null;
       if (check.when === "file" && !file) continue;
       const args = (Array.isArray(check.args) ? check.args : []).map(value => String(value).replace("{file}", file || ""));
-      const result = await runCommand({ command: check.command, args, cwd: resolvedRoot, timeoutMs: check.timeoutMs || timeoutMs, env: check.env || {}, now });
+      const result = await runCommand({ command: check.command, args, cwd: resolvedRoot, timeoutMs: check.timeoutMs || timeoutMs, env: check.env || {}, now, signal });
       commands.push({
         name: check.name || (check.command + " " + args.join(" ")).trim(),
         command: (check.command + " " + args.join(" ")).trim(),
@@ -298,13 +319,16 @@ export function createRepositoryEngineeringTransport({
         timedOut: result.timedOut === true,
         stdoutTail: result.stdout ? result.stdout.slice(-1_200) : "",
         stderrTail: result.stderr ? result.stderr.slice(-1_200) : "",
+        aborted: result.aborted === true,
         durationMs: result.durationMs
       });
     }
     const inspected = files.filter(item => item.digest);
     const failed = commands.filter(item => item.exitCode !== 0);
+    const aborted = commands.some(item => item.aborted === true) || signal?.aborted === true;
     return {
-      ok: inspected.length > 0 && failed.length === 0,
+      ok: !aborted && inspected.length > 0 && failed.length === 0,
+      aborted,
       summary: "Inspected " + inspected.length + " file(s); ran " + commands.length + " allowlisted check(s); " + failed.length + " failed.",
       confidence: inspected.length === 0 ? 0.2 : failed.length === 0 ? 0.9 : 0.5,
       files,

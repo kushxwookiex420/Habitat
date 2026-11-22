@@ -568,6 +568,10 @@ app.get("/health", (req, res) => {
     // Public, non-sensitive pointers. Full probe-based diagnostics require the Ax credential at
     // GET /ax/command/diagnostics; this endpoint never claims a subsystem is healthy.
     version: process.env.HABITAT_VERSION || "0.5.0",
+    // Non-sensitive deployment identity. Render injects RENDER_GIT_COMMIT, so a verifier can
+    // distinguish "the route is missing" from "this is an older build" without a credential.
+    commit: process.env.RENDER_GIT_COMMIT || process.env.GIT_COMMIT || process.env.HABITAT_COMMIT || null,
+    startedAt: new Date(Date.now() - Math.round(process.uptime() * 1000)).toISOString(),
     controlCenter: "/control",
     provider: "multi-provider",
     model,
