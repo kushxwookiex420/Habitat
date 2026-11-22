@@ -83,6 +83,7 @@ async function harness({
   const objectives = createObjectiveService({ repository, log: quiet });
   const calls = { research: 0, engineering: 0 };
   const failState = { engineering: false };
+  const hooks = { onResearch: null };
   const remembered = [];
   const memoryContext = {
     recall: async () => ({
@@ -114,6 +115,7 @@ async function harness({
     ...(research ? {
       research: async input => {
         calls.research += 1;
+        if (typeof hooks.onResearch === "function") await hooks.onResearch();
         return researchTransport(input);
       }
     } : {}),
@@ -157,6 +159,7 @@ async function harness({
     cycle,
     calls,
     failState,
+    hooks,
     remembered,
     memoryContext,
     channel,
@@ -393,6 +396,13 @@ test("8: a mission result is sent through the authenticated Ax bridge, and both 
     });
     assert.equal(revoked.statusCode, 200);
     assert.equal(revoked.body.revoked, true);
+
+    const fresh = await makeObjective(h, {
+      text: "Research the README.md evidence",
+      criteria: RESEARCH_CRITERIA
+    });
+    const afterRevoke = await h.cycle.run({ objectiveId: fresh.id, by: "test" });
+    assert.equal(afterRevoke.code, "agents_revoked", "a revoked runtime refuses new work");
   } finally {
     await h.cleanup();
   }
@@ -461,6 +471,36 @@ test("10: a multi-agent objective reaches a verified completion with memory, aud
     assert.equal(report.verificationAgent.passed, true);
     assert.ok(h.securityEvents.length === 0, "no permission violation was raised by an allowed mission");
     assert.equal(report.message.kind, "result");
+  } finally {
+    await h.cleanup();
+  }
+});
+
+test("11: an operator stop halts the mission between steps and a later run resumes it", async () => {
+  const h = await harness();
+  try {
+    let objectiveId = null;
+    h.hooks.onResearch = async () => {
+      await h.cycle.stop({ objectiveId, by: "test-operator", reason: "stop after research" });
+    };
+    const objective = await makeObjective(h, {
+      text: "Research the README.md evidence and inspect module.mjs",
+      criteria: RESEARCH_CRITERIA
+    });
+    objectiveId = objective.id;
+
+    const stopped = await h.cycle.run({ objectiveId: objective.id, by: "test" });
+    assert.equal(stopped.ok, false);
+    assert.equal(stopped.code, "work_stopped");
+    assert.equal(stopped.status, "interrupted");
+    assert.equal(h.calls.engineering, 0, "the step after the stop never ran");
+    assert.ok(h.securityEvents.some(entry => entry.category === "work.stop_requested"));
+
+    h.hooks.onResearch = null;
+    const resumed = await h.cycle.run({ objectiveId: objective.id, by: "test" });
+    assert.equal(resumed.ok, true, JSON.stringify(resumed));
+    assert.equal(resumed.status, "completed");
+    assert.equal(h.calls.research, 1, "the pre-stop research evidence was reused");
   } finally {
     await h.cleanup();
   }

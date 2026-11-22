@@ -4,7 +4,7 @@ Branch: `ax-nexus/revision-4.6-nexus-mainline-integration` (PR #93, draft).
 Status: **implemented and locally acceptance-tested. Not deployed. Not enabled.**
 No model was called, no D1 database was touched, no Render service was changed and no Android
 device was involved. Evidence: `release/mission-17-nexus-acceptance.json`; tests:
-`tests/ax-work-cycle.test.mjs` (9) and the new autonomous bridge test in `tests/ax-nexus-e2e.test.mjs`.
+`tests/ax-work-cycle.test.mjs` (10) and the new autonomous bridge test in `tests/ax-nexus-e2e.test.mjs`.
 
 ---
 
@@ -158,6 +158,7 @@ store); a stop cannot abort a call already in flight; the objective record itsel
 | preserve results across restarts | 7: new service and cycle over the same repository see the verified result |
 | send a message through the authenticated bridge | 8: result thread persisted; `/ax/nexus/messages/notify` 401 without token; work route 401 |
 | report failure honestly | 9: missing capability blocks with zero evidence; unmet criteria fail, never complete |
+| stop active work and revoke agents | 11: an operator stop interrupts between steps and a later run resumes; revoke refuses new work |
 | complete a multi-agent objective end to end | 10 and the new bridge test: scheduler autonomy completes and verifies a mission |
 
 Bridge-level proof (`tests/ax-nexus-e2e.test.mjs`): the real composition root, both credentials, the
@@ -173,7 +174,7 @@ no manual dispatch, and a later tick does not run it again.
 | `ax-agents.mjs` | Director + Verification roles; context passing; scoped delegation budgets; empty-memory observation; engineering correction proposal |
 | `command-routes.mjs` | `work`, `work/stop` and `agents/revoke` routes |
 | `device-command-bridge.mjs` | mounts the work cycle; autonomy selects it for agent plans |
-| `tests/ax-work-cycle.test.mjs` | new acceptance suite (9 tests) |
+| `tests/ax-work-cycle.test.mjs` | new acceptance suite (10 tests) |
 | `tests/ax-nexus-e2e.test.mjs` | new autonomous mission through the real bridge |
 | `tests/ax-mission-10.test.mjs`, `tests/ax-openapi-contract.test.mjs`, `tests/command-routes.test.mjs` | deliberate contract counts (9 agents, 87 routes) |
 | `scripts/nexus-readiness.mjs`, `package.json` | acceptance runner and scripts |

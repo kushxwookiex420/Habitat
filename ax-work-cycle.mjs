@@ -507,6 +507,9 @@ export function createWorkCycle({
       return { ...report, code: lease.code, lease: lease.lease || null, error: lease.code === "work_cycle_busy" ? "Another work cycle holds this objective." : "The lease could not be claimed." };
     }
     report.lease = { owner, expiresAtMs: lease.lease?.expiresAtMs || null };
+    // A stop belongs to the run it interrupted. The durable stop checkpoint is timestamped, so a
+    // later run starts after it and is still correctly refused only for stops issued during itself.
+    stopped.delete(report.objectiveId);
     const correlation = clean(correlationId, 120) || "cor_mission_" + digest(report.objectiveId).slice(0, 16);
 
     try {
