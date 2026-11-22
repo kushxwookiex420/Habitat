@@ -225,6 +225,17 @@ test("phone actions are allowlisted and forwarded", async () => {
   assert.match(send.auth, /^Bearer hb_ax_/);
 });
 
+test("the console offers a pairing control backed by the authenticated endpoint", async () => {
+  const { app } = setup();
+  const res = await invoke(app, "GET /bridge/console", {});
+  const html = String(res.html);
+  assert.match(html, /id="pair-create"/, "pairing button is present");
+  assert.match(html, /id="pair-device"/, "optional device id input is present");
+  assert.match(html, /\/bridge\/console\/pairing/, "the control uses the operator-authenticated route");
+  assert.match(html, /single-use/i, "the UI states the code is single use");
+  assert.equal(html.includes(OPERATOR), false, "the operator token is never rendered");
+});
+
 test("the console page contains no credentials", async () => {
   const { app } = setup();
   const res = await invoke(app, "GET /bridge/console", {});
