@@ -216,23 +216,37 @@ test("an audited denial is recorded and reported as recorded", async () => {
   assert.equal(verifyEventChain(repository.events).ok, true);
 });
 
-test("an audit failure cannot produce an apparently successful decision", async () => {
-  const { app } = await mountRuntime({ audit: async () => ({ ok: false, code: "security_store_unavailable" }) });
-
-  const response = await decide(app, "cmd_a", true);
-  assert.equal(response.statusCode, 502);
+function assertAuditFailure(response, decision, status) {
+  assert.equal(response.statusCode, 502, "an unaudited decision must not return 200");
   assert.equal(response.body.ok, false);
   assert.equal(response.body.recorded, false);
-  assert.equal(response.body.decision, "approved");
+  assert.equal(response.body.decision, decision, "the applied decision is still reported");
+  assert.equal(response.body.status, status, "the applied task status is still reported");
   assert.match(response.body.error, /could not be recorded in the security audit log/);
+}
+
+// All four sink states are audit failures: absence, no result, explicit failure and a throw.
+test("a missing audit callback cannot produce an apparently successful decision", async () => {
+  const { app } = await mountRuntime(); // no audit option at all
+  assertAuditFailure(await decide(app, "cmd_a", true), "approved", "working");
+});
+
+test("an audit callback returning undefined is not treated as success", async () => {
+  const { app } = await mountRuntime({ audit: async () => undefined });
+  assertAuditFailure(await decide(app, "cmd_a", true), "approved", "working");
+});
+
+test("an audit callback returning {ok:false} is not treated as success", async () => {
+  const { app } = await mountRuntime({ audit: async () => ({ ok: false }) });
+  assertAuditFailure(await decide(app, "cmd_b", false), "denied", "failed");
 });
 
 test("a throwing audit sink cannot produce an apparently successful decision", async () => {
   const { app } = await mountRuntime({ audit: async () => { throw new Error("audit transport down"); } });
+  assertAuditFailure(await decide(app, "cmd_b", false), "denied", "failed");
+});
 
-  const response = await decide(app, "cmd_b", false);
-  assert.equal(response.statusCode, 502);
-  assert.equal(response.body.ok, false);
-  assert.equal(response.body.recorded, false);
-  assert.equal(response.body.decision, "denied");
+test("an unrecognised audit result is not treated as success", async () => {
+  const { app } = await mountRuntime({ audit: async () => ({ ok: "true" }) });
+  assertAuditFailure(await decide(app, "cmd_a", true), "approved", "working");
 });

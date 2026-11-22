@@ -786,17 +786,18 @@ export function registerNexusRuntime(app, {
   let started = false;
   let signalsAttached = false;
   let shuttingDown = false;
-  // Returns a result, not void: a caller that reports a decision must be able to tell the
-  // difference between "recorded" and "the audit sink failed". An embedder with no sink is
-  // reported as `recorded:false` rather than as a successful audited decision.
+  // Fail closed: only an explicit `{ ok: true }` from the sink counts as recorded. A missing
+  // callback, `undefined`, a partial or unrecognised result, `{ ok: false }` and a throw are all
+  // audit failures, so a decision can never be reported as successful without a written entry.
   const recordAudit = async entry => {
-    if (typeof audit !== "function") return { ok: true, recorded: false, reason: "audit_not_configured" };
+    if (typeof audit !== "function") return { ok: false, recorded: false, reason: "audit_not_configured" };
     try {
       const result = await audit(entry);
-      if (result && typeof result === "object" && result.ok === false) {
-        return { ok: false, recorded: false, reason: String(result.code || result.error || "audit_failed").slice(0, 200) };
-      }
-      return { ok: true, recorded: true };
+      if (result && typeof result === "object" && result.ok === true) return { ok: true, recorded: true };
+      const reason = result && typeof result === "object"
+        ? String(result.code || result.error || "audit_unconfirmed")
+        : "audit_unconfirmed";
+      return { ok: false, recorded: false, reason: reason.slice(0, 200) };
     } catch (error) {
       console.error("NEXUS_AUDIT_FAILED", String(error?.message || error));
       return { ok: false, recorded: false, reason: "audit_failed" };
