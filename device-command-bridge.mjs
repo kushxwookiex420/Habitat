@@ -73,6 +73,37 @@ function sanitizeDeviceDetails(value) {
   return details;
 }
 
+/**
+ * Map a NEXUS runtime audit entry into the security audit log.
+ *
+ * The runtime names its entries `device.command.approved` / `device.command.denied`. Those names are
+ * not accept categories for the append-only log, so they are translated into the existing
+ * allowlisted categories (`approval.created`, `owner.rejection`) while the original event name and
+ * the non-secret identifiers stay in `evidence`. Returning the sink's own result is deliberate: the
+ * runtime treats `ok:false` as an audit failure and refuses to report the decision as successful.
+ */
+export function createNexusAuditRecorder(securityEvents) {
+  return async entry => {
+    if (!securityEvents) return { ok: false, code: "security_log_not_configured" };
+    const event = String(entry?.event || "");
+    const approved = event === "device.command.approved";
+    const denied = event === "device.command.denied";
+    if (!approved && !denied) return { ok: false, code: "unmapped_nexus_audit_event" };
+    const taskId = entry?.targetDeviceId ? String(entry.targetDeviceId).slice(0, 160) : null;
+    const actorDeviceId = entry?.actorDeviceId ? String(entry.actorDeviceId).slice(0, 160) : null;
+    return securityEvents.record({
+      category: approved ? "approval.created" : "owner.rejection",
+      severity: approved ? "info" : "medium",
+      outcome: approved ? "allowed" : "denied",
+      actor: actorDeviceId ? "device:" + actorDeviceId : "nexus",
+      deviceId: actorDeviceId,
+      taskId,
+      summary: approved ? "NEXUS task approval accepted" : "NEXUS task approval denied",
+      evidence: JSON.stringify({ event, taskId, actorDeviceId })
+    });
+  };
+}
+
 export function registerDeviceCommandBridge(app, {
   env = process.env,
   fetchImpl = fetch,
@@ -804,6 +835,9 @@ export function registerDeviceCommandBridge(app, {
         deviceRepository: store,
         ownerDeviceId: env.HABITAT_OWNER_DEVICE_ID,
         ownerDeviceIds: env.HABITAT_OWNER_DEVICE_IDS,
+        // Owner approvals and denials are decisions about execution; they must land in the
+        // append-only, hash-chained security log, not only in a task record.
+        audit: createNexusAuditRecorder(securityEvents),
         handleSignals,
         exitOnSignal,
         log

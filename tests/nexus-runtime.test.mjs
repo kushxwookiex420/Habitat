@@ -894,6 +894,9 @@ async function approvalFixture(decision) {
     adapters: TEST_ADAPTERS,
     verifyDevice: async (token, deviceId) => deviceId === DEVICE && token === DEVICE_TOKEN,
     ownerDeviceId: DEVICE, handleSignals: false, log: quiet,
+    // Audit is fail-closed; this fixture exercises worker transitions, so it supplies a sink that
+    // explicitly confirms the write instead of relying on a no-op recorder.
+    audit: async () => ({ ok: true }),
     enforceReadOnlyAdapters: false
   });
   await runtime.initialize({ startWorker: false });
@@ -930,6 +933,7 @@ test("a worker-parks a pending task without a fence so the owner can then approv
     adapters: TEST_ADAPTERS,
     verifyDevice: async (token, deviceId) => deviceId === DEVICE && token === DEVICE_TOKEN,
     ownerDeviceId: DEVICE, handleSignals: false, log: quiet,
+    audit: async () => ({ ok: true }),
     enforceReadOnlyAdapters: false
   });
   await runtime.initialize({ startWorker: false });

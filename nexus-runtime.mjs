@@ -786,9 +786,22 @@ export function registerNexusRuntime(app, {
   let started = false;
   let signalsAttached = false;
   let shuttingDown = false;
+  // Fail closed: only an explicit `{ ok: true }` from the sink counts as recorded. A missing
+  // callback, `undefined`, a partial or unrecognised result, `{ ok: false }` and a throw are all
+  // audit failures, so a decision can never be reported as successful without a written entry.
   const recordAudit = async entry => {
-    if (typeof audit !== "function") return;
-    try { await audit(entry); } catch (error) { console.error("NEXUS_AUDIT_FAILED", String(error?.message || error)); }
+    if (typeof audit !== "function") return { ok: false, recorded: false, reason: "audit_not_configured" };
+    try {
+      const result = await audit(entry);
+      if (result && typeof result === "object" && result.ok === true) return { ok: true, recorded: true };
+      const reason = result && typeof result === "object"
+        ? String(result.code || result.error || "audit_unconfirmed")
+        : "audit_unconfirmed";
+      return { ok: false, recorded: false, reason: reason.slice(0, 200) };
+    } catch (error) {
+      console.error("NEXUS_AUDIT_FAILED", String(error?.message || error));
+      return { ok: false, recorded: false, reason: "audit_failed" };
+    }
   };
 
   async function deviceFrom(req) {
@@ -879,15 +892,30 @@ export function registerNexusRuntime(app, {
         return res.status(409).json({ ok: false, error: outcome.error || "The decision was rejected.", details: outcome.details || null });
       }
       const after = outcome?.task || await store.get(taskId) || {};
-      await recordAudit({
+      const decision = approved ? "approved" : "denied";
+      const audited = await recordAudit({
         event: approved ? "device.command.approved" : "device.command.denied",
         actorDeviceId: deviceId,
         targetDeviceId: taskId
       });
+      if (!audited.ok) {
+        // The decision has already been applied to the task. Returning 200 would make an
+        // unauditable approval look successful, so the caller is told the audit failed and that
+        // the decision stands, with enough detail to reconcile it by hand.
+        return res.status(502).json({
+          ok: false,
+          recorded: false,
+          taskId,
+          decision,
+          status: after.status || null,
+          error: "The decision was applied but could not be recorded in the security audit log."
+        });
+      }
       return res.json({
         ok: true,
+        recorded: audited.recorded !== false,
         taskId,
-        decision: approved ? "approved" : "denied",
+        decision,
         decidedBy: "phone:" + deviceId,
         decidedAt: new Date().toISOString(),
         status: after.status || null
