@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
 import { lookup as dnsLookup } from "node:dns/promises";
 import { isIP } from "node:net";
+import https from "node:https";
+import { Readable } from "node:stream";
 
 /**
  * Secure web research transport.
@@ -170,6 +172,59 @@ export function detectDivergences(sources = []) {
   return divergences.slice(0, 5);
 }
 
+/**
+ * HTTPS fetch pinned to an address that was already validated.
+ *
+ * `lookup` makes the socket connect to the pinned IP, while `servername` keeps SNI and certificate
+ * verification bound to the original hostname. A DNS answer that changes after validation cannot
+ * redirect the connection; the certificate must still match the URL host.
+ */
+export function createPinnedHttpsFetch({ httpsImpl = https, now = () => new Date().toISOString() } = {}) {
+  return function pinnedFetch(url, { address, family = 4, headers = {}, timeoutMs = WEB_RESEARCH_LIMITS.timeoutMs, signal = null } = {}) {
+    return new Promise((resolve, reject) => {
+      if (!address || isPrivateAddress(address)) return reject(new Error("pinned_address_refused"));
+      const parsed = new URL(url);
+      const request = httpsImpl.request({
+        protocol: "https:",
+        hostname: parsed.hostname,
+        port: parsed.port || 443,
+        path: parsed.pathname + parsed.search,
+        method: "GET",
+        headers: { ...headers, host: parsed.host },
+        servername: parsed.hostname,
+        // Pin the connection to the validated answer; never let the resolver choose again.
+        lookup: (_hostname, _options, callback) => callback(null, address, family),
+        rejectUnauthorized: true,
+        minVersion: "TLSv1.2",
+        agent: false
+      }, response => {
+        const headerMap = new Map(Object.entries(response.headers || {}).map(([key, value]) => [key.toLowerCase(), Array.isArray(value) ? value.join(", ") : value]));
+        resolve({
+          status: response.statusCode || 0,
+          headers: { get: name => headerMap.get(String(name).toLowerCase()) ?? null },
+          body: Readable.toWeb(response),
+          text: async () => {
+            const chunks = [];
+            for await (const chunk of response) chunks.push(Buffer.from(chunk));
+            return Buffer.concat(chunks).toString("utf8");
+          },
+          url,
+          pinnedAddress: address,
+          at: now()
+        });
+      });
+      request.setTimeout(timeoutMs, () => request.destroy(new Error("pinned_request_timeout")));
+      request.on("error", reject);
+      if (signal) {
+        const onAbort = () => request.destroy(new Error("aborted"));
+        if (signal.aborted) onAbort();
+        else signal.addEventListener("abort", onAbort, { once: true });
+      }
+      request.end();
+    });
+  };
+}
+
 async function readBounded(response, maxBytes, signal) {
   if (!response.body || typeof response.body.getReader !== "function") {
     const text = await response.text();
@@ -202,7 +257,8 @@ async function readBounded(response, maxBytes, signal) {
 }
 
 export function createWebResearchTransport({
-  fetchImpl = fetch,
+  fetchImpl = null,
+  pinned = false,
   lookup = dnsLookup,
   maxBytes = WEB_RESEARCH_LIMITS.maxBytes,
   timeoutMs = WEB_RESEARCH_LIMITS.timeoutMs,
@@ -211,6 +267,8 @@ export function createWebResearchTransport({
   allowLoopback = false,
   now = () => new Date().toISOString()
 } = {}) {
+  const pinnedFetch = pinned ? createPinnedHttpsFetch() : null;
+  const fetcher = fetchImpl || pinnedFetch || fetch;
   async function fetchOne(rawUrl, terms, signal) {
     let current = rawUrl;
     for (let hop = 0; hop <= maxRedirects; hop += 1) {
@@ -222,15 +280,20 @@ export function createWebResearchTransport({
       const timer = setTimeout(() => controller.abort(), timeoutMs);
       const onAbort = () => controller.abort();
       if (signal) signal.addEventListener("abort", onAbort, { once: true });
+      const requestHeaders = {
+        accept: "text/html, text/plain;q=0.9, application/json;q=0.8",
+        "user-agent": "Habitat-NEXUS/0.5 (+https://github.com/kushxwookiex420/Habitat)"
+      };
       let response;
       try {
-        response = await fetchImpl(valid.url.href, {
+        response = await fetcher(valid.url.href, {
           method: "GET",
           redirect: "manual",
-          headers: {
-            accept: "text/html, text/plain;q=0.9, application/json;q=0.8",
-            "user-agent": "Habitat-NEXUS/0.5 (+https://github.com/kushxwookiex420/Habitat)"
-          },
+          headers: requestHeaders,
+          // Only the pinned transport reads these; a plain fetch ignores the extra options.
+          address: valid.addresses?.[0] || null,
+          family: isIP(valid.addresses?.[0] || "") === 6 ? 6 : 4,
+          timeoutMs,
           signal: controller.signal
         });
       } catch {

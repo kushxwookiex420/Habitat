@@ -369,7 +369,7 @@ export function createOpenRouterCompletion({
  * Runtime resolution. Off unless explicitly enabled; never constructs a paid provider in free-only
  * mode, and never reads or exposes the key beyond the completion closure.
  */
-export function resolveMissionPlanner(env = process.env) {
+export function resolveMissionPlanner(env = process.env, { costStore = null } = {}) {
   if (String(env.NEXUS_MODEL_PLANNING_ENABLED || "").trim().toLowerCase() !== "true") {
     return null;
   }
@@ -381,7 +381,7 @@ export function resolveMissionPlanner(env = process.env) {
   if (!apiKey) return null;
   const free = isFreeModel(model);
   if (limits.freeOnly && !free) return null;
-  const governor = createCostGovernor({ limits, freeOnly: limits.freeOnly });
+  const governor = createCostGovernor({ limits, freeOnly: limits.freeOnly, ...(costStore ? { store: costStore } : {}) });
   const complete = createOpenRouterCompletion({ apiKey, model, freeOnly: limits.freeOnly });
   return createMissionPlanner({ complete, governor, free, provider: "openrouter", model, limits: { estimateUsd: limits.estimateUsd } });
 }

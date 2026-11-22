@@ -9,9 +9,9 @@
  * `freeOnly` is the default. It refuses any call whose provider/model is not explicitly free, before
  * any request is made. There is no code path that "upgrades" a free-only call to a paid one.
  *
- * The ledger is process-local by default. That is a real limit: a restart starts a new daily total.
- * Pass a durable store implementing `{ read(day), write(day, value) }` to keep the daily figure
- * across restarts; the enforcement logic is unchanged.
+ * Durability: the store may expose `transact(day, mutator)` for compare-and-swap semantics. The D1
+ * store does, so reservations are atomic across service instances and survive a restart. A plain
+ * `{ read, write }` store falls back to a process-local lock and is only suitable for tests.
  */
 
 export const COST_LIMITS = Object.freeze({
@@ -39,9 +39,35 @@ export function resolveCostLimits(env = process.env) {
   };
 }
 
+function emptyDay(day) {
+  return { day, spentUsd: 0, reservedUsd: 0, calls: 0, refused: 0, tasks: {} };
+}
+
+function normalize(state, day) {
+  const value = state && typeof state === "object" ? state : {};
+  return {
+    ...emptyDay(day),
+    ...value,
+    day,
+    spentUsd: money(value.spentUsd),
+    reservedUsd: money(value.reservedUsd),
+    calls: money(value.calls),
+    refused: money(value.refused),
+    tasks: value.tasks && typeof value.tasks === "object" ? { ...value.tasks } : {}
+  };
+}
+
 export function createMemoryCostStore() {
   const days = new Map();
+  let queue = Promise.resolve();
+  function locked(work) {
+    const run = queue.then(work, work);
+    queue = run.then(() => undefined, () => undefined);
+    return run;
+  }
   return {
+    adapter: "memory",
+    durable: false,
     async read(day) {
       const value = days.get(day);
       return value ? JSON.parse(JSON.stringify(value)) : null;
@@ -50,14 +76,18 @@ export function createMemoryCostStore() {
       days.set(day, JSON.parse(JSON.stringify(value)));
       return true;
     },
+    async transact(day, mutator) {
+      return locked(async () => {
+        const current = days.get(day) ? JSON.parse(JSON.stringify(days.get(day))) : null;
+        const { state, result } = mutator(current);
+        days.set(day, JSON.parse(JSON.stringify(state)));
+        return result;
+      });
+    },
     snapshot() {
       return [...days.entries()].map(([day, value]) => ({ day, ...value }));
     }
   };
-}
-
-function emptyDay(day) {
-  return { day, spentUsd: 0, reservedUsd: 0, calls: 0, refused: 0, tasks: {} };
 }
 
 export function createCostGovernor({
@@ -66,6 +96,9 @@ export function createCostGovernor({
   freeOnly = true,
   now = () => new Date()
 } = {}) {
+  if (!store || (typeof store.transact !== "function" && (typeof store.read !== "function" || typeof store.write !== "function"))) {
+    throw new Error("The cost governor needs a store with transact, or read/write.");
+  }
   const config = {
     taskUsd: money(limits.taskUsd, COST_LIMITS.taskUsd),
     dailyUsd: money(limits.dailyUsd, COST_LIMITS.dailyUsd),
@@ -73,22 +106,31 @@ export function createCostGovernor({
   };
   let queue = Promise.resolve();
 
-  /** Serialize ledger writes so a read-modify-write cannot lose a concurrent reservation. */
   function locked(work) {
     const run = queue.then(work, work);
     queue = run.then(() => undefined, () => undefined);
     return run;
   }
 
-  async function readDay() {
+  /**
+   * Apply one mutation to today's ledger. With `store.transact`, the store may retry the mutator
+   * after a concurrent writer wins; the mutator is pure and always receives a fresh clone.
+   */
+  async function mutate(mutator) {
     const day = dayKey(now());
-    const value = (await store.read(day)) || emptyDay(day);
-    return { ...emptyDay(day), ...value, day, tasks: { ...(value.tasks || {}) } };
-  }
-
-  async function writeDay(value) {
-    await store.write(value.day, value);
-    return value;
+    if (typeof store.transact === "function") {
+      return store.transact(day, state => {
+        const value = normalize(state, day);
+        const result = mutator(value);
+        return { state: value, result };
+      });
+    }
+    return locked(async () => {
+      const value = normalize(await store.read(day), day);
+      const result = mutator(value);
+      await store.write(day, value);
+      return result;
+    });
   }
 
   function summary(value, event = null) {
@@ -106,33 +148,27 @@ export function createCostGovernor({
       dailyUsd: config.dailyUsd,
       freeOnly,
       calls: value.calls,
-      refused: value.refused
+      refused: value.refused,
+      durable: store.durable === true
     };
   }
 
   async function reserve({ taskId, estimateUsd = config.estimateUsd, free = null, provider = null, model = null } = {}) {
     const id = String(taskId || "").trim().slice(0, 160);
     if (!id) return { ok: false, code: "task_id_required" };
-    if (freeOnly && free !== true) {
-      return locked(async () => {
-        const value = await readDay();
-        value.refused += 1;
-        await writeDay(value);
-        return { ...summary(value, "free_only_refused"), taskId: id, provider, model };
-      });
-    }
     const amount = money(estimateUsd, config.estimateUsd);
-    return locked(async () => {
-      const value = await readDay();
+    return mutate(value => {
+      if (freeOnly && free !== true) {
+        value.refused += 1;
+        return { ...summary(value, "free_only_refused"), taskId: id, provider, model };
+      }
       const taskSpent = money(value.tasks[id]?.spentUsd);
       if (taskSpent + amount > config.taskUsd) {
         value.refused += 1;
-        await writeDay(value);
         return { ...summary(value, "task_budget_exceeded"), taskId: id, requestedUsd: amount };
       }
       if (value.spentUsd + value.reservedUsd + amount > config.dailyUsd) {
         value.refused += 1;
-        await writeDay(value);
         return { ...summary(value, "daily_budget_exceeded"), taskId: id, requestedUsd: amount };
       }
       value.reservedUsd = money(value.reservedUsd) + amount;
@@ -141,7 +177,6 @@ export function createCostGovernor({
         spentUsd: taskSpent,
         calls: money(value.tasks[id]?.calls)
       };
-      await writeDay(value);
       return { ...summary(value), taskId: id, reservedUsdForCall: amount };
     });
   }
@@ -151,8 +186,7 @@ export function createCostGovernor({
     if (!id) return { ok: false, code: "task_id_required" };
     const reserved = money(estimateUsd, config.estimateUsd);
     const actual = money(costUsd, 0);
-    return locked(async () => {
-      const value = await readDay();
+    return mutate(value => {
       const task = value.tasks[id] || { reservedUsd: 0, spentUsd: 0, calls: 0 };
       value.reservedUsd = Math.max(0, money(value.reservedUsd) - Math.min(reserved, money(task.reservedUsd)));
       value.spentUsd = money(value.spentUsd) + actual;
@@ -163,7 +197,6 @@ export function createCostGovernor({
         calls: money(task.calls) + (ok ? 1 : 0)
       };
       if (value.tasks[id].reservedUsd === 0 && value.tasks[id].spentUsd === 0) delete value.tasks[id];
-      await writeDay(value);
       return {
         ...summary(value, actual > config.taskUsd ? "task_limit_exceeded_after_settlement" : null),
         ok: actual <= config.taskUsd,
@@ -178,7 +211,7 @@ export function createCostGovernor({
   }
 
   async function status() {
-    return locked(async () => summary(await readDay()));
+    return mutate(value => summary(value));
   }
 
   return Object.freeze({
@@ -187,6 +220,7 @@ export function createCostGovernor({
     release,
     status,
     limits: Object.freeze({ ...config, freeOnly }),
-    store
+    store,
+    durable: store.durable === true
   });
 }

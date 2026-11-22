@@ -3,6 +3,10 @@ import { lstat, readFile, readdir, realpath, stat } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import path from "node:path";
 import { createCompositeResearchTransport, createWebResearchTransport } from "./ax-web-research.mjs";
+import { createEngineeringSandbox } from "./ax-engineering-sandbox.mjs";
+import { filteredEnv } from "./ax-child-env.mjs";
+
+export { filteredEnv };
 
 /**
  * Real, injectable transports for the research and engineering agents.
@@ -17,26 +21,6 @@ import { createCompositeResearchTransport, createWebResearchTransport } from "./
 const TEXT_EXTENSIONS = new Set([".mjs", ".js", ".cjs", ".json", ".md", ".txt", ".sql", ".kt", ".xml", ".yml", ".yaml", ".toml", ".sh"]);
 const SKIP_DIRECTORIES = new Set(["node_modules", ".git", ".gradle", "build", "dist", "out", "target", "coverage"]);
 const MAX_OUTPUT_TAIL = 4_000;
-const SAFE_ENV_KEYS = new Set([
-  "PATH", "HOME", "TMPDIR", "TMP", "TEMP", "LANG", "LC_ALL", "LC_CTYPE",
-  "SystemRoot", "SYSTEMROOT", "ComSpec", "COMSPEC", "PATHEXT", "WINDIR"
-]);
-
-/**
- * Child processes never inherit credentials. Only the keys an interpreter needs to start are passed
- * through; a check's own `env` is filtered for credential-shaped names as well.
- */
-export function filteredEnv(extra = {}) {
-  const safe = {};
-  for (const [key, value] of Object.entries(process.env)) {
-    if (SAFE_ENV_KEYS.has(key)) safe[key] = value;
-  }
-  for (const [key, value] of Object.entries(extra || {})) {
-    if (!/token|secret|passw|api[_-]?key|authorization|credential|cookie|session/i.test(key)) safe[key] = String(value);
-  }
-  safe.NO_COLOR = "1";
-  return safe;
-}
 
 function digest(value) {
   return createHash("sha256").update(String(value), "utf8").digest("hex");
@@ -347,6 +331,64 @@ export function createRepositoryEngineeringTransport({
 }
 
 /**
+ * Engineering with an approval-gated write path.
+ *
+ * With no proposed changes this behaves exactly like the read-only repository transport. When a
+ * caller supplies `changes`, the sandbox copies the repository, verifies the owner approval, writes
+ * only inside that copy and runs the allowlisted checks. The deployed checkout is never the target.
+ */
+export function createSandboxEngineeringTransport({ sandbox, fallback = null } = {}) {
+  if (!sandbox) throw new Error("The sandbox engineering transport needs a sandbox.");
+  async function run(input = {}) {
+    const changes = Array.isArray(input.changes) ? input.changes : [];
+    if (!changes.length) {
+      if (fallback) return fallback(input);
+      return { ok: false, summary: "No change set was supplied.", confidence: 0, files: [], commands: [], limitations: ["Nothing was inspected or written."] };
+    }
+    const outcome = await sandbox.apply({
+      objective: input.objective,
+      changes,
+      checks: Array.isArray(input.checks) ? input.checks : null,
+      approval: input.approval || null
+    });
+    if (!outcome.ok) {
+      return {
+        ok: false,
+        code: outcome.code || "sandbox_refused",
+        summary: "Sandbox refused the change set: " + (outcome.code || "refused") + ".",
+        confidence: 0,
+        files: [],
+        commands: [],
+        limitations: ["No file was written without a valid owner approval."]
+      };
+    }
+    return {
+      ok: outcome.verified === true,
+      code: outcome.verified ? null : "engineering_check_failed",
+      summary: "Applied " + outcome.changes.length + " change(s) in an isolated workspace; " + outcome.checks.length + " check(s), verified=" + outcome.verified + ".",
+      confidence: outcome.verified ? 0.9 : 0.4,
+      files: outcome.changes.map(change => ({ path: change.path, digest: change.digestAfter })),
+      commands: outcome.checks.map(check => ({
+        name: check.name,
+        command: check.command,
+        exitCode: check.exitCode,
+        timedOut: check.timedOut === true,
+        stderrTail: String(check.stderr || "").slice(-1_200)
+      })),
+      sandbox: {
+        proposalId: outcome.proposalId,
+        verified: outcome.verified,
+        workspace: outcome.workspace,
+        diff: outcome.changes.map(change => ({ path: change.path, diff: change.diff }))
+      },
+      limitations: outcome.limitations
+    };
+  }
+  run.kind = "sandbox";
+  return run;
+}
+
+/**
  * Resolve transports from the environment. Off unless an explicit local root is configured, and
  * never able to run an arbitrary command: the checks below are the only ones mounted.
  */
@@ -361,7 +403,11 @@ export function resolveAgentTransports(env = process.env) {
     .slice(0, 3);
   try {
     const web = webEnabled
-      ? createWebResearchTransport({ allowLoopback: String(env.AX_WEB_RESEARCH_ALLOW_LOOPBACK || "").toLowerCase() === "true" })
+      ? createWebResearchTransport({
+          allowLoopback: String(env.AX_WEB_RESEARCH_ALLOW_LOOPBACK || "").toLowerCase() === "true",
+          // Production uses the pinned-IP transport; tests inject their own fetch.
+          pinned: String(env.AX_WEB_RESEARCH_PINNED ?? "true").toLowerCase() !== "false"
+        })
       : null;
     if (!root) {
       return {
@@ -383,9 +429,33 @@ export function resolveAgentTransports(env = process.env) {
         timeoutMs: 120_000
       }))
     ];
-    const engineering = createRepositoryEngineeringTransport({ root, checks });
+    const repositoryEngineering = createRepositoryEngineeringTransport({ root, checks });
+    const sandboxEnabled = String(env.NEXUS_SANDBOX_ENABLED || "").trim().toLowerCase() === "true";
+    const approvalToken = String(env.NEXUS_SANDBOX_APPROVAL_TOKEN || "").trim();
+    let sandbox = null;
+    if (sandboxEnabled && approvalToken) {
+      sandbox = createEngineeringSandbox({
+        sourceRoot: root,
+        checks,
+        allowedCommands: [process.execPath],
+        approvalVerifier: async approval => {
+          if (!approvalToken || approval?.token !== approvalToken) return { ok: false, code: "approval_required" };
+          return { ok: true, approvedBy: String(approval.approvedBy || "owner").slice(0, 120) };
+        }
+      });
+    }
+    const engineering = sandbox
+      ? createSandboxEngineeringTransport({ sandbox, fallback: repositoryEngineering })
+      : repositoryEngineering;
     const research = web ? createCompositeResearchTransport({ repository, web }) : repository;
-    return { research, engineering, root: path.resolve(root), checks: checks.length, web: Boolean(web) };
+    return {
+      research,
+      engineering,
+      sandbox: Boolean(sandbox),
+      root: path.resolve(root),
+      checks: checks.length,
+      web: Boolean(web)
+    };
   } catch (error) {
     return { research: null, engineering: null, reason: String(error?.message || error).slice(0, 160) };
   }

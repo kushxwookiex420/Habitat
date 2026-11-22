@@ -85,7 +85,8 @@ const REQUIRED_DOCUMENTS = [
   "docs/CHATGPT_CONNECTION_READINESS.md",
   "docs/NEXUS_MISSION_18_LIVE_READINESS.md",
   "docs/NEXUS_MISSION_19.md",
-  "docs/NEXUS_MISSION_20.md"
+  "docs/NEXUS_MISSION_20.md",
+  "docs/NEXUS_MISSION_21.md"
 ];
 const REQUIRED_ARTIFACTS = [
   "release/demo-evidence.json",
@@ -103,7 +104,8 @@ const REQUIRED_MIGRATIONS = [
   "0003_ax_memory_notifications.sql",
   "0004_ax_objectives_incidents.sql",
   "0005_ax_security_scheduler.sql",
-  "0006_ax_nexus_messages.sql"
+  "0006_ax_nexus_messages.sql",
+  "0007_ax_cost_ledger.sql"
 ];
 
 /** Artifact and schema presence is a release requirement, not a formality. */
@@ -202,6 +204,13 @@ export async function checkReleaseInputs(root = ROOT) {
   checks.push({ name: "0006 has the message table", ok: /CREATE TABLE IF NOT EXISTS habitat_ax_messages/i.test(messagesSchema) });
   checks.push({ name: "0006 has the correlation index", ok: /habitat_ax_messages_correlation/i.test(messagesSchema) });
   checks.push({ name: "migration 0006 is additive", ok: /CREATE TABLE IF NOT EXISTS/i.test(messagesSchema) && !/\bDROP\b/i.test(messagesSchema) });
+
+  // Mission 21: losing the cost table would silently make budgets process-local again.
+  let costSchema = "";
+  try { costSchema = await readFile(path.join(root, "migrations", "0007_ax_cost_ledger.sql"), "utf8"); } catch { costSchema = ""; }
+  checks.push({ name: "0007 has the cost ledger table", ok: /CREATE TABLE IF NOT EXISTS habitat_ax_cost_ledger/i.test(costSchema) });
+  checks.push({ name: "0007 has the updated_at index", ok: /habitat_ax_cost_ledger_updated_at/i.test(costSchema) });
+  checks.push({ name: "migration 0007 is additive", ok: /CREATE TABLE IF NOT EXISTS/i.test(costSchema) && !/\bDROP\b/i.test(costSchema) });
   return { ok: checks.every(item => item.ok), checks };
 }
 
@@ -385,8 +394,8 @@ export async function runReleaseGate() {
     },
     schema: {
       migrations: migrations.files,
-      currentVersion: "0006",
-      newInThisMission: ["0006_ax_nexus_messages.sql"],
+      currentVersion: "0007",
+      newInThisMission: ["0007_ax_cost_ledger.sql"],
       appliedToProduction: false,
       note: "Validate against D1 before applying; SQLite proves SQL shape and idempotence, not D1 parity."
     },
@@ -402,12 +411,16 @@ export async function runReleaseGate() {
       "Message delivery is at-least-once and restricted to read-only adapters.",
       "No live model provider call is made by the gate or by tests.",
       "Research/engineering transports require AX_AGENT_LOCAL_ROOT and stay off by default.",
+      "The D1 cost ledger is proven against SQLite only; migration 0007 is not applied to production and no live restart has been observed.",
+      "The engineering sandbox is a filesystem copy with policy checks, not VM isolation, and is not behind a command route yet.",
+      "The pinned-IP research transport is covered by option-level tests; it was not exercised against a live remote host in this environment.",
       "Scheduler runs only when an external trigger or an owner calls its tick endpoint."
     ],
     rollback: [
       "Deploy the previous commit; migration 0005 is additive and no other schema was altered.",
       "Dropping habitat_ax_security_events or habitat_ax_scheduler removes only Mission 11 history.",
       "Migration 0006 is additive; leaving habitat_ax_messages in place after a rollback is harmless.",
+      "Migration 0007 is additive; leaving habitat_ax_cost_ledger in place after a rollback is harmless.",
       "Do not roll back by deleting task, objective or memory tables."
     ]
   };

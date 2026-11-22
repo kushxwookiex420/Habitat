@@ -55,7 +55,8 @@ export async function runMigrationChecks() {
       "habitat_ax_incidents",
       "habitat_ax_security_events",
       "habitat_ax_scheduler",
-      "habitat_ax_messages"
+      "habitat_ax_messages",
+      "habitat_ax_cost_ledger"
     ]) {
       check("fresh table " + name, freshTables.includes(name));
     }
@@ -65,7 +66,8 @@ export async function runMigrationChecks() {
       "habitat_ax_security_events_seq",
       "habitat_ax_security_events_category",
       "habitat_ax_messages_correlation",
-      "habitat_ax_messages_status_updated"
+      "habitat_ax_messages_status_updated",
+      "habitat_ax_cost_ledger_updated_at"
     ]) {
       check("fresh index " + name, freshIndexes.includes(name));
     }

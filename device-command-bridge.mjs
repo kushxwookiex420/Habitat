@@ -31,6 +31,7 @@ import { createD1SchedulerRepository } from "./ax-scheduler-repository.mjs";
 import { createProjectRegistry } from "./ax-projects.mjs";
 import { resolveAgentTransports } from "./ax-agent-transports.mjs";
 import { resolveMissionPlanner } from "./ax-mission-planner.mjs";
+import { createD1CostLedgerStoreFromEnv } from "./d1-ax-cost-ledger-repository.mjs";
 import { detectSandbox } from "./nexus-sandbox.mjs";
 import { createD1AxMessageRepository } from "./d1-ax-message-repository.mjs";
 import { createMessageChannel } from "./ax-message-channel.mjs";
@@ -315,7 +316,10 @@ export function registerDeviceCommandBridge(app, {
   const agentTransports = resolveAgentTransports(env);
   // Off unless NEXUS_MODEL_PLANNING_ENABLED=true and a free model is explicitly configured. The
   // planner owns its own cost governor, so every mission shares the same daily ceiling.
-  const missionPlanner = resolveMissionPlanner(env);
+  // D1-backed when credentials exist, so the daily ceiling survives a restart and is shared by
+  // every instance; the in-memory ledger remains the honest fallback for local runs.
+  const costLedger = createD1CostLedgerStoreFromEnv(env);
+  const missionPlanner = resolveMissionPlanner(env, { costStore: costLedger });
   const circuitBreaker = createProviderCircuitBreaker({
     failureThreshold: Number(env.AX_CIRCUIT_FAILURES) || 3,
     cooldownMs: Number(env.AX_CIRCUIT_COOLDOWN_MS) || 60_000

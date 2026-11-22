@@ -529,7 +529,15 @@ export function createAgentRuntime({
 
     // engineering
     const run = dependencies.engineering;
-    const result = await run({ objective: input.objective, files: input.files || [], signal: input.signal || null });
+    const result = await run({
+      objective: input.objective,
+      files: input.files || [],
+      signal: input.signal || null,
+      // Only present when a caller has a real owner approval; the sandbox verifies it independently.
+      changes: input.changes || null,
+      approval: input.approval || null,
+      checks: input.checks || null
+    });
     const commands = Array.isArray(result?.commands) ? result.commands.slice(0, 10) : [];
     const files = Array.isArray(result?.files) ? result.files.slice(0, 8) : [];
     const evidence = commands.map(command => ({
