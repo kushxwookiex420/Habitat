@@ -99,9 +99,10 @@ class PairingSingleFlightTest {
         val gate = guard(scheduler)
         val first = gate.start {}!!
         assertTrue(gate.finish(first)) // normal completion, timer still queued
+        val staleTimer = scheduler.tasks.single().second
 
         val second = gate.start {}!!
-        scheduler.fireAll() // first attempt's timer fires late
+        staleTimer.run() // only the first attempt's timer fires late
 
         assertTrue("the newer attempt still owns the gate", gate.isInFlight())
         assertTrue(gate.finish(second))
