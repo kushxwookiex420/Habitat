@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { registerProductImageVideo, validatePublicImageUrl } from "../product-image-video.mjs";
+import { registerProductImageVideo, validatePublicImageUrl, formatRenderError } from "../product-image-video.mjs";
 
 function makeHarness() {
   const routes = new Map();
@@ -56,4 +56,27 @@ test("product-picture renderer registers status, render, and artifact routes", (
   assert.ok(routes.has("GET /product-image-video/status"));
   assert.ok(routes.has("POST /product-image-video/render"));
   assert.ok(routes.has("GET /product-image-video/:id/artifact"));
+});
+
+test("renderer errors expose bounded sanitized stderr diagnostics", () => {
+  const result = formatRenderError({
+    message: "Command failed: /opt/render/project/src/node_modules/ffmpeg-static/ffmpeg -i /tmp/habitat-product-image-video-a1b2/output.mp4",
+    stderr: "[Parsed_drawtext] Font not found " + String.fromCharCode(27) + "[31m",
+    code: 1
+  });
+  assert.match(result, /stderr:.*Font not found/);
+  assert.match(result, /code: 1/);
+  assert.equal(result.includes("/tmp/habitat-product-image-video"), false);
+  assert.equal(result.includes("/opt/render/project/src"), false);
+  assert.equal(result.includes(String.fromCharCode(27)), false);
+  assert.ok(result.length <= 600);
+});
+
+test("renderer error diagnostics redact URL query strings", () => {
+  const result = formatRenderError({
+    message: "fetch failed https://cdn.example.test/image.jpg?token=secret&sig=abc",
+    code: "ERR_FETCH"
+  });
+  assert.equal(result.includes("https://cdn.example.test/image.jpg"), true);
+  assert.doesNotMatch(result, /token=secret|sig=abc/);
 });
