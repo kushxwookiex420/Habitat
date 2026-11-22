@@ -8,7 +8,13 @@ import { createReadOnlyAdapters } from "../nexus-adapters.mjs";
 import { detectSandbox } from "../nexus-sandbox.mjs";
 
 const sandbox = await detectSandbox();
-const needsSandbox = { skip: sandbox.available ? false : "sandbox backend unavailable: " + sandbox.reason };
+const needsSandbox = {
+  skip: sandbox.available
+    ? false
+    : "sandbox backend unavailable: " + sandbox.reason +
+      " | missing capability: " + (sandbox.missing?.length ? sandbox.missing.join(", ") : "unprivileged user namespaces (unshare -r)") +
+      " | alternative: npm run sandbox:check on a namespace-capable Linux host; fail-closed detection is asserted on every host"
+};
 
 const sha256 = value => createHash("sha256").update(value).digest("hex");
 

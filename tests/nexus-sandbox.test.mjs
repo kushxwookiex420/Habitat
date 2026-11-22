@@ -11,7 +11,15 @@ const sandbox = await detectSandbox();
 // The sandbox needs kernel and host primitives (user/mount namespaces, chroot). A host without
 // them cannot exercise these cases at all; report that honestly instead of failing as if the
 // isolation were broken. The adapter suite already skips on the same verdict.
-const needsSandbox = { skip: sandbox.available ? false : "sandbox backend unavailable: " + sandbox.reason };
+// A skip must name the exact missing capability and where the guarantee is verified instead, so a
+// green suite with skipped isolation tests can never be read as proof of isolation.
+const needsSandbox = {
+  skip: sandbox.available
+    ? false
+    : "sandbox backend unavailable: " + sandbox.reason +
+      " | missing capability: " + (sandbox.missing?.length ? sandbox.missing.join(", ") : "unprivileged user namespaces (unshare -r)") +
+      " | alternative: npm run sandbox:check on a namespace-capable Linux host; fail-closed detection is asserted on every host"
+};
 const sha256 = value => createHash("sha256").update(value).digest("hex");
 
 async function fixture(files) {

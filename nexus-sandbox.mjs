@@ -78,26 +78,35 @@ function probeNamespaces(unsharePath, shPath, timeoutMs) {
 /**
  * Returns a cached capability verdict. `available: false` means repo.test MUST NOT execute.
  */
-export async function detectSandbox({ timeoutMs = 5000 } = {}) {
-  if (cached) return cached;
+export async function detectSandbox({ timeoutMs = 5000, hostTools = null } = {}) {
+  // `hostTools` is a test seam: it lets a suite assert the fail-closed verdict for a host that is
+  // missing a primitive without running as root or editing the host. A supplied seam is never
+  // cached, so it cannot leak into a later real detection in the same process.
+  const cacheable = hostTools === null;
+  // A test seam must bypass the cache, not be answered by it: the whole point is to observe the
+  // verdict this host would produce with a primitive missing.
+  if (cached && cacheable) return cached;
   const missing = [];
   const tools = {};
   for (const [name, candidates] of Object.entries(HOST_TOOLS)) {
-    const found = await resolveTool(candidates);
+    const override = hostTools && Object.prototype.hasOwnProperty.call(hostTools, name) ? hostTools[name] : undefined;
+    const found = override === null ? null : override ? await resolveTool([override]) : await resolveTool(candidates);
     if (found) tools[name] = found;
-    else missing.push(name + " (" + candidates.join(" or ") + ")");
+    else missing.push(name + " (" + (override === null ? "disabled by caller" : candidates.join(" or ")) + ")");
   }
   if (!(await exists(SETUP_SCRIPT))) missing.push(SETUP_SCRIPT);
   if (process.platform !== "linux") missing.push("linux");
   if (missing.length) {
-    cached = Object.freeze({ available: false, backend: SANDBOX_BACKEND, missing, tools, reason: "missing primitives: " + missing.join(", ") });
-    return cached;
+    const verdict = Object.freeze({ available: false, backend: SANDBOX_BACKEND, missing, tools, reason: "missing primitives: " + missing.join(", ") });
+    if (cacheable) cached = verdict;
+    return verdict;
   }
   const probe = await probeNamespaces(tools.unshare, tools.sh, timeoutMs);
-  cached = Object.freeze(probe.ok
+  const verdict = Object.freeze(probe.ok
     ? { available: true, backend: SANDBOX_BACKEND, missing: [], tools, reason: "user/mount/pid/net namespaces available" }
     : { available: false, backend: SANDBOX_BACKEND, missing: [], tools, reason: "namespace probe failed: " + probe.reason });
-  return cached;
+  if (cacheable) cached = verdict;
+  return verdict;
 }
 
 /**
