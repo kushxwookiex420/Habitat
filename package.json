@@ -2,6 +2,9 @@
   "name": "habitat-audrey-backend",
   "version": "0.5.0",
   "private": true,
+  "engines": {
+    "node": ">=22.13"
+  },
   "type": "module",
   "scripts": {
     "start": "npm run check && node server.mjs",

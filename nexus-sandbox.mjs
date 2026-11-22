@@ -4,7 +4,8 @@
  * Backend: Linux user + mount + PID + network namespaces via `unshare -r -m -p -f -n`, a disposable
  * tmpfs root built by `sandbox/sandbox-setup.sh`, chroot, capabilities dropped, no_new_privs,
  * kernel rlimits, and an empty environment. There is no network interface in the sandbox and the
- * only host tree mounted is read-only `/usr`.
+ * only host trees mounted are read-only `/usr` and, when the running Node binary lives elsewhere
+ * (a CI tool cache such as `/opt/hostedtoolcache`), just that binary's own directory.
  *
  * If the host cannot provide those primitives, detection fails and callers must fail closed. This
  * module never falls back to running a command in the host namespace.
@@ -169,7 +170,11 @@ export async function runSandboxed({ sourceDir, allowedPrefixes, command, args =
     for (const [link, target] of [["bin", "usr/bin"], ["sbin", "usr/sbin"], ["lib", "usr/lib"], ["lib64", "usr/lib64"]]) {
       await fs.symlink(target, path.join(root, link)).catch(async error => { if (error.code !== "EEXIST") throw error; });
     }
-    const sandboxPath = [...new Set(["/usr/local/bin", "/usr/bin", "/bin", path.dirname(process.execPath)])].join(":");
+    const nodeDir = path.dirname(process.execPath);
+    const sandboxPath = [...new Set(["/usr/local/bin", "/usr/bin", "/bin", nodeDir])].join(":");
+    // The chroot only exposes /usr, so a Node installed anywhere else (GitHub's tool cache, a
+    // version manager, /opt) would be invisible and every repo.test would fail with exit 127.
+    const runtimeDir = nodeDir === "/usr" || nodeDir.startsWith("/usr/") ? "" : nodeDir;
     const prepared = await copyAllowlistedSource(base, sourceDir, allowedPrefixes);
     copied = prepared.copied;
 
@@ -178,7 +183,7 @@ export async function runSandboxed({ sourceDir, allowedPrefixes, command, args =
       "/bin/sh", SETUP_SCRIPT, base,
       String(limits.memoryBytes), String(limits.nproc), String(limits.fileBytes),
       String(limits.workBytes), String(limits.tmpBytes), String(limits.cpuSeconds), String(limits.openFiles),
-      sandboxPath, command, ...args.map(String)
+      sandboxPath, runtimeDir, command, ...args.map(String)
     ];
 
     return await new Promise(resolve => {

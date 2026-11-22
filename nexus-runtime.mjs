@@ -316,6 +316,9 @@ export function createNexusWorker({
   let running = false;
   const counters = { claimed: 0, completed: 0, failed: 0, recovered: 0, exhausted: 0, stale: 0, renewals: 0 };
   const renewals = new Map();
+  // Adapter deadlines that are currently the only thing bounding a running task. Referenced while
+  // the adapter runs, released when shutdown gives up on it (see stop()).
+  const deadlines = new Set();
 
   // Lifecycle and execution transitions are written immediately; routine liveness beats are
   // written at most once per heartbeatMs. `polling` and `idle` are the same routine state, so an
@@ -541,10 +544,11 @@ export function createNexusWorker({
           controller.abort();
           reject(new Error("adapter timed out after " + adapterTimeoutMs + "ms"));
         }, adapterTimeoutMs);
-        // A shutdown can give up on a hung adapter before this deadline. Do not let the pending
-        // deadline keep a test process or a draining worker alive; the task lease remains the
-        // durable recovery mechanism if the process exits first.
-        if (typeof timeout.unref === "function") timeout.unref();
+        deadlines.add(timeout);
+        // Deliberately referenced while the adapter runs: this deadline is the only thing bounding
+        // it and the caller is awaiting the race, so unreferencing it would let the event loop
+        // empty and the process exit with the promise unresolved (a one-shot tick would die with
+        // the task neither timed out nor failed). stop() releases it if shutdown gives up.
       });
       result = await Promise.race([
         Promise.resolve().then(() => run(task, { signal: controller.signal, timeoutMs: adapterTimeoutMs })),
@@ -552,10 +556,12 @@ export function createNexusWorker({
       ]);
     } catch (error) {
       clearTimeout(timeout);
+      deadlines.delete(timeout);
       stopRenewal(task.id);
       return failTask(task, "adapter failed: " + String(error?.message || error));
     }
     clearTimeout(timeout);
+    deadlines.delete(timeout);
     stopRenewal(task.id);
 
     // The lease may have expired and another worker may own the task by now.
@@ -670,7 +676,13 @@ export function createNexusWorker({
     const deadline = Date.now() + shutdownTimeoutMs;
     while (running && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 25));
     const timedOut = running;
-    if (timedOut) aborted = true;
+    if (timedOut) {
+      aborted = true;
+      // Shutdown is abandoning a hung adapter. Release its deadline so this process can exit; the
+      // task lease remains the durable recovery mechanism, and a still-running adapter result is
+      // ignored by the fenced completion anyway.
+      for (const handle of deadlines) if (typeof handle.unref === "function") handle.unref();
+    }
     try {
       await heartbeat("stopped", timedOut ? reason + ": timed out waiting for in-flight task" : reason);
     } catch {}

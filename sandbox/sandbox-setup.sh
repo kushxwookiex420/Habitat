@@ -6,8 +6,8 @@
 # $2 memory bytes        $3 nproc limit       $4 file bytes
 # $5 work tmpfs bytes    $6 tmp tmpfs bytes   $7 cpu seconds
 # $8 open files
-# $9 sandbox PATH
-# $10 command            $11... arguments
+# $9 sandbox PATH       $10 runtime dir to expose read-only (empty when it is already /usr)
+# $11 command            $12... arguments
 set -eu
 
 base=$1
@@ -19,7 +19,8 @@ tmpsize=$6
 cpu=$7
 nofile=$8
 sandbox_path=$9
-shift 9
+runtime_dir=${10}
+shift 10
 
 root="$base/root"
 checkout="$base/checkout"
@@ -40,6 +41,14 @@ for node in null zero random urandom; do
   : > "$root/dev/$node"
   mount --bind "/dev/$node" "$root/dev/$node"
 done
+
+# A Node binary outside /usr (e.g. the CI tool cache) must be reachable from inside the chroot.
+# Only its own bin directory is exposed, still read-only. Mounted last: a tmpfs on /tmp would
+# otherwise hide a runtime that lives there.
+if [ -n "$runtime_dir" ]; then
+  mkdir -p "$root$runtime_dir"
+  mount --bind -o ro "$runtime_dir" "$root$runtime_dir"
+fi
 
 # Enter the isolated root, drop every capability and set no_new_privs, apply kernel rlimits, clear
 # the environment entirely, then run the allowlisted command from the isolated checkout.
