@@ -1,13 +1,13 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-11-22T05:27:50.270Z",
-  "commit": "c2fd06f0b9412684407ceb0cc80cfe74b2d6a6f4",
+  "generatedAt": "2026-11-22T08:43:34.110Z",
+  "commit": "0ac296f921f3e73d9897cd3aae9a7a8f5f5fee86",
   "branch": "ax-nexus/revision-4.6-nexus-mainline-integration",
   "checks": [
     {
       "name": "git commit resolved",
       "ok": true,
-      "commit": "c2fd06f0b9412684407ceb0cc80cfe74b2d6a6f4"
+      "commit": "0ac296f921f3e73d9897cd3aae9a7a8f5f5fee86"
     },
     {
       "name": "syntax and repository checks",
@@ -17,22 +17,22 @@
     {
       "name": "full test suite",
       "ok": true,
-      "pass": 703,
+      "pass": 789,
       "fail": 0,
       "detail": "exit 0"
     },
     {
       "name": "migration compatibility (local sqlite)",
       "ok": true,
-      "checks": 22,
-      "passed": 22,
+      "checks": 24,
+      "passed": 24,
       "failed": 0,
       "environment": "node:sqlite in-memory (D1-compatible SQL only; not D1 itself)"
     },
     {
       "name": "command route authentication",
       "ok": true,
-      "routes": 74,
+      "routes": 78,
       "unguarded": [],
       "note": "Static check only: every command route registration names requireAx or requireScheduler on the same line."
     },
@@ -116,6 +116,26 @@
           "ok": true
         },
         {
+          "name": "docs/CHATGPT_CONNECTION_READINESS.md",
+          "ok": true
+        },
+        {
+          "name": "docs/NEXUS_MISSION_18_LIVE_READINESS.md",
+          "ok": true
+        },
+        {
+          "name": "docs/NEXUS_MISSION_19.md",
+          "ok": true
+        },
+        {
+          "name": "docs/NEXUS_MISSION_20.md",
+          "ok": true
+        },
+        {
+          "name": "docs/NEXUS_MISSION_21.md",
+          "ok": true
+        },
+        {
           "name": "release/demo-evidence.json",
           "ok": true
         },
@@ -133,6 +153,18 @@
         },
         {
           "name": "release/mission-15-live-activation.json",
+          "ok": true
+        },
+        {
+          "name": "release/mission-16-chatgpt-readiness.json",
+          "ok": true
+        },
+        {
+          "name": "release/mission-18-live-readiness.json",
+          "ok": true
+        },
+        {
+          "name": "release/mission-19-deployment-verification.json",
           "ok": true
         },
         {
@@ -160,6 +192,10 @@
           "ok": true
         },
         {
+          "name": "migrations/0007_ax_cost_ledger.sql",
+          "ok": true
+        },
+        {
           "name": "0005 has security events table",
           "ok": true
         },
@@ -181,6 +217,18 @@
         },
         {
           "name": "migration 0006 is additive",
+          "ok": true
+        },
+        {
+          "name": "0007 has the cost ledger table",
+          "ok": true
+        },
+        {
+          "name": "0007 has the updated_at index",
+          "ok": true
+        },
+        {
+          "name": "migration 0007 is additive",
           "ok": true
         }
       ]
@@ -204,7 +252,7 @@
     {
       "name": "release manifest matches the validated commit",
       "ok": true,
-      "commit": "c2fd06f0b9412684407ceb0cc80cfe74b2d6a6f4",
+      "commit": "0ac296f921f3e73d9897cd3aae9a7a8f5f5fee86",
       "relation": "generated-now"
     },
     {
@@ -311,11 +359,12 @@
       "0003_ax_memory_notifications.sql",
       "0004_ax_objectives_incidents.sql",
       "0005_ax_security_scheduler.sql",
-      "0006_ax_nexus_messages.sql"
+      "0006_ax_nexus_messages.sql",
+      "0007_ax_cost_ledger.sql"
     ],
-    "currentVersion": "0006",
+    "currentVersion": "0007",
     "newInThisMission": [
-      "0006_ax_nexus_messages.sql"
+      "0007_ax_cost_ledger.sql"
     ],
     "appliedToProduction": false,
     "note": "Validate against D1 before applying; SQLite proves SQL shape and idempotence, not D1 parity."
@@ -442,12 +491,16 @@
     "Message delivery is at-least-once and restricted to read-only adapters.",
     "No live model provider call is made by the gate or by tests.",
     "Research/engineering transports require AX_AGENT_LOCAL_ROOT and stay off by default.",
+    "The D1 cost ledger is proven against SQLite only; migration 0007 is not applied to production and no live restart has been observed.",
+    "The engineering sandbox is a filesystem copy with policy checks, not VM isolation, and is not behind a command route yet.",
+    "The pinned-IP research transport is covered by option-level tests; it was not exercised against a live remote host in this environment.",
     "Scheduler runs only when an external trigger or an owner calls its tick endpoint."
   ],
   "rollback": [
     "Deploy the previous commit; migration 0005 is additive and no other schema was altered.",
     "Dropping habitat_ax_security_events or habitat_ax_scheduler removes only Mission 11 history.",
     "Migration 0006 is additive; leaving habitat_ax_messages in place after a rollback is harmless.",
+    "Migration 0007 is additive; leaving habitat_ax_cost_ledger in place after a rollback is harmless.",
     "Do not roll back by deleting task, objective or memory tables."
   ]
 }
