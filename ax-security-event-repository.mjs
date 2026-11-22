@@ -2,6 +2,16 @@ import { createD1Query } from "./nexus-runtime.mjs";
 import { eventHash, verifyEventChain } from "./ax-security-events.mjs";
 
 /**
+ * Content identity for idempotent appends. Sequence, previous hash and hash are assigned by the
+ * store, so they must not participate: the same logical event retried before and after assignment
+ * has to compare equal.
+ */
+function sameEventContent(left, right) {
+  const content = event => eventHash("content", { ...event, seq: undefined, prevHash: undefined, hash: undefined });
+  return content(left) === content(right);
+}
+
+/**
  * Append-only storage for security events.
  *
  * The interface has `append`, `list`, `chain`, `head` and `stats` — and no update or delete. Sequence
@@ -23,7 +33,14 @@ export function createMemorySecurityEventRepository({ records = [] } = {}) {
   }
 
   async function appendLocked(event) {
-    if (rows.some(row => row.id === event.id)) throw new Error("security_event_id_already_exists");
+    if (!event || typeof event.id !== "string" || !event.id) throw new Error("security_event_id_required");
+    // A caller retrying an append that already committed gets its original record back. Reusing an
+    // id for different content is a programming error and must not be silently accepted.
+    const existing = rows.find(row => row.id === event.id);
+    if (existing) {
+      if (!sameEventContent(existing, event)) throw new Error("security_event_id_conflict");
+      return existing;
+    }
     const previous = rows[rows.length - 1] || null;
     const seq = previous ? previous.seq + 1 : 1;
     const prevHash = previous ? previous.hash : null;
@@ -113,11 +130,20 @@ export function createD1AxSecurityEventRepository({ accountId, databaseId, apiTo
       return initializing;
     },
     async append(event) {
+      if (!event || typeof event.id !== "string" || !event.id) throw new Error("security_event_id_required");
       // A busy owner can produce many concurrent refusals. Retry enough rounds that a burst of
       // eight appends is not silently dropped; the UNIQUE(seq) constraint still guarantees one
       // writer per sequence, so this is contention handling, not a lost event.
       for (let attempt = 0; attempt < 24; attempt += 1) {
         if (attempt > 0) await new Promise(resolve => setTimeout(resolve, Math.min(25, attempt * 2)));
+        // Idempotency: if a previous attempt committed but its response was lost, the row is here
+        // under the caller's stable id. Return it instead of appending a second event.
+        const existingRows = await query("SELECT record_json FROM habitat_ax_security_events WHERE id = ?", [event.id]);
+        const existing = decode(existingRows[0]?.results?.[0]?.record_json);
+        if (existing) {
+          if (!sameEventContent(existing, event)) throw new Error("security_event_id_conflict");
+          return existing;
+        }
         const head = await readHead();
         const seq = head ? head.seq + 1 : 1;
         const prevHash = head ? head.hash : null;
