@@ -34,6 +34,8 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           MANUAL_RUN_TICK: ${{ inputs.run_tick }}
           SCHEDULER_ENABLED: ${{ vars.NEXUS_SCHEDULER_ENABLED }}
+          HABITAT_BASE_URL: ${{ vars.HABITAT_BASE_URL }}
+          AX_SCHEDULER_TOKEN: ${{ secrets.AX_SCHEDULER_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           HABITAT_D1_DATABASE_ID: ${{ secrets.HABITAT_D1_DATABASE_ID }}
           HABITAT_D1_API_TOKEN: ${{ secrets.HABITAT_D1_API_TOKEN }}
@@ -50,6 +52,8 @@ jobs:
             exit 0
           fi
           missing=()
+          [[ -n "$HABITAT_BASE_URL" ]] || missing+=("repository variable HABITAT_BASE_URL")
+          [[ -n "$AX_SCHEDULER_TOKEN" ]] || missing+=("AX_SCHEDULER_TOKEN")
           [[ -n "$CLOUDFLARE_ACCOUNT_ID" ]] || missing+=("CLOUDFLARE_ACCOUNT_ID")
           [[ -n "$HABITAT_D1_DATABASE_ID" ]] || missing+=("HABITAT_D1_DATABASE_ID")
           [[ -n "$HABITAT_D1_API_TOKEN" ]] || missing+=("HABITAT_D1_API_TOKEN")
@@ -58,7 +62,29 @@ jobs:
             exit 3
           fi
           echo "execute=true" >> "$GITHUB_OUTPUT"
-          echo "Execution gate passed. One read-only-adapter NEXUS tick will run." >> "$GITHUB_STEP_SUMMARY"
+          echo "Execution gate passed. Habitat autonomy scheduler and one read-only-adapter NEXUS tick will run." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Trigger Habitat autonomy scheduler
+        if: steps.gate.outputs.execute == 'true'
+        shell: bash
+        env:
+          HABITAT_BASE_URL: ${{ vars.HABITAT_BASE_URL }}
+          AX_SCHEDULER_TOKEN: ${{ secrets.AX_SCHEDULER_TOKEN }}
+        run: |
+          set -euo pipefail
+          base="${HABITAT_BASE_URL%/}"
+          response="$(curl --silent --show-error --fail-with-body --max-time 90 \
+            -X POST "$base/ax/command/scheduler/tick" \
+            -H "X-Scheduler-Token: $AX_SCHEDULER_TOKEN" \
+            -H "Content-Type: application/json" \
+            --data '{"trigger":"github-actions"}')"
+          printf '%s\n' "$response" | jq .
+          printf '%s\n' "$response" | jq -e '.ok == true' >/dev/null
+          {
+            echo "## Habitat autonomy scheduler: PASS"
+            echo ""
+            printf '%s\n' "$response" | jq .
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - uses: actions/checkout@v4
         if: steps.gate.outputs.execute == 'true'
