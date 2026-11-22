@@ -23,6 +23,12 @@ import { createD1AxObjectiveRepository } from "./ax-objective-repository.mjs";
 import { createAgentRuntime } from "./ax-agents.mjs";
 import { createIncidentService, createOperationalMonitor, createRecoveryService } from "./ax-recovery.mjs";
 import { createD1AxIncidentRepository } from "./ax-incident-repository.mjs";
+import { createSecurityEventService } from "./ax-security-events.mjs";
+import { createD1AxSecurityEventRepository } from "./ax-security-event-repository.mjs";
+import { createSchedulerService } from "./ax-scheduler.mjs";
+import { createD1SchedulerRepository } from "./ax-scheduler-repository.mjs";
+import { createProjectRegistry } from "./ax-projects.mjs";
+import { resolveAgentTransports } from "./ax-agent-transports.mjs";
 import { detectSandbox } from "./nexus-sandbox.mjs";
 
 const SAFE_COMMANDS = new Set(["device.status"]);
@@ -77,6 +83,8 @@ export function registerDeviceCommandBridge(app, {
   notificationRepository = null,
   objectiveRepository = null,
   incidentRepository = null,
+  securityRepository = null,
+  schedulerRepository = null,
   handleSignals = false,
   exitOnSignal = false,
   log = console
@@ -127,6 +135,36 @@ export function registerDeviceCommandBridge(app, {
     fetchImpl
   }) : null);
   const incidents = incidentStore ? createIncidentService({ repository: incidentStore, log }) : null;
+  // Append-only security audit and the trigger-agnostic scheduler. Both are additive stores on the
+  // same database; if either is absent, its surface reports 503 instead of pretending to work.
+  const securityStore = securityRepository || (hasD1 ? createD1AxSecurityEventRepository({
+    accountId: env.CLOUDFLARE_ACCOUNT_ID,
+    databaseId: env.HABITAT_D1_DATABASE_ID,
+    apiToken: env.HABITAT_D1_API_TOKEN,
+    fetchImpl
+  }) : null);
+  const securityEvents = securityStore ? createSecurityEventService({ repository: securityStore, log }) : null;
+  const schedulerStore = schedulerRepository || (hasD1 ? createD1SchedulerRepository({
+    accountId: env.CLOUDFLARE_ACCOUNT_ID,
+    databaseId: env.HABITAT_D1_DATABASE_ID,
+    apiToken: env.HABITAT_D1_API_TOKEN,
+    fetchImpl
+  }) : null);
+  let schedulerRef = null;
+  function resolveScheduler() {
+    if (!schedulerStore) return null;
+    if (schedulerRef) return schedulerRef;
+    schedulerRef = createSchedulerService({
+      ticks: schedulerStore,
+      recovery: resolveRecovery(),
+      objectives,
+      notifications,
+      log
+    });
+    return schedulerRef;
+  }
+  const projects = createProjectRegistry({ objectives, memory: memoryContext });
+  const agentTransports = resolveAgentTransports(env);
   const circuitBreaker = createProviderCircuitBreaker({
     failureThreshold: Number(env.AX_CIRCUIT_FAILURES) || 3,
     cooldownMs: Number(env.AX_CIRCUIT_COOLDOWN_MS) || 60_000
@@ -176,6 +214,16 @@ export function registerDeviceCommandBridge(app, {
       const createdAt = new Date().toISOString();
       const expiresAt = new Date(Date.now() + PAIRING_TTL_MS).toISOString();
       await store.createPairing({ codeHash: digest(code), deviceId, createdAt, expiresAt });
+      securityEvents?.record({
+        category: "device.pairing",
+        severity: "info",
+        outcome: "recorded",
+        actor: "ax",
+        deviceId,
+        correlationId: String(req.headers?.["x-correlation-id"] || "").slice(0, 120) || null,
+        summary: "Pairing challenge issued (single use, short lived)",
+        evidence: JSON.stringify({ expiresAt, singleUse: true })
+      }).catch?.(() => {});
       return res.status(201).json({ ok: true, pairing: { code, deviceId, expiresAt, singleUse: true } });
     } catch (error) {
       console.error("DEVICE_PAIRING_CREATE_FAILED", String(error?.message || error));
@@ -212,6 +260,15 @@ export function registerDeviceCommandBridge(app, {
       async function issueToken(recovered) {
         const deviceToken = randomBytes(32).toString("base64url");
         await store.registerDevice({ deviceId, tokenHash: digest(deviceToken), createdAt: now });
+        securityEvents?.record({
+          category: "device.pairing",
+          severity: "info",
+          outcome: "allowed",
+          actor: "device:" + deviceId,
+          deviceId,
+          summary: recovered ? "Pairing exchange recovered after a lost response" : "Pairing exchange completed; device token issued",
+          evidence: JSON.stringify({ recovered })
+        }).catch?.(() => {});
         // Keep the canonical nested object and expose top-level aliases for older Bridge APK parsers.
         // The raw credential is returned only in this one-time exchange response.
         return res.status(200).json({
@@ -457,6 +514,9 @@ export function registerDeviceCommandBridge(app, {
       agentProvider: () => resolveAgents(),
       recoveryProvider: () => resolveRecovery(),
       incidentProvider: () => incidents,
+      securityProvider: () => securityEvents,
+      schedulerProvider: () => resolveScheduler(),
+      projectProvider: () => projects,
       deviceStateProvider: () => deviceSnapshot(),
       circuitProvider: () => circuitBreaker,
       budgetProvider: () => ({
@@ -604,10 +664,19 @@ export function registerDeviceCommandBridge(app, {
         adapters: READ_ONLY_ADAPTER_NAMES.slice(),
         allowedAdapters: READ_ONLY_ADAPTER_NAMES.slice(),
         sideEffectsEnabled: false,
-        // No research or engineering transport is configured in this deployment. Those agents
-        // report capability_unavailable rather than fabricating a result.
-        research: null,
-        engineering: null
+        // Off unless AX_AGENT_LOCAL_ROOT names a bounded local repository. With no root, both agents
+        // keep reporting capability_unavailable rather than fabricating a result.
+        research: agentTransports.research,
+        engineering: agentTransports.engineering,
+        transportRoot: agentTransports.root || null,
+        onSecurityEvent: entry => securityEvents?.record({
+          category: "agent.permission_violation",
+          severity: "high",
+          outcome: "denied",
+          actor: "agent:" + (entry?.agent || "unknown"),
+          summary: entry?.summary || "Agent result rejected by Ax review",
+          evidence: entry?.evidence || null
+        })
       }
     });
     return agentRuntimeRef;
@@ -796,7 +865,7 @@ export function registerDeviceCommandBridge(app, {
       await store.initialize();
       // Additive schema for memory and notifications. A failure is reported and leaves device
       // commands usable, because neither is a prerequisite for executing a task.
-      for (const [label, repository] of [["AX_MEMORY", memoryStore], ["AX_NOTIFICATIONS", notificationStore], ["AX_OBJECTIVES", objectiveStore], ["AX_INCIDENTS", incidentStore]]) {
+      for (const [label, repository] of [["AX_MEMORY", memoryStore], ["AX_NOTIFICATIONS", notificationStore], ["AX_OBJECTIVES", objectiveStore], ["AX_INCIDENTS", incidentStore], ["AX_SECURITY_EVENTS", securityStore], ["AX_SCHEDULER", schedulerStore]]) {
         if (!repository || typeof repository.initialize !== "function") continue;
         try {
           await repository.initialize();

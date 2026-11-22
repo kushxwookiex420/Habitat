@@ -65,7 +65,7 @@ textarea{min-height:96px;resize:vertical}
 .error{border:1px solid rgba(255,122,133,.35);background:rgba(255,122,133,.08);border-radius:13px;padding:13px;font-size:13.5px;color:#ffd9dd}
 .line{height:1px;background:rgba(255,255,255,.08);margin:12px 0}
 details summary{cursor:pointer;color:var(--teal2);font-size:13.5px;padding:6px 0}
-nav{position:fixed;left:0;right:0;bottom:0;z-index:5;display:grid;grid-template-columns:repeat(5,1fr);grid-auto-rows:auto;gap:2px;background:rgba(5,11,18,.96);border-top:1px solid var(--line);padding:7px 6px calc(7px + env(safe-area-inset-bottom));backdrop-filter:blur(18px)}
+nav{position:fixed;left:0;right:0;bottom:0;z-index:5;display:grid;grid-template-columns:repeat(auto-fit,minmax(56px,1fr));grid-auto-rows:auto;gap:2px;background:rgba(5,11,18,.96);border-top:1px solid var(--line);padding:7px 6px calc(7px + env(safe-area-inset-bottom));backdrop-filter:blur(18px)}
 nav button{appearance:none;background:transparent;border:0;color:var(--muted);padding:4px 2px;border-radius:11px;font-size:10.5px;font-weight:700;letter-spacing:.02em;min-height:52px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;cursor:pointer}
 nav button[aria-selected="true"]{color:var(--teal2);background:rgba(67,227,208,.1)}
 nav svg{width:20px;height:20px;stroke:currentColor;fill:none;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
@@ -74,7 +74,7 @@ nav svg{width:20px;height:20px;stroke:currentColor;fill:none;stroke-width:1.7;st
 #gate.hidden{display:none}
 #toast{position:fixed;left:16px;right:16px;bottom:calc(158px + env(safe-area-inset-bottom));z-index:30;background:rgba(10,25,36,.96);border:1px solid var(--line);border-radius:13px;padding:12px 14px;font-size:13.5px;color:var(--text);transform:translateY(140%);transition:transform .22s ease}
 #toast.show{transform:none}
-@media(min-width:720px){nav{grid-template-columns:repeat(10,1fr);max-width:900px;margin:0 auto;border-radius:18px 18px 0 0;border:1px solid var(--line)}body{padding-bottom:96px}}
+@media(min-width:720px){nav{grid-template-columns:repeat(auto-fit,minmax(68px,1fr));max-width:1040px;margin:0 auto;border-radius:18px 18px 0 0;border:1px solid var(--line)}body{padding-bottom:96px}}
 @media(prefers-reduced-motion:reduce){#brain{opacity:.35}}
 `;
 
@@ -88,6 +88,7 @@ const ICONS = {
   agents: '<circle cx="7" cy="7" r="2.4"/><circle cx="17" cy="7" r="2.4"/><circle cx="12" cy="17" r="2.4"/><path d="M9 8.4l2 6M15 8.4l-2 6M9.4 7h5.2"/>',
   device: '<rect x="7" y="3" width="10" height="18" rx="2.5"/><path d="M10.5 18h3"/>',
   recovery: '<path d="M20 12a8 8 0 1 1-2.4-5.7"/><path d="M20 4v5h-5"/>',
+  security: '<path d="M12 3l7 3v6c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6z"/><path d="M9 12l2 2 4-4"/>',
   health: '<path d="M3 12h4l2-5 3 10 2-5h7"/>'
 };
 
@@ -116,7 +117,7 @@ export function renderControlCenter({ version = "unknown" } = {}) {
     '<nav role="tablist" aria-label="Control center sections">' +
     navButton("chat", "Chat") + navButton("workers", "Workers") + navButton("tasks", "Tasks") + navButton("memory", "Memory") +
     navButton("approvals", "Approvals") + navButton("missions", "Missions") + navButton("agents", "Agents") +
-    navButton("device", "Device") + navButton("recovery", "Recovery") + navButton("health", "Health") +
+    navButton("device", "Device") + navButton("recovery", "Recovery") + navButton("security", "Security") + navButton("health", "Health") +
     "</nav>" +
     '<div id="gate"><div class="sheet" role="dialog" aria-modal="true" aria-labelledby="gate-title">' +
     '<h2 id="gate-title" style="margin:0 0 6px;font-size:18px">Connect to Ax</h2>' +
@@ -141,7 +142,7 @@ function clientApp() {
   const TOKEN_KEY = "habitat.ax.token";
   const OWNER_ID_KEY = "habitat.owner.id";
   const OWNER_TOKEN_KEY = "habitat.owner.token";
-  const TABS = ["chat", "workers", "tasks", "memory", "approvals", "missions", "agents", "device", "recovery", "health"];
+  const TABS = ["chat", "workers", "tasks", "memory", "approvals", "missions", "agents", "device", "recovery", "security", "health"];
   const state = { tab: "chat", timer: null, busy: false };
 
   const $ = id => document.getElementById(id);
@@ -193,11 +194,13 @@ function clientApp() {
     let data = {};
     try { data = await response.json(); } catch { data = {}; }
     if (!response.ok || data.ok === false) {
+      state.readFailure = true;
       const error = new Error(data.error || ("HTTP " + response.status));
       error.code = data.code || ("http_" + response.status);
       error.status = response.status;
       throw error;
     }
+    state.readCount += 1;
     return data;
   }
 
@@ -233,9 +236,9 @@ function clientApp() {
 
   function statusClass(value) {
     const text = String(value || "").toLowerCase();
-    if (["ok", "ready", "reachable", "available", "completed", "verified", "delivered", "true", "running"].includes(text)) return "good";
-    if (["pending", "recorded", "needs_approval", "warn", "unchecked", "not_checked", "partial"].includes(text)) return "warn";
-    if (["failed", "error", "unreachable", "unavailable", "not_configured", "denied", "expired"].includes(text)) return "bad";
+    if (["ok", "ready", "reachable", "available", "completed", "verified", "delivered", "true", "running", "healthy", "active", "allowed"].includes(text)) return "good";
+    if (["pending", "recorded", "needs_approval", "requires_approval", "warn", "unchecked", "not_checked", "partial", "degraded", "stale", "unknown", "never_run", "awaiting_approval"].includes(text)) return "warn";
+    if (["failed", "error", "unreachable", "unavailable", "not_configured", "denied", "expired", "offline"].includes(text)) return "bad";
     return "";
   }
 
@@ -272,6 +275,8 @@ function clientApp() {
   async function render() {
     if (state.timer) { clearInterval(state.timer); state.timer = null; }
     panel.replaceChildren(loading());
+    state.readCount = 0;
+    state.readFailure = false;
     const sub = $("panel-sub");
     const labels = {
       chat: "Command Ax, then follow the run it creates.",
@@ -282,13 +287,17 @@ function clientApp() {
       missions: "Reconstructed from durable run records and notifications.",
       agents: "Capability manifests: implemented and available are different claims.",
       device: "Topology and pairing state of the paired phone, with each state derived separately.",
-      recovery: "Durable incidents and the reversible repairs the owner can authorize.",
+      recovery: "Durable incidents, the scheduler lease and the reversible repairs the owner can authorize.",
+      security: "Append-only security audit with hash-chain integrity.",
       health: "Probe results, provider configuration and subsystem status."
     };
     sub.textContent = labels[state.tab] || "";
     try {
       await renderers[state.tab]();
-      setConnection(token() ? "ok" : "warn", token() ? "Connected" : "Read-only");
+      if (!token()) setConnection("warn", "Read-only");
+      else if (state.readFailure) setConnection("bad", "Degraded");
+      else if (state.readCount > 0) setConnection("ok", "Connected");
+      else setConnection("warn", "Unverified");
     } catch (error) {
       panel.replaceChildren(errorCard(error));
       setConnection("bad", error && error.status === 401 ? "Token refused" : "Degraded");
@@ -535,6 +544,64 @@ function clientApp() {
     panel.replaceChildren(statCard, insightsCard, search, results, owner);
   }
 
+  async function renderObjectiveDetail(id) {
+    const back = el("div", { class: "actions" }, el("button", { class: "btn ghost", type: "button", text: "← Missions", onclick: () => selectTab("missions") }));
+    let data;
+    try {
+      data = await api("/ax/command/objectives/" + encodeURIComponent(id));
+    } catch (error) {
+      panel.replaceChildren(back, errorCard(error));
+      return;
+    }
+    const objective = data.objective;
+    const accounting = data.accounting || {};
+    if (!objective) {
+      panel.replaceChildren(back, el("div", { class: "card" }, el("div", { class: "empty", text: "No objective with that id." })));
+      return;
+    }
+    const header = el("div", { class: "card" },
+      el("div", { class: "top" }, el("h2", { text: "Objective" }), pill(objective.status)),
+      el("p", { text: objective.objective }),
+      row("Id", objective.id),
+      row("Project", objective.project),
+      row("Priority", objective.priority),
+      row("Created", objective.createdAt),
+      row("Updated", objective.updatedAt),
+      row("Criteria met", (objective.criteria || []).filter(item => item.met).length + "/" + (objective.criteria || []).filter(item => item.required).length, objective.verification && objective.verification.verified ? "good" : "warn"));
+    const budget = el("div", { class: "card" }, el("h2", { text: "Budget and children" }),
+      row("Limit", "$" + Number(accounting.limitUsd || 0).toFixed(4)),
+      row("Reserved", "$" + Number(accounting.reservedUsd || 0).toFixed(4)),
+      row("Spent", "$" + Number(accounting.spentUsd || 0).toFixed(4)),
+      row("Remaining", "$" + Number(accounting.remainingUsd || 0).toFixed(4), Number(accounting.remainingUsd || 0) > 0 ? "good" : "bad"),
+      el("p", { class: "small muted", text: "Every child execution is reserved before it starts and settled exactly once. A released or settled execution stays in history." }));
+    const executions = accounting.executions || [];
+    budget.appendChild(executions.length ? el("div", { class: "list" }, ...executions.map(execution => el("div", { class: "item" },
+      el("div", { class: "top" }, el("strong", { text: execution.runId || execution.executionId }), pill(execution.status)),
+      el("p", { class: "small muted", text: "agent " + (execution.agentId || "unassigned") + " · reserved $" + Number(execution.reservedUsd || 0).toFixed(4) + " · actual $" + Number(execution.actualUsd || 0).toFixed(4) + (execution.settledAt ? " · settled " + execution.settledAt : "") })
+    ))) : el("div", { class: "empty", text: "No child execution has been reserved." }));
+    const criteria = el("div", { class: "card" }, el("h2", { text: "Acceptance criteria" }));
+    for (const criterion of objective.criteria || []) {
+      criteria.appendChild(row(criterion.id + (criterion.required ? "" : " (optional)"), (criterion.met ? "met — " : "unmet — ") + criterion.statement, criterion.met ? "good" : "warn"));
+    }
+    if (objective.verification) criteria.appendChild(el("p", { class: "small muted", text: "Verification: " + (objective.verification.verified ? "passed" : "not passed") + " at " + (objective.verification.checkedAt || "never") + (objective.verification.unmet && objective.verification.unmet.length ? " · unmet " + objective.verification.unmet.join(", ") : "") }));
+    const tasks = el("div", { class: "card" }, el("h2", { text: "Linked tasks · " + (objective.execution?.tasks || []).length }));
+    if (!(objective.execution?.tasks || []).length) tasks.appendChild(el("div", { class: "empty", text: "No task is attached yet." }));
+    for (const task of objective.execution?.tasks || []) tasks.appendChild(row(task.taskId, (task.agent || "unassigned") + " · " + task.status));
+    const evidence = el("div", { class: "card" }, el("h2", { text: "Evidence · " + (objective.evidence || []).length }));
+    if (!(objective.evidence || []).length) evidence.appendChild(el("div", { class: "empty", text: "No evidence recorded. An objective cannot complete without it." }));
+    for (const item of objective.evidence || []) {
+      evidence.appendChild(el("div", { class: "item" }, el("div", { class: "top" }, el("strong", { text: item.id }), pill(item.source)), el("p", { text: item.summary }), item.taskId ? el("p", { class: "small mono muted", text: "task " + item.taskId }) : null));
+    }
+    const approval = el("div", { class: "card" }, el("h2", { text: "Approval" }),
+      row("Required", objective.approval?.required ? "yes" : "no", objective.approval?.required ? "warn" : "good"),
+      row("Approved", objective.approval?.approvedAt || "no"),
+      row("Approved by", objective.approval?.approvedBy || "—"),
+      row("Denied", objective.approval?.deniedAt || "no", objective.approval?.deniedAt ? "bad" : "good"));
+    const checkpoints = el("div", { class: "card" }, el("h2", { text: "Checkpoints · " + (objective.checkpoints || []).length }));
+    for (const checkpoint of (objective.checkpoints || []).slice(-8)) checkpoints.appendChild(el("p", { class: "small muted", text: checkpoint.at + " · " + checkpoint.note + (checkpoint.taskIds?.length ? " · tasks " + checkpoint.taskIds.join(", ") : "") }));
+    panel.replaceChildren(back, header, budget, criteria, tasks, evidence, approval, checkpoints);
+  }
+
   async function renderMissions() {
     const data = await api("/ax/command/history?limit=20");
     const missions = data.missions || [];
@@ -553,9 +620,10 @@ function clientApp() {
         el("p", { class: "small muted", text: "Durable mission lifecycles. Completion requires verified acceptance criteria; a plan cannot reach completed." }));
       if (!items.length) objectivesCard.appendChild(el("div", { class: "empty", text: "No objectives recorded. Create one through the API; this page does not invent missions." }));
       for (const item of items.slice(0, 8)) {
+        const acct = item.accounting || {};
         objectivesCard.appendChild(el("div", { class: "row" },
-          el("span", { class: "k" }, el("strong", { text: item.objective.slice(0, 90) }), el("div", { class: "small muted", text: item.id + " · criteria " + item.criteria.met + "/" + item.criteria.required + " · $" + Number(item.costUsd || 0).toFixed(4) })),
-          el("span", { class: "v" }, pill(item.status))));
+          el("span", { class: "k" }, el("strong", { text: item.objective.slice(0, 90) }), el("div", { class: "small muted", text: item.id + " · criteria " + item.criteria.met + "/" + item.criteria.required + " · spent $" + Number(acct.spentUsd || 0).toFixed(4) + " of $" + Number(acct.limitUsd || 0).toFixed(4) + " · reserved $" + Number(acct.reservedUsd || 0).toFixed(4) })),
+          el("span", { class: "v" }, pill(item.status), el("button", { class: "btn ghost", type: "button", text: "Open", onclick: () => renderObjectiveDetail(item.id) }))));
       }
     } catch (error) {
       objectivesCard = el("div", { class: "card" }, el("h2", { text: "Objectives" }), errorCard(error));
@@ -642,8 +710,44 @@ function clientApp() {
     panel.replaceChildren(connection, pairingCard, capabilityCard);
   }
 
+  async function schedulerCard() {
+    const card = el("div", { class: "card" }, el("h2", { text: "Scheduler" }));
+    let data;
+    try {
+      data = await api("/ax/command/scheduler/status");
+    } catch (error) {
+      card.appendChild(errorCard(error));
+      return card;
+    }
+    const scheduler = data.scheduler || {};
+    card.appendChild(row("Status", scheduler.status || "unknown", statusClass(scheduler.status)));
+    card.appendChild(row("Last success", scheduler.lastSuccessAt || "never", scheduler.lastSuccessAt ? "" : "warn"));
+    card.appendChild(row("Last start", scheduler.lastStartAt || "never"));
+    card.appendChild(row("Missed ticks", scheduler.missedTicks === null || scheduler.missedTicks === undefined ? "unknown" : String(scheduler.missedTicks), Number(scheduler.missedTicks) > 1 ? "warn" : ""));
+    card.appendChild(row("Lease", scheduler.lease ? (scheduler.leaseActive ? "held until " + scheduler.lease.expiresAt : "expired") : "free", scheduler.lease ? (scheduler.leaseActive ? "good" : "bad") : "good"));
+    card.appendChild(row("Interval", Math.round(Number(scheduler.tickIntervalMs || 0) / 1000) + "s"));
+    if (scheduler.lastDetail) card.appendChild(el("p", { class: "small muted", text: scheduler.lastDetail }));
+    const tick = el("button", { class: "btn", type: "button", text: "Run tick now", onclick: async event => {
+      const button = event.currentTarget;
+      button.disabled = true;
+      button.textContent = "Ticking…";
+      try {
+        const outcome = await api("/ax/command/scheduler/tick", { method: "POST", body: { trigger: "control-center" } });
+        notify(outcome.ok ? "Tick completed: " + outcome.status + " · " + outcome.detail : "Tick refused: " + (outcome.code || "unknown"));
+        render();
+      } catch (error) {
+        notify(error.code || "tick_failed");
+        panel.replaceChildren(errorCard(error));
+      }
+    } });
+    card.appendChild(el("div", { class: "actions" }, tick));
+    card.appendChild(el("p", { class: "small muted", text: "An external scheduler calls the same endpoint with a scheduler token. A tick holds a durable lease, so two triggers cannot run one tick together." }));
+    return card;
+  }
+
   async function renderRecovery() {
     const data = await api("/ax/command/recovery/incidents?status=open");
+    const scheduler = await schedulerCard();
     const scan = el("button", { class: "btn", type: "button", text: "Scan now", onclick: async event => {
       const button = event.currentTarget;
       button.disabled = true;
@@ -661,7 +765,7 @@ function clientApp() {
       el("div", { class: "actions" }, scan));
     const incidents = data.incidents || [];
     if (!incidents.length) {
-      panel.replaceChildren(intro, el("div", { class: "card" }, el("div", { class: "empty", text: "No open incidents. That is the result of a scan, not a promise that nothing is wrong." })));
+      panel.replaceChildren(intro, scheduler, el("div", { class: "card" }, el("div", { class: "empty", text: "No open incidents. That is the result of a scan, not a promise that nothing is wrong." })));
       return;
     }
     const list = el("div", { class: "list" });
@@ -692,7 +796,48 @@ function clientApp() {
         incident.recovery ? el("p", { class: "small muted", text: "Last repair: " + incident.recovery.action + " · verified " + (incident.recovery.verification && incident.recovery.verification.verified ? "yes" : "no") }) : null,
         el("div", { class: "actions" }, recover)));
     }
-    panel.replaceChildren(intro, list);
+    panel.replaceChildren(intro, scheduler, list);
+  }
+
+  async function renderSecurity() {
+    let integrity = null;
+    let events = null;
+    let failure = null;
+    try { integrity = await api("/ax/command/security/integrity"); } catch (error) { failure = failure || error; }
+    try { events = await api("/ax/command/security/events?limit=50"); } catch (error) { failure = failure || error; }
+    if (!integrity && !events) {
+      panel.replaceChildren(errorCard(failure));
+      return;
+    }
+    const chain = el("div", { class: "card" }, el("h2", { text: "Audit chain" }));
+    if (integrity) {
+      chain.appendChild(row("Integrity", integrity.ok ? "verified" : "broken", integrity.ok ? "good" : "bad"));
+      chain.appendChild(row("Events checked", String(integrity.checked || 0)));
+      chain.appendChild(row("Sequence", (integrity.firstSeq ?? "—") + " → " + (integrity.lastSeq ?? "—")));
+      chain.appendChild(row("Head hash", String(integrity.headHash || "—").slice(0, 24) + "…"));
+      chain.appendChild(row("Algorithm", integrity.algorithm || "sha256-chain"));
+      if (integrity.ok === false) chain.appendChild(el("p", { class: "error", text: "The chain failed at index " + integrity.index + " (" + integrity.reason + ")" }));
+      chain.appendChild(el("p", { class: "small muted", text: integrity.tamperEvidence || "Hash-chained; detects edits relative to an observed head." }));
+    } else {
+      chain.appendChild(errorCard(failure));
+    }
+    const list = el("div", { class: "card" }, el("h2", { text: "Recent security events · " + ((events && events.count) || 0) }));
+    if (!events) list.appendChild(errorCard(failure));
+    else if (!events.events.length) list.appendChild(el("div", { class: "empty", text: "No security events recorded. This is an empty audit log, not a claim that nothing happened." }));
+    else {
+      const items = el("div", { class: "list" });
+      for (const event of events.events) {
+        const item = el("div", { class: "item" },
+          el("div", { class: "top" }, el("strong", { text: event.category }), pill(event.severity)),
+          el("p", { text: event.summary || "(no summary)" }),
+          el("p", { class: "small mono muted", text: "seq " + event.seq + " · " + event.createdAt + " · outcome " + event.outcome + " · actor " + (event.actor || "unknown") + (event.deviceId ? " · device " + event.deviceId : "") + (event.objectiveId ? " · objective " + event.objectiveId : "") + (event.runId ? " · run " + event.runId : "") }));
+        if (event.evidence) item.appendChild(el("details", {}, el("summary", { text: "Evidence" }), el("p", { class: "small mono muted", text: event.evidence })));
+        items.appendChild(item);
+      }
+      list.appendChild(items);
+      list.appendChild(el("p", { class: "small muted", text: "Read-only. No API route can edit or delete an event; retention is bounded by the store policy." }));
+    }
+    panel.replaceChildren(chain, list);
   }
 
   async function renderHealth() {
@@ -758,6 +903,7 @@ function clientApp() {
     agents: renderAgents,
     device: renderDevice,
     recovery: renderRecovery,
+    security: renderSecurity,
     health: renderHealth
   };
 

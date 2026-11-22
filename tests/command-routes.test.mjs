@@ -88,7 +88,7 @@ test("registers the complete command route surface without duplicate paths", () 
   const app = makeApp();
   mountTestApp(app, memoryRepository());
   const paths = [...app.routes.keys()];
-  assert.equal(paths.length, 64, "the route surface is 36 Mission 09 routes plus 28 Mission 10 objective, agent, device, recovery, dispatch and insight routes");
+  assert.equal(paths.length, 70, "the route surface is 36 Mission 09 routes, 28 Mission 10 routes and 6 Mission 11 security, scheduler and project routes");
   assert.equal(new Set(paths).size, paths.length);
   assert.ok(paths.includes("GET /ax/command/roles"));
   assert.ok(paths.includes("GET /ax/command/tools"));

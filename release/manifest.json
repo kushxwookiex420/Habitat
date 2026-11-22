@@ -1,0 +1,238 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-11-22T03:10:57.407Z",
+  "commit": "deb4e7fcacab6bac9fd6c2813077ee412ed18435",
+  "branch": "ax-nexus/revision-4.6-nexus-mainline-integration",
+  "checks": [
+    {
+      "name": "git commit resolved",
+      "ok": true,
+      "commit": "deb4e7fcacab6bac9fd6c2813077ee412ed18435"
+    },
+    {
+      "name": "syntax and repository checks",
+      "ok": true,
+      "detail": "exit 0"
+    },
+    {
+      "name": "full test suite",
+      "ok": true,
+      "pass": 648,
+      "fail": 0,
+      "detail": "exit 0"
+    },
+    {
+      "name": "migration compatibility (local sqlite)",
+      "ok": true,
+      "checks": 18,
+      "passed": 18,
+      "failed": 0,
+      "environment": "node:sqlite in-memory (D1-compatible SQL only; not D1 itself)"
+    },
+    {
+      "name": "command route authentication",
+      "ok": true,
+      "routes": 69,
+      "unguarded": [],
+      "note": "Static check only: every command route registration names requireAx or requireScheduler on the same line."
+    },
+    {
+      "name": "Android compilation",
+      "ok": true,
+      "task": ":app:compileDebugKotlin",
+      "environment": "local Gradle + Android SDK (compile only)",
+      "detail": "compiled",
+      "skipped": false
+    },
+    {
+      "name": "required environment variables are documented",
+      "ok": true,
+      "variables": [
+        {
+          "name": "HABITAT_AX_COMMAND_TOKEN",
+          "purpose": "Ax command credential",
+          "required": true,
+          "present": false
+        },
+        {
+          "name": "HABITAT_AX_BRIDGE_TOKEN",
+          "purpose": "device-capable Ax credential",
+          "required": true,
+          "present": false
+        },
+        {
+          "name": "HABITAT_OWNER_DEVICE_IDS",
+          "purpose": "owner device allowlist",
+          "required": true,
+          "present": false
+        },
+        {
+          "name": "CLOUDFLARE_ACCOUNT_ID",
+          "purpose": "D1 account",
+          "required": true,
+          "present": false
+        },
+        {
+          "name": "HABITAT_D1_DATABASE_ID",
+          "purpose": "D1 database",
+          "required": true,
+          "present": false
+        },
+        {
+          "name": "HABITAT_D1_API_TOKEN",
+          "purpose": "D1 API token",
+          "required": true,
+          "present": false
+        },
+        {
+          "name": "AX_SCHEDULER_TOKEN",
+          "purpose": "external scheduler credential",
+          "required": false,
+          "present": false
+        },
+        {
+          "name": "HABITAT_PUBLIC_ORIGIN",
+          "purpose": "canonical public origin",
+          "required": false,
+          "present": false
+        },
+        {
+          "name": "AX_AGENT_LOCAL_ROOT",
+          "purpose": "enable local research/engineering transports",
+          "required": false,
+          "present": false
+        }
+      ],
+      "note": "Presence is reported without values. This gate does not validate the credentials themselves."
+    }
+  ],
+  "releaseReady": true,
+  "schema": {
+    "migrations": [
+      "0001_habitat_tasks.sql",
+      "0002_habitat_command_tasks.sql",
+      "0003_ax_memory_notifications.sql",
+      "0004_ax_objectives_incidents.sql",
+      "0005_ax_security_scheduler.sql"
+    ],
+    "currentVersion": "0005",
+    "newInThisMission": [
+      "0005_ax_security_scheduler.sql"
+    ],
+    "appliedToProduction": false,
+    "note": "Validate against D1 before applying; SQLite proves SQL shape and idempotence, not D1 parity."
+  },
+  "environment": {
+    "required": [
+      {
+        "name": "HABITAT_AX_COMMAND_TOKEN",
+        "purpose": "Ax command credential",
+        "required": true,
+        "present": false
+      },
+      {
+        "name": "HABITAT_AX_BRIDGE_TOKEN",
+        "purpose": "device-capable Ax credential",
+        "required": true,
+        "present": false
+      },
+      {
+        "name": "HABITAT_OWNER_DEVICE_IDS",
+        "purpose": "owner device allowlist",
+        "required": true,
+        "present": false
+      },
+      {
+        "name": "CLOUDFLARE_ACCOUNT_ID",
+        "purpose": "D1 account",
+        "required": true,
+        "present": false
+      },
+      {
+        "name": "HABITAT_D1_DATABASE_ID",
+        "purpose": "D1 database",
+        "required": true,
+        "present": false
+      },
+      {
+        "name": "HABITAT_D1_API_TOKEN",
+        "purpose": "D1 API token",
+        "required": true,
+        "present": false
+      }
+    ],
+    "optional": [
+      {
+        "name": "HABITAT_AX_COMMAND_TOKEN",
+        "purpose": "Ax command credential",
+        "required": true,
+        "present": false
+      },
+      {
+        "name": "HABITAT_AX_BRIDGE_TOKEN",
+        "purpose": "device-capable Ax credential",
+        "required": true,
+        "present": false
+      },
+      {
+        "name": "HABITAT_OWNER_DEVICE_IDS",
+        "purpose": "owner device allowlist",
+        "required": true,
+        "present": false
+      },
+      {
+        "name": "CLOUDFLARE_ACCOUNT_ID",
+        "purpose": "D1 account",
+        "required": true,
+        "present": false
+      },
+      {
+        "name": "HABITAT_D1_DATABASE_ID",
+        "purpose": "D1 database",
+        "required": true,
+        "present": false
+      },
+      {
+        "name": "HABITAT_D1_API_TOKEN",
+        "purpose": "D1 API token",
+        "required": true,
+        "present": false
+      },
+      {
+        "name": "AX_SCHEDULER_TOKEN",
+        "purpose": "external scheduler credential",
+        "required": false,
+        "present": false
+      },
+      {
+        "name": "HABITAT_PUBLIC_ORIGIN",
+        "purpose": "canonical public origin",
+        "required": false,
+        "present": false
+      },
+      {
+        "name": "AX_AGENT_LOCAL_ROOT",
+        "purpose": "enable local research/engineering transports",
+        "required": false,
+        "present": false
+      }
+    ]
+  },
+  "artifacts": {
+    "apk": "app/build/outputs/apk/debug/app-debug.apk",
+    "demoEvidence": "release/demo-evidence.json"
+  },
+  "knownLimitations": [
+    "No production or staging deployment was performed.",
+    "Migration 0005 has not been applied to D1.",
+    "Android is compile-verified; the pairing fix has not run on a physical device.",
+    "No live model provider call is made by the gate or by tests.",
+    "Research/engineering transports require AX_AGENT_LOCAL_ROOT and stay off by default.",
+    "Scheduler runs only when an external trigger or an owner calls its tick endpoint."
+  ],
+  "rollback": [
+    "Deploy the previous commit; migration 0005 is additive and no other schema was altered.",
+    "Dropping habitat_ax_security_events or habitat_ax_scheduler removes only Mission 11 history.",
+    "Do not roll back by deleting task, objective or memory tables."
+  ]
+}

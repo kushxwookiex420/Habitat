@@ -176,9 +176,46 @@ export function evaluateEvidenceChecks(objective, checks) {
   };
 }
 
+/**
+ * Objective accounting is derived, never trusted from a single counter. A reservation holds budget
+ * while a child run is in flight; a settlement replaces it with the actual cost exactly once. The
+ * limit is always `budgetUsd`, so an old record cannot drift from its authority.
+ */
+export function objectiveAccounting(objective) {
+  if (!objective) return null;
+  const limitUsd = Number(objective.budgetUsd || 0);
+  const executions = Array.isArray(objective.accounting?.executions) ? objective.accounting.executions : [];
+  const spentUsd = Number(objective.accounting?.spentUsd ?? objective.costUsd ?? 0);
+  const reservedUsd = Number(executions
+    .filter(item => item.status === "reserved")
+    .reduce((sum, item) => sum + Number(item.reservedUsd || 0), 0).toFixed(6));
+  const remainingUsd = Number((limitUsd - spentUsd - reservedUsd).toFixed(6));
+  return {
+    currency: "USD",
+    limitUsd,
+    spentUsd: Number(spentUsd.toFixed(6)),
+    reservedUsd,
+    remainingUsd,
+    exhausted: remainingUsd <= 0,
+    executions: executions.map(item => ({
+      executionId: item.executionId,
+      runId: item.runId || null,
+      agentId: item.agentId || null,
+      provider: item.provider || null,
+      reservedUsd: Number(item.reservedUsd || 0),
+      actualUsd: Number(item.actualUsd || 0),
+      status: item.status,
+      chargeId: item.chargeId || null,
+      reservedAt: item.reservedAt || null,
+      settledAt: item.settledAt || null
+    }))
+  };
+}
+
 export function objectiveSummary(objective) {
   if (!objective) return null;
   const required = (objective.criteria || []).filter(item => item.required);
+  const accounting = objectiveAccounting(objective);
   return {
     id: objective.id,
     key: objective.key,
@@ -191,8 +228,9 @@ export function objectiveSummary(objective) {
     criteria: { total: (objective.criteria || []).length, required: required.length, met: required.filter(item => item.met).length },
     planSteps: (objective.plan?.steps || []).length,
     tasks: (objective.execution?.tasks || []).map(task => ({ taskId: task.taskId, agent: task.agent, status: task.status })),
-    costUsd: Number(objective.costUsd || 0),
-    budgetUsd: Number(objective.budgetUsd || 0),
+    costUsd: accounting.spentUsd,
+    budgetUsd: accounting.limitUsd,
+    accounting,
     createdAt: objective.createdAt,
     updatedAt: objective.updatedAt,
     completedAt: objective.completedAt || null,
@@ -360,6 +398,7 @@ export function createObjectiveService({
       checkpoints: [],
       costUsd: 0,
       budgetUsd: budget,
+      accounting: { spentUsd: 0, executions: [] },
       deadlineAt: deadlineAt ? clean(deadlineAt, 40) : null,
       recovered: 0,
       error: null,
@@ -510,8 +549,14 @@ export function createObjectiveService({
     if (objective.approval?.required && !objective.approval?.approvedAt) {
       return { ok: false, code: "approval_required", error: "This objective needs owner approval before execution." };
     }
-    if (Number(objective.costUsd || 0) > Number(objective.budgetUsd || 0)) {
-      return { ok: false, code: "budget_exhausted", error: "The objective has no budget left." };
+    const accounting = objectiveAccounting(objective);
+    if (accounting.exhausted) {
+      return {
+        ok: false,
+        code: "budget_exhausted",
+        error: "The objective has no budget left (limit " + accounting.limitUsd + " USD, spent " + accounting.spentUsd + " USD, reserved " + accounting.reservedUsd + " USD).",
+        accounting
+      };
     }
     // A plan that needed no owner approval still passes through `authorized`. That keeps the audit
     // trail identical for gated and ungated work: every execution has an authorization edge.
@@ -733,7 +778,9 @@ export function createObjectiveService({
     if (!loaded.ok) return loaded;
     const objective = loaded.objective;
     if (isTerminal(objective.status)) return { ok: false, code: "objective_terminal" };
-    objective.costUsd = Number((Number(objective.costUsd || 0) + amount).toFixed(6));
+    objective.accounting = objective.accounting || { spentUsd: Number(objective.costUsd || 0), executions: [] };
+    objective.costUsd = Number((Number(objective.accounting.spentUsd ?? objective.costUsd ?? 0) + amount).toFixed(6));
+    objective.accounting.spentUsd = objective.costUsd;
     const over = objective.costUsd > Number(objective.budgetUsd || 0);
     if (over) {
       objective.execution.stopped = "budget_exhausted";
@@ -750,7 +797,184 @@ export function createObjectiveService({
       if (error instanceof ObjectiveConflict) return { ok: false, code: "objective_conflict" };
       return { ok: false, code: "objective_store_unavailable" };
     }
-    return { ok: !over, code: over ? "budget_exhausted" : null, objective, remainingUsd: Number((objective.budgetUsd - objective.costUsd).toFixed(6)) };
+    return { ok: !over, code: over ? "budget_exhausted" : null, objective, accounting: objectiveAccounting(objective), remainingUsd: objectiveAccounting(objective).remainingUsd };
+  }
+
+  /**
+   * Reserve budget for one child run before it starts. The execution id is the idempotency key, so
+   * a retried dispatch (or two concurrent dispatches) reserves once. The reservation is durable and
+   * CAS-guarded like every other objective write, and it refuses to overcommit across independent
+   * child runs.
+   */
+  async function reserveExecution(id, { executionId, runKey = null, estimateUsd = 0, agentId = null, provider = null } = {}) {
+    if (!repository) return unavailable();
+    const key = clean(executionId || runKey, 160);
+    if (!key) return { ok: false, code: "execution_id_required" };
+    const amount = Number(estimateUsd);
+    if (!Number.isFinite(amount) || amount < 0 || amount > maxBudgetUsd) return { ok: false, code: "invalid_cost" };
+    const loaded = await load(id);
+    if (!loaded.ok) return loaded;
+    const objective = loaded.objective;
+    if (isTerminal(objective.status)) return { ok: false, code: "objective_terminal", error: "This objective is already closed." };
+    objective.accounting = {
+      spentUsd: Number(objective.accounting?.spentUsd ?? objective.costUsd ?? 0),
+      executions: Array.isArray(objective.accounting?.executions) ? objective.accounting.executions.slice() : []
+    };
+    const existing = objective.accounting.executions.find(item => item.executionId === key);
+    if (existing) {
+      return { ok: true, replayed: true, objective, execution: existing, accounting: objectiveAccounting(objective) };
+    }
+    const before = objectiveAccounting(objective);
+    if (before.exhausted || Number((before.remainingUsd - amount).toFixed(6)) < 0) {
+      return {
+        ok: false,
+        code: "budget_exhausted",
+        error: "This run needs a reservation of " + amount.toFixed(4) + " USD but only " + Math.max(0, before.remainingUsd).toFixed(4) + " USD remains.",
+        accounting: before
+      };
+    }
+    const execution = {
+      executionId: key,
+      runKey: runKey || null,
+      runId: null,
+      agentId: clean(agentId, 64) || null,
+      provider: clean(provider, 64) || null,
+      reservedUsd: Number(amount.toFixed(6)),
+      actualUsd: 0,
+      status: "reserved",
+      chargeId: "chg_" + createHash("sha256").update(objective.id + "\u0000" + key).digest("hex").slice(0, 20),
+      reservedAt: now(),
+      settledAt: null,
+      note: null
+    };
+    objective.accounting.executions.push(execution);
+    if (objective.accounting.executions.length > 50) objective.accounting.executions = objective.accounting.executions.slice(-50);
+    remember(objective, { from: objective.status, to: objective.status, at: now(), by: "ax", reason: "budget reserved: " + key });
+    try {
+      await persist(objective);
+    } catch (error) {
+      if (error instanceof ObjectiveConflict) {
+        // A concurrent dispatch may have reserved this same execution first. Re-read before calling
+        // it a conflict: a replay is the correct, non-duplicating answer.
+        const again = await load(id);
+        const found = again.ok && (again.objective.accounting?.executions || []).find(item => item.executionId === key);
+        if (found) return { ok: true, replayed: true, objective: again.objective, execution: found, accounting: objectiveAccounting(again.objective) };
+        return { ok: false, code: "objective_conflict", objective: error.objective };
+      }
+      return { ok: false, code: "objective_store_unavailable" };
+    }
+    return { ok: true, objective, execution, accounting: objectiveAccounting(objective) };
+  }
+
+  /** Replace a reservation with the actual cost, exactly once. Idempotent on the execution id. */
+  async function settleExecution(id, { executionId, runKey = null, runId = null, actualUsd = 0, note = null } = {}) {
+    if (!repository) return unavailable();
+    const key = clean(executionId || runKey, 160);
+    if (!key) return { ok: false, code: "execution_id_required" };
+    const amount = Number(actualUsd);
+    if (!Number.isFinite(amount) || amount < 0 || amount > maxBudgetUsd) return { ok: false, code: "invalid_cost" };
+    const loaded = await load(id);
+    if (!loaded.ok) return loaded;
+    const objective = loaded.objective;
+    objective.accounting = objective.accounting || { spentUsd: Number(objective.costUsd || 0), executions: [] };
+    const execution = (objective.accounting.executions || []).find(item => item.executionId === key);
+    if (!execution) return { ok: false, code: "unknown_execution", error: "No reservation exists for that execution." };
+    if (execution.status !== "reserved") {
+      return { ok: true, replayed: true, objective, execution, accounting: objectiveAccounting(objective) };
+    }
+    execution.status = "settled";
+    execution.actualUsd = Number(amount.toFixed(6));
+    execution.runId = clean(runId, 160) || execution.runId || null;
+    execution.settledAt = now();
+    execution.note = note ? redact(note) : null;
+    objective.accounting.spentUsd = Number((Number(objective.accounting.spentUsd || 0) + execution.actualUsd).toFixed(6));
+    objective.costUsd = objective.accounting.spentUsd;
+    const accounting = objectiveAccounting(objective);
+    if (accounting.spentUsd > accounting.limitUsd && canTransition(objective.status, "blocked")) {
+      objective.execution.stopped = "budget_exhausted";
+      objective.error = "Spending " + accounting.spentUsd + " USD exceeded the " + accounting.limitUsd + " USD objective budget.";
+      objective.code = "budget_exhausted";
+      remember(objective, { from: objective.status, to: "blocked", at: now(), by: "system", reason: "budget exhausted by settled run " + key });
+      objective.status = "blocked";
+    }
+    remember(objective, { from: objective.status, to: objective.status, at: now(), by: "ax", reason: "budget settled: " + key });
+    try {
+      await persist(objective);
+    } catch (error) {
+      if (error instanceof ObjectiveConflict) {
+        const again = await load(id);
+        const found = again.ok && (again.objective.accounting?.executions || []).find(item => item.executionId === key);
+        if (found && found.status !== "reserved") {
+          return { ok: true, replayed: true, objective: again.objective, execution: found, accounting: objectiveAccounting(again.objective) };
+        }
+        return { ok: false, code: "objective_conflict", objective: error.objective };
+      }
+      return { ok: false, code: "objective_store_unavailable" };
+    }
+    return { ok: true, objective, execution, accounting: objectiveAccounting(objective) };
+  }
+
+  /** Release a reservation that never spent anything (dispatch failed before a run existed). */
+  async function releaseExecution(id, { executionId, runKey = null, reason = "dispatch failed" } = {}) {
+    if (!repository) return unavailable();
+    const key = clean(executionId || runKey, 160);
+    if (!key) return { ok: false, code: "execution_id_required" };
+    const loaded = await load(id);
+    if (!loaded.ok) return loaded;
+    const objective = loaded.objective;
+    objective.accounting = objective.accounting || { spentUsd: Number(objective.costUsd || 0), executions: [] };
+    const execution = (objective.accounting.executions || []).find(item => item.executionId === key);
+    if (!execution) return { ok: false, code: "unknown_execution" };
+    if (execution.status !== "reserved") return { ok: true, replayed: true, objective, execution, accounting: objectiveAccounting(objective) };
+    execution.status = "released";
+    execution.actualUsd = 0;
+    execution.settledAt = now();
+    execution.note = redact(reason);
+    remember(objective, { from: objective.status, to: objective.status, at: now(), by: "ax", reason: "budget released: " + key });
+    try {
+      await persist(objective);
+    } catch (error) {
+      if (error instanceof ObjectiveConflict) {
+        const again = await load(id);
+        const found = again.ok && (again.objective.accounting?.executions || []).find(item => item.executionId === key);
+        if (found && found.status !== "reserved") {
+          return { ok: true, replayed: true, objective: again.objective, execution: found, accounting: objectiveAccounting(again.objective) };
+        }
+        return { ok: false, code: "objective_conflict", objective: error.objective };
+      }
+      return { ok: false, code: "objective_store_unavailable" };
+    }
+    return { ok: true, objective, execution, accounting: objectiveAccounting(objective) };
+  }
+
+  /** Bind the durable run id to its reservation without changing the charged amount. */
+  async function linkExecutionRun(id, { executionId, runKey = null, runId } = {}) {
+    if (!repository) return { ok: false, code: "objectives_not_configured" };
+    const key = clean(executionId || runKey, 160);
+    const cleanRun = clean(runId, 160);
+    if (!key || !cleanRun) return { ok: false, code: "execution_id_required" };
+    const loaded = await load(id);
+    if (!loaded.ok) return loaded;
+    const objective = loaded.objective;
+    objective.accounting = objective.accounting || { spentUsd: Number(objective.costUsd || 0), executions: [] };
+    const execution = (objective.accounting.executions || []).find(item => item.executionId === key);
+    if (!execution) return { ok: false, code: "unknown_execution" };
+    if (execution.runId && execution.runId !== cleanRun) {
+      return { ok: false, code: "execution_run_conflict", error: "This reservation already belongs to another run." };
+    }
+    execution.runId = cleanRun;
+    try {
+      await persist(objective);
+    } catch (error) {
+      if (error instanceof ObjectiveConflict) return { ok: false, code: "objective_conflict" };
+      return { ok: false, code: "objective_store_unavailable" };
+    }
+    return { ok: true, objective, execution, accounting: objectiveAccounting(objective) };
+  }
+
+  async function accounting(id) {
+    const objective = await get(id);
+    return objective ? objectiveAccounting(objective) : null;
   }
 
   async function get(id) {
@@ -792,6 +1016,12 @@ export function createObjectiveService({
     recover,
     cancel,
     charge,
+    reserveExecution,
+    settleExecution,
+    releaseExecution,
+    linkExecutionRun,
+    accounting,
+    accountingOf: objectiveAccounting,
     transition,
     summary: objectiveSummary
   });

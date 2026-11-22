@@ -175,6 +175,7 @@ export function createAgentRuntime({
   dependencies = {},
   limits = {},
   log = console,
+  onSecurityEvent = null,
   now = () => new Date().toISOString()
 } = {}) {
   const config = { ...AGENT_LIMITS, ...limits };
@@ -329,6 +330,7 @@ export function createAgentRuntime({
     if (id === "research") {
       const run = dependencies.research;
       const result = await run({ objective: input.objective, query: input.query || input.objective });
+      if (result?.ok === false) return unavailable(id, result.code || result.error || "research_transport_failed");
       const sources = Array.isArray(result?.sources) ? result.sources.slice(0, 8) : [];
       return {
         ok: true,
@@ -342,16 +344,30 @@ export function createAgentRuntime({
 
     // engineering
     const run = dependencies.engineering;
-    const result = await run({ objective: input.objective });
+    const result = await run({ objective: input.objective, files: input.files || [] });
     const commands = Array.isArray(result?.commands) ? result.commands.slice(0, 10) : [];
+    const files = Array.isArray(result?.files) ? result.files.slice(0, 8) : [];
+    const evidence = commands.map(command => ({
+      summary: clean(command.command, 200) + " → exit " + Number(command.exitCode ?? -1) + (command.timedOut ? " (timed out)" : ""),
+      source: "agent:engineering",
+      digest: command.exitCode === 0 ? null : clean(command.stderrTail, 120) || null
+    }));
+    for (const file of files) {
+      if (!file?.path || !file.digest) continue;
+      evidence.push({
+        summary: clean(file.path, 200) + " inspected: " + Number(file.lines || 0) + " lines, sha256 " + String(file.digest).slice(0, 16),
+        source: "agent:engineering",
+        digest: String(file.digest).slice(0, 64)
+      });
+    }
     return {
-      ok: true,
+      ok: result?.ok !== false && evidence.length > 0,
+      code: result?.ok === false ? "engineering_check_failed" : null,
       summary: clean(result?.summary, AGENT_LIMITS.maxSummary) || "Engineering adapter returned no summary.",
       confidence: Number.isFinite(Number(result?.confidence)) ? Number(result.confidence) : 0.5,
-      evidence: commands.map(command => ({
-        summary: clean(command.command, 200) + " → exit " + Number(command.exitCode ?? -1),
-        source: "agent:engineering"
-      })),
+      evidence,
+      files,
+      commands,
       limitations: ["Only allowlisted read-only adapter commands can run; no write path exists."]
     };
   }
@@ -465,6 +481,15 @@ export function createAgentRuntime({
     const text = (envelope.summary || "") + " " + envelope.evidence.map(item => item.summary).join(" ");
     const forbidden = (manifest.forbidden || []).find(action => new RegExp("\\b" + action.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\\\./g, "\\.") + "\\b", "i").test(text));
     if (forbidden && SENSITIVE_ACTION.test(forbidden)) {
+      try {
+        onSecurityEvent?.({
+          agent: envelope.agent,
+          summary: "Agent output claimed a forbidden action: " + forbidden,
+          evidence: envelope.delegationId || null
+        });
+      } catch {
+        // An audit hook must never decide the verdict.
+      }
       return { accepted: false, code: "forbidden_action_claim", agent: envelope.agent, action: forbidden };
     }
     return {

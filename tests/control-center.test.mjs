@@ -10,10 +10,10 @@ import { clientSource, CONTROL_CENTER_PATH, registerControlCenter, renderControl
 
 test("the page exposes every required control-center section", () => {
   const html = renderControlCenter({ version: "0.5.0" });
-  for (const tab of ["chat", "workers", "tasks", "memory", "approvals", "missions", "agents", "device", "recovery", "health"]) {
+  for (const tab of ["chat", "workers", "tasks", "memory", "approvals", "missions", "agents", "device", "recovery", "security", "health"]) {
     assert.match(html, new RegExp('data-tab="' + tab + '"'), "tab " + tab);
   }
-  assert.equal((html.match(/role="tab"/g) || []).length, 10);
+  assert.equal((html.match(/role="tab"/g) || []).length, 11);
   assert.match(html, /id="brain"/);
   assert.match(html, /viewport-fit=cover/);
   assert.match(html, /Version 0\.5\.0/);
@@ -48,7 +48,12 @@ test("every panel reads a real authenticated endpoint", () => {
     "/ax/command/device/capabilities",
     "/ax/command/recovery/incidents",
     "/ax/command/recovery/scan",
-    "/ax/command/memory/insights"
+    "/ax/command/memory/insights",
+    "/ax/command/scheduler/status",
+    "/ax/command/scheduler/tick",
+    "/ax/command/security/events",
+    "/ax/command/security/integrity",
+    "/ax/command/objectives/"
   ]) {
     assert.ok(source.includes(path), "must call " + path);
   }

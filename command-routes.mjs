@@ -127,7 +127,11 @@ export function registerUniversalCommandRoutes(app, {
   incidentProvider = null,
   deviceStateProvider = null,
   circuitProvider = null,
-  budgetProvider = null
+  budgetProvider = null,
+  // Mission 11 operational surfaces. Same rule: absent means 503, never an invented status.
+  securityProvider = null,
+  schedulerProvider = null,
+  projectProvider = null
 } = {}) {
   // Two credentials, two permission sets. The bridge token is device-capable and predates this
   // work. The command token may only reach /ax/command, and it can never satisfy an owner action.
@@ -216,6 +220,7 @@ export function registerUniversalCommandRoutes(app, {
     // Ax's command credential may ask for an approval; it may never satisfy one. Checked before
     // device verification so a leaked owner device header still cannot be used with this token.
     if (req.axRole === "command") {
+      recordSecurity({ category: "owner.rejection", severity: "high", outcome: "denied", actor: "ax:command-token", summary: label + " refused: the command token cannot perform owner actions", correlationId: req.correlationId || null });
       res.status(403).json({
         ok: false,
         code: "command_token_cannot_approve",
@@ -230,6 +235,7 @@ export function registerUniversalCommandRoutes(app, {
     const deviceId = String(req.headers?.["x-owner-device-id"] || "").trim();
     const token = String(req.headers?.["x-owner-device-token"] || "").trim();
     if (!deviceId || !token) {
+      recordSecurity({ category: "owner.rejection", severity: "medium", outcome: "denied", actor: "anonymous", summary: label + " rejected: owner device credential missing" });
       res.status(401).json({ ok: false, code: "owner_required", error: label + " requires an owner device id and device token." });
       return null;
     }
@@ -242,6 +248,7 @@ export function registerUniversalCommandRoutes(app, {
       return null;
     }
     if (!valid) {
+      recordSecurity({ category: "owner.rejection", severity: "high", outcome: "denied", actor: "device:" + deviceId.slice(0, 80), deviceId: deviceId.slice(0, 120), summary: label + " rejected: invalid device credential" });
       res.status(401).json({ ok: false, code: "owner_invalid", error: "The owner device credential is not valid." });
       return null;
     }
@@ -257,9 +264,11 @@ export function registerUniversalCommandRoutes(app, {
       return null;
     }
     if (!owners.has(deviceId)) {
+      recordSecurity({ category: "owner.rejection", severity: "high", outcome: "denied", actor: "device:" + deviceId.slice(0, 80), deviceId: deviceId.slice(0, 120), summary: label + " rejected: device is not a configured owner" });
       res.status(403).json({ ok: false, code: "not_owner", error: "This device is not the configured owner and cannot perform " + label.toLowerCase() + "." });
       return null;
     }
+    recordSecurity({ category: "owner.authorization", severity: "info", outcome: "allowed", actor: "owner:" + deviceId, deviceId, summary: label + " authorized by the paired owner device" });
     return deviceId;
   }
 
@@ -281,6 +290,16 @@ export function registerUniversalCommandRoutes(app, {
     return false;
   }
 
+  const schedulerToken = String(env.AX_SCHEDULER_TOKEN || "").trim();
+  const securityService = () => resolveService(securityProvider);
+  function recordSecurity(entry) {
+    const service = securityService();
+    if (!service || typeof service.record !== "function") return;
+    // Fire-and-forget on purpose: an audit write must never turn a refused request into a retried
+    // one, and a failed audit write is reported by its own log path.
+    Promise.resolve(service.record(entry)).catch(() => {});
+  }
+
   function requireAx(req, res, next) {
     if (!anyAxToken) {
       return res.status(503).json({
@@ -291,6 +310,15 @@ export function registerUniversalCommandRoutes(app, {
     }
     const role = axRole(req);
     if (!role) {
+      recordSecurity({
+        category: "auth.failure",
+        severity: "medium",
+        outcome: "denied",
+        actor: "anonymous",
+        correlationId: String(req.headers?.["x-correlation-id"] || "").slice(0, 120) || null,
+        summary: "Rejected command request with no valid Ax credential: " + String(req.method || "?") + " " + String(req.originalUrl || req.path || "?") + "",
+        evidence: "authorization header present=" + Boolean(bearer(req))
+      });
       return res.status(401).json({ ok: false, code: "invalid_token", error: "Ax command authentication required." });
     }
     // Audit identity comes from the verified credential, never from the request body.
@@ -921,7 +949,8 @@ export function registerUniversalCommandRoutes(app, {
       criteria: req.body?.criteria,
       budgetUsd: req.body?.budgetUsd,
       deadlineAt: req.body?.deadlineAt ?? null,
-      priority: req.body?.priority || "normal"
+      priority: req.body?.priority || "normal",
+      project: req.body?.project || "habitat"
     });
     return objectiveReply(res, outcome, !outcome.replayed);
   }));
@@ -943,7 +972,7 @@ export function registerUniversalCommandRoutes(app, {
     if (!service) return capabilityUnavailable(res, "objectives_not_configured", "Durable objectives are not mounted on this service.");
     const objective = await service.get(req.params.id);
     if (!objective) return reply(res, { ok: false, code: "not_found", error: "No objective with that id." });
-    res.json({ ok: true, objective, summary: service.summary(objective) });
+    res.json({ ok: true, objective, summary: service.summary(objective), accounting: service.accountingOf(objective) });
   }));
 
   route.post("/ax/command/objectives/:id/understand", requireAx, serviceGuard(async (req, res) => {
@@ -1092,13 +1121,71 @@ export function registerUniversalCommandRoutes(app, {
     if (objective.status !== "executing") {
       return objectiveReply(res, { ok: false, code: "invalid_transition", error: "Start the objective before dispatching work.", from: objective.status });
     }
+    // Reserve BEFORE the run exists. The execution id is the deterministic run key, so a retry or a
+    // concurrent dispatch reserves once and can never spend the same budget twice. The reservation
+    // is the smaller of what remains and the run's own maximum, so several child runs cannot jointly
+    // exceed the objective's limit.
+    const runKey = "objective:" + objective.id;
+    const accountingBefore = service.accountingOf(objective);
+    const requestedEstimate = Number(req.body?.estimateUsd);
+    const estimate = Number.isFinite(requestedEstimate) && requestedEstimate >= 0
+      ? requestedEstimate
+      : Number(objective.plan?.estimatedCostUsd || 0) > 0
+        ? Number(objective.plan.estimatedCostUsd)
+        : Math.min(accountingBefore.remainingUsd, Number(orchestrator.budgetUsd || 0.05));
+    const reservation = await service.reserveExecution(objective.id, {
+      executionId: runKey,
+      runKey,
+      estimateUsd: Math.max(0, Math.min(estimate, Math.max(0, accountingBefore.remainingUsd))),
+      agentId: (objective.plan?.steps || []).map(step => step.agent).filter(Boolean)[0] || null,
+      provider: objective.plan?.provider || null
+    });
+    if (reservation.ok !== true) {
+      if (reservation.code === "budget_exhausted") {
+        recordSecurity({
+          category: "budget.exhausted",
+          severity: "high",
+          outcome: "denied",
+          actor: "ax",
+          objectiveId: objective.id,
+          summary: "Objective dispatch refused: no budget remaining",
+          evidence: reservation.error
+        });
+      }
+      return objectiveReply(res, reservation);
+    }
     const outcome = await orchestrator.runObjective({
       objective: objective.objective,
+      // Immutable scope: every child run can be traced to exactly one objective.
+      objectiveId: objective.id,
       requestedBy: "ax",
       // Deterministic per objective, so a retried dispatch resumes the same run instead of forking.
-      runKey: "objective:" + objective.id
+      runKey
     });
     const run = outcome?.run || null;
+    if (!run && outcome?.code === "store_unavailable") {
+      await service.releaseExecution(objective.id, { executionId: runKey, reason: "the run store was unavailable" });
+    } else if (run) {
+      await service.linkExecutionRun(objective.id, { executionId: runKey, runId: run.id });
+      const settled = await service.settleExecution(objective.id, {
+        executionId: runKey,
+        runId: run.id,
+        actualUsd: Number(run.costUsd || 0),
+        note: "run status " + String(run.status || "unknown")
+      });
+      if (settled.ok === true && settled.accounting?.exhausted) {
+        recordSecurity({
+          category: "budget.exhausted",
+          severity: "high",
+          outcome: "detected",
+          actor: "ax",
+          objectiveId: objective.id,
+          runId: run.id,
+          summary: "Objective budget exhausted after run settlement",
+          evidence: JSON.stringify(settled.accounting)
+        });
+      }
+    }
     if (run) {
       for (const step of run.steps || []) {
         if (step.taskId) await service.attachTask(objective.id, { taskId: step.taskId, agent: step.agent || null, step: step.index });
@@ -1111,11 +1198,13 @@ export function registerUniversalCommandRoutes(app, {
         taskIds: (run.steps || []).map(step => step.taskId).filter(Boolean)
       });
     }
+    const resolvedObjective = await service.get(objective.id);
     res.status(outcome?.code === "store_unavailable" ? 503 : 200).json({
       ok: outcome?.ok === true,
       code: outcome?.code || null,
       run,
-      objective: await service.get(objective.id)
+      objective: resolvedObjective,
+      accounting: resolvedObjective ? service.accountingOf(resolvedObjective) : null
     });
   }));
 
@@ -1232,6 +1321,68 @@ export function registerUniversalCommandRoutes(app, {
     const entries = await repository.list({ project, limit: 200 });
     const insights = memoryInsights({ entries, objective: String(req.query?.q || ""), now: Date.now() });
     res.json({ ok: true, project, insights });
+  }));
+
+  // ------------------------------------------------------- security audit and scheduler contract
+  function requireScheduler(req, res, next) {
+    const manual = Boolean(anyAxToken) && axRole(req) !== null;
+    const external = Boolean(schedulerToken) && safeEqual(String(req.headers?.["x-scheduler-token"] || ""), schedulerToken);
+    if (!manual && !external) {
+      recordSecurity({ category: "auth.failure", severity: "medium", outcome: "denied", actor: "scheduler", summary: "Scheduler tick rejected: no valid scheduler or Ax credential" });
+      return res.status(401).json({ ok: false, code: "scheduler_auth_required", error: "A scheduler token or Ax credential is required for a tick." });
+    }
+    next();
+  }
+
+  route.get("/ax/command/security/events", requireAx, serviceGuard(async (req, res) => {
+    const service = securityService();
+    if (!service) return capabilityUnavailable(res, "security_log_not_configured", "The security audit log is not mounted on this service.");
+    const listed = await service.list({
+      category: req.query?.category || null,
+      severity: req.query?.severity || null,
+      beforeSeq: req.query?.beforeSeq ?? null,
+      limit: req.query?.limit
+    });
+    if (listed.ok === false) return capabilityUnavailable(res, listed.code, "The security audit log could not be read.");
+    res.set("cache-control", "no-store");
+    res.json(listed);
+  }));
+
+  route.get("/ax/command/security/integrity", requireAx, serviceGuard(async (req, res) => {
+    const service = securityService();
+    if (!service) return capabilityUnavailable(res, "security_log_not_configured", "The security audit log is not mounted on this service.");
+    const verified = await service.integrity({ limit: req.query?.limit });
+    if (verified.ok === false) return capabilityUnavailable(res, verified.code, "Security integrity could not be verified.");
+    res.set("cache-control", "no-store");
+    res.json(verified);
+  }));
+
+  route.get("/ax/command/scheduler/status", requireAx, serviceGuard(async (_req, res) => {
+    const scheduler = resolveService(schedulerProvider);
+    if (!scheduler) return capabilityUnavailable(res, "scheduler_not_configured", "The scheduler contract is not mounted on this service.");
+    res.json(await scheduler.status());
+  }));
+
+  route.post("/ax/command/scheduler/tick", requireScheduler, serviceGuard(async (req, res) => {
+    const scheduler = resolveService(schedulerProvider);
+    if (!scheduler) return capabilityUnavailable(res, "scheduler_not_configured", "The scheduler contract is not mounted on this service.");
+    const outcome = await scheduler.tick({ trigger: req.body?.trigger || (req.headers?.["x-scheduler-token"] ? "external" : "manual") });
+    res.status(outcome.ok === true ? 200 : outcome.code === "tick_overlap" ? 409 : 500).json(outcome);
+  }));
+
+  // ------------------------------------------------------------------ project intelligence
+  route.get("/ax/command/projects", requireAx, serviceGuard(async (_req, res) => {
+    const projects = resolveService(projectProvider);
+    if (!projects) return capabilityUnavailable(res, "projects_not_configured", "Project intelligence is not mounted on this service.");
+    res.json(await projects.list());
+  }));
+
+  route.get("/ax/command/projects/:id", requireAx, serviceGuard(async (req, res) => {
+    const projects = resolveService(projectProvider);
+    if (!projects) return capabilityUnavailable(res, "projects_not_configured", "Project intelligence is not mounted on this service.");
+    const detail = await projects.detail(req.params.id);
+    if (!detail) return reply(res, { ok: false, code: "not_found", error: "No project with that id." });
+    res.json(detail);
   }));
 
   return { engine, registry: registryInstance, store: () => store };

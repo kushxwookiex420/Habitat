@@ -345,12 +345,15 @@ export function createAxOrchestrator({
     return run;
   }
 
-  function newRun({ objective, requestedBy, id, runKey }) {
+  function newRun({ objective, requestedBy, id, runKey, objectiveId = null }) {
     const at = now();
     return {
       schemaVersion: RUN_SCHEMA_VERSION,
       id,
       runKey: runKey || null,
+      // The immutable parent objective. A run created for an objective cannot be reused as another
+      // objective's run, and a run created outside one cannot later be adopted into one.
+      objectiveId: objectiveId ? String(objectiveId).slice(0, 160) : null,
       objective,
       requestedBy,
       status: "planning",
@@ -882,11 +885,15 @@ export function createAxOrchestrator({
     }
   }
 
-  async function runObjective({ objective, requestedBy = "ax", runKey = null } = {}) {
+  async function runObjective({ objective, requestedBy = "ax", runKey = null, objectiveId = null } = {}) {
     const text = String(objective || "").trim().slice(0, 2000);
     const key = runKey === null || runKey === undefined ? null : String(runKey).trim();
     if (key !== null && !key) {
       return { ok: false, code: "invalid_run_key", error: "runKey must be a non-empty string when supplied." };
+    }
+    const parentObjectiveId = objectiveId === null || objectiveId === undefined ? null : String(objectiveId).trim().slice(0, 160);
+    if (parentObjectiveId !== null && !parentObjectiveId) {
+      return { ok: false, code: "invalid_objective_id", error: "objectiveId must be a non-empty string when supplied." };
     }
     const runId = key ? slug("run_", "run:" + key) : "run_" + randomBytes(10).toString("hex");
 
@@ -901,6 +908,26 @@ export function createAxOrchestrator({
     if (record?.run) {
       storeTokens.set(runId, record.recordJson);
       const run = record.run;
+      // A run has exactly one parent objective for life. A dispatch that names a different objective
+      // (or tries to adopt a standalone run) is refused rather than silently re-scoped.
+      if (parentObjectiveId !== null && run.objectiveId !== parentObjectiveId) {
+        return {
+          ok: false,
+          code: "objective_scope_mismatch",
+          error: "This run already belongs to " + (run.objectiveId || "no objective") + ", not " + parentObjectiveId + ".",
+          run,
+          resumed: true
+        };
+      }
+      if (parentObjectiveId === null && run.objectiveId) {
+        return {
+          ok: false,
+          code: "objective_scope_mismatch",
+          error: "This run belongs to objective " + run.objectiveId + "; dispatch it through that objective.",
+          run,
+          resumed: true
+        };
+      }
       // A run key identifies one objective. Reusing it for a different objective would silently
       // return someone else's result, so it is refused instead.
       if (text && run.objective && text !== run.objective) {
@@ -920,7 +947,7 @@ export function createAxOrchestrator({
 
     if (!text) return { ok: false, code: "invalid_objective", error: "An objective is required." };
 
-    const run = newRun({ objective: text, requestedBy: String(requestedBy).slice(0, 120), id: runId, runKey: key });
+    const run = newRun({ objective: text, requestedBy: String(requestedBy).slice(0, 120), id: runId, runKey: key, objectiveId: parentObjectiveId });
     try {
       const created = await runs.create(run);
       storeTokens.set(runId, created.recordJson);
