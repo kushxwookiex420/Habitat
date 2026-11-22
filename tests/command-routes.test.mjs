@@ -88,7 +88,7 @@ test("registers the complete command route surface without duplicate paths", () 
   const app = makeApp();
   mountTestApp(app, memoryRepository());
   const paths = [...app.routes.keys()];
-  assert.equal(paths.length, 20);
+  assert.equal(paths.length, 36, "the route surface is the 20 legacy command routes plus 16 Mission 09 ones");
   assert.equal(new Set(paths).size, paths.length);
   assert.ok(paths.includes("GET /ax/command/roles"));
   assert.ok(paths.includes("GET /ax/command/tools"));
@@ -100,6 +100,27 @@ test("registers the complete command route surface without duplicate paths", () 
   assert.ok(paths.includes("GET /ax/command/runs/:id"));
   assert.ok(paths.includes("POST /ax/command/tasks/:id/cancel"));
   assert.ok(paths.includes("POST /ax/command/tasks/:id/retry"));
+  // Mission 09: memory, notifications, history, recovery, providers and diagnostics.
+  for (const added of [
+    "GET /ax/command/memory",
+    "GET /ax/command/memory/stats",
+    "GET /ax/command/memory/search",
+    "GET /ax/command/memory/:project/:key",
+    "GET /ax/command/memory/:project/:key/history",
+    "POST /ax/command/memory",
+    "POST /ax/command/memory/owner",
+    "POST /ax/command/memory/:project/:key/delete",
+    "POST /ax/command/memory/import/preview",
+    "POST /ax/command/memory/import/apply",
+    "GET /ax/command/notifications",
+    "POST /ax/command/notifications/:id/ack",
+    "GET /ax/command/history",
+    "GET /ax/command/recovery",
+    "GET /ax/command/providers",
+    "GET /ax/command/diagnostics"
+  ]) {
+    assert.ok(paths.includes(added), "route " + added);
+  }
 });
 
 test("rejects missing and incorrect Ax credentials before touching command storage", async () => {

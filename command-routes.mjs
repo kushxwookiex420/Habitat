@@ -3,6 +3,8 @@ import { createD1CommandTaskRepository } from "./d1-command-task-repository.mjs"
 import { createToolRegistry } from "./tool-registry.mjs";
 import { createUniversalCommandEngine } from "./universal-command-engine.mjs";
 import { describeRoles } from "./agent-roles.mjs";
+import { applyMemoryImport, deriveMemoryCandidates } from "./ax-memory-import.mjs";
+import { buildMissionHistory, missionSummary } from "./mission-history.mjs";
 
 /**
  * The universal command API.
@@ -100,7 +102,15 @@ export function registerUniversalCommandRoutes(app, {
   presenceProvider = null,
   // Optional Habitat-native Ax. Absent or disabled, the run routes answer 503 instead of pretending
   // an agent exists.
-  orchestratorProvider = null
+  orchestratorProvider = null,
+  // Optional durable Ax memory repository. Absent, memory routes answer 503 and the planner simply
+  // receives no memory context.
+  memoryProvider = null,
+  memoryProject = "habitat",
+  // Optional notification service and diagnostics/producer views supplied by the mounted runtime.
+  notificationProvider = null,
+  diagnosticsProvider = null,
+  providerStatusProvider = null
 } = {}) {
   // Two credentials, two permission sets. The bridge token is device-capable and predates this
   // work. The command token may only reach /ax/command, and it can never satisfy an owner action.
@@ -554,6 +564,285 @@ export function registerUniversalCommandRoutes(app, {
       await recordAudit({ event: "command.retried", actorDeviceId: deviceId, targetDeviceId: req.params.id });
     }
     reply(res, outcome);
+  }));
+
+  // ------------------------------------------------------------------ durable memory
+  //
+  // Memory is its own store, separate from every task table. Reads need the Ax credential; a write
+  // may never claim `verified_fact` unless the paired owner device performs it, and deletion is
+  // owner-only with the current version required.
+  const memoryRepository = () => {
+    try {
+      return typeof memoryProvider === "function" ? memoryProvider() : memoryProvider;
+    } catch {
+      return null;
+    }
+  };
+  const projectOf = req => String(req.query?.project || req.body?.project || memoryProject || "habitat").trim().toLowerCase();
+
+  function memoryUnavailable(res) {
+    res.status(503).json({
+      ok: false,
+      code: "memory_not_configured",
+      error: "Durable Ax memory is unavailable on this service; no memory was read or written."
+    });
+  }
+
+  function memoryWrite(req, { source, actor }) {
+    return {
+      project: projectOf(req),
+      key: req.body?.key,
+      kind: String(req.body?.kind || "claim"),
+      statement: req.body?.statement,
+      provenance: {
+        source,
+        actor,
+        ref: req.body?.ref ?? null,
+        observedAt: req.body?.observedAt ?? new Date().toISOString()
+      },
+      tags: req.body?.tags,
+      confidence: req.body?.confidence
+    };
+  }
+
+  route.get("/ax/command/memory/stats", requireAx, guard(async (req, res) => {
+    const repository = memoryRepository();
+    if (!repository) return memoryUnavailable(res);
+    res.json({ ok: true, stats: await repository.stats({ project: projectOf(req) }) });
+  }));
+
+  route.get("/ax/command/memory/search", requireAx, guard(async (req, res) => {
+    const repository = memoryRepository();
+    if (!repository) return memoryUnavailable(res);
+    const project = projectOf(req);
+    const results = await repository.search({
+      project,
+      query: String(req.query?.q || ""),
+      kind: req.query?.kind || null,
+      limit: req.query?.limit
+    });
+    res.json({ ok: true, project, count: results.length, results });
+  }));
+
+  route.get("/ax/command/memory", requireAx, guard(async (req, res) => {
+    const repository = memoryRepository();
+    if (!repository) return memoryUnavailable(res);
+    const project = projectOf(req);
+    const results = await repository.list({ project, kind: req.query?.kind || null, limit: req.query?.limit });
+    res.json({ ok: true, project, count: results.length, results });
+  }));
+
+  // Named import routes are registered before the two-segment key route so they cannot be shadowed.
+  route.post("/ax/command/memory/import/preview", requireAx, guard(async (req, res) => {
+    const exported = req.body?.export ?? req.body?.conversations ?? null;
+    if (!exported) return reply(res, { ok: false, code: "invalid_export", error: "A ChatGPT export is required." });
+    const derived = deriveMemoryCandidates(exported, { project: projectOf(req) });
+    // Candidates only. Nothing is written and no candidate can be a verified fact.
+    res.status(derived.ok ? 200 : 400).json({
+      ok: derived.ok,
+      code: derived.code || null,
+      candidates: derived.candidates,
+      rejected: derived.rejected,
+      stats: derived.stats
+    });
+  }));
+
+  route.post("/ax/command/memory/import/apply", requireAx, guard(async (req, res) => {
+    const deviceId = await authorizeOwnerAction(req, res, "Memory import approval");
+    if (!deviceId) return undefined;
+    const repository = memoryRepository();
+    if (!repository) return memoryUnavailable(res);
+    const exported = req.body?.export ?? req.body?.conversations ?? null;
+    if (!exported) return reply(res, { ok: false, code: "invalid_export", error: "A ChatGPT export is required." });
+    // Re-derived on the server: the client can name approved ids, never supply candidate content.
+    const derived = deriveMemoryCandidates(exported, { project: projectOf(req) });
+    if (!derived.ok) return res.status(400).json({ ok: false, code: derived.code, error: "The export could not be read." });
+    const approvedIds = Array.isArray(req.body?.approvedIds) ? req.body.approvedIds : [];
+    if (!approvedIds.length) {
+      return res.status(400).json({ ok: false, code: "owner_approval_required", error: "Name the candidate ids to accept; an empty approval set is refused." });
+    }
+    const outcome = await applyMemoryImport(repository, derived.candidates, { approvedIds });
+    await recordAudit({ event: "command.memory.imported", actorDeviceId: deviceId, inserted: outcome.inserted, skipped: outcome.skipped });
+    res.status(outcome.ok ? 200 : 400).json({ ok: outcome.ok, project: projectOf(req), rejected: derived.rejected, ...outcome });
+  }));
+
+  route.post("/ax/command/memory/owner", requireAx, guard(async (req, res) => {
+    const deviceId = await authorizeOwnerAction(req, res, "Owner memory write");
+    if (!deviceId) return undefined;
+    const repository = memoryRepository();
+    if (!repository) return memoryUnavailable(res);
+    const outcome = await repository.put(
+      memoryWrite(req, { source: "owner", actor: "owner:" + deviceId }),
+      { expectedVersion: req.body?.expectedVersion ?? null, allowKindChange: Boolean(req.body?.allowKindChange) }
+    );
+    if (outcome?.ok !== false) {
+      await recordAudit({ event: "command.memory.written", actorDeviceId: deviceId, key: req.body?.key || null, kind: req.body?.kind || null });
+    }
+    reply(res, outcome);
+  }));
+
+  route.post("/ax/command/memory", requireAx, guard(async (req, res) => {
+    const repository = memoryRepository();
+    if (!repository) return memoryUnavailable(res);
+    const kind = String(req.body?.kind || "").trim().toLowerCase();
+    if (kind === "verified_fact") {
+      return res.status(403).json({
+        ok: false,
+        code: "verified_fact_owner_only",
+        error: "Only the paired owner device may record a verified fact. Ax can record a claim or an observation."
+      });
+    }
+    const outcome = await repository.put(
+      memoryWrite(req, { source: "ax", actor: "ax" }),
+      { expectedVersion: req.body?.expectedVersion ?? 0 }
+    );
+    reply(res, outcome);
+  }));
+
+  route.get("/ax/command/memory/:project/:key/history", requireAx, guard(async (req, res) => {
+    const repository = memoryRepository();
+    if (!repository) return memoryUnavailable(res);
+    const history = await repository.history({ project: req.params.project, key: req.params.key });
+    res.json({ ok: true, project: String(req.params.project).toLowerCase(), key: String(req.params.key).toLowerCase(), history });
+  }));
+
+  route.get("/ax/command/memory/:project/:key", requireAx, guard(async (req, res) => {
+    const repository = memoryRepository();
+    if (!repository) return memoryUnavailable(res);
+    const entry = await repository.get({ project: req.params.project, key: req.params.key });
+    if (!entry) return reply(res, { ok: false, code: "not_found", error: "No active memory entry with that project and key." });
+    res.json({ ok: true, entry });
+  }));
+
+  route.post("/ax/command/memory/:project/:key/delete", requireAx, guard(async (req, res) => {
+    const deviceId = await authorizeOwnerAction(req, res, "Memory deletion");
+    if (!deviceId) return undefined;
+    const repository = memoryRepository();
+    if (!repository) return memoryUnavailable(res);
+    const outcome = await repository.remove({
+      project: req.params.project,
+      key: req.params.key,
+      expectedVersion: req.body?.expectedVersion,
+      actor: "owner"
+    });
+    if (outcome?.ok !== false) {
+      await recordAudit({ event: "command.memory.deleted", actorDeviceId: deviceId, key: req.params.key });
+    }
+    reply(res, outcome);
+  }));
+
+  // ------------------------------------------------------- notifications and history
+  const notificationService = () => {
+    try {
+      return typeof notificationProvider === "function" ? notificationProvider() : notificationProvider;
+    } catch {
+      return null;
+    }
+  };
+
+  function notificationsUnavailable(res) {
+    res.status(503).json({
+      ok: false,
+      code: "notifications_not_configured",
+      error: "Notification storage is unavailable on this service; no event was recorded."
+    });
+  }
+
+  route.get("/ax/command/notifications", requireAx, guard(async (req, res) => {
+    const service = notificationService();
+    if (!service) return notificationsUnavailable(res);
+    const outcome = await service.list({ status: req.query?.status || null, limit: req.query?.limit });
+    if (outcome.ok === false) return res.status(503).json(outcome);
+    res.json({ ...outcome, channel: "inbox", externalTransport: false });
+  }));
+
+  route.post("/ax/command/notifications/:id/ack", requireAx, guard(async (req, res) => {
+    const deviceId = await authorizeOwnerAction(req, res, "Notification acknowledgement");
+    if (!deviceId) return undefined;
+    const service = notificationService();
+    if (!service) return notificationsUnavailable(res);
+    reply(res, await service.acknowledge({ id: req.params.id, by: "owner:" + deviceId }));
+  }));
+
+  route.get("/ax/command/history", requireAx, guard(async (req, res) => {
+    const orchestrator = resolveOrchestrator();
+    if (!orchestrator?.enabled) {
+      return res.status(503).json({
+        ok: false,
+        code: orchestrator?.code || "orchestrator_disabled",
+        error: orchestrator?.error || "Mission history needs the Habitat-native Ax run store."
+      });
+    }
+    const runs = await orchestrator.listRuns({ limit: req.query?.limit });
+    const service = notificationService();
+    let notifications = [];
+    if (service) {
+      const listed = await service.list({ limit: 100 });
+      notifications = listed.notifications || [];
+    }
+    const missions = buildMissionHistory({ runs, notifications, limit: req.query?.limit });
+    res.json({ ok: true, missions, summary: missionSummary(missions) });
+  }));
+
+  route.get("/ax/command/recovery", requireAx, guard(async (_req, res) => {
+    const orchestrator = resolveOrchestrator();
+    const runs = orchestrator?.enabled ? await orchestrator.listRuns({ limit: 20 }) : [];
+    let presence = null;
+    try {
+      presence = typeof presenceProvider === "function" ? await presenceProvider() : null;
+    } catch {
+      presence = null;
+    }
+    const unsettledRuns = runs
+      .filter(run => run && !run.settled && run.status !== "error")
+      .map(run => ({
+        runId: run.id,
+        status: run.status,
+        objective: String(run.objective || "").slice(0, 200),
+        updatedAt: run.updatedAt || null,
+        deadlineAt: run.deadlineAt || null,
+        recoveries: Number(run.recoveries || 0),
+        openSteps: (run.steps || [])
+          .filter(step => step.taskId && step.terminal !== true)
+          .map(step => ({ taskId: step.taskId, status: step.status, adapter: step.adapter || null }))
+      }));
+    res.json({
+      ok: true,
+      // Read-only view. Recovery itself is the orchestrator's reconciliation and the worker's lease
+      // reclamation; this route must never mutate a task.
+      recovery: {
+        unsettledRuns,
+        workers: presence?.heartbeat || null,
+        queue: presence?.queue || null,
+        observedAt: new Date().toISOString()
+      }
+    });
+  }));
+
+  // ------------------------------------------------------------- providers and diagnostics
+  route.get("/ax/command/providers", requireAx, (_req, res) => {
+    let providers = null;
+    try {
+      providers = typeof providerStatusProvider === "function" ? providerStatusProvider() : null;
+    } catch {
+      providers = null;
+    }
+    res.json({
+      ok: true,
+      providers: providers || { enabled: false, code: "provider_not_configured", primary: null, fallbacks: [] },
+      health: {
+        checked: false,
+        note: "Configuration only. This endpoint makes no model call, so it cannot report an account as healthy."
+      }
+    });
+  });
+
+  route.get("/ax/command/diagnostics", requireAx, guard(async (_req, res) => {
+    if (typeof diagnosticsProvider !== "function") {
+      return res.status(503).json({ ok: false, code: "diagnostics_unavailable", error: "Diagnostics are not mounted on this service." });
+    }
+    const diagnostics = await diagnosticsProvider();
+    res.json({ ok: true, diagnostics });
   }));
 
   return { engine, registry: registryInstance, store: () => store };

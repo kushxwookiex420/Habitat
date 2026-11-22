@@ -12,6 +12,12 @@ import {
   resolveAxProviderConfig
 } from "./ax-providers.mjs";
 import { createD1AxRunRepository } from "./d1-ax-run-repository.mjs";
+import { createD1AxMemoryRepository } from "./d1-ax-memory-repository.mjs";
+import { createAxMemoryContext } from "./ax-memory-context.mjs";
+import { createD1AxNotificationRepository } from "./d1-ax-notification-repository.mjs";
+import { createNotificationService } from "./ax-notifications.mjs";
+import { createAxDiagnostics } from "./ax-diagnostics.mjs";
+import { detectSandbox } from "./nexus-sandbox.mjs";
 
 const SAFE_COMMANDS = new Set(["device.status"]);
 const PAIRING_TTL_MS = 10 * 60 * 1000;
@@ -59,6 +65,10 @@ export function registerDeviceCommandBridge(app, {
   taskRepository = null,
   query = null,
   adapters = null,
+  // Optional injection for tests/embedders. In a deployment both are derived from the same D1
+  // database as every other store, so memory and notifications can never point somewhere else.
+  memoryRepository = null,
+  notificationRepository = null,
   handleSignals = false,
   exitOnSignal = false,
   log = console
@@ -73,6 +83,25 @@ export function registerDeviceCommandBridge(app, {
   }) : null);
 
   const axToken = String(env.HABITAT_AX_BRIDGE_TOKEN || "");
+
+  // Durable Ax memory and notification events are additive stores on the same database. They are
+  // independent of task execution: if either is unavailable, planning and execution still work and
+  // the control center reports the capability as unavailable instead of losing the run.
+  const memoryProject = String(env.HABITAT_AX_MEMORY_PROJECT || "habitat").trim().toLowerCase() || "habitat";
+  const memoryStore = memoryRepository || (hasD1 ? createD1AxMemoryRepository({
+    accountId: env.CLOUDFLARE_ACCOUNT_ID,
+    databaseId: env.HABITAT_D1_DATABASE_ID,
+    apiToken: env.HABITAT_D1_API_TOKEN,
+    fetchImpl
+  }) : null);
+  const notificationStore = notificationRepository || (hasD1 ? createD1AxNotificationRepository({
+    accountId: env.CLOUDFLARE_ACCOUNT_ID,
+    databaseId: env.HABITAT_D1_DATABASE_ID,
+    apiToken: env.HABITAT_D1_API_TOKEN,
+    fetchImpl
+  }) : null);
+  const notifications = notificationStore ? createNotificationService({ repository: notificationStore, project: memoryProject, log }) : null;
+  const memoryContext = memoryStore ? createAxMemoryContext({ repository: memoryStore, project: memoryProject, log }) : null;
 
   function requireAx(req, res, next) {
     if (!axToken || !safeEqual(bearer(req), axToken)) {
@@ -383,6 +412,26 @@ export function registerDeviceCommandBridge(app, {
       },
       // Habitat-native Ax. Built lazily so it can use the engine this call creates and the runtime
       // mounted after it, without either of them owning a second task store.
+      memoryProvider: () => memoryStore,
+      memoryProject,
+      notificationProvider: () => notifications,
+      providerStatusProvider: () => describeProviderStatus(resolveAxProviderConfig(env)),
+      // Diagnostics are assembled per request: every subsystem is probed, and a probe failure is
+      // reported as unavailable rather than turning into a false green status.
+      diagnosticsProvider: () => createAxDiagnostics({
+        env,
+        version: env.HABITAT_VERSION || "0.5.0",
+        project: memoryProject,
+        engine: commandApi?.engine || null,
+        memory: memoryStore,
+        notifications,
+        providerConfig: resolveAxProviderConfig(env),
+        orchestrator: () => (axOrchestrator === undefined ? { enabled: false, code: "orchestrator_not_resolved" } : axOrchestrator),
+        presence: () => nexusRuntime,
+        // A function, so diagnostics read the bridge's state at request time rather than at mount.
+        deviceBridge: () => ({ ready, durable: Boolean(store?.durable), axTokenConfigured: Boolean(axToken), perDeviceTokens: true }),
+        sandbox: () => detectSandbox()
+      })(),
       orchestratorProvider: () => {
         if (axOrchestrator !== undefined) return axOrchestrator;
         axOrchestrator = null;
@@ -432,6 +481,10 @@ export function registerDeviceCommandBridge(app, {
                 failedCallCostUsd: axConfig.failedCallCostUsd
               }),
               runs: runStore,
+              // Approved memory is retrieved before planning and written back after verification.
+              memory: memoryContext,
+              // Durable operational events for the control center. Inbox only; no push transport.
+              notify: notifications ? event => notifications.record(event) : null,
               // The planner may only choose adapters the worker actually has, never the registry's
               // full read-only surface.
               adapters: READ_ONLY_ADAPTER_NAMES,
@@ -530,6 +583,16 @@ export function registerDeviceCommandBridge(app, {
         return { ok: false, durable: false, nexus: nexusMount };
       }
       await store.initialize();
+      // Additive schema for memory and notifications. A failure is reported and leaves device
+      // commands usable, because neither is a prerequisite for executing a task.
+      for (const [label, repository] of [["AX_MEMORY", memoryStore], ["AX_NOTIFICATIONS", notificationStore]]) {
+        if (!repository || typeof repository.initialize !== "function") continue;
+        try {
+          await repository.initialize();
+        } catch (error) {
+          console.error(label + "_INIT_FAILED", String(error?.message || error));
+        }
+      }
       const bootstrapHash = String(env.HABITAT_DEVICE_PAIRING_BOOTSTRAP_CODE_HASH || "").trim().toLowerCase();
       const bootstrapExpiresAt = String(env.HABITAT_DEVICE_PAIRING_BOOTSTRAP_EXPIRES_AT || "").trim();
       const bootstrapExpiryMs = Date.parse(bootstrapExpiresAt);
