@@ -18,7 +18,9 @@ Render web service awake.
 
 ## Safety defaults
 
-The workflow is committed with execution **off**.
+The workflow is committed with execution **off**. When enabled, each run first
+calls Habitat's authenticated scheduler route (Ax message drain/objective advance)
+and then runs one NEXUS D1 worker tick (task execution).
 
 - Scheduled runs do nothing until the repository variable
   `NEXUS_SCHEDULER_ENABLED` is explicitly set to the exact string `true`.
@@ -37,9 +39,23 @@ In GitHub, open **Settings → Secrets and variables → Actions** for this repo
 Create these **repository secrets** using the exact values already configured on
 Habitat-1. Do not paste them into ChatGPT or commit them to files:
 
-1. `CLOUDFLARE_ACCOUNT_ID`
-2. `HABITAT_D1_DATABASE_ID`
-3. `HABITAT_D1_API_TOKEN`
+1. `AX_SCHEDULER_TOKEN` — set the same randomly generated value as the
+   `AX_SCHEDULER_TOKEN` environment variable on Habitat-1. Generate it locally
+   (for example with a password manager); never reuse the Ax command or phone-bridge token.
+2. `CLOUDFLARE_ACCOUNT_ID`
+3. `HABITAT_D1_DATABASE_ID`
+4. `HABITAT_D1_API_TOKEN`
+
+Also add this **repository variable**:
+
+- `HABITAT_BASE_URL` = `https://habitat-1-szzd.onrender.com`
+
+The scheduler secret is used only to call Habitat's authenticated
+`POST /ax/command/scheduler/tick` endpoint. The three D1 secrets are used by
+the separate one-shot NEXUS worker process. The workflow first asks Habitat to
+drain Ax messages and advance eligible objectives, then runs the NEXUS worker
+against the same D1 database to execute the queued read-only task. This ordering
+is intentional: the scheduler creates eligible work; the NEXUS tick executes it.
 
 The database ID and token must point to the **same D1 database** used by Habitat-1.
 A different database would make the workflow process a different queue.
