@@ -22,7 +22,37 @@
       "full suite and migration checks on Node 26.13.1",
       "Android debug APK compiled and packaged; no device or emulator"
     ],
-    "ciVerified": "pending on the final head; recorded in the PR and manifest after the workflows run",
+    "ciVerified": {
+      "head": "113e2983cdb96605a79bb09fe169eab883e2d4d1",
+      "workflows": [
+        {
+          "check": "syntax",
+          "conclusion": "success"
+        },
+        {
+          "check": "test",
+          "conclusion": "success"
+        },
+        {
+          "check": "verify",
+          "conclusion": "success"
+        },
+        {
+          "check": "backend-regression",
+          "conclusion": "success"
+        },
+        {
+          "check": "d1-repository",
+          "conclusion": "success"
+        },
+        {
+          "check": "sandbox guarantees (portable tier + honest capability report)",
+          "conclusion": "success"
+        }
+      ],
+      "observedAt": "2026-11-22T05:13:45Z",
+      "note": "All six check runs completed success on the release-record commit. Annotations are warnings, not failures."
+    },
     "stagingVerified": "NOT RUN \u2014 no disposable D1 database, credentials or owner approval id",
     "physicallyDeviceVerified": "BUILD ONLY \u2014 no phone or emulator attached; 15-check sheet unexecuted",
     "productionVerified": "NOT DEPLOYED \u2014 no production change was made"
