@@ -2,9 +2,10 @@
   "schemaVersion": 1,
   "mission": "17",
   "title": "NEXUS autonomous work cycle acceptance",
-  "generatedAt": "2026-11-22T07:36:24.485Z",
-  "finishedAt": "2026-11-22T07:36:24.948Z",
-  "commit": "5e907b85f670be76a0335080bc00092c32d17f41",
+  "generatedAt": "2026-11-22T07:36:36.285Z",
+  "finishedAt": "2026-11-22T07:36:36.756Z",
+  "commit": "ab726322897ddee2b33aa4be4aeda1e08df3a42e",
+  "head": "16451d89685c70a9be2ac1feef335571efb599e0",
   "branch": "ax-nexus/revision-4.6-nexus-mainline-integration",
   "node": "v26.13.1",
   "suites": [

@@ -36,8 +36,17 @@ const checks = [...stdout.matchAll(/^(ok|not ok) \d+ - (.+)$/gm)].map(match => (
   name: match[2].trim()
 }));
 const failed = checks.filter(check => !check.ok);
-const commit = (run("git", ["rev-parse", "HEAD"]).stdout || "").trim();
+const head = (run("git", ["rev-parse", "HEAD"]).stdout || "").trim();
 const branch = (run("git", ["rev-parse", "--abbrev-ref", "HEAD"]).stdout || "").trim();
+// Name the commit that actually changed the implementation, not a later release-record commit.
+// A manifest that names an unrelated commit is a release-gate failure.
+const codeCommit = (run("git", [
+  "log", "-1", "--format=%H", "--",
+  "ax-mission-plan.mjs", "ax-work-cycle.mjs", "ax-agents.mjs",
+  "command-routes.mjs", "device-command-bridge.mjs",
+  "tests/ax-work-cycle.test.mjs", "tests/ax-nexus-e2e.test.mjs"
+]).stdout || "").trim();
+const commit = codeCommit || head;
 
 const evidence = {
   schemaVersion: 1,
@@ -46,6 +55,7 @@ const evidence = {
   generatedAt: startedAt,
   finishedAt: new Date().toISOString(),
   commit,
+  head,
   branch,
   node: process.version,
   suites: SUITES,
