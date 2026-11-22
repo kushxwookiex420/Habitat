@@ -176,8 +176,8 @@ These are local measurements, not D1/Render/production latency, and no capacity 
 
 ## 13. Test counts and CI
 
-- Full suite: **687/687 pass** on Node 26.13.1.
-- Full suite: **687/687 pass** on Node 22.23.5.
+- Full suite: **689/689 pass** on Node 26.13.1.
+- Full suite: **689/689 pass** on Node 22.23.5.
 - New adversarial suites: accounting 8, security 8, transports 7, auth 6, multi-process scheduler 5,
   D1 HTTP compatibility 3, staging harness 2.
 - Migration checks: 18/18.
