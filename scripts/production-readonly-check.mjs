@@ -11,6 +11,7 @@
  *   node scripts/production-readonly-check.mjs
  *   node scripts/production-readonly-check.mjs --base-url https://habitat-1-szzd.onrender.com
  *   node scripts/production-readonly-check.mjs --expect-commit 57a5123
+ *   node scripts/production-readonly-check.mjs --require-message-surface
  *
  * Exit codes: 0 all checks passed, 1 a check failed, 2 the checks could not run.
  */
@@ -69,7 +70,8 @@ export async function runReadOnlyChecks({
   baseUrl = DEFAULT_BASE_URL,
   fetchImpl = fetch,
   timeoutMs = 15_000,
-  expectCommit = null
+  expectCommit = null,
+  requireMessageSurface = false
 } = {}) {
   const base = trimBase(baseUrl);
   const checks = [];
@@ -103,11 +105,22 @@ export async function runReadOnlyChecks({
   // The executor must stay disabled until the owner authorizes activation. This is a hard failure.
   add("nexus executor is disabled", nexus?.configured === false, nexus?.configured === true ? "configured=true is unexpected before activation approval" : String(nexus?.reason || "not reported"));
 
-  add(
-    "message-surface status is either reported or clearly absent",
-    true,
-    body.nexusMessageSurface ? JSON.stringify({ configured: body.nexusMessageSurface.configured === true, code: body.nexusMessageSurface.code || null }) : "not present (PR #95 not deployed)"
-  );
+  const surface = body.nexusMessageSurface || null;
+  if (requireMessageSurface) {
+    // Post-#95 gate: the field must exist and report a configured surface. Presence without
+    // configuration still means the bridge cannot report readiness.
+    add(
+      "message-surface is deployed and configured",
+      surface?.configured === true,
+      surface ? JSON.stringify({ configured: surface.configured === true, code: surface.code || null }) : "not present — deploy PR #95 first"
+    );
+  } else {
+    add(
+      "message-surface status is either reported or clearly absent",
+      true,
+      surface ? JSON.stringify({ configured: surface.configured === true, code: surface.code || null }) : "not present (PR #95 not deployed)"
+    );
+  }
 
   for (const probe of PROBES) {
     try {
@@ -128,15 +141,16 @@ export async function runReadOnlyChecks({
 }
 
 function parseArgs(argv) {
-  const options = { baseUrl: DEFAULT_BASE_URL, expectCommit: null, timeoutMs: 15_000, json: false };
+  const options = { baseUrl: DEFAULT_BASE_URL, expectCommit: null, timeoutMs: 15_000, json: false, requireMessageSurface: false };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === "--base-url") options.baseUrl = argv[++index];
     else if (arg === "--expect-commit") options.expectCommit = argv[++index];
     else if (arg === "--timeout-ms") options.timeoutMs = Number(argv[++index] || 0) || 15_000;
     else if (arg === "--json") options.json = true;
+    else if (arg === "--require-message-surface") options.requireMessageSurface = true;
     else if (arg === "--help" || arg === "-h") {
-      console.log("Read-only Habitat production check. Options: --base-url URL --expect-commit SHA --timeout-ms N --json");
+      console.log("Read-only Habitat production check. Options: --base-url URL --expect-commit SHA --timeout-ms N --json --require-message-surface");
       process.exit(0);
     }
   }

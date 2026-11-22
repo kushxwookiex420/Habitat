@@ -111,3 +111,40 @@ test("a health response missing nexus state fails closed", async () => {
   assert.equal(result.ok, false);
   assert.equal(result.checks.find(entry => entry.name === "health reports nexus state").ok, false);
 });
+
+test("strict mode fails when the message surface is absent", async () => {
+  const fake = fakeFetch(healthyRoutes({
+    "/health": { status: 200, body: { commit: "57a5123", nexus: { configured: false, reason: "disabled_by_config" } } }
+  }));
+  const result = await runReadOnlyChecks({ baseUrl: BASE, fetchImpl: fake.impl, requireMessageSurface: true });
+
+  assert.equal(result.ok, false);
+  const check = result.checks.find(entry => entry.name === "message-surface is deployed and configured");
+  assert.equal(check.ok, false);
+  assert.match(check.detail, /not present/);
+});
+
+test("strict mode fails when the surface is reported but not configured", async () => {
+  const fake = fakeFetch(healthyRoutes({
+    "/health": { status: 200, body: { commit: "57a5123", nexus: { configured: false }, nexusMessageSurface: { configured: false, code: "token_missing" } } }
+  }));
+  const result = await runReadOnlyChecks({ baseUrl: BASE, fetchImpl: fake.impl, requireMessageSurface: true });
+
+  assert.equal(result.ok, false);
+  const check = result.checks.find(entry => entry.name === "message-surface is deployed and configured");
+  assert.equal(check.ok, false);
+  assert.match(check.detail, /token_missing/);
+});
+
+test("strict mode passes on a configured surface, and the default tolerates absence", async () => {
+  const withoutSurface = fakeFetch(healthyRoutes({
+    "/health": { status: 200, body: { commit: "57a5123", nexus: { configured: false } } }
+  }));
+  const lenient = await runReadOnlyChecks({ baseUrl: BASE, fetchImpl: withoutSurface.impl });
+  assert.equal(lenient.ok, true);
+
+  const withSurface = fakeFetch(healthyRoutes());
+  const strict = await runReadOnlyChecks({ baseUrl: BASE, fetchImpl: withSurface.impl, requireMessageSurface: true });
+  assert.equal(strict.ok, true);
+  assert.equal(strict.checks.find(entry => entry.name === "message-surface is deployed and configured").ok, true);
+});
