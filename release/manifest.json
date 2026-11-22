@@ -1,13 +1,13 @@
 {
-  "schemaVersion": 1,
-  "generatedAt": "2026-11-22T03:40:26.285Z",
-  "commit": "1f44412576c4329585dbea8b5c0316df787984c9",
+  "schemaVersion": 2,
+  "generatedAt": "2026-11-22T04:04:55.642Z",
+  "commit": "ab727b4637dde66cf1b6770ef781cb39312d7436",
   "branch": "ax-nexus/revision-4.6-nexus-mainline-integration",
   "checks": [
     {
       "name": "git commit resolved",
       "ok": true,
-      "commit": "1f44412576c4329585dbea8b5c0316df787984c9"
+      "commit": "ab727b4637dde66cf1b6770ef781cb39312d7436"
     },
     {
       "name": "syntax and repository checks",
@@ -17,7 +17,7 @@
     {
       "name": "full test suite",
       "ok": true,
-      "pass": 689,
+      "pass": 691,
       "fail": 0,
       "detail": "exit 0"
     },
@@ -57,11 +57,35 @@
           "ok": true
         },
         {
+          "name": "docs/NEXUS_MISSION_13.md",
+          "ok": true
+        },
+        {
+          "name": "docs/NEXUS_MISSION_13_BASELINE.md",
+          "ok": true
+        },
+        {
+          "name": "docs/STAGING_VALIDATION_RESULTS.md",
+          "ok": true
+        },
+        {
+          "name": "docs/ANDROID_MISSION_13_DEVICE_TEST.md",
+          "ok": true
+        },
+        {
+          "name": "docs/RENDER_INTEGRATION_READINESS.md",
+          "ok": true
+        },
+        {
           "name": "release/demo-evidence.json",
           "ok": true
         },
         {
           "name": "release/perf-mission-12.json",
+          "ok": true
+        },
+        {
+          "name": "release/mission-13-evidence.json",
           "ok": true
         },
         {
@@ -97,6 +121,28 @@
           "ok": true
         }
       ]
+    },
+    {
+      "name": "staging and physical evidence claims",
+      "ok": true,
+      "checks": [
+        {
+          "name": "staging blocker has an owner action",
+          "ok": true
+        },
+        {
+          "name": "physical-device blocker has an owner action",
+          "ok": true
+        }
+      ],
+      "stagingStatus": "NOT RUN — owner-blocked",
+      "androidStatus": "BUILD ONLY — owner-blocked"
+    },
+    {
+      "name": "release manifest matches the validated commit",
+      "ok": true,
+      "commit": "ab727b4637dde66cf1b6770ef781cb39312d7436",
+      "relation": "generated-now"
     },
     {
       "name": "critical adversarial suites",
@@ -176,6 +222,12 @@
     }
   ],
   "releaseReady": true,
+  "evidenceLevels": {
+    "ci": "not yet verified for this manifest until the workflow run on the final head is green",
+    "staging": "NOT RUN — owner-blocked",
+    "physicalDevice": "BUILD ONLY — owner-blocked",
+    "controlCenter": "local real authenticated backend harness (in-memory); not staging or production"
+  },
   "schema": {
     "migrations": [
       "0001_habitat_tasks.sql",
@@ -293,8 +345,9 @@
   },
   "knownLimitations": [
     "No production or staging deployment was performed.",
+    "No disposable staging D1 credentials or owner approval id were available; staging is not verified.",
     "Migration 0005 has not been applied to D1.",
-    "Android is compile-verified; the pairing fix has not run on a physical device.",
+    "Android is compile-verified; no emulator or physical S26 Ultra test was run.",
     "No live model provider call is made by the gate or by tests.",
     "Research/engineering transports require AX_AGENT_LOCAL_ROOT and stay off by default.",
     "Scheduler runs only when an external trigger or an owner calls its tick endpoint."
