@@ -13,6 +13,12 @@
 ChatGPT workspace, connector or custom GPT has been created, no credential has been issued, and no
 request has ever travelled from OpenAI to Habitat. Everything below is unverified until §8 passes.
 
+> **Mission 16 update (2026-11-22).** Custom GPTs are being retired in favour of plugins, and MCP
+> authentication is still OAuth-or-none with no custom API keys. The current compatibility decision,
+> the validated contract and the usable external relay are in
+> [`CHATGPT_CONNECTION_READINESS.md`](CHATGPT_CONNECTION_READINESS.md). Read that first; this file
+> remains the historical Action plan.
+
 ---
 
 ## 1. Which connection method, and why

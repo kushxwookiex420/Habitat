@@ -62,8 +62,7 @@ export function buildAxOpenApiSpec({ origin = "https://habitat-1-szzd.onrender.c
               description: "Which role owns the objective. Ax submits as ax."
             },
             adapter: {
-              type: "string",
-              nullable: true,
+              type: ["string", "null"],
               description: "Optional tool name such as runtime.health. Omit to let NEXUS choose; a task with no adapter waits for a human."
             },
             idempotencyKey: {
@@ -80,32 +79,32 @@ export function buildAxOpenApiSpec({ origin = "https://habitat-1-szzd.onrender.c
             objective: { type: "string" },
             status: {
               type: "string",
-              enum: ["queued", "working", "needs_approval", "done", "failed", "cancelled"]
+              enum: ["queued", "working", "needs_approval", "done", "failed", "cancelled", "blocked"]
             },
             role: { type: "string" },
-            adapter: { type: "string", nullable: true },
+            adapter: { type: ["string", "null"] },
             attempts: { type: "integer" },
             createdAt: { type: "string", format: "date-time" },
             updatedAt: { type: "string", format: "date-time" },
-            error: { type: "string", nullable: true },
+            error: { type: ["string", "null"] },
             result: {
-              type: "object",
-              nullable: true,
+              type: ["object", "null"],
               properties: {
                 summary: { type: "string" },
-                evidence: { type: "array", items: { type: "string" } }
+                evidence: { type: "array", items: { type: "string" } },
+                verifiedBy: { type: "string", description: "Worker id that produced the evidence." }
               }
             },
-            history: {
+            statusHistory: {
               type: "array",
               items: {
                 type: "object",
                 properties: {
-                  from: { type: "string", nullable: true },
+                  from: { type: ["string", "null"] },
                   to: { type: "string" },
                   at: { type: "string", format: "date-time" },
                   by: { type: "string" },
-                  reason: { type: "string", nullable: true }
+                  reason: { type: ["string", "null"] }
                 }
               }
             }

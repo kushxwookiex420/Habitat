@@ -304,6 +304,33 @@ export function registerUniversalCommandRoutes(app, {
     Promise.resolve(service.record(entry)).catch(() => {});
   }
 
+  // Per-process limiter for the whole command surface. It is keyed by the verified credential
+  // role, never by a caller-supplied header or body field, so one leaked secret cannot be used to
+  // exhaust a shared bucket and one caller cannot evade the limit by rotating a client id. The
+  // message channel keeps its own stricter per-origin limit; this one covers submit/read/poll and
+  // the operator routes an Action must never reach anyway. Behind several instances the effective
+  // limit multiplies by the instance count, which is documented rather than hidden.
+  // A malformed override must not lock the API out: non-finite or non-positive values fall back to
+  // the documented defaults instead of producing a bucket that refuses every request.
+  const positiveSetting = (value, fallback, floor) => {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) && parsed > 0 ? Math.max(floor, Math.floor(parsed)) : fallback;
+  };
+  const rateMax = positiveSetting(env.AX_COMMAND_RATE_MAX, 240, 1);
+  const rateWindowMs = positiveSetting(env.AX_COMMAND_RATE_WINDOW_MS, 60_000, 1000);
+  const rateBuckets = new Map();
+  function takeRateSlot(role) {
+    const now = Date.now();
+    const bucket = rateBuckets.get(role);
+    if (!bucket || now - bucket.start >= rateWindowMs) {
+      rateBuckets.set(role, { start: now, count: 1 });
+      return null;
+    }
+    bucket.count += 1;
+    if (bucket.count <= rateMax) return null;
+    return { retryAfterMs: Math.max(0, rateWindowMs - (now - bucket.start)), limit: rateMax, windowMs: rateWindowMs };
+  }
+
   function requireAx(req, res, next) {
     if (!anyAxToken) {
       return res.status(503).json({
@@ -327,6 +354,23 @@ export function registerUniversalCommandRoutes(app, {
     }
     // Audit identity comes from the verified credential, never from the request body.
     req.axRole = role;
+    const limited = takeRateSlot(role);
+    if (limited) {
+      recordSecurity({
+        category: "auth.rate_limited",
+        severity: "medium",
+        outcome: "denied",
+        actor: "ax:" + role + "-token",
+        summary: "Rejected command request over the per-credential rate limit: " + String(req.method || "?") + " " + String(req.originalUrl || req.path || "?")
+      });
+      res.setHeader("retry-after", String(Math.ceil(limited.retryAfterMs / 1000)));
+      return res.status(429).json({
+        ok: false,
+        code: "rate_limited",
+        error: "Too many command requests in the current window; retry after " + Math.ceil(limited.retryAfterMs / 1000) + " seconds.",
+        retryAfterMs: limited.retryAfterMs
+      });
+    }
     return next();
   }
 
