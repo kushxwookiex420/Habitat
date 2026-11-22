@@ -455,6 +455,15 @@ footer{color:#527080;font-size:10px;letter-spacing:.1em;text-align:center;paddin
       <h2>PHONE · RELAY <span id="phone-status">—</span></h2>
       <div class="row"><span class="k">device</span><span class="v" id="phone-name">—</span></div>
       <div class="row"><span class="k">last check-in</span><span class="v" id="phone-seen">—</span></div>
+      <h2 style="margin-top:14px">PAIR A PHONE</h2>
+      <p class="note">Mints a single-use code for 10 minutes and shows it once. The code is not stored in this page, and the relay credential never reaches the browser.</p>
+      <input id="pair-device" placeholder="device id (optional — blank binds the first phone)" aria-label="Phone device id">
+      <div class="grid2"><button id="pair-create">CREATE PAIRING CODE</button></div>
+      <div class="err" id="pair-err" role="status" aria-live="polite"></div>
+      <div id="pair-code" class="hidden">
+        <div class="row"><span class="k">one-time code</span><span class="v" id="pair-value"></span></div>
+        <div class="note" id="pair-meta"></div>
+      </div>
       <h2 style="margin-top:14px">APPROVED COMMAND</h2>
       <select id="cmd-action" aria-label="Action">
         <option value="status">status</option>
@@ -598,6 +607,17 @@ footer{color:#527080;font-size:10px;letter-spacing:.1em;text-align:center;paddin
   $("refresh").addEventListener("click",load);
   $("buff-refresh").addEventListener("click",load);
   $("phone-refresh").addEventListener("click",load);
+  $("pair-create").addEventListener("click",async function(){
+    text("pair-err","");$("pair-code").classList.add("hidden");
+    var button=$("pair-create");button.disabled=true;
+    try{
+      var r=await api("/bridge/console/pairing",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({deviceId:$("pair-device").value.trim()})});
+      text("pair-value",r.pairing.code);
+      text("pair-meta","single-use · expires "+when(new Date(r.pairing.expiresAt).toISOString())+(r.pairing.deviceId?" · bound to "+r.pairing.deviceId:" · binds to the first phone that uses it"));
+      $("pair-code").classList.remove("hidden");
+    }catch(e){text("pair-err",e.message)}
+    finally{button.disabled=false}
+  });
   $("logout").addEventListener("click",async function(ev){ev.preventDefault();try{await api("/bridge/console/logout",{method:"POST"})}catch(e){};location.reload()});
 
   $("submit-task").addEventListener("click",async function(){

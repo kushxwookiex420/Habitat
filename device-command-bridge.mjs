@@ -307,6 +307,8 @@ export function registerDeviceCommandBridge(app, {
       const expiresAt = new Date(Date.now() + PAIRING_TTL_MS).toISOString();
       // Without a device id the code is bound to the first device that uses it.
       await store.createPairing({ codeHash: digest(code), deviceId: deviceId || "*", createdAt, expiresAt });
+      // A short-lived credential must not be cached by a proxy or the browser.
+      res.setHeader("Cache-Control", "no-store");
       return res.status(201).json({
         ok: true,
         pairing: { code, deviceId: deviceId || null, expiresAt, singleUse: true }

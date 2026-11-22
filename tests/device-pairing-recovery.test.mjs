@@ -230,6 +230,7 @@ test("the Control Center can mint a fresh code, and only with its credential", a
     body: { deviceId: "launcher-a" }
   });
   assert.equal(minted.statusCode, 201);
+  assert.equal(minted.headers["cache-control"], "no-store", "a short-lived code must not be cached");
   const code = minted.body.pairing.code;
   assert.ok(code.length >= 20);
   assert.equal(minted.body.pairing.deviceId, "launcher-a");
