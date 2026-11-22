@@ -1,13 +1,13 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-11-22T05:10:57.003Z",
-  "commit": "282da02b0e77ce2a6dfc9a542cdbf9036e5a1a4a",
+  "generatedAt": "2026-11-22T05:27:50.270Z",
+  "commit": "c2fd06f0b9412684407ceb0cc80cfe74b2d6a6f4",
   "branch": "ax-nexus/revision-4.6-nexus-mainline-integration",
   "checks": [
     {
       "name": "git commit resolved",
       "ok": true,
-      "commit": "282da02b0e77ce2a6dfc9a542cdbf9036e5a1a4a"
+      "commit": "c2fd06f0b9412684407ceb0cc80cfe74b2d6a6f4"
     },
     {
       "name": "syntax and repository checks",
@@ -112,6 +112,10 @@
           "ok": true
         },
         {
+          "name": "docs/NEXUS_MISSION_15.md",
+          "ok": true
+        },
+        {
           "name": "release/demo-evidence.json",
           "ok": true
         },
@@ -125,6 +129,10 @@
         },
         {
           "name": "release/mission-14-evidence.json",
+          "ok": true
+        },
+        {
+          "name": "release/mission-15-live-activation.json",
           "ok": true
         },
         {
@@ -196,7 +204,7 @@
     {
       "name": "release manifest matches the validated commit",
       "ok": true,
-      "commit": "282da02b0e77ce2a6dfc9a542cdbf9036e5a1a4a",
+      "commit": "c2fd06f0b9412684407ceb0cc80cfe74b2d6a6f4",
       "relation": "generated-now"
     },
     {
