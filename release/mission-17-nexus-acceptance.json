@@ -1,0 +1,94 @@
+{
+  "schemaVersion": 1,
+  "mission": "17",
+  "title": "NEXUS autonomous work cycle acceptance",
+  "generatedAt": "2026-11-22T07:36:24.485Z",
+  "finishedAt": "2026-11-22T07:36:24.948Z",
+  "commit": "5e907b85f670be76a0335080bc00092c32d17f41",
+  "branch": "ax-nexus/revision-4.6-nexus-mainline-integration",
+  "node": "v26.13.1",
+  "suites": [
+    "tests/ax-work-cycle.test.mjs",
+    "tests/ax-nexus-e2e.test.mjs"
+  ],
+  "summary": {
+    "checked": 13,
+    "passed": 13,
+    "failed": 0,
+    "exitCode": 0
+  },
+  "checks": [
+    {
+      "ok": true,
+      "name": "Ax and NEXUS complete an authenticated, persisted, idempotent exchange end to end"
+    },
+    {
+      "ok": true,
+      "name": "NEXUS advances a low-risk planned objective without an owner in the loop"
+    },
+    {
+      "ok": true,
+      "name": "an approval-gated objective is never started autonomously and the command token cannot approve it"
+    },
+    {
+      "ok": true,
+      "name": "the scheduler completes an agent-oriented mission autonomously and verifies it"
+    },
+    {
+      "ok": true,
+      "name": "1-2-3: an objective is persisted, decomposed by the Director, and research returns cited evidence"
+    },
+    {
+      "ok": true,
+      "name": "4: the engineering agent detects a real failing check and proposes a tested correction without writing"
+    },
+    {
+      "ok": true,
+      "name": "5: an interrupted mission resumes without repeating the work that already produced evidence"
+    },
+    {
+      "ok": true,
+      "name": "6: a plan that needs an owner is refused before any agent runs"
+    },
+    {
+      "ok": true,
+      "name": "7: results and evidence survive a new service instance over the same durable store"
+    },
+    {
+      "ok": true,
+      "name": "8: a mission result is sent through the authenticated Ax bridge, and both surfaces reject a missing token"
+    },
+    {
+      "ok": true,
+      "name": "9: failures are reported as failures, never as completed"
+    },
+    {
+      "ok": true,
+      "name": "10: a multi-agent objective reaches a verified completion with memory, audit and a result message"
+    },
+    {
+      "ok": true,
+      "name": "director and verification are assigned by role only, never auto-routed"
+    }
+  ],
+  "operational": [
+    "durable objective receipt, understanding, planning, authorization and execution transitions",
+    "deterministic Director plan routed to memory, research, engineering, operations, security and verification",
+    "read-only repository research with file/line citations and digests",
+    "allowlisted engineering inspection with node --check and a test-backed correction proposal",
+    "per-step evidence persistence and resume without repeating finished work",
+    "independent verification against acceptance criteria before completion",
+    "memory write after a verified completion",
+    "authenticated NEXUS->Ax result and progress messages with a stable correlation id",
+    "scheduler autonomy drives agent-oriented objectives through the work cycle",
+    "stop and revoke controls with audit events"
+  ],
+  "notVerifiedHere": [
+    "No OpenAI or other model call: the Director plan is deterministic, so model planning quality is not measured.",
+    "No Cloudflare D1 or Render deployment: the acceptance run uses memory repositories with the same CAS contract.",
+    "No Android device, no APK build, no release gate and no production migration.",
+    "The signature/verification check is keyword-based evidence coverage, not semantic proof.",
+    "An in-flight agent call cannot be interrupted mid-call; stop takes effect before the next step."
+  ],
+  "secretsExposed": false
+}
