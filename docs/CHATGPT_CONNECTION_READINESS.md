@@ -154,6 +154,15 @@ not automatic, it is not a ChatGPT connection, and the conversation is visible t
 So even a perfectly configured ChatGPT client would fail against the live origin today. The repository
 is ready; the deployment is not.
 
+Deployment shape, from the repository (not from the Render dashboard, which is not readable here):
+`Dockerfile` on `node:22-bookworm-slim`, `npm install --omit=dev`, `CMD sh -c "npm run check && exec node server.mjs"`,
+`EXPOSE 8080`; `server.mjs` binds `process.env.PORT` and mounts `registerDeviceCommandBridge`, which
+mounts `registerUniversalCommandRoutes`. `/ax/command/openapi.json` is therefore registered as soon as
+the process starts, even before a token exists; every other operation answers `503` until a token is
+configured. TLS is terminated at Render's edge — the app itself has no HTTP→HTTPS redirect, which is
+why the relay refuses a non-loopback `http://` origin and the document validator refuses a plain-HTTP
+server.
+
 ---
 
 ## 6. Phone-first setup path
