@@ -5,7 +5,12 @@ import { registerDeviceHabitat } from "./device-habitat.mjs";
 import { registerUniversalCommandRoutes } from "./command-routes.mjs";
 import { createD1Query, registerNexusRuntime } from "./nexus-runtime.mjs";
 import { buildReadOnlyNexusAdapters, READ_ONLY_ADAPTER_NAMES, READ_ONLY_ADAPTER_PREFIXES } from "./nexus-adapter-registration.mjs";
-import { createAxOrchestrator, createOpenAiPlanner, resolveAxOrchestratorConfig } from "./ax-orchestrator.mjs";
+import { createAxOrchestrator, resolveAxOrchestratorConfig } from "./ax-orchestrator.mjs";
+import {
+  createAxPlannerFromProviderConfig,
+  describeProviderStatus,
+  resolveAxProviderConfig
+} from "./ax-providers.mjs";
 import { createD1AxRunRepository } from "./d1-ax-run-repository.mjs";
 
 const SAFE_COMMANDS = new Set(["device.status"]);
@@ -382,7 +387,20 @@ export function registerDeviceCommandBridge(app, {
         if (axOrchestrator !== undefined) return axOrchestrator;
         axOrchestrator = null;
         try {
-          const axConfig = resolveAxOrchestratorConfig(env);
+          // The provider layer owns which model account Ax spends against. `AX_PROVIDER` defaults to
+          // openai, so an existing OPENAI_API_KEY + AX_MODEL deployment behaves exactly as before;
+          // Gemini and OpenRouter (and optional fallbacks) are additive configuration.
+          const providerConfig = resolveAxProviderConfig(env);
+          const axConfig = {
+            ...resolveAxOrchestratorConfig(env),
+            enabled: providerConfig.enabled,
+            code: providerConfig.code,
+            error: providerConfig.error,
+            apiKey: providerConfig.primary?.apiKey || "",
+            model: providerConfig.primary?.model || "",
+            baseUrl: providerConfig.primary?.baseUrl || "",
+            provider: describeProviderStatus(providerConfig)
+          };
           const runStore = hasD1
             ? createD1AxRunRepository({
                 accountId: env.CLOUDFLARE_ACCOUNT_ID,
@@ -405,13 +423,13 @@ export function registerDeviceCommandBridge(app, {
               // In-process execution when the runtime is mounted; otherwise the run is queued for
               // the cron executor and says so instead of spinning.
               execute: nexusRuntime && typeof nexusRuntime.tick === "function" ? () => nexusRuntime.tick() : null,
-              planner: createOpenAiPlanner({
-                apiKey: axConfig.apiKey,
-                model: axConfig.model,
-                baseUrl: axConfig.baseUrl,
+              planner: createAxPlannerFromProviderConfig(providerConfig, {
                 fetchImpl,
                 prices: axConfig.prices,
-                maxSteps: axConfig.maxSteps
+                maxSteps: axConfig.maxSteps,
+                maxOutputTokens: axConfig.maxOutputTokens,
+                reasoningEffort: axConfig.reasoningEffort,
+                failedCallCostUsd: axConfig.failedCallCostUsd
               }),
               runs: runStore,
               // The planner may only choose adapters the worker actually has, never the registry's
