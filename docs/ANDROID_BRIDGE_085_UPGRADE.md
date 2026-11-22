@@ -29,6 +29,44 @@ evidence that the installed 0.8.2 build shares a certificate with this 0.8.5 art
 
 Therefore the plan is **verify first, decide after** — never uninstall to "make the update work".
 
+## 2a. Signing investigation (2026-11-22)
+
+Checked, read-only:
+
+| Question | Result |
+|---|---|
+| Keystore/`.jks`/`.p12` in the repository or its history | **none** |
+| `signingConfig` in `app/build.gradle.kts` | **none** — debug signing only |
+| Keystore or `~/.android` caching in the build workflow | **none** |
+| Keystore material in Actions caches | **none** — the cache list contains only npm `node-cache` entries |
+| Stable certificate across CI runs | **no**: run `45071858035` signed with cert DER SHA-256 `1ad6b99f…fb09a`; run `45073390090` signed with `06b73dfa…789b0` |
+| Existing APK release asset | `habitat-v0.8-latest` (Oct 8) exists, but an APK contains only the **public** certificate |
+| `adb`/device to read the installed certificate | **unavailable** |
+
+Conclusion: **no stable private key exists in the repository or CI.** Each GitHub runner generates a
+fresh debug keystore, which is why the certificate changes between builds. A new key cannot be made
+compatible with the installed 0.8.2 app — Android requires the **same** signing certificate for an
+in-place update.
+
+Legitimate paths, in order:
+
+1. **Owner-supplied original keystore.** Only viable if the installed 0.8.2 was built on a machine
+   whose `~/.android/debug.keystore` (or a release keystore) still exists, and its certificate
+   matches the installed app. The certificate must be compared first; the keystore password is
+   supplied to the build environment, never pasted into chat or committed.
+2. **Owner-side local build with that keystore**, producing a 0.8.5 APK with the same certificate.
+   CI cannot do this without the key.
+3. **Google Play App Signing** only if the app was distributed through Play (not indicated); Play
+   can re-sign uploads, but it is not a general-purpose update path.
+4. **Key rotation** (`apksigner rotate --lineage`) requires possession of the **old private key** to
+   sign the lineage; it cannot start from a certificate alone.
+5. **Approved uninstall + install + re-pair** if no key exists, accepting the new device ID and the
+   owner-allowlist update.
+
+**Do not generate a new key and present it as compatible.** A fresh debug or release key produces
+`INSTALL_FAILED_UPDATE_INCOMPATIBLE` against the existing install; calling it a "release signing
+fix" would be false.
+
 ## 3. Gate 0 — preserve the current installation
 
 Until the owner approves a replacement:
