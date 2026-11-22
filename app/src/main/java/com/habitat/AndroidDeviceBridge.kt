@@ -14,6 +14,7 @@ import java.util.UUID
 import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
@@ -36,6 +37,10 @@ class AndroidDeviceBridge(
     private val appContext = context.applicationContext
     private val prefs = appContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
     private var executor: ScheduledExecutorService? = null
+    // One pairing exchange at a time. The dialog re-enables its button after 30 s, so a tap can
+    // arrive while the first request is still running; two concurrent exchanges of a single-use
+    // code would race the stored credential against the server's last issued token.
+    private val pairingInFlight = AtomicBoolean(false)
 
     val deviceId: String
         get() {
@@ -52,6 +57,10 @@ class AndroidDeviceBridge(
         val clean = code.trim()
         if (clean.length < 20 || clean.length > 128) {
             onComplete(false, "Pairing code format is invalid. Request a fresh code.")
+            return
+        }
+        if (!pairingInFlight.compareAndSet(false, true)) {
+            onComplete(false, "A pairing attempt is already running. Give it a moment, then retry.")
             return
         }
         Thread({
@@ -78,6 +87,8 @@ class AndroidDeviceBridge(
                 onComplete(success, if (success) "Paired" else failureReason)
             } catch (_: Throwable) {
                 // A destroyed Activity must not crash the pairing worker.
+            } finally {
+                pairingInFlight.set(false)
             }
         }, "Habitat-Phone-Pair").apply {
             isDaemon = true
