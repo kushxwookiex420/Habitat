@@ -17,20 +17,24 @@
       "release gate inputs for Mission 14 documents, migration 0006 and evidence artifact"
     ],
     "locallyTested": [
-      "tests/ax-message-channel.test.mjs — 9 tests",
-      "tests/ax-nexus-e2e.test.mjs — 3 tests through registerDeviceCommandBridge",
+      "tests/ax-message-channel.test.mjs \u2014 9 tests",
+      "tests/ax-nexus-e2e.test.mjs \u2014 3 tests through registerDeviceCommandBridge",
       "full suite and migration checks on Node 26.13.1",
       "Android debug APK compiled and packaged; no device or emulator"
     ],
     "ciVerified": "pending on the final head; recorded in the PR and manifest after the workflows run",
-    "stagingVerified": "NOT RUN — no disposable D1 database, credentials or owner approval id",
-    "physicallyDeviceVerified": "BUILD ONLY — no phone or emulator attached; 15-check sheet unexecuted",
-    "productionVerified": "NOT DEPLOYED — no production change was made"
+    "stagingVerified": "NOT RUN \u2014 no disposable D1 database, credentials or owner approval id",
+    "physicallyDeviceVerified": "BUILD ONLY \u2014 no phone or emulator attached; 15-check sheet unexecuted",
+    "productionVerified": "NOT DEPLOYED \u2014 no production change was made"
   },
   "channel": {
     "table": "habitat_ax_messages",
     "migration": "migrations/0006_ax_nexus_messages.sql",
-    "allowedAdapters": ["repo.inspect", "task.inspect", "runtime.health"],
+    "allowedAdapters": [
+      "repo.inspect",
+      "task.inspect",
+      "runtime.health"
+    ],
     "limits": {
       "bodyMax": 4000,
       "evidenceItems": 12,
@@ -39,8 +43,13 @@
       "rateWindowMs": 60000
     },
     "credentials": {
-      "ax": ["HABITAT_AX_COMMAND_TOKEN", "HABITAT_AX_BRIDGE_TOKEN"],
-      "nexus": ["AX_NEXUS_TOKEN"]
+      "ax": [
+        "HABITAT_AX_COMMAND_TOKEN",
+        "HABITAT_AX_BRIDGE_TOKEN"
+      ],
+      "nexus": [
+        "AX_NEXUS_TOKEN"
+      ]
     },
     "acceptance": {
       "submissionPersisted": true,
@@ -90,7 +99,7 @@
       "STAGING_OWNER_APPROVAL_ID"
     ],
     "networkRequests": 0,
-    "ownerAction": "docs/HABITAT_ACTIVATION_RUNBOOK.md §1"
+    "ownerAction": "docs/HABITAT_ACTIVATION_RUNBOOK.md \u00a71"
   },
   "render": {
     "deployed": false,
@@ -103,7 +112,7 @@
     "channelAvailable": true,
     "chatGptSessionConnected": false,
     "reason": "No deployed origin, no managed ChatGPT workspace, no authorised connector in this session. A personal ChatGPT plan cannot create a GPT/Action.",
-    "ownerAction": "docs/AX_NEXUS_COMMUNICATION.md §7"
+    "ownerAction": "docs/AX_NEXUS_COMMUNICATION.md \u00a77"
   },
   "forbiddenActionsTaken": {
     "productionDeploy": false,
@@ -115,5 +124,27 @@
     "phoneCommand": false,
     "merge": false,
     "forcePush": false
+  },
+  "codeCommit": "282da02b0e77ce2a6dfc9a542cdbf9036e5a1a4a",
+  "localVerification": {
+    "syntaxCheck": "exit 0",
+    "tests": {
+      "total": 703,
+      "passed": 703,
+      "failed": 0,
+      "node": "26.13.1"
+    },
+    "migrationChecks": {
+      "checks": 22,
+      "passed": 22,
+      "failed": 0
+    },
+    "releaseGate": {
+      "checks": 13,
+      "releaseReady": true
+    },
+    "androidBuild": {
+      "multiple": "BUILD SUCCESSFUL"
+    }
   }
 }

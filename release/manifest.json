@@ -1,13 +1,13 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-11-22T04:04:55.642Z",
-  "commit": "ab727b4637dde66cf1b6770ef781cb39312d7436",
+  "generatedAt": "2026-11-22T05:10:57.003Z",
+  "commit": "282da02b0e77ce2a6dfc9a542cdbf9036e5a1a4a",
   "branch": "ax-nexus/revision-4.6-nexus-mainline-integration",
   "checks": [
     {
       "name": "git commit resolved",
       "ok": true,
-      "commit": "ab727b4637dde66cf1b6770ef781cb39312d7436"
+      "commit": "282da02b0e77ce2a6dfc9a542cdbf9036e5a1a4a"
     },
     {
       "name": "syntax and repository checks",
@@ -17,24 +17,31 @@
     {
       "name": "full test suite",
       "ok": true,
-      "pass": 691,
+      "pass": 703,
       "fail": 0,
       "detail": "exit 0"
     },
     {
       "name": "migration compatibility (local sqlite)",
       "ok": true,
-      "checks": 18,
-      "passed": 18,
+      "checks": 22,
+      "passed": 22,
       "failed": 0,
       "environment": "node:sqlite in-memory (D1-compatible SQL only; not D1 itself)"
     },
     {
       "name": "command route authentication",
       "ok": true,
-      "routes": 69,
+      "routes": 74,
       "unguarded": [],
       "note": "Static check only: every command route registration names requireAx or requireScheduler on the same line."
+    },
+    {
+      "name": "NEXUS message route authentication",
+      "ok": true,
+      "routes": 9,
+      "unguarded": [],
+      "note": "Static check only: every NEXUS route registration names requireNexus on the same line."
     },
     {
       "name": "required release inputs and migrations",
@@ -77,6 +84,34 @@
           "ok": true
         },
         {
+          "name": "docs/NEXUS_MISSION_14.md",
+          "ok": true
+        },
+        {
+          "name": "docs/AX_NEXUS_COMMUNICATION.md",
+          "ok": true
+        },
+        {
+          "name": "docs/AUTONOMOUS_EXECUTION.md",
+          "ok": true
+        },
+        {
+          "name": "docs/AGENT_CAPABILITY_MATRIX.md",
+          "ok": true
+        },
+        {
+          "name": "docs/HABITAT_ACTIVATION_RUNBOOK.md",
+          "ok": true
+        },
+        {
+          "name": "docs/RENDER_MISSION_14_READINESS.md",
+          "ok": true
+        },
+        {
+          "name": "docs/ANDROID_MISSION_14_DEVICE_TEST.md",
+          "ok": true
+        },
+        {
           "name": "release/demo-evidence.json",
           "ok": true
         },
@@ -86,6 +121,10 @@
         },
         {
           "name": "release/mission-13-evidence.json",
+          "ok": true
+        },
+        {
+          "name": "release/mission-14-evidence.json",
           "ok": true
         },
         {
@@ -109,6 +148,10 @@
           "ok": true
         },
         {
+          "name": "migrations/0006_ax_nexus_messages.sql",
+          "ok": true
+        },
+        {
           "name": "0005 has security events table",
           "ok": true
         },
@@ -118,6 +161,18 @@
         },
         {
           "name": "migration 0005 is additive",
+          "ok": true
+        },
+        {
+          "name": "0006 has the message table",
+          "ok": true
+        },
+        {
+          "name": "0006 has the correlation index",
+          "ok": true
+        },
+        {
+          "name": "migration 0006 is additive",
           "ok": true
         }
       ]
@@ -141,7 +196,7 @@
     {
       "name": "release manifest matches the validated commit",
       "ok": true,
-      "commit": "ab727b4637dde66cf1b6770ef781cb39312d7436",
+      "commit": "282da02b0e77ce2a6dfc9a542cdbf9036e5a1a4a",
       "relation": "generated-now"
     },
     {
@@ -150,13 +205,18 @@
       "detail": "exit 0"
     },
     {
+      "name": "Ax-NEXUS channel and complete-system acceptance",
+      "ok": true,
+      "detail": "exit 0 (12 tests)"
+    },
+    {
       "name": "Android compilation",
       "ok": true,
       "task": ":app:assembleDebug",
       "environment": "local Gradle + Android SDK (compile and package; no emulator or phone)",
       "detail": "assembled",
       "apk": "app/build/outputs/apk/debug/app-debug.apk",
-      "sha256": "aa022d8b3f56f8cf9c45c8e5f79fdb8706e64d80cb9e8a006d7afbc61e71f950",
+      "sha256": "e20a0729e2f7a954b49b2a58e07ba5bec589d3e7fb32211700a062cde92653b4",
       "skipped": false
     },
     {
@@ -200,6 +260,12 @@
           "present": false
         },
         {
+          "name": "AX_NEXUS_TOKEN",
+          "purpose": "NEXUS message surface credential",
+          "required": true,
+          "present": false
+        },
+        {
           "name": "AX_SCHEDULER_TOKEN",
           "purpose": "external scheduler credential",
           "required": false,
@@ -226,7 +292,9 @@
     "ci": "not yet verified for this manifest until the workflow run on the final head is green",
     "staging": "NOT RUN — owner-blocked",
     "physicalDevice": "BUILD ONLY — owner-blocked",
-    "controlCenter": "local real authenticated backend harness (in-memory); not staging or production"
+    "controlCenter": "local real authenticated backend harness (in-memory); not staging or production",
+    "messaging": "local integration evidence only (D1-shaped SQLite, simulated model transport); not staging",
+    "autonomy": "local integration evidence only (scheduler tick + real engine + read-only adapter)"
   },
   "schema": {
     "migrations": [
@@ -234,11 +302,12 @@
       "0002_habitat_command_tasks.sql",
       "0003_ax_memory_notifications.sql",
       "0004_ax_objectives_incidents.sql",
-      "0005_ax_security_scheduler.sql"
+      "0005_ax_security_scheduler.sql",
+      "0006_ax_nexus_messages.sql"
     ],
-    "currentVersion": "0005",
+    "currentVersion": "0006",
     "newInThisMission": [
-      "0005_ax_security_scheduler.sql"
+      "0006_ax_nexus_messages.sql"
     ],
     "appliedToProduction": false,
     "note": "Validate against D1 before applying; SQLite proves SQL shape and idempotence, not D1 parity."
@@ -278,6 +347,12 @@
       {
         "name": "HABITAT_D1_API_TOKEN",
         "purpose": "D1 API token",
+        "required": true,
+        "present": false
+      },
+      {
+        "name": "AX_NEXUS_TOKEN",
+        "purpose": "NEXUS message surface credential",
         "required": true,
         "present": false
       }
@@ -320,6 +395,12 @@
         "present": false
       },
       {
+        "name": "AX_NEXUS_TOKEN",
+        "purpose": "NEXUS message surface credential",
+        "required": true,
+        "present": false
+      },
+      {
         "name": "AX_SCHEDULER_TOKEN",
         "purpose": "external scheduler credential",
         "required": false,
@@ -346,8 +427,11 @@
   "knownLimitations": [
     "No production or staging deployment was performed.",
     "No disposable staging D1 credentials or owner approval id were available; staging is not verified.",
-    "Migration 0005 has not been applied to D1.",
+    "Migrations 0005 and 0006 have not been applied to D1.",
     "Android is compile-verified; no emulator or physical S26 Ultra test was run.",
+    "The Ax-NEXUS channel is locally proven; no Ax client is connected to a deployed origin.",
+    "Autonomy requires a trigger; a sleeping Render Free service is not continuously autonomous.",
+    "Message delivery is at-least-once and restricted to read-only adapters.",
     "No live model provider call is made by the gate or by tests.",
     "Research/engineering transports require AX_AGENT_LOCAL_ROOT and stay off by default.",
     "Scheduler runs only when an external trigger or an owner calls its tick endpoint."
@@ -355,6 +439,7 @@
   "rollback": [
     "Deploy the previous commit; migration 0005 is additive and no other schema was altered.",
     "Dropping habitat_ax_security_events or habitat_ax_scheduler removes only Mission 11 history.",
+    "Migration 0006 is additive; leaving habitat_ax_messages in place after a rollback is harmless.",
     "Do not roll back by deleting task, objective or memory tables."
   ]
 }

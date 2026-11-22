@@ -107,9 +107,14 @@ gate on the deployed commit.**
 
 ## 10. Commit and PR state
 
-The exact validated commit is written by the gate into `release/manifest.json`; the PR body records
-the same commit. PR #93 stays **open, draft and clean**. No merge, force-push or history rewrite was
-performed.
+Validated code commit: `282da02b0e77ce2a6dfc9a542cdbf9036e5a1a4a`. The release record that follows
+it changes only `release/` and `docs/`, and the gate is re-run with `--check` on that head.
+PR #93 stays **open, draft and clean**. No merge, force-push or history rewrite was performed.
+
+Local verification on that commit: `npm run check` exit 0; `npm test` 703/703; migration checks
+22/22; release gate 13/13 checks, `releaseReady: true`; Android build successful
+(`e20a0729…`, 908,446 bytes). Only Node 26.13.1 was available in this environment for Mission 14;
+Node 22 was used in Mission 13 but was not re-run here.
 
 ## 11. Known limitations carried forward
 
