@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { readFile, readdir } from "node:fs/promises";
+import { lstat, readFile, readdir, realpath, stat } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import path from "node:path";
 
@@ -16,6 +16,26 @@ import path from "node:path";
 const TEXT_EXTENSIONS = new Set([".mjs", ".js", ".cjs", ".json", ".md", ".txt", ".sql", ".kt", ".xml", ".yml", ".yaml", ".toml", ".sh"]);
 const SKIP_DIRECTORIES = new Set(["node_modules", ".git", ".gradle", "build", "dist", "out", "target", "coverage"]);
 const MAX_OUTPUT_TAIL = 4_000;
+const SAFE_ENV_KEYS = new Set([
+  "PATH", "HOME", "TMPDIR", "TMP", "TEMP", "LANG", "LC_ALL", "LC_CTYPE",
+  "SystemRoot", "SYSTEMROOT", "ComSpec", "COMSPEC", "PATHEXT", "WINDIR"
+]);
+
+/**
+ * Child processes never inherit credentials. Only the keys an interpreter needs to start are passed
+ * through; a check's own `env` is filtered for credential-shaped names as well.
+ */
+export function filteredEnv(extra = {}) {
+  const safe = {};
+  for (const [key, value] of Object.entries(process.env)) {
+    if (SAFE_ENV_KEYS.has(key)) safe[key] = value;
+  }
+  for (const [key, value] of Object.entries(extra || {})) {
+    if (!/token|secret|passw|api[_-]?key|authorization|credential|cookie|session/i.test(key)) safe[key] = String(value);
+  }
+  safe.NO_COLOR = "1";
+  return safe;
+}
 
 function digest(value) {
   return createHash("sha256").update(String(value), "utf8").digest("hex");
@@ -81,11 +101,12 @@ export function createRepositoryResearchTransport({
     for (const file of files) {
       let content;
       try {
+        const info = await stat(file);
+        if (!info.isFile() || info.size > maxFileBytes) continue;
         content = await readFile(file, "utf8");
       } catch {
         continue;
       }
-      if (content.length > maxFileBytes) content = content.slice(0, maxFileBytes);
       const lower = content.toLowerCase();
       let score = 0;
       for (const term of wanted) {
@@ -151,7 +172,9 @@ function runCommand({ command, args = [], cwd, timeoutMs = 60_000, env = {}, now
       child = spawn(command, args, {
         cwd,
         shell: false,
-        env: { ...process.env, ...env, NO_COLOR: "1" },
+        env: filteredEnv(env),
+        // Own process group on POSIX so a timeout can terminate grandchildren the check spawned.
+        detached: process.platform !== "win32",
         stdio: ["ignore", "pipe", "pipe"]
       });
     } catch (error) {
@@ -160,7 +183,12 @@ function runCommand({ command, args = [], cwd, timeoutMs = 60_000, env = {}, now
     }
     const timer = setTimeout(() => {
       if (settled) return;
-      try { child.kill("SIGKILL"); } catch { /* already gone */ }
+      try {
+        if (process.platform !== "win32" && child.pid) process.kill(-child.pid, "SIGKILL");
+        else child.kill("SIGKILL");
+      } catch {
+        try { child.kill("SIGKILL"); } catch { /* already gone */ }
+      }
     }, timeoutMs);
     const append = (current, chunk) => (current + chunk.toString()).slice(-MAX_OUTPUT_TAIL);
     child.stdout.on("data", chunk => { stdout = append(stdout, chunk); });
@@ -207,10 +235,24 @@ export function createRepositoryEngineeringTransport({
   const resolvedRoot = path.resolve(root);
 
   async function inspect(relativePath) {
-    const absolute = path.resolve(resolvedRoot, relativePath);
-    if (!within(resolvedRoot, absolute)) throw new Error("inspect_outside_root");
-    const content = await readFile(absolute, "utf8");
-    const bounded = content.slice(0, maxFileBytes);
+    const requested = String(relativePath || "");
+    const absolute = path.resolve(resolvedRoot, requested);
+    if (!requested || !within(resolvedRoot, absolute)) throw new Error("inspect_outside_root");
+    // Hidden files are refused after containment, so `..` reports the traversal it actually is.
+    if (requested.split(/[\\/]/).some(part => part.startsWith("."))) {
+      throw new Error("inspect_hidden_path");
+    }
+    // `path.resolve` is not enough: a symlink inside the root can point outside it. Refuse links
+    // outright and verify the real path is still contained before reading.
+    const linkInfo = await lstat(absolute);
+    if (linkInfo.isSymbolicLink()) throw new Error("inspect_symlink");
+    const real = await realpath(absolute);
+    if (!within(resolvedRoot, real)) throw new Error("inspect_symlink_escape");
+    const info = await stat(real);
+    if (!info.isFile()) throw new Error("inspect_not_a_file");
+    if (info.size > maxFileBytes) throw new Error("inspect_file_too_large");
+    const content = await readFile(real, "utf8");
+    const bounded = content;
     const lines = bounded.split(/\r?\n/);
     const markers = [];
     for (const [index, line] of lines.entries()) {
@@ -247,7 +289,7 @@ export function createRepositoryEngineeringTransport({
       const file = files.find(item => item.digest && !item.error)?.path || null;
       if (check.when === "file" && !file) continue;
       const args = (Array.isArray(check.args) ? check.args : []).map(value => String(value).replace("{file}", file || ""));
-      const result = await runCommand({ command: check.command, args, cwd: resolvedRoot, timeoutMs: check.timeoutMs || timeoutMs, now });
+      const result = await runCommand({ command: check.command, args, cwd: resolvedRoot, timeoutMs: check.timeoutMs || timeoutMs, env: check.env || {}, now });
       commands.push({
         name: check.name || (check.command + " " + args.join(" ")).trim(),
         command: (check.command + " " + args.join(" ")).trim(),

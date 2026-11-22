@@ -4,6 +4,18 @@ Mission 10 changed the pairing dialog so it survives activity recreation. That c
 compile-verified on this branch; it has **not** been run on a physical phone from this environment.
 This document separates the three levels of evidence so they cannot be confused.
 
+## Mission 12 artifact record
+
+- Artifact: `app/build/outputs/apk/debug/app-debug.apk`
+- Size: 908,394 bytes
+- SHA-256: `aa022d8b3f56f8cf9c45c8e5f79fdb8706e64d80cb9e8a006d7afbc61e71f950`
+- Build: `:app:assembleDebug`, Gradle 8.9, JDK 17, local Android SDK, offline
+- Verified level: **compiled and packaged only**
+
+The checksum identifies this local build. Rebuilds produce their own checksum; record the checksum
+of the APK actually installed. JavaScript changes in Mission 12 do not alter the Kotlin UI, but the
+APK must still be rebuilt from the final commit before physical validation.
+
 ## Evidence levels
 
 | Level | What it proves | Current status |
@@ -66,6 +78,27 @@ Connection, revocation and receipts:
 15. Confirm the acknowledgement and the execution receipt match the command id.
 16. Send a destructive or unapproved command; it must be refused and recorded as a denied security
     event.
+
+## Test sheet labels
+
+Use one row per check and label the evidence level exactly. Do not upgrade a label because a later
+check passed at a lower level.
+
+| Area | Check | Evidence level | Result |
+| --- | --- | --- | --- |
+| Build | Kotlin compiles, resources merge, APK packages | Compiled only | Pass (local) |
+| Build | APK installs and launches | Emulator or physical | Not run |
+| Lifecycle | Rotate with dialog open, code preserved, no duplicate dialog | Emulator or physical | Not run |
+| Lifecycle | Keyboard show/hide keeps the dialog usable | Emulator or physical | Not run |
+| Lifecycle | Display/font size change, background/foreground, process kill | Emulator or physical | Not run |
+| Pairing | Expired code is refused, dialog remains usable | Emulator or physical | Not run |
+| Pairing | Repeated submission is refused, no duplicate device | Emulator or physical | Not run |
+| Network | Timeout and mid-request interruption leave no used code | Emulator or physical | Not run |
+| Auth | Successful pairing records a bounded proof, not a permanent flag | Emulator or physical | Not run |
+| Auth | Revoked device is refused on the next command | Emulator or physical | Not run |
+| Commands | Duplicate idempotency key executes once | Emulator or physical | Not run |
+| Commands | Acknowledgement and execution receipt match the command id | Emulator or physical | Not run |
+| Safety | Destructive/unapproved command refused and audited | Emulator or physical | Not run |
 
 ## Recording evidence
 

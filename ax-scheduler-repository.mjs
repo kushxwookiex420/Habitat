@@ -1,3 +1,4 @@
+import { DatabaseSync } from "node:sqlite";
 import { createD1Query } from "./nexus-runtime.mjs";
 
 /**
@@ -81,6 +82,128 @@ export function createMemorySchedulerRepository({ state = null } = {}) {
     snapshot() {
       return clone(current);
     }
+  });
+}
+
+/**
+ * Durable scheduler state in a local SQLite file.
+ *
+ * This exists for the multi-process adversarial harness: separate Node processes really contend for
+ * one row. It is not mounted as a production store; Cloudflare D1 remains the production adapter.
+ * `BEGIN IMMEDIATE` plus the revision CAS makes acquire/heartbeat/complete serializable across
+ * processes, and a stale lease holder loses its write after a takeover.
+ */
+export function createSqliteSchedulerRepository({ filename = null } = {}) {
+  if (!filename) throw new Error("The SQLite scheduler harness needs a filename.");
+  const db = new DatabaseSync(filename);
+  db.exec("PRAGMA busy_timeout = 5000");
+  // WAL setup itself takes a lock, so tolerate another process doing it first.
+  try { db.exec("PRAGMA journal_mode = WAL"); } catch { /* another process is initializing */ }
+  let initialized = false;
+
+  function initializeSync() {
+    if (initialized) return;
+    db.exec("CREATE TABLE IF NOT EXISTS habitat_ax_scheduler (id TEXT PRIMARY KEY NOT NULL, record_json TEXT NOT NULL, revision INTEGER NOT NULL DEFAULT 0, lease_expires_at TEXT, updated_at TEXT NOT NULL)");
+    db.prepare("INSERT INTO habitat_ax_scheduler (id, record_json, revision, lease_expires_at, updated_at) VALUES ('primary', ?, 0, NULL, ?) ON CONFLICT(id) DO NOTHING")
+      .run(JSON.stringify(emptyState()), new Date().toISOString());
+    initialized = true;
+  }
+
+  function readSync() {
+    initializeSync();
+    const row = db.prepare("SELECT record_json, revision FROM habitat_ax_scheduler WHERE id = 'primary' LIMIT 1").get();
+    return row ? { state: JSON.parse(row.record_json), revision: Number(row.revision) } : null;
+  }
+
+  function transact(fn) {
+    initializeSync();
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      const outcome = fn();
+      db.exec("COMMIT");
+      return outcome;
+    } catch (error) {
+      try { db.exec("ROLLBACK"); } catch { /* no active transaction */ }
+      throw error;
+    }
+  }
+
+  function writeSync(state, revision, leaseExpiresAt, updatedAt) {
+    const result = db.prepare("UPDATE habitat_ax_scheduler SET record_json = ?, revision = revision + 1, lease_expires_at = ?, updated_at = ? WHERE id = 'primary' AND revision = ? RETURNING revision")
+      .all(JSON.stringify(state), leaseExpiresAt, updatedAt, revision);
+    return result.length === 1;
+  }
+
+  return Object.freeze({
+    adapter: "sqlite-harness",
+    durable: true,
+    table: "habitat_ax_scheduler",
+    async initialize() { initializeSync(); return { ok: true }; },
+    async acquire({ tickId, owner, ttlMs, nowMs }) {
+      return transact(() => {
+        const row = readSync();
+        if (!row) throw new Error("scheduler_state_missing");
+        const now = Number(nowMs);
+        if (row.state.lease && Date.parse(row.state.lease.expiresAt) > now) {
+          return { ok: false, code: "tick_overlap", lease: clone(row.state.lease) };
+        }
+        const state = { ...emptyState(), ...row.state };
+        const startedAt = new Date(now).toISOString();
+        state.lease = {
+          tickId,
+          owner: String(owner || "manual").slice(0, 80),
+          startedAt,
+          expiresAt: new Date(now + Math.max(1_000, Number(ttlMs) || 60_000)).toISOString()
+        };
+        state.lastStartAt = startedAt;
+        state.lastTickId = tickId;
+        state.tickCount = Number(state.tickCount || 0) + 1;
+        const written = writeSync(state, row.revision, state.lease.expiresAt, startedAt);
+        return written ? { ok: true, lease: clone(state.lease), tickCount: state.tickCount } : { ok: false, code: "tick_overlap", lease: null };
+      });
+    },
+    async heartbeat({ tickId, ttlMs, nowMs, progress = null }) {
+      return transact(() => {
+        const row = readSync();
+        if (!row || !row.state.lease || row.state.lease.tickId !== tickId) return { ok: false, code: "lease_lost" };
+        const state = row.state;
+        state.lease.expiresAt = new Date(Number(nowMs) + Math.max(1_000, Number(ttlMs) || 60_000)).toISOString();
+        if (progress) state.lease.progress = String(progress).slice(0, 200);
+        return writeSync(state, row.revision, state.lease.expiresAt, new Date().toISOString())
+          ? { ok: true, lease: clone(state.lease) }
+          : { ok: false, code: "lease_lost" };
+      });
+    },
+    async complete({ tickId, status, detail, nowIso }) {
+      return transact(() => {
+        const row = readSync();
+        if (!row || !row.state.lease || row.state.lease.tickId !== tickId) return { ok: false, code: "lease_lost" };
+        const state = row.state;
+        state.lease = null;
+        state.lastStatus = String(status || "ok").slice(0, 40);
+        state.lastDetail = detail ? String(detail).slice(0, 500) : null;
+        if (state.lastStatus !== "failed") state.lastSuccessAt = nowIso;
+        else state.failures = Number(state.failures || 0) + 1;
+        return writeSync(state, row.revision, null, nowIso) ? { ok: true } : { ok: false, code: "lease_lost" };
+      });
+    },
+    async fail({ tickId, error, nowIso }) {
+      return transact(() => {
+        const row = readSync();
+        if (!row) return { ok: false };
+        const state = { ...emptyState(), ...row.state };
+        if (state.lease && state.lease.tickId === tickId) state.lease = null;
+        state.lastStatus = "failed";
+        state.lastDetail = String(error || "tick failed").slice(0, 500);
+        state.failures = Number(state.failures || 0) + 1;
+        writeSync(state, row.revision, null, nowIso);
+        return { ok: true };
+      });
+    },
+    async status() {
+      return clone(readSync()?.state || emptyState());
+    },
+    close() { try { db.close(); } catch { /* already closed */ } }
   });
 }
 

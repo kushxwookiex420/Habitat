@@ -212,6 +212,23 @@ export function objectiveAccounting(objective) {
   };
 }
 
+/**
+ * Bound execution history without ever discarding an in-flight reservation.
+ *
+ * Dropping a `reserved` row would silently free budget while its child run is still alive, which
+ * is how a bounded history can become an over-budget hole. Terminal rows are trimmed first; active
+ * reservations are always retained, even if that temporarily exceeds the history bound.
+ */
+export function pruneExecutions(executions, max = 50) {
+  const rows = Array.isArray(executions) ? executions : [];
+  if (rows.length <= max) return rows;
+  const active = rows.filter(item => item.status === "reserved");
+  const terminal = rows.filter(item => item.status !== "reserved");
+  const terminalBudget = Math.max(0, max - active.length);
+  const keep = new Set([...active, ...terminal.slice(-terminalBudget)]);
+  return rows.filter(item => keep.has(item));
+}
+
 export function objectiveSummary(objective) {
   if (!objective) return null;
   const required = (objective.criteria || []).filter(item => item.required);
@@ -848,7 +865,7 @@ export function createObjectiveService({
       note: null
     };
     objective.accounting.executions.push(execution);
-    if (objective.accounting.executions.length > 50) objective.accounting.executions = objective.accounting.executions.slice(-50);
+    objective.accounting.executions = pruneExecutions(objective.accounting.executions, 50);
     remember(objective, { from: objective.status, to: objective.status, at: now(), by: "ax", reason: "budget reserved: " + key });
     try {
       await persist(objective);
@@ -972,6 +989,53 @@ export function createObjectiveService({
     return { ok: true, objective, execution, accounting: objectiveAccounting(objective) };
   }
 
+  /**
+   * Release reservations whose execution is provably gone after a crash or restart.
+   *
+   * The rule is deliberately conservative: a reservation with a bound run id is released only when
+   * a run lookup is available and says the run does not exist. An unbound reservation older than
+   * `staleMs` is released because no child run could ever be linked to it. When the run store is
+   * unknown, the reservation is kept, so reconciliation cannot free budget for live work.
+   */
+  async function reconcileReservations(id, { staleMs = 30 * 60_000, runExists = null } = {}) {
+    if (!repository) return unavailable();
+    const stale = Math.max(0, Number(staleMs) || 0);
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const loaded = await load(id);
+      if (!loaded.ok) return loaded;
+      const objective = loaded.objective;
+      const at = Date.parse(now());
+      const executions = objective.accounting?.executions || [];
+      const released = [];
+      for (const execution of executions) {
+        if (execution.status !== "reserved") continue;
+        const reservedAt = Date.parse(execution.reservedAt || 0);
+        if (!Number.isFinite(reservedAt) || !Number.isFinite(at) || at - reservedAt <= stale) continue;
+        if (execution.runId) {
+          if (typeof runExists !== "function") continue;
+          let exists;
+          try { exists = await runExists(execution.runId); } catch { continue; }
+          if (exists !== false) continue;
+        }
+        execution.status = "released";
+        execution.actualUsd = 0;
+        execution.settledAt = now();
+        execution.note = "stale reservation reconciled: no live run";
+        released.push(execution.executionId);
+      }
+      if (!released.length) return { ok: true, released: [], objective, accounting: objectiveAccounting(objective) };
+      remember(objective, { from: objective.status, to: objective.status, at: now(), by: "system", reason: "reconciled " + released.length + " stale reservation(s)" });
+      try {
+        await persist(objective);
+      } catch (error) {
+        if (error instanceof ObjectiveConflict) continue;
+        return { ok: false, code: "objective_store_unavailable" };
+      }
+      return { ok: true, released, objective, accounting: objectiveAccounting(objective) };
+    }
+    return { ok: false, code: "objective_conflict" };
+  }
+
   async function accounting(id) {
     const objective = await get(id);
     return objective ? objectiveAccounting(objective) : null;
@@ -1020,6 +1084,7 @@ export function createObjectiveService({
     settleExecution,
     releaseExecution,
     linkExecutionRun,
+    reconcileReservations,
     accounting,
     accountingOf: objectiveAccounting,
     transition,

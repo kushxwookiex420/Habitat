@@ -1,0 +1,65 @@
+{
+  "ok": true,
+  "generatedAt": "2026-11-22T03:31:14.735Z",
+  "environment": {
+    "node": "v26.13.1",
+    "platform": "linux",
+    "arch": "x64",
+    "cpu": "AMD EPYC 7003 (Milan)",
+    "cpuCount": 8,
+    "totalMemoryBytes": 16769875968,
+    "storage": "in-memory repositories; no D1, no network",
+    "note": "Local bounded measurements only. Not production latency and not a capacity claim."
+  },
+  "samples": {
+    "reservationMs": {
+      "samples": 100,
+      "p50Ms": 0.191,
+      "p95Ms": 0.407,
+      "maxMs": 0.698,
+      "meanMs": 0.223
+    },
+    "settlementMs": {
+      "samples": 100,
+      "p50Ms": 0.296,
+      "p95Ms": 0.498,
+      "maxMs": 0.976,
+      "meanMs": 0.329
+    },
+    "repositoryReadMs": {
+      "samples": 200,
+      "p50Ms": 0.135,
+      "p95Ms": 0.205,
+      "maxMs": 0.492,
+      "meanMs": 0.145
+    },
+    "securityAppendMs": {
+      "samples": 200,
+      "p50Ms": 0.018,
+      "p95Ms": 0.052,
+      "maxMs": 1.255,
+      "meanMs": 0.032
+    },
+    "securityVerify200Ms": {
+      "samples": 20,
+      "p50Ms": 0.441,
+      "p95Ms": 1.112,
+      "maxMs": 1.301,
+      "meanMs": 0.591
+    },
+    "schedulerTickMs": {
+      "samples": 20,
+      "p50Ms": 0.542,
+      "p95Ms": 1.685,
+      "maxMs": 1.724,
+      "meanMs": 0.684
+    }
+  },
+  "data": {
+    "reservations": 100,
+    "settlements": 100,
+    "objectiveReads": 200,
+    "securityEvents": 200,
+    "schedulerTicks": 20
+  }
+}

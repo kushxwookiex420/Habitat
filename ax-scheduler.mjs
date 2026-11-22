@@ -28,6 +28,7 @@ export function createSchedulerService({
   ticks,
   recovery = null,
   objectives = null,
+  runs = null,
   notifications = null,
   now = () => new Date().toISOString(),
   nowMs = () => Date.now(),
@@ -115,6 +116,38 @@ export function createSchedulerService({
           });
         }
       }
+      // Crash reconciliation: a process can die after reserving budget but before binding a run.
+      // Only provably dead reservations are released; an unbound reservation is stale, a bound one
+      // is released only when the run store confirms it does not exist.
+      let reconciled = 0;
+      if (objectives && typeof objectives.reconcileReservations === "function") {
+        let rows = [];
+        try { rows = await objectives.list({ limit: SCHEDULER_LIMITS.maxObjectives }); } catch { rows = []; }
+        const activeStatuses = ["executing", "verifying", "interrupted", "recovery_required"];
+        const runExists = runs && typeof runs.getRun === "function"
+          ? async runId => Boolean(await runs.getRun(runId))
+          : null;
+        for (const row of rows.filter(item => activeStatuses.includes(item.status)).slice(0, 50)) {
+          try {
+            const outcome = await objectives.reconcileReservations(row.id, { staleMs: stuckObjectiveMs, runExists });
+            if (outcome?.ok && Array.isArray(outcome.released) && outcome.released.length) {
+              reconciled += outcome.released.length;
+              findings.push({
+                kind: "accounting.reservation_released",
+                severity: "warning",
+                subject: "objective:" + row.id,
+                title: "Released stale budget reservation(s)",
+                detail: "Released " + outcome.released.join(", ") + " after no live run was found.",
+                recommendation: "No charge was made; the reservation history remains visible.",
+                safeAction: "reconcile_run",
+                objectiveId: row.id
+              });
+            }
+          } catch (error) {
+            log.error?.("AX_SCHEDULER_RECONCILE_FAILED", clean(error?.message, 160));
+          }
+        }
+      }
       findings.push(...await stuckObjectives());
       findings.push(...await expiredApprovals());
       const high = findings.filter(item => ["high", "critical"].includes(item.severity));
@@ -148,6 +181,7 @@ export function createSchedulerService({
           recorded: Array.isArray(recoveryResult.recorded) ? recoveryResult.recorded.length : 0,
           summary: recoveryResult.report?.summary || null
         } : null,
+        reconciledReservations: reconciled,
         notification,
         startedAt: new Date(startedAtMs).toISOString(),
         finishedAt: now(),

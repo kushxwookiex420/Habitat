@@ -158,6 +158,14 @@ export function registerDeviceCommandBridge(app, {
       ticks: schedulerStore,
       recovery: resolveRecovery(),
       objectives,
+      // Only a configured run store can prove a bound reservation is dead. When it is unavailable,
+      // getRun throws and the scheduler keeps the reservation rather than freeing budget blindly.
+      runs: {
+        async getRun(runId) {
+          if (!axOrchestrator?.enabled) throw new Error("run_store_unavailable");
+          return axOrchestrator.getRun(runId);
+        }
+      },
       notifications,
       log
     });

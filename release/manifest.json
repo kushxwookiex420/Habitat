@@ -1,13 +1,13 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-11-22T03:17:38.361Z",
-  "commit": "7939f39237ba5ac41fc66574857dd082ea179e39",
+  "generatedAt": "2026-11-22T03:38:59.648Z",
+  "commit": "411ea5298734e963cb0824970fbfd266879ee64a",
   "branch": "ax-nexus/revision-4.6-nexus-mainline-integration",
   "checks": [
     {
       "name": "git commit resolved",
       "ok": true,
-      "commit": "7939f39237ba5ac41fc66574857dd082ea179e39"
+      "commit": "411ea5298734e963cb0824970fbfd266879ee64a"
     },
     {
       "name": "syntax and repository checks",
@@ -17,7 +17,7 @@
     {
       "name": "full test suite",
       "ok": true,
-      "pass": 648,
+      "pass": 687,
       "fail": 0,
       "detail": "exit 0"
     },
@@ -37,11 +37,80 @@
       "note": "Static check only: every command route registration names requireAx or requireScheduler on the same line."
     },
     {
+      "name": "required release inputs and migrations",
+      "ok": true,
+      "checks": [
+        {
+          "name": "docs/NEXUS_MISSION_12.md",
+          "ok": true
+        },
+        {
+          "name": "docs/SECURITY_REVIEW_MISSION_12.md",
+          "ok": true
+        },
+        {
+          "name": "docs/STAGING_VALIDATION.md",
+          "ok": true
+        },
+        {
+          "name": "docs/ANDROID_DEVICE_VALIDATION.md",
+          "ok": true
+        },
+        {
+          "name": "release/demo-evidence.json",
+          "ok": true
+        },
+        {
+          "name": "release/perf-mission-12.json",
+          "ok": true
+        },
+        {
+          "name": "migrations/0001_habitat_tasks.sql",
+          "ok": true
+        },
+        {
+          "name": "migrations/0002_habitat_command_tasks.sql",
+          "ok": true
+        },
+        {
+          "name": "migrations/0003_ax_memory_notifications.sql",
+          "ok": true
+        },
+        {
+          "name": "migrations/0004_ax_objectives_incidents.sql",
+          "ok": true
+        },
+        {
+          "name": "migrations/0005_ax_security_scheduler.sql",
+          "ok": true
+        },
+        {
+          "name": "0005 has security events table",
+          "ok": true
+        },
+        {
+          "name": "0005 has scheduler table",
+          "ok": true
+        },
+        {
+          "name": "migration 0005 is additive",
+          "ok": true
+        }
+      ]
+    },
+    {
+      "name": "critical adversarial suites",
+      "ok": true,
+      "detail": "exit 0"
+    },
+    {
       "name": "Android compilation",
       "ok": true,
-      "task": ":app:compileDebugKotlin",
-      "environment": "local Gradle + Android SDK (compile only)",
-      "detail": "compiled",
+      "task": ":app:assembleDebug",
+      "environment": "local Gradle + Android SDK (compile and package; no emulator or phone)",
+      "detail": "assembled",
+      "apk": "app/build/outputs/apk/debug/app-debug.apk",
+      "sha256": "aa022d8b3f56f8cf9c45c8e5f79fdb8706e64d80cb9e8a006d7afbc61e71f950",
       "skipped": false
     },
     {

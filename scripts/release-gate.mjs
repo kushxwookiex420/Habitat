@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
-import { readFile, writeFile, mkdir, access } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { readFile, readdir, writeFile, mkdir, access } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { runMigrationChecks } from "./migration-check.mjs";
@@ -50,13 +51,47 @@ function run(command, commandArgs, options = {}) {
   }
 }
 
-async function exists(relative) {
+async function exists(relative, root = ROOT) {
   try {
-    await access(path.join(ROOT, relative));
+    await access(path.join(root, relative));
     return true;
   } catch {
     return false;
   }
+}
+
+const REQUIRED_DOCUMENTS = [
+  "docs/NEXUS_MISSION_12.md",
+  "docs/SECURITY_REVIEW_MISSION_12.md",
+  "docs/STAGING_VALIDATION.md",
+  "docs/ANDROID_DEVICE_VALIDATION.md"
+];
+const REQUIRED_ARTIFACTS = ["release/demo-evidence.json", "release/perf-mission-12.json"];
+const REQUIRED_MIGRATIONS = [
+  "0001_habitat_tasks.sql",
+  "0002_habitat_command_tasks.sql",
+  "0003_ax_memory_notifications.sql",
+  "0004_ax_objectives_incidents.sql",
+  "0005_ax_security_scheduler.sql"
+];
+
+/** Artifact and schema presence is a release requirement, not a formality. */
+export async function checkReleaseInputs(root = ROOT) {
+  const checks = [];
+  for (const file of [...REQUIRED_DOCUMENTS, ...REQUIRED_ARTIFACTS]) {
+    checks.push({ name: file, ok: await exists(file, root) });
+  }
+  let migrations = [];
+  try { migrations = await readdir(path.join(root, "migrations")); } catch { migrations = []; }
+  for (const expected of REQUIRED_MIGRATIONS) {
+    checks.push({ name: "migrations/" + expected, ok: migrations.includes(expected) });
+  }
+  let schema = "";
+  try { schema = await readFile(path.join(root, "migrations", "0005_ax_security_scheduler.sql"), "utf8"); } catch { schema = ""; }
+  checks.push({ name: "0005 has security events table", ok: /habitat_ax_security_events/.test(schema) });
+  checks.push({ name: "0005 has scheduler table", ok: /habitat_ax_scheduler/.test(schema) });
+  checks.push({ name: "migration 0005 is additive", ok: /CREATE TABLE IF NOT EXISTS/i.test(schema) && !/\bDROP\b/i.test(schema) });
+  return { ok: checks.every(item => item.ok), checks };
 }
 
 async function routeAuthCheck() {
@@ -89,15 +124,22 @@ async function androidCheck() {
   if (!(await exists("../toolchain/gradle-8.9/bin/gradle"))) {
     return { ok: false, skipped: true, reason: "gradle toolchain not present on this machine" };
   }
-  const result = run(gradle, ["--offline", "--console=plain", ":app:compileDebugKotlin"], {
+  const result = run(gradle, ["--offline", "--console=plain", ":app:assembleDebug"], {
     env: { JAVA_HOME: javaHome, ANDROID_HOME: androidHome, ANDROID_SDK_ROOT: androidHome },
     timeoutMs: 240_000
   });
+  const apk = path.join(ROOT, "app/build/outputs/apk/debug/app-debug.apk");
+  let sha256 = null;
+  try {
+    sha256 = createHash("sha256").update(await readFile(apk)).digest("hex");
+  } catch { sha256 = null; }
   return {
-    ok: result.ok,
-    task: ":app:compileDebugKotlin",
-    environment: "local Gradle + Android SDK (compile only)",
-    detail: result.ok ? "compiled" : result.stderr.slice(-800),
+    ok: result.ok && Boolean(sha256),
+    task: ":app:assembleDebug",
+    environment: "local Gradle + Android SDK (compile and package; no emulator or phone)",
+    detail: result.ok ? (sha256 ? "assembled" : "APK missing after build") : result.stderr.slice(-800),
+    apk: sha256 ? "app/build/outputs/apk/debug/app-debug.apk" : null,
+    sha256,
     skipped: false
   };
 }
@@ -138,6 +180,14 @@ export async function runReleaseGate() {
   const routeAuth = await routeAuthCheck();
   add("command route authentication", routeAuth);
 
+  const releaseInputs = await checkReleaseInputs(ROOT);
+  add("required release inputs and migrations", releaseInputs);
+
+  // These are the adversarial invariants, not a repeat of the whole suite. They run even when the
+  // operator asked to skip the long suite, because a release may not skip its security checks.
+  const critical = run("node", ["--test", "tests/ax-adversarial-accounting.test.mjs", "tests/ax-adversarial-security.test.mjs", "tests/ax-adversarial-transports.test.mjs", "tests/ax-adversarial-auth.test.mjs", "tests/ax-scheduler-multiprocess.test.mjs", "tests/d1-http-compat-mission-12.test.mjs"]);
+  add("critical adversarial suites", { ok: critical.ok, detail: critical.ok ? "exit 0" : (critical.stdout + critical.stderr).slice(-1200) });
+
   if (skipAndroid) {
     add("Android compilation", { ok: true, skipped: true, reason: "--skip-android was supplied" });
   } else {
@@ -156,9 +206,8 @@ export async function runReleaseGate() {
     note: "Presence is reported without values. This gate does not validate the credentials themselves."
   });
 
-  const apk = await exists("app/build/outputs/apk/debug/app-debug.apk")
-    ? "app/build/outputs/apk/debug/app-debug.apk"
-    : null;
+  const android = checks.find(check => check.name === "Android compilation");
+  const apk = android?.apk || (await exists("app/build/outputs/apk/debug/app-debug.apk") ? "app/build/outputs/apk/debug/app-debug.apk" : null);
 
   const manifest = {
     schemaVersion: 1,
@@ -166,7 +215,7 @@ export async function runReleaseGate() {
     commit,
     branch: run("git", ["rev-parse", "--abbrev-ref", "HEAD"]).stdout.trim(),
     checks,
-    releaseReady: checks.every(check => check.ok),
+    releaseReady: checks.every(check => check.ok && check.skipped !== true),
     schema: {
       migrations: migrations.files,
       currentVersion: "0005",

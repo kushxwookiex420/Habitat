@@ -54,6 +54,7 @@ function redact(value) {
     .replace(/sk-[A-Za-z0-9_-]{8,}/g, "[redacted]")
     .replace(/Bearer\s+[A-Za-z0-9._~+/=-]{8,}/gi, "Bearer [redacted]")
     .replace(/\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{12,}/g, "[redacted]")
+    .replace(/\b([A-Za-z0-9_]*(?:TOKEN|SECRET|PASSWORD|PASSWD|API[_-]?KEY|AUTHORIZATION|CREDENTIAL)[A-Za-z0-9_]*)\s*[:=]\s*["']?([^\s"',;]{3,})/gi, "$1=[redacted]")
     .replace(/\b[A-Za-z0-9+/=_-]{40,}\b/g, "[redacted]");
 }
 
@@ -150,6 +151,8 @@ export function createSecurityEventService({
       evidence: evidence ? redact(typeof evidence === "string" ? evidence : JSON.stringify(evidence)) : null,
       createdAt: now()
     };
+    // A malformed clock value must not create an event that can never be ordered or expired.
+    if (!Number.isFinite(Date.parse(event.createdAt))) event.createdAt = new Date().toISOString();
     try {
       const stored = await repository.append(event);
       return { ok: true, event: stored };
@@ -174,13 +177,18 @@ export function createSecurityEventService({
     };
   }
 
-  async function integrity({ limit = 500 } = {}) {
+  async function integrity({ limit = 500, expectedHeadHash = null } = {}) {
     if (!repository) return unavailable();
     const events = await repository.chain({ limit });
     const verified = verifyEventChain(events);
+    const anchor = expectedHeadHash
+      ? { expected: String(expectedHeadHash), actual: verified.headHash, matches: verified.ok && verified.headHash === String(expectedHeadHash) }
+      : null;
+    const anchored = !anchor || anchor.matches;
     return {
-      ok: true,
-      ...verified,
+      ok: verified.ok && anchored,
+      ...(anchored ? verified : { ...verified, ok: false, reason: verified.ok ? "head_anchor_mismatch" : verified.reason }),
+      anchor,
       checked: events.length,
       firstSeq: events[0]?.seq ?? null,
       lastSeq: events[events.length - 1]?.seq ?? null,

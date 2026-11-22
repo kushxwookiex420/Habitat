@@ -23,6 +23,7 @@ export function createMemorySecurityEventRepository({ records = [] } = {}) {
   }
 
   async function appendLocked(event) {
+    if (rows.some(row => row.id === event.id)) throw new Error("security_event_id_already_exists");
     const previous = rows[rows.length - 1] || null;
     const seq = previous ? previous.seq + 1 : 1;
     const prevHash = previous ? previous.hash : null;
@@ -112,7 +113,11 @@ export function createD1AxSecurityEventRepository({ accountId, databaseId, apiTo
       return initializing;
     },
     async append(event) {
-      for (let attempt = 0; attempt < 4; attempt += 1) {
+      // A busy owner can produce many concurrent refusals. Retry enough rounds that a burst of
+      // eight appends is not silently dropped; the UNIQUE(seq) constraint still guarantees one
+      // writer per sequence, so this is contention handling, not a lost event.
+      for (let attempt = 0; attempt < 24; attempt += 1) {
+        if (attempt > 0) await new Promise(resolve => setTimeout(resolve, Math.min(25, attempt * 2)));
         const head = await readHead();
         const seq = head ? head.seq + 1 : 1;
         const prevHash = head ? head.hash : null;
@@ -126,7 +131,7 @@ export function createD1AxSecurityEventRepository({ accountId, databaseId, apiTo
           return record;
         } catch (error) {
           // A concurrent append won the sequence. Re-read the head and rebuild the link.
-          if (attempt === 3) throw error;
+          if (attempt === 23) throw error;
         }
       }
       throw new Error("security_sequence_contention");
