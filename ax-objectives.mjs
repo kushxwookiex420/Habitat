@@ -641,6 +641,11 @@ export function createObjectiveService({
         taskId: clean(item?.taskId, 160) || null,
         agent: clean(item?.agent, 64) || null,
         digest: clean(item?.digest, 128) || null,
+        // Research attribution is durable: a later reader can re-check the URL and retrieval time.
+        url: clean(item?.url, 2_000) || null,
+        retrievedAt: clean(item?.retrievedAt, 40) || null,
+        confidence: Number.isFinite(Number(item?.confidence)) ? Number(item.confidence) : null,
+        uncertainty: clean(item?.uncertainty, 300) || null,
         recordedAt: now()
       });
     }

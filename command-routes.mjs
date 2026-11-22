@@ -136,7 +136,8 @@ export function registerUniversalCommandRoutes(app, {
   // pretending a channel exists.
   messageProvider = null,
   // Mission 17: the agent work cycle that turns an objective into specialist work and verifies it.
-  workProvider = null
+  workProvider = null,
+  plannerProvider = null
 } = {}) {
   // Two credentials, two permission sets. The bridge token is device-capable and predates this
   // work. The command token may only reach /ax/command, and it can never satisfy an owner action.
@@ -1512,12 +1513,24 @@ export function registerUniversalCommandRoutes(app, {
     const runtime = agents();
     if (!runtime) return capabilityUnavailable(res, "agents_not_configured", "The agent runtime is not mounted on this service.");
     const cycle = typeof workProvider === "function" ? workProvider() : null;
+    const planner = typeof plannerProvider === "function" ? plannerProvider() : null;
     res.json({
       ok: true,
       agents: runtime.capabilityMatrix(),
       limits: runtime.limits,
       delegations: runtime.delegations(),
-      revoked: typeof cycle?.revoked === "function" ? cycle.revoked() : null
+      revoked: typeof cycle?.revoked === "function" ? cycle.revoked() : null,
+      // Null means deterministic planning. A model planner reports its provider/model and the shared
+      // daily ledger, never a credential.
+      planner: planner
+        ? {
+            mode: planner.mode || null,
+            provider: planner.provider || null,
+            model: planner.model || null,
+            free: planner.free === true,
+            budget: typeof planner.status === "function" ? await planner.status() : null
+          }
+        : null
     });
   }));
 

@@ -304,7 +304,8 @@ export function createWorkCycle({
     report.director = {
       ok: director.review?.accepted === true,
       code: director.review?.code || director.envelope?.code || null,
-      summary: director.envelope?.summary || null
+      summary: director.envelope?.summary || null,
+      planner: director.envelope?.planner || null
     };
     if (director.review?.accepted !== true) {
       audit({
@@ -333,8 +334,8 @@ export function createWorkCycle({
         adapter: null,
         requiresApproval: step.requiresApproval === true
       })),
-      provider: "nexus-director",
-      estimatedCostUsd: 0,
+      provider: plan.provider || "nexus-director",
+      estimatedCostUsd: Number(plan.costUsd || 0),
       risk: "low",
       permissions: [],
       by: "nexus-director"
@@ -385,7 +386,9 @@ export function createWorkCycle({
       ok: false,
       code: null,
       evidenceIds: [],
-      evidence: []
+      evidence: [],
+      sources: [],
+      divergences: []
     };
     if (!step.agent) {
       result.status = "failed";
@@ -481,7 +484,11 @@ export function createWorkCycle({
         summary: clean(item.summary, config.maxStepSummary),
         source: clean(item.source, 80) || "agent:" + step.agent,
         agent: step.agent,
-        digest: item.digest || null
+        digest: item.digest || null,
+        url: item.url || null,
+        retrievedAt: item.retrievedAt || null,
+        confidence: item.confidence ?? null,
+        uncertainty: item.uncertainty || null
       }))
       .filter(item => item.summary);
     if (!items.length) {
@@ -503,6 +510,8 @@ export function createWorkCycle({
     result.summary = envelope.summary || null;
     result.commands = Array.isArray(envelope.commands) ? envelope.commands.length : 0;
     result.proposedCorrection = envelope.proposedCorrection || null;
+    result.sources = Array.isArray(envelope.sources) ? envelope.sources.slice(0, 8) : [];
+    result.divergences = Array.isArray(envelope.divergences) ? envelope.divergences.slice(0, 5) : [];
     await objectives.checkpoint(objective.id, {
       note: "work:step:" + index + ":" + step.agent + ":ok:evidence=" + items.length,
       by: "nexus-work-cycle"
@@ -519,7 +528,7 @@ export function createWorkCycle({
       role: "verification",
       context: {
         criteria: (objective.criteria || []).map(item => ({ id: item.id, statement: item.statement, required: item.required })),
-        evidence: (objective.evidence || []).map(item => ({ id: item.id, summary: item.summary, source: item.source, agent: item.agent, digest: item.digest })),
+        evidence: (objective.evidence || []).map(item => ({ id: item.id, summary: item.summary, source: item.source, agent: item.agent, digest: item.digest, url: item.url || null, retrievedAt: item.retrievedAt || null, confidence: item.confidence ?? null })),
         claims
       },
       scope: "mission-verify:" + objective.id
@@ -573,6 +582,7 @@ export function createWorkCycle({
       verificationAgent: null,
       verification: null,
       memory: null,
+      sources: [],
       message: null,
       lease: null,
       durationMs: 0
@@ -802,12 +812,14 @@ export function createWorkCycle({
         });
         if (completed.ok !== true) return { ...report, code: completed.code || "complete_failed", status: objective.status };
 
+        report.sources = report.steps.flatMap(step => Array.isArray(step.sources) ? step.sources : []).slice(0, 12);
         if (memory && typeof memory.remember === "function") {
           try {
             const remembered = await memory.remember({
               objective: completed.objective.objective,
               runId: "mission:" + completed.objective.id,
-              evidence: (completed.objective.evidence || []).map(item => item.summary)
+              evidence: (completed.objective.evidence || []).map(item => item.summary),
+              sources: report.sources
             });
             report.memory = { ...(report.memory || {}), written: remembered?.ok === true, key: remembered?.key || null, code: remembered?.code || null };
           } catch (error) {

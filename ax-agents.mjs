@@ -274,6 +274,41 @@ export function createAgentRuntime({
 
     if (id === "director") {
       const context = input.context && typeof input.context === "object" ? input.context : {};
+      // Model-backed planning is injected, never assumed. It validates its own response and falls
+      // back deterministically; this handler only decides which plan shape to return.
+      if (dependencies.missionPlanner && typeof dependencies.missionPlanner.plan === "function") {
+        try {
+          const planned = await dependencies.missionPlanner.plan({
+            objective: input.objective,
+            criteria: Array.isArray(context.criteria) ? context.criteria : [],
+            capabilities: context.capabilities && typeof context.capabilities === "object" ? context.capabilities : {}
+          });
+          if (planned?.ok === true && Array.isArray(planned.plan?.steps) && planned.plan.steps.length) {
+            const plan = planned.plan;
+            const fallback = planned.fallback === true;
+            const missing = Array.isArray(plan.missingCapabilities) ? plan.missingCapabilities : [];
+            return {
+              ok: true,
+              summary: (fallback
+                ? "Deterministic fallback plan (" + (planned.fallbackReason || "model_unavailable") + "): "
+                : "Model plan via " + (planned.provider || "model") + ": ") +
+                plan.steps.map(step => step.agent).join(" -> ") + ". Missing capabilities: " + (missing.join(", ") || "none") + ".",
+              confidence: fallback ? 0.6 : 0.85,
+              evidence: [
+                { summary: "plan: " + plan.steps.map((step, index) => (index + 1) + ":" + step.agent + ":" + step.objective).join(" | "), source: "agent:director" },
+                { summary: "planner: mode=" + (fallback ? "deterministic-fallback" : "model") + ", provider=" + (planned.provider || "none") + ", model=" + (planned.model || "none") + ", costUsd=" + Number(planned.costUsd || 0).toFixed(6) + ", fallbackReason=" + (planned.fallbackReason || "none"), source: "agent:director" }
+              ],
+              plan,
+              planner: { mode: fallback ? "deterministic-fallback" : "model", provider: planned.provider || null, model: planned.model || null, costUsd: Number(planned.costUsd || 0), fallbackReason: planned.fallbackReason || null },
+              limitations: [fallback
+                ? "The model was unavailable, refused or invalid; deterministic routing produced this plan."
+                : "Model plan validated against the agent registry; security review and independent verification are appended."]
+            };
+          }
+        } catch {
+          // A planner failure is not a mission failure: the deterministic plan below still runs.
+        }
+      }
       const plan = planMissionSteps({
         objective: input.objective,
         criteria: Array.isArray(context.criteria) ? context.criteria : [],
@@ -471,11 +506,23 @@ export function createAgentRuntime({
         summary: clean(result?.summary, AGENT_LIMITS.maxSummary) || "Research transport returned no summary.",
         confidence: Number.isFinite(Number(result?.confidence)) ? Number(result.confidence) : 0.5,
         evidence: sources.map(source => ({
-          summary: clean((source.title || source.url) + " | " + (source.excerpt || ""), 300),
+          // Attribution survives into the durable objective: URL, retrieval time and confidence are
+          // part of the summary, and the structured fields below are stored when available.
+          summary: clean(
+            (source.title || source.url || "source") + " | " + (source.excerpt || "") +
+              " | " + (source.url || "no-url") + " | retrieved " + (source.retrievedAt || "unknown") +
+              " | confidence " + Number(source.confidence ?? 0.5).toFixed(2),
+            480
+          ),
           source: "agent:research",
-          digest: digest(source.url || source.title)
+          digest: source.digest || digest(source.url || source.title),
+          url: clean(source.url, 2_000) || null,
+          retrievedAt: clean(source.retrievedAt, 40) || null,
+          confidence: Number.isFinite(Number(source.confidence)) ? Number(source.confidence) : 0.5,
+          uncertainty: clean(source.uncertainty, 300) || null
         })),
         sources,
+        divergences: Array.isArray(result?.divergences) ? result.divergences.slice(0, 5) : [],
         limitations: ["Source verification is limited to what the transport returned."]
       };
     }
@@ -585,8 +632,23 @@ export function createAgentRuntime({
         id: clean(item?.id, 120) || "agev_" + digest(envelopeSeed(selected, text) + index).slice(0, 16),
         summary: clean(item?.summary, 500),
         source: clean(item?.source, 100) || "agent:" + selected,
-        digest: clean(item?.digest, 128) || null
+        digest: clean(item?.digest, 128) || null,
+        url: clean(item?.url, 2_000) || null,
+        retrievedAt: clean(item?.retrievedAt, 40) || null,
+        confidence: Number.isFinite(Number(item?.confidence)) ? Number(item.confidence) : null,
+        uncertainty: clean(item?.uncertainty, 300) || null
       })).filter(item => item.summary),
+      sources: (Array.isArray(outcome?.sources) ? outcome.sources : []).slice(0, 8).map(source => ({
+        title: clean(source?.title, 200) || null,
+        url: clean(source?.url, 2_000) || null,
+        excerpt: clean(source?.excerpt, 480) || null,
+        digest: clean(source?.digest, 128) || null,
+        retrievedAt: clean(source?.retrievedAt, 40) || null,
+        confidence: Number.isFinite(Number(source?.confidence)) ? Number(source.confidence) : null,
+        uncertainty: clean(source?.uncertainty, 300) || null
+      })).filter(source => source.url),
+      divergences: Array.isArray(outcome?.divergences) ? outcome.divergences.slice(0, 5) : [],
+      planner: outcome?.planner || null,
       limitations: (Array.isArray(outcome?.limitations) ? outcome.limitations : []).slice(0, 6).map(item => clean(item, 240)),
       requiresApproval: outcome?.requiresApproval === true,
       findings: Array.isArray(outcome?.findings) ? outcome.findings.slice(0, 10) : [],

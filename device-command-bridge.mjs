@@ -30,6 +30,7 @@ import { createSchedulerService } from "./ax-scheduler.mjs";
 import { createD1SchedulerRepository } from "./ax-scheduler-repository.mjs";
 import { createProjectRegistry } from "./ax-projects.mjs";
 import { resolveAgentTransports } from "./ax-agent-transports.mjs";
+import { resolveMissionPlanner } from "./ax-mission-planner.mjs";
 import { detectSandbox } from "./nexus-sandbox.mjs";
 import { createD1AxMessageRepository } from "./d1-ax-message-repository.mjs";
 import { createMessageChannel } from "./ax-message-channel.mjs";
@@ -312,6 +313,9 @@ export function registerDeviceCommandBridge(app, {
   }
   const projects = createProjectRegistry({ objectives, memory: memoryContext });
   const agentTransports = resolveAgentTransports(env);
+  // Off unless NEXUS_MODEL_PLANNING_ENABLED=true and a free model is explicitly configured. The
+  // planner owns its own cost governor, so every mission shares the same daily ceiling.
+  const missionPlanner = resolveMissionPlanner(env);
   const circuitBreaker = createProviderCircuitBreaker({
     failureThreshold: Number(env.AX_CIRCUIT_FAILURES) || 3,
     cooldownMs: Number(env.AX_CIRCUIT_COOLDOWN_MS) || 60_000
@@ -664,6 +668,7 @@ export function registerDeviceCommandBridge(app, {
       objectiveProvider: () => objectives,
       agentProvider: () => resolveAgents(),
       workProvider: () => resolveWorkCycle(),
+      plannerProvider: () => missionPlanner,
       recoveryProvider: () => resolveRecovery(),
       incidentProvider: () => incidents,
       securityProvider: () => securityEvents,
@@ -818,10 +823,11 @@ export function registerDeviceCommandBridge(app, {
         adapters: READ_ONLY_ADAPTER_NAMES.slice(),
         allowedAdapters: READ_ONLY_ADAPTER_NAMES.slice(),
         sideEffectsEnabled: false,
-        // Off unless AX_AGENT_LOCAL_ROOT names a bounded local repository. With no root, both agents
-        // keep reporting capability_unavailable rather than fabricating a result.
+        // Off unless AX_AGENT_LOCAL_ROOT names a bounded local repository or web research is
+        // explicitly enabled. Without either, both agents report capability_unavailable.
         research: agentTransports.research,
         engineering: agentTransports.engineering,
+        missionPlanner,
         transportRoot: agentTransports.root || null,
         onSecurityEvent: entry => securityEvents?.record({
           category: "agent.permission_violation",

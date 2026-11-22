@@ -210,16 +210,20 @@ export function createAxMemoryContext({
    * Write back only what was actually verified. The statement is built from the run's own record,
    * not from model output, and the repository refuses anything credential-shaped.
    */
-  async function remember({ objective, runId, evidence } = {}) {
+  async function remember({ objective, runId, evidence, sources = [] } = {}) {
     if (!repository || typeof repository.put !== "function" || !projectId) {
       return { ok: false, code: "memory_not_configured" };
     }
     const id = clean(runId, 120);
     if (!id) return { ok: false, code: "invalid_run_id" };
     const evidenceCount = Array.isArray(evidence) ? evidence.length : 0;
+    const preserved = (Array.isArray(sources) ? sources : []).filter(source => source?.url);
     const statement = clean(
       "Run " + id + ' completed and was verified: "' + clean(objective, MEMORY_CONTEXT_LIMITS.maxObjectiveChars) +
-        '". Evidence items collected: ' + evidenceCount + ".",
+        '". Evidence items collected: ' + evidenceCount + "." +
+        (preserved.length
+          ? " Research sources preserved: " + preserved.length + " (first: " + clean(preserved[0].url, 160) + ")."
+          : ""),
       600
     );
     const payload = {

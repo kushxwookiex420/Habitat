@@ -84,7 +84,8 @@ const REQUIRED_DOCUMENTS = [
   "docs/NEXUS_MISSION_15.md",
   "docs/CHATGPT_CONNECTION_READINESS.md",
   "docs/NEXUS_MISSION_18_LIVE_READINESS.md",
-  "docs/NEXUS_MISSION_19.md"
+  "docs/NEXUS_MISSION_19.md",
+  "docs/NEXUS_MISSION_20.md"
 ];
 const REQUIRED_ARTIFACTS = [
   "release/demo-evidence.json",

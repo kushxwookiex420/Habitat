@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { lstat, readFile, readdir, realpath, stat } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import path from "node:path";
+import { createCompositeResearchTransport, createWebResearchTransport } from "./ax-web-research.mjs";
 
 /**
  * Real, injectable transports for the research and engineering agents.
@@ -351,14 +352,28 @@ export function createRepositoryEngineeringTransport({
  */
 export function resolveAgentTransports(env = process.env) {
   const root = String(env.AX_AGENT_LOCAL_ROOT || "").trim();
-  if (!root) return { research: null, engineering: null, reason: "AX_AGENT_LOCAL_ROOT is not set" };
+  const webEnabled = String(env.AX_WEB_RESEARCH_ENABLED || "").trim().toLowerCase() === "true";
+  if (!root && !webEnabled) return { research: null, engineering: null, reason: "AX_AGENT_LOCAL_ROOT is not set" };
   const testFiles = String(env.AX_AGENT_LOCAL_TESTS || "")
     .split(",")
     .map(item => item.trim())
     .filter(item => /^tests\/[A-Za-z0-9._/-]+\.test\.mjs$/.test(item))
     .slice(0, 3);
   try {
-    const research = createRepositoryResearchTransport({ root });
+    const web = webEnabled
+      ? createWebResearchTransport({ allowLoopback: String(env.AX_WEB_RESEARCH_ALLOW_LOOPBACK || "").toLowerCase() === "true" })
+      : null;
+    if (!root) {
+      return {
+        research: web,
+        engineering: null,
+        root: null,
+        checks: 0,
+        web: true,
+        reason: "AX_AGENT_LOCAL_ROOT is not set; web research is mounted without repository access"
+      };
+    }
+    const repository = createRepositoryResearchTransport({ root });
     const checks = [
       { name: "syntax-check", command: process.execPath, args: ["--check", "{file}"], when: "file" },
       ...testFiles.map(file => ({
@@ -369,7 +384,8 @@ export function resolveAgentTransports(env = process.env) {
       }))
     ];
     const engineering = createRepositoryEngineeringTransport({ root, checks });
-    return { research, engineering, root: path.resolve(root), checks: checks.length };
+    const research = web ? createCompositeResearchTransport({ repository, web }) : repository;
+    return { research, engineering, root: path.resolve(root), checks: checks.length, web: Boolean(web) };
   } catch (error) {
     return { research: null, engineering: null, reason: String(error?.message || error).slice(0, 160) };
   }
