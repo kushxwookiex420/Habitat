@@ -1,4 +1,5 @@
 import { buildCapabilityStatus } from "./capability-status.mjs";
+import { projectDevicePresence, DEVICE_BRIDGE_HEARTBEAT_TTL_MS } from "./device-presence.mjs";
 import { registerDeviceCommandBridge } from "./device-command-bridge.mjs";
 import { claimTaskDispatch } from "./task-dispatch-guard.mjs";
 import { createD1TaskRepository } from "./d1-task-repository.mjs";
@@ -540,7 +541,9 @@ app.get("/device/status", async (req, res) => {
     ok: access.status === "PASS",
     androidDeviceAccess: access.status,
     detail: access.detail,
-    deviceCount: access.devices.length
+    deviceCount: access.deviceCount,
+    liveCount: access.liveCount,
+    lastSeenAt: access.lastSeenAt
   });
 });
 
@@ -1155,7 +1158,6 @@ function nowIso() { return new Date().toISOString(); }
 // system checks can verify that the Android client actually reached the backend.
 const androidDevices = new Map();
 const ANDROID_HEARTBEAT_TTL_MS = 120000;
-const DEVICE_BRIDGE_HEARTBEAT_TTL_MS = 45 * 60 * 1000;
 
 function pruneAndroidDevices() {
   const cutoff = Date.now() - ANDROID_HEARTBEAT_TTL_MS;
@@ -1165,50 +1167,22 @@ function pruneAndroidDevices() {
 }
 
 async function androidAccessStatus() {
-  pruneAndroidDevices();
-  const legacyDevices = Array.from(androidDevices.values()).map(device => ({
-    ...device,
-    source: "legacy-heartbeat",
-    heartbeatTtlMs: ANDROID_HEARTBEAT_TTL_MS
-  }));
   let pairedDevices = [];
   try {
     pairedDevices = await deviceCommandBridge.listDevices();
   } catch (error) {
     console.warn("DEVICE_BRIDGE_INVENTORY_UNAVAILABLE", String(error?.message || error));
   }
-  const bridgeDevices = pairedDevices
-    .filter(row => !row.revoked_at && row.last_seen_at)
-    .map(row => {
-      let details = {};
-      try { details = row.device_json ? JSON.parse(row.device_json) : {}; } catch {}
-      const deviceModel = [details.manufacturer, details.model].filter(Boolean).join(" ") || "Paired Habitat Android device";
-      return {
-        deviceId: row.device_id,
-        packageName: "com.habitat.axbridge",
-        deviceModel,
-        appVersion: details.appVersion || "device-bridge",
-        androidSdk: details.androidSdk || null,
-        androidRelease: details.androidRelease || null,
-        batteryPercent: Number.isInteger(details.batteryPercent) ? details.batteryPercent : null,
-        charging: typeof details.charging === "boolean" ? details.charging : null,
-        interactive: typeof details.interactive === "boolean" ? details.interactive : null,
-        lastSeenAt: row.last_seen_at,
-        source: "secure-device-bridge",
-        heartbeatTtlMs: DEVICE_BRIDGE_HEARTBEAT_TTL_MS
-      };
-    });
-  const devices = [...legacyDevices, ...bridgeDevices]
-    .sort((a, b) => new Date(b.lastSeenAt).getTime() - new Date(a.lastSeenAt).getTime());
-  const active = devices.filter(device =>
-    Date.now() - new Date(device.lastSeenAt).getTime() <= (device.heartbeatTtlMs || ANDROID_HEARTBEAT_TTL_MS)
-  );
+  const presence = projectDevicePresence(pairedDevices);
+  const registeredCount = pairedDevices.filter(row => row && !row.revoked_at).length;
   return {
-    status: active.length > 0 ? "PASS" : "UNVERIFIED",
-    detail: active.length > 0
-      ? "A Habitat Android device checked in recently (" + active[0].source + ")."
-      : "No Habitat Android device has checked in within its heartbeat window.",
-    devices
+    ...presence,
+    registeredCount,
+    // Registration and live presence are different facts: nine historical registrations do not
+    // mean nine connected phones. deviceCount is the registry; liveCount is the heartbeat window.
+    deviceCount: registeredCount,
+    liveCount: presence.active.length,
+    lastSeenAt: presence.active[0]?.lastSeenAt || null
   };
 }
 function makeTaskId() {
@@ -1301,9 +1275,7 @@ async function runSystemCheck() {
     };
 
     const androidAccess = await androidAccessStatus();
-    const latestDevice = androidAccess.devices.find(device =>
-      Date.now() - new Date(device.lastSeenAt).getTime() <= (device.heartbeatTtlMs || ANDROID_HEARTBEAT_TTL_MS)
-    ) || null;
+    const latestDevice = androidAccess.active[0] || null;
     const heartbeatAgeMs = latestDevice?.lastSeenAt
       ? Math.max(0, Date.now() - new Date(latestDevice.lastSeenAt).getTime())
       : null;
@@ -1721,9 +1693,7 @@ app.post("/tasks/:id/delegate", async (req, res) => {
     }
 
     const androidAccess = await androidAccessStatus();
-    const latestDevice = androidAccess.devices.find(device =>
-      Date.now() - new Date(device.lastSeenAt).getTime() <= (device.heartbeatTtlMs || ANDROID_HEARTBEAT_TTL_MS)
-    ) || null;
+    const latestDevice = androidAccess.active[0] || null;
     const heartbeatAgeMs = latestDevice?.lastSeenAt
       ? Math.max(0, Date.now() - new Date(latestDevice.lastSeenAt).getTime())
       : null;

@@ -6,8 +6,10 @@ import android.app.AlertDialog
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Bundle
+import android.net.Uri
 import android.os.Handler
 import android.os.Looper
+import android.provider.Settings
 import android.speech.RecognizerIntent
 import android.view.Gravity
 import android.view.View
@@ -495,8 +497,13 @@ class MainActivity : Activity() {
         }
         heartbeatHandler.postDelayed(heartbeatRunnable, heartbeatIntervalMs)
         if (deviceBridge.isConfigured()) {
-            deviceBridge.start()
+            HabitatPresenceService.start(this)
             DeviceBridgeScheduler.schedule(this)
+        }
+        if (android.os.Build.VERSION.SDK_INT >= 33 &&
+            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 731)
         }
         ensureSystemCheckTask()
         // A system recreation during pairing must not leave the owner without the screen they were
@@ -692,10 +699,24 @@ class MainActivity : Activity() {
             setTextColor(Color.DKGRAY)
             setPadding(0, 10, 0, 0)
         }
+        val backgroundPermission = Button(this).apply {
+            text = "Allow background presence"
+            isAllCaps = false
+            textSize = 13f
+            setOnClickListener {
+                val request = Intent(
+                    Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                    Uri.parse("package:" + packageName)
+                )
+                runCatching { startActivity(request) }
+                    .onFailure { Toast.makeText(this@MainActivity, "Battery settings are unavailable on this device.", Toast.LENGTH_SHORT).show() }
+            }
+        }
         panel.addView(device)
         panel.addView(help)
         panel.addView(code)
         panel.addView(status)
+        panel.addView(backgroundPermission)
 
         val dialog = AlertDialog.Builder(this)
             .setTitle("AX • Secure phone pairing")
@@ -738,7 +759,7 @@ class MainActivity : Activity() {
                             try {
                                 if (success) {
                                     deviceBridgeButton?.text = "AX SET"
-                                    deviceBridge.start()
+                                    HabitatPresenceService.start(this)
                                     DeviceBridgeScheduler.schedule(this)
                                     status.text = "Phone credential saved. Starting secure check-in…"
                                     Toast.makeText(this, "Phone paired successfully.", Toast.LENGTH_LONG).show()
@@ -852,19 +873,20 @@ class MainActivity : Activity() {
     override fun onResume() {
         super.onResume()
         if (::deviceBridge.isInitialized && deviceBridge.isConfigured()) {
-            deviceBridge.start()
+            HabitatPresenceService.start(this)
             DeviceBridgeScheduler.schedule(this)
         }
     }
 
     override fun onPause() {
-        if (::deviceBridge.isInitialized) deviceBridge.stop()
+        // Presence is owned by HabitatPresenceService. Stopping the poll loop here is what made the
+        // phone look offline after leaving Habitat; the service and the persisted job keep it live.
         super.onPause()
     }
 
     override fun onDestroy() {
         heartbeatHandler.removeCallbacks(heartbeatRunnable)
-        if (::deviceBridge.isInitialized) deviceBridge.stop()
+        // Do not stop the bridge: the foreground service owns it beyond the Activity lifetime.
         brain.shutdown()
         super.onDestroy()
     }

@@ -106,13 +106,16 @@ class AndroidDeviceBridge(
         stop()
         DeviceBridgeScheduler.cancel(appContext)
         prefs.edit().remove("encrypted_token").apply()
+        HabitatPresenceService.stop(appContext)
     }
 
     @Synchronized
     fun start() {
         if (!isConfigured() || executor != null) return
         executor = Executors.newSingleThreadScheduledExecutor()
-        executor?.scheduleWithFixedDelay({ pollOnce() }, 0, 5, TimeUnit.SECONDS)
+        // The foreground service owns this loop now; 30s is frequent enough to keep the command
+        // queue responsive without polling every five seconds for the life of the phone.
+        executor?.scheduleWithFixedDelay({ pollOnce() }, 0, 30, TimeUnit.SECONDS)
         onStatus("AX device bridge polling started")
     }
 
