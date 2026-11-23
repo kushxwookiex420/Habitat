@@ -63,6 +63,13 @@ jobs:
           export HABITAT_KEYSTORE_FILE="$KS"
           gradle :app:assembleRelease --no-daemon --console=plain
           rm -f "$KS"
+      - name: Verify APK signatures
+        run: |
+          set -euo pipefail
+          while IFS= read -r -d '' apk; do
+            echo "== $apk"
+            "$ANDROID_HOME/build-tools/34.0.0/apksigner" verify --print-certs "$apk"
+          done < <(find app/build/outputs/apk -name '*.apk' -print0)
       - name: Checksums
         run: |
           set -euo pipefail
