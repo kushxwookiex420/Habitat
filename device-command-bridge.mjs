@@ -37,7 +37,19 @@ import { createD1AxMessageRepository } from "./d1-ax-message-repository.mjs";
 import { createMessageChannel } from "./ax-message-channel.mjs";
 import { autonomousPolicy, dispatchObjective } from "./ax-objective-dispatch.mjs";
 
-const SAFE_COMMANDS = new Set(["device.status"]);
+// The command contract lives in device-commands.mjs so the allowlist, the payload validation and
+// the Android agent cannot drift apart. Sensitive input commands require explicit owner approval.
+import {
+  validateDeviceCommand,
+  isSensitiveDeviceCommand,
+  isDeviceCommandApproved
+} from "./device-commands.mjs";
+import {
+  createD1DeviceScreenshotRepository,
+  SCREENSHOT_MAX_BYTES,
+  SCREENSHOT_RETENTION_MS,
+  SCREENSHOT_MIME_TYPES
+} from "./d1-device-screenshot-repository.mjs";
 const PAIRING_TTL_MS = 10 * 60 * 1000;
 // The read-only adapter path allowlist lives in nexus-adapter-registration so the mounted runtime
 // and the one-shot tick cannot drift apart. It resolves symlinks and refuses anything outside these
@@ -91,6 +103,9 @@ export function registerDeviceCommandBridge(app, {
   incidentRepository = null,
   securityRepository = null,
   schedulerRepository = null,
+  // Screenshots are private owner data with a 24-hour retention; the store is additive and its
+  // absence only makes the screenshot routes report 503.
+  screenshotRepository = null,
   // Mission 14: the durable Ax <-> NEXUS message store. On a deployment it is created on the same
   // D1 database as every other additive store; embedders and tests may inject one.
   messageRepository = null,
@@ -146,6 +161,12 @@ export function registerDeviceCommandBridge(app, {
   const incidents = incidentStore ? createIncidentService({ repository: incidentStore, log }) : null;
   // Append-only security audit and the trigger-agnostic scheduler. Both are additive stores on the
   // same database; if either is absent, its surface reports 503 instead of pretending to work.
+  const screenshotStore = screenshotRepository || (hasD1 ? createD1DeviceScreenshotRepository({
+    accountId: env.CLOUDFLARE_ACCOUNT_ID,
+    databaseId: env.HABITAT_D1_DATABASE_ID,
+    apiToken: env.HABITAT_D1_API_TOKEN,
+    fetchImpl
+  }) : null);
   const securityStore = securityRepository || (hasD1 ? createD1AxSecurityEventRepository({
     accountId: env.CLOUDFLARE_ACCOUNT_ID,
     databaseId: env.HABITAT_D1_DATABASE_ID,
@@ -498,19 +519,52 @@ export function registerDeviceCommandBridge(app, {
     try {
       const deviceId = String(req.body?.deviceId || "").trim();
       const type = String(req.body?.type || "").trim();
-      if (!validDeviceId(deviceId) || !SAFE_COMMANDS.has(type)) {
-        return res.status(400).json({ ok: false, error: "A valid paired deviceId and allowlisted command type are required." });
+      if (!validDeviceId(deviceId)) {
+        return res.status(400).json({ ok: false, error: "A valid paired deviceId is required." });
+      }
+      const validation = validateDeviceCommand(type, req.body?.payload ?? {});
+      if (!validation.ok) {
+        return res.status(400).json({ ok: false, code: "invalid_device_command", error: "Invalid command: " + validation.error });
+      }
+      // Taps, typing, gestures and key events change the phone. They are refused unless the caller
+      // states that the owner approved this exact action; approval is per command, never implicit.
+      if (!isDeviceCommandApproved(type, req.body?.approved)) {
+        return res.status(400).json({
+          ok: false,
+          code: "owner_approval_required",
+          error: type + " changes the phone and requires approved:true after the owner approves it."
+        });
       }
       if (!await store.isDevicePaired(deviceId)) {
         return res.status(404).json({ ok: false, error: "Device is not paired." });
       }
       const command = {
-        id: "dc_" + randomUUID(), deviceId, type, payload: {}, status: "queued",
+        id: "dc_" + randomUUID(), deviceId, type, payload: validation.payload, status: "queued",
         createdAt: new Date().toISOString(),
         expiresAt: new Date(Date.now() + 5 * 60 * 1000).toISOString()
       };
       await store.enqueue(command);
-      return res.status(202).json({ ok: true, command: { id: command.id, type, status: command.status, expiresAt: command.expiresAt } });
+      if (isSensitiveDeviceCommand(type)) {
+        // Audit the approval, not the payload: the text or coordinates are owner data.
+        securityEvents?.record({
+          category: "command.sensitive",
+          severity: "high",
+          outcome: "allowed",
+          actor: "ax",
+          deviceId,
+          summary: "Owner-approved " + type + " queued for a paired phone"
+        })?.catch?.(() => {});
+      }
+      return res.status(202).json({
+        ok: true,
+        command: {
+          id: command.id,
+          type,
+          status: command.status,
+          expiresAt: command.expiresAt,
+          sensitive: isSensitiveDeviceCommand(type)
+        }
+      });
     } catch (error) {
       console.error("DEVICE_COMMAND_ENQUEUE_FAILED", String(error?.message || error));
       return res.status(500).json({ ok: false, error: "Unable to queue device command." });
@@ -553,6 +607,49 @@ export function registerDeviceCommandBridge(app, {
     }
   });
 
+  // A phone uploads one bounded screenshot after executing device.screenshot. Base64 keeps this
+  // transport free of a new body parser; the decoded size, mime type and timestamp are enforced here.
+  app.post("/device/screenshots", requireStore, requireDevice, async (req, res) => {
+    try {
+      if (!screenshotStore) {
+        return res.status(503).json({ ok: false, error: "Screenshot storage is unavailable." });
+      }
+      const mime = String(req.body?.mime || "").trim().toLowerCase();
+      const dataBase64 = String(req.body?.data || "").trim();
+      const capturedAt = String(req.body?.capturedAt || "").trim();
+      if (!SCREENSHOT_MIME_TYPES.includes(mime)) {
+        return res.status(415).json({ ok: false, error: "Screenshot mime must be image/jpeg or image/png." });
+      }
+      if (!dataBase64 || !/^[A-Za-z0-9+/=\r\n]+$/.test(dataBase64)) {
+        return res.status(400).json({ ok: false, error: "Screenshot data must be base64." });
+      }
+      if (Buffer.byteLength(dataBase64, "base64") > SCREENSHOT_MAX_BYTES) {
+        return res.status(413).json({ ok: false, error: "Screenshot exceeds the 1.5 MB limit; capture a downscaled JPEG." });
+      }
+      if (!Number.isFinite(Date.parse(capturedAt))) {
+        return res.status(400).json({ ok: false, error: "capturedAt must be an ISO timestamp." });
+      }
+      const id = "shot_" + randomUUID();
+      await screenshotStore.save({
+        id,
+        deviceId: req.habitatDeviceId,
+        mime,
+        dataBase64,
+        capturedAt,
+        createdAt: new Date().toISOString()
+      });
+      // Retention is best-effort: a failed prune must not lose the screenshot the owner just captured.
+      screenshotStore.prune(new Date(Date.now() - SCREENSHOT_RETENTION_MS).toISOString()).catch(() => {});
+      return res.status(201).json({
+        ok: true,
+        screenshot: { id, mime, capturedAt, retentionHours: 24 }
+      });
+    } catch (error) {
+      console.error("DEVICE_SCREENSHOT_UPLOAD_FAILED", String(error?.message || error));
+      return res.status(500).json({ ok: false, error: "Unable to store the screenshot." });
+    }
+  });
+
   app.get("/ax/device/commands/:id", requireAx, requireStore, async (req, res) => {
     try {
       const command = await store.get(String(req.params.id || ""));
@@ -591,6 +688,30 @@ export function registerDeviceCommandBridge(app, {
   } catch (error) {
     console.error("HOME_BRIDGE_CONSOLE_MOUNT_FAILED", String(error?.message || error));
   }
+
+  // Screenshot reads are authenticated and never cached. The same bytes are served to the Ax API
+  // (bearer token) and to the console (operator session), so the owner can look at a capture in the
+  // Console without ever receiving the device credential.
+  async function serveScreenshot(req, res) {
+    try {
+      if (!screenshotStore) {
+        return res.status(503).json({ ok: false, error: "Screenshot storage is unavailable." });
+      }
+      const shot = await screenshotStore.get(String(req.params.id || ""));
+      if (!shot) return res.status(404).json({ ok: false, error: "Screenshot not found or expired." });
+      const bytes = Buffer.from(shot.dataBase64, "base64");
+      res.setHeader("Cache-Control", "no-store");
+      res.setHeader("Content-Type", shot.mime);
+      res.setHeader("Content-Length", bytes.length);
+      return res.status(200).send(bytes);
+    } catch (error) {
+      console.error("DEVICE_SCREENSHOT_READ_FAILED", String(error?.message || error));
+      return res.status(500).json({ ok: false, error: "Unable to read the screenshot." });
+    }
+  }
+
+  app.get("/ax/device/screenshots/:id", requireAx, serveScreenshot);
+  app.get("/bridge/console/screenshots/:id", (consoleApi?.requireOperator || requireAx), serveScreenshot);
 
   // The Control Center mints a fresh pairing code itself, using its own operator session (or the
   // Ax bridge credential). The Ax token stays server-side: the browser never receives it.
@@ -1060,7 +1181,7 @@ export function registerDeviceCommandBridge(app, {
       await store.initialize();
       // Additive schema for memory and notifications. A failure is reported and leaves device
       // commands usable, because neither is a prerequisite for executing a task.
-      for (const [label, repository] of [["AX_MEMORY", memoryStore], ["AX_NOTIFICATIONS", notificationStore], ["AX_OBJECTIVES", objectiveStore], ["AX_INCIDENTS", incidentStore], ["AX_SECURITY_EVENTS", securityStore], ["AX_SCHEDULER", schedulerStore], ["AX_MESSAGES", messageStore]]) {
+      for (const [label, repository] of [["AX_MEMORY", memoryStore], ["AX_NOTIFICATIONS", notificationStore], ["AX_OBJECTIVES", objectiveStore], ["AX_INCIDENTS", incidentStore], ["AX_SECURITY_EVENTS", securityStore], ["AX_SCHEDULER", schedulerStore], ["AX_MESSAGES", messageStore], ["DEVICE_SCREENSHOTS", screenshotStore]]) {
         if (!repository || typeof repository.initialize !== "function") continue;
         try {
           await repository.initialize();
@@ -1103,6 +1224,22 @@ export function registerDeviceCommandBridge(app, {
     async listDevices() {
       if (!store || !ready) return [];
       return store.listDevices();
+    },
+    /**
+     * Verify a paired-device bearer credential for a non-/device route. The raw token is never
+     * stored: the repository hashes the supplied value and compares it in constant time. Returns
+     * false when storage is not ready, so an unauthenticated caller can never be upgraded by
+     * accident while the bridge is degraded.
+     */
+    async verifyDevice({ deviceId, token } = {}) {
+      if (!store || !ready) return false;
+      if (!validDeviceId(deviceId) || !token) return false;
+      try {
+        return await store.verifyDeviceToken(String(token), String(deviceId));
+      } catch (error) {
+        console.error("DEVICE_TOKEN_VERIFY_FAILED", String(error?.message || error).slice(0, 160));
+        return false;
+      }
     },
     async requestDeviceStatus() {
       if (!store || !ready) return { ok: false, error: "Device command bridge is not ready." };

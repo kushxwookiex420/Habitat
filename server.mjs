@@ -1,5 +1,6 @@
 import { buildCapabilityStatus } from "./capability-status.mjs";
 import { registerDeviceCommandBridge } from "./device-command-bridge.mjs";
+import { projectDevicePresence, DEVICE_BRIDGE_HEARTBEAT_TTL_MS } from "./device-presence.mjs";
 import { claimTaskDispatch } from "./task-dispatch-guard.mjs";
 import { createD1TaskRepository } from "./d1-task-repository.mjs";
 import { createD1DispatchLeaseRepository } from "./d1-dispatch-lease-repository.mjs";
@@ -18,6 +19,8 @@ import { registerControlCenter } from "./control-center.mjs";
 import { readFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { buildSystemStatus, classifyWorkers, inferReadOnlyAdapter, isSystemStatusRequest, parseAxCommand, summarizeWorkerCounts } from "./system-status.mjs";
+import { buildWorkerList, buildWorkerDetail, resolveWorkerId, describeVerification, normalizeError } from "./worker-catalog.mjs";
+import { createChatCommandAuthorizer } from "./command-auth.mjs";
 
 import express from "express";
 
@@ -26,6 +29,7 @@ const app = express();
 app.use(express.json({ limit: "1mb" }));
 
 const deviceCommandBridge = registerDeviceCommandBridge(app);
+const chatCommandAuthorizer = createChatCommandAuthorizer({ env: process.env, deviceBridge: deviceCommandBridge });
 
 registerPublicPages(app);
 // Operational control center. The page is public but carries no data; every value it shows comes
@@ -117,37 +121,31 @@ function canonicalTaskReport(task) {
   const status = task?.status || "unknown";
   const worker = task?.worker || "unknown";
   const result = String(task?.result || "");
-  const error = String(task?.error || "");
-  let verification = null;
-  try { verification = JSON.parse(result)?.verification || null; } catch (_) {}
+  const error = normalizeError(task?.error);
+  let parsed = null;
+  try { parsed = JSON.parse(result); } catch (_) {}
+  const verification = parsed?.verification || null;
 
   if (!verification) {
     return "Status: " + status + "\nWorker: " + worker + (error ? "\nError: " + error : "\nResult: " + (result || "No worker result."));
   }
 
+  // Every FAIL/UNKNOWN line explains itself. A blocked check with no reason is a reporting bug, so
+  // describeVerification substitutes an explicit "no reason was reported" instead of a blank.
+  const described = describeVerification(verification, parsed?.verificationDetails || {});
   const lines = [
     "Status: " + status,
     "Worker: " + worker,
     "",
     "CANONICAL MACHINE CHECKS:",
-    "Backend health: " + (verification.backendHealth || "UNKNOWN"),
-    "Model worker: " + (verification.modelWorker || "UNKNOWN"),
-    "Android heartbeat: " + (verification.androidHeartbeat || "UNKNOWN"),
-    "Android device access: " + (verification.androidDeviceAccess || "UNKNOWN"),
-    "Task creation: " + (verification.taskCreation || "UNKNOWN"),
-    "Storage: " + (verification.storage || "UNKNOWN")
+    ...described.lines
   ];
 
-  const verified =
-    status.toLowerCase() === "verified" &&
-    verification.backendHealth === "PASS" &&
-    verification.modelWorker === "PASS" &&
-    verification.androidHeartbeat === "PASS" &&
-    verification.androidDeviceAccess === "PASS" &&
-    verification.taskCreation === "PASS" &&
-    verification.storage === "PASS";
-
+  const verified = status.toLowerCase() === "verified" && described.verified;
   lines.push("", "CANONICAL RESULT: " + (verified ? "VERIFIED PASS" : "PARTIAL / BLOCKED"));
+  if (described.blockers.length > 0) {
+    lines.push("BLOCKERS: " + described.blockers.map((blocker) => blocker.check + ": " + blocker.detail).join(" | "));
+  }
   if (error) lines.push("Worker error: " + error);
   return lines.join("\n");
 }
@@ -520,27 +518,6 @@ app.get("/diagnostics/provider", async (req, res) => {
   }
 });
 
-app.post("/device/heartbeat", (req, res) => {
-  const packageName = String(req.body?.packageName || "").trim();
-  const deviceId = String(req.body?.deviceId || "").trim();
-  const deviceModel = String(req.body?.deviceModel || "").trim();
-  const appVersion = String(req.body?.appVersion || "").trim();
-
-  if (packageName !== "com.habitat" || !deviceId || !deviceModel) {
-    return res.status(400).json({ ok: false, error: "Valid Habitat Android identity required." });
-  }
-
-  const device = {
-    deviceId,
-    packageName,
-    deviceModel,
-    appVersion,
-    lastSeenAt: nowIso()
-  };
-  androidDevices.set(deviceId, device);
-  return res.json({ ok: true, androidDeviceAccess: "PASS", device });
-});
-
 app.get("/device/status", async (req, res) => {
   const access = await androidAccessStatus();
   return res.json({
@@ -738,6 +715,20 @@ app.post("/chat", async (req, res) => {
     // claimed, and the executor's real state is included in the answer.
     const axObjective = parseAxCommand(message);
     if (axObjective) {
+      // A command objective creates a durable task, so it needs a real credential. Status and
+      // ordinary conversation above stay public; this write does not.
+      const authorization = await chatCommandAuthorizer.authorize({ headers: req.headers, message: axObjective });
+      if (!authorization.ok) {
+        console.warn("CHAT_COMMAND_UNAUTHORIZED", JSON.stringify({ code: authorization.code }));
+        return res.status(401).json({
+          response: "AX COMMAND AUTHORIZATION REQUIRED\n" +
+            "Command submission needs the owner Ax credential or a paired-device credential. " +
+            "This request carried neither, so nothing was queued. Status and conversation still work.",
+          deterministic: true,
+          code: authorization.code,
+          commandRouter: "unauthorized"
+        });
+      }
       if (!allowAxChatCommand(req.ip)) {
         return res.status(429).json({
           response: "AX COMMAND RATE LIMITED\nAt most " + AX_CHAT_COMMAND_LIMIT + " command objectives per 10 minutes from this address.",
@@ -1211,6 +1202,35 @@ const workerRegistry = new Map([
     model,
     capabilities: ["topic-research", "content-planning"],
     lastRunAt: null
+  }],
+  // The Android worker mesh shows these three rows; without registry entries the detail page would
+  // have nothing real to report. They are execution profiles, not separate model providers.
+  ["dropilot-listing-optimizer", {
+    id: "dropilot-listing-optimizer",
+    name: "DropPilot Listing Optimizer",
+    kind: "specialist",
+    status: hasAnyAiProviderKey() ? "available" : "blocked",
+    model,
+    capabilities: ["listing-copy", "pricing-review", "conversion-audit"],
+    lastRunAt: null
+  }],
+  ["dropilot-growth-operator", {
+    id: "dropilot-growth-operator",
+    name: "DropPilot Growth Operator",
+    kind: "specialist",
+    status: hasAnyAiProviderKey() ? "available" : "blocked",
+    model,
+    capabilities: ["campaign-planning", "creator-outreach", "sales-tracking"],
+    lastRunAt: null
+  }],
+  ["habitat-orchestrator", {
+    id: "habitat-orchestrator",
+    name: "Ax Orchestrator",
+    kind: "orchestrator",
+    status: hasAnyAiProviderKey() ? "available" : "blocked",
+    model,
+    capabilities: ["planning", "delegation", "mission-control"],
+    lastRunAt: null
   }]
 ]);
 
@@ -1225,65 +1245,17 @@ function storageSelfTest() {
 
 function nowIso() { return new Date().toISOString(); }
 
-// Real Android app presence registry. A running Habitat APK posts a heartbeat;
-// system checks can verify that the Android client actually reached the backend.
-const androidDevices = new Map();
-const ANDROID_HEARTBEAT_TTL_MS = 120000;
-const DEVICE_BRIDGE_HEARTBEAT_TTL_MS = 45 * 60 * 1000;
-
-function pruneAndroidDevices() {
-  const cutoff = Date.now() - ANDROID_HEARTBEAT_TTL_MS;
-  for (const [id, device] of androidDevices.entries()) {
-    if (new Date(device.lastSeenAt).getTime() < cutoff) androidDevices.delete(id);
-  }
-}
-
+// Phone presence is read from the durable paired-device registry only. The legacy in-memory
+// heartbeat map was removed: its route was shadowed by the durable device bridge, so it could never
+// be written and only made /device/status report two competing sources of truth.
 async function androidAccessStatus() {
-  pruneAndroidDevices();
-  const legacyDevices = Array.from(androidDevices.values()).map(device => ({
-    ...device,
-    source: "legacy-heartbeat",
-    heartbeatTtlMs: ANDROID_HEARTBEAT_TTL_MS
-  }));
   let pairedDevices = [];
   try {
     pairedDevices = await deviceCommandBridge.listDevices();
   } catch (error) {
     console.warn("DEVICE_BRIDGE_INVENTORY_UNAVAILABLE", String(error?.message || error));
   }
-  const bridgeDevices = pairedDevices
-    .filter(row => !row.revoked_at && row.last_seen_at)
-    .map(row => {
-      let details = {};
-      try { details = row.device_json ? JSON.parse(row.device_json) : {}; } catch {}
-      const deviceModel = [details.manufacturer, details.model].filter(Boolean).join(" ") || "Paired Habitat Android device";
-      return {
-        deviceId: row.device_id,
-        packageName: "com.habitat.axbridge",
-        deviceModel,
-        appVersion: details.appVersion || "device-bridge",
-        androidSdk: details.androidSdk || null,
-        androidRelease: details.androidRelease || null,
-        batteryPercent: Number.isInteger(details.batteryPercent) ? details.batteryPercent : null,
-        charging: typeof details.charging === "boolean" ? details.charging : null,
-        interactive: typeof details.interactive === "boolean" ? details.interactive : null,
-        lastSeenAt: row.last_seen_at,
-        source: "secure-device-bridge",
-        heartbeatTtlMs: DEVICE_BRIDGE_HEARTBEAT_TTL_MS
-      };
-    });
-  const devices = [...legacyDevices, ...bridgeDevices]
-    .sort((a, b) => new Date(b.lastSeenAt).getTime() - new Date(a.lastSeenAt).getTime());
-  const active = devices.filter(device =>
-    Date.now() - new Date(device.lastSeenAt).getTime() <= (device.heartbeatTtlMs || ANDROID_HEARTBEAT_TTL_MS)
-  );
-  return {
-    status: active.length > 0 ? "PASS" : "UNVERIFIED",
-    detail: active.length > 0
-      ? "A Habitat Android device checked in recently (" + active[0].source + ")."
-      : "No Habitat Android device has checked in within its heartbeat window.",
-    devices
-  };
+  return projectDevicePresence(pairedDevices);
 }
 function makeTaskId() {
   return "task-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 8);
@@ -1376,7 +1348,7 @@ async function runSystemCheck() {
 
     const androidAccess = await androidAccessStatus();
     const latestDevice = androidAccess.devices.find(device =>
-      Date.now() - new Date(device.lastSeenAt).getTime() <= (device.heartbeatTtlMs || ANDROID_HEARTBEAT_TTL_MS)
+      Date.now() - new Date(device.lastSeenAt).getTime() <= (device.heartbeatTtlMs || DEVICE_BRIDGE_HEARTBEAT_TTL_MS)
     ) || null;
     const heartbeatAgeMs = latestDevice?.lastSeenAt
       ? Math.max(0, Date.now() - new Date(latestDevice.lastSeenAt).getTime())
@@ -1425,6 +1397,16 @@ async function runSystemCheck() {
       detail: "Real model-backed QA execution completed without an error."
     };
 
+    // Every check carries its own detail so a BLOCKED result can name the failing subsystem
+    // instead of surfacing a null placeholder.
+    const verificationDetails = Object.fromEntries(
+      Object.entries(checks).map(([name, check]) => [name, { status: check.status, detail: check.detail }])
+    );
+    const blockedReason = Object.entries(checks)
+      .filter(([, check]) => check.status !== "PASS")
+      .map(([name, check]) => name + ": " + check.detail)
+      .join(" | ");
+
     task.result = JSON.stringify({
       verification: {
         backendHealth: checks.backendHealth.status,
@@ -1434,6 +1416,8 @@ async function runSystemCheck() {
         taskCreation: checks.taskCreation.status,
         storage: checks.storage.status
       },
+      verificationDetails,
+      blockedReason: blockedReason || null,
       model: modelName,
       provider: providerName,
       latencyMs,
@@ -1595,22 +1579,40 @@ app.get("/capabilities", async (_req, res) => {
   }));
 });
 
-// Truthful worker inventory: registration is not health. `running` counts tasks this process is
-// holding, `healthy` requires a recent verified run, and a worker without evidence is idle.
+// Truthful worker inventory: the catalog supplies per-worker detail from real task history, and
+// the counts come from observed state, not from registration. A registered worker is not health.
 app.get("/workers", async (_req, res) => {
-  try {
-    const tasks = await listStoredTasks();
-    const workers = classifyWorkers({ registry: workerRegistry, tasks });
-    return res.json({
-      ok: true,
-      counts: summarizeWorkerCounts(workers),
-      workers,
-      note: "Counts are derived from registered workers and the task records this process holds. A registered worker is not proof of health."
-    });
-  } catch (error) {
-    console.error("WORKER_INVENTORY_FAILED", String(error?.message || error));
-    return res.status(503).json({ ok: false, error: "Worker inventory could not be read." });
+  let tasks = [];
+  try { tasks = await listStoredTasks(); } catch { tasks = []; }
+  const classified = classifyWorkers({ registry: workerRegistry, tasks });
+  return res.json({
+    ok: true,
+    counts: summarizeWorkerCounts(classified),
+    workers: buildWorkerList({
+      workers: Array.from(workerRegistry.values()),
+      tasks,
+      providerConfigured: hasAnyAiProviderKey()
+    }),
+    note: "Counts are derived from registered workers and the task records this process holds. A registered worker is not proof of health."
+  });
+});
+
+// Read-only worker detail used by the Android worker mesh: runtime status, capabilities, recent
+// jobs, an execution log and the real blocker. No credential is ever part of this payload.
+app.get("/workers/:id", async (req, res) => {
+  const id = resolveWorkerId(req.params.id);
+  const worker = workerRegistry.get(id);
+  if (!worker) {
+    return res.status(404).json({ ok: false, error: "worker not found", workerId: id });
   }
+  let tasks = [];
+  try { tasks = await listStoredTasks(); } catch { tasks = []; }
+  const detail = buildWorkerDetail({
+    worker,
+    tasks,
+    providerConfigured: hasAnyAiProviderKey()
+  });
+  return res.json({ ok: true, worker: detail });
 });
 
 app.get("/storage/check", async (_req, res) => {
@@ -1878,7 +1880,7 @@ app.post("/tasks/:id/delegate", async (req, res) => {
 
     const androidAccess = await androidAccessStatus();
     const latestDevice = androidAccess.devices.find(device =>
-      Date.now() - new Date(device.lastSeenAt).getTime() <= (device.heartbeatTtlMs || ANDROID_HEARTBEAT_TTL_MS)
+      Date.now() - new Date(device.lastSeenAt).getTime() <= (device.heartbeatTtlMs || DEVICE_BRIDGE_HEARTBEAT_TTL_MS)
     ) || null;
     const heartbeatAgeMs = latestDevice?.lastSeenAt
       ? Math.max(0, Date.now() - new Date(latestDevice.lastSeenAt).getTime())
@@ -1895,6 +1897,23 @@ app.post("/tasks/:id/delegate", async (req, res) => {
       taskCreation,
       storage
     };
+    const verificationDetails = {
+      backendHealth: { status: "PASS", detail: "The local /health endpoint answered online and ready." },
+      modelWorker: { status: "PASS", detail: "The model returned a non-empty result after one real retry." },
+      androidHeartbeat: {
+        status: androidHeartbeat,
+        detail: latestDevice
+          ? "Last authenticated check-in " + latestDevice.lastSeenAt + " (" + Math.round((heartbeatAgeMs || 0) / 1000) + "s ago)."
+          : "No paired Android device checked in within the 45-minute heartbeat window, so device-dependent checks cannot pass. Open the Habitat app or check the bridge connection."
+      },
+      androidDeviceAccess: { status: androidAccess.status, detail: androidAccess.detail },
+      taskCreation: { status: taskCreation, detail: "The task record is present in the configured task store." },
+      storage: { status: storage, detail: "The task storage write/read self-test passed." }
+    };
+    const blockedReason = Object.entries(verificationDetails)
+      .filter(([, check]) => check.status !== "PASS")
+      .map(([name, check]) => name + ": " + check.detail)
+      .join(" | ");
 
     const fullyVerified =
       verification.backendHealth === "PASS" &&
@@ -1906,6 +1925,8 @@ app.post("/tasks/:id/delegate", async (req, res) => {
 
     task.result = JSON.stringify({
       verification,
+      verificationDetails,
+      blockedReason: blockedReason || null,
       androidDevice: latestDevice,
       heartbeatAgeMs,
       workerReport: result

@@ -60,6 +60,7 @@ function fakeStore(seed = []) {
   const pairings = new Map();
   const devices = new Map();
   const rows = [];
+  const commands = new Map();
   for (const entry of seed) {
     pairings.set(digest(entry.code), {
       deviceId: entry.deviceId || "*",
@@ -71,6 +72,7 @@ function fakeStore(seed = []) {
     pairings,
     devices,
     rows,
+    commands,
     async initialize() { return { ok: true, durable: true }; },
     async createPairing({ codeHash, deviceId, expiresAt }) {
       pairings.set(codeHash, { deviceId, expiresAt, consumedAt: null });
@@ -113,6 +115,39 @@ function fakeStore(seed = []) {
         row.device_json = JSON.stringify(details);
       }
       return true;
+    },
+    // Mirrors d1-device-command-repository: ISO timestamps compare lexicographically, a claim only
+    // takes a queued command that has not expired, and a result only completes a claimed command.
+    async enqueue(command) {
+      if (!command?.id || !command?.deviceId || !command?.type) throw new Error("A complete device command is required.");
+      commands.set(command.id, { ...command, status: "queued" });
+      return { ...command };
+    },
+    async claimNext(deviceId) {
+      const claimedAt = new Date().toISOString();
+      const next = [...commands.values()]
+        .filter((command) => command.deviceId === deviceId && command.status === "queued" && command.expiresAt > claimedAt)
+        .sort((left, right) => (left.createdAt < right.createdAt ? -1 : 1))[0];
+      if (!next) return null;
+      next.status = "claimed";
+      next.claimedAt = claimedAt;
+      return { ...next };
+    },
+    async complete({ id, deviceId, result, completedAt }) {
+      const command = commands.get(id);
+      if (!command || command.deviceId !== deviceId) return false;
+      if (command.status !== "claimed" || !(command.expiresAt > completedAt)) return false;
+      command.status = "completed";
+      command.result = result;
+      command.completedAt = completedAt;
+      return true;
+    },
+    async listCommands({ deviceId = null, limit = 20 } = {}) {
+      return [...commands.values()]
+        .filter((command) => !deviceId || command.deviceId === deviceId)
+        .sort((left, right) => (left.createdAt < right.createdAt ? 1 : -1))
+        .slice(0, limit)
+        .map((command) => ({ ...command }));
     },
     async listDevices() { return rows.slice(); }
   };
@@ -286,6 +321,57 @@ test("phone last check-in falls back to the device registry when the relay is un
   assert.equal(dashboard.body.phone.online, true);
   assert.equal(dashboard.body.phone.lastSeen, dashboard.body.devices.device.lastSeenAt);
   assert.equal(dashboard.body.phone.lastSeen, heartbeat.body.lastSeenAt);
+});
+
+test("durable status command lifecycle: queue, claim, result, completion, then no replay", async () => {
+  const { app } = await setup([{ code: CODE, expiresAt: future() }]);
+  const minted = await invoke(app, "POST /bridge/console/pairing", { ...tokenHeaders(OPERATOR), body: { deviceId: "launcher-a" } });
+  assert.equal(minted.statusCode, 201);
+  const paired = await invoke(app, "POST /device/pair", { body: { deviceId: "launcher-a", code: minted.body.pairing.code } });
+  assert.equal(paired.statusCode, 200);
+  const deviceAuth = { authorization: "Bearer " + paired.body.token };
+  const heartbeat = await invoke(app, "POST /device/heartbeat", { headers: deviceAuth, body: { deviceId: "launcher-a", details: { model: "Pixel" } } });
+  assert.equal(heartbeat.statusCode, 200);
+
+  // 1. the dashboard queues device.status in the durable queue; no HOME RELAY role is configured here
+  const queued = await invoke(app, "POST /bridge/console/send", { ...tokenHeaders(OPERATOR), body: { action: "status", arg: "" } });
+  assert.equal(queued.statusCode, 202);
+  assert.equal(queued.body.type, "device.status");
+  assert.equal(queued.body.deviceId, "launcher-a");
+
+  // 2. the paired phone claims it
+  const claimed = await invoke(app, "GET /device/commands/next", { headers: deviceAuth, query: { deviceId: "launcher-a" } });
+  assert.equal(claimed.statusCode, 200);
+  assert.equal(claimed.body.command.id, queued.body.id);
+  assert.equal(claimed.body.command.type, "device.status");
+
+  // 3. the phone submits its execution result
+  const summary = "Habitat Android device is online and responding";
+  const result = await invoke(app, "POST /device/commands/:id/result", {
+    headers: deviceAuth,
+    params: { id: queued.body.id },
+    body: { deviceId: "launcher-a", result: { ok: true, summary, details: { model: "Pixel" } } }
+  });
+  assert.equal(result.statusCode, 200);
+  assert.equal(result.body.status, "completed");
+
+  // 4. the server records completion and the dashboard shows the receipt read-only
+  const dashboard = await invoke(app, "GET /bridge/console/dashboard", tokenHeaders(OPERATOR));
+  assert.equal(dashboard.statusCode, 200);
+  assert.equal(dashboard.body.deviceCommands.available, true);
+  const receipt = dashboard.body.deviceCommands.items.find((item) => item.id === queued.body.id);
+  assert.ok(receipt, "the completed command appears as a receipt");
+  assert.equal(receipt.deviceId, "launcher-a");
+  assert.equal(receipt.type, "device.status");
+  assert.equal(receipt.state, "completed");
+  assert.equal(receipt.summary, summary);
+  assert.ok(receipt.receivedAt, "the claim time is recorded");
+  assert.ok(receipt.completedAt, "the completion time is recorded");
+
+  // 5. a later poll must not return the completed command again
+  const again = await invoke(app, "GET /device/commands/next", { headers: deviceAuth, query: { deviceId: "launcher-a" } });
+  assert.equal(again.statusCode, 200);
+  assert.equal(again.body.command, null);
 });
 
 test("the Control Center page exposes the pairing-code generator", async () => {

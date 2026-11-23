@@ -116,12 +116,11 @@ test("status never contains environment values", () => {
     assert.equal(serialized.includes(value), false, "secret value leaked into status");
   }
   assert.equal(status.secretsExposed, false);
-  const keys = status.requiredConfiguration.keys;
-  const axKey = keys.find(entry => entry.key === "HABITAT_AX_BRIDGE_TOKEN");
-  assert.equal(axKey.configured, true);
-  const nexusKey = keys.find(entry => entry.key === "NEXUS_RUNTIME_ENABLED");
-  assert.equal(nexusKey.configured, false);
-  assert.ok(status.requiredConfiguration.missing.includes("NEXUS_RUNTIME_ENABLED"));
+  // Public payload: missing key *names* only. No per-key configured map and never a value.
+  assert.equal(status.requiredConfiguration.keys, undefined);
+  assert.equal(status.requiredConfiguration.allPresent, false);
+  assert.equal(status.requiredConfiguration.missing.includes("NEXUS_RUNTIME_ENABLED"), true);
+  assert.equal(status.requiredConfiguration.missing.includes("HABITAT_AX_BRIDGE_TOKEN"), false);
 });
 
 test("a disabled executor is reported as unable to execute", () => {
@@ -199,4 +198,61 @@ test("only allowlisted read-only adapters are inferred", () => {
   assert.equal(inferReadOnlyAdapter("check the worker health"), "runtime.health");
   assert.equal(inferReadOnlyAdapter("order a pizza"), null);
   assert.equal(inferReadOnlyAdapter(""), null);
+});
+
+test("status exposes no task content, device identifiers or worker internals", () => {
+  const status = buildSystemStatus({
+    env: { HABITAT_AX_BRIDGE_TOKEN: "set", NEXUS_RUNTIME_ENABLED: "false" },
+    now: NOW,
+    version: "0.5.0",
+    commit: "0d5eb6e4ab2eb62ee044f2b7708af8a1c250b788",
+    startedAtMs: NOW - MINUTE,
+    latencyMs: 3,
+    registry,
+    tasks: [{
+      worker: "habitat-qa-worker",
+      status: "verified",
+      verifiedAt: new Date(NOW - MINUTE).toISOString(),
+      title: "private task title",
+      objective: "private objective text",
+      result: "private result body"
+    }],
+    deviceBridge: { durable: true, axTokenConfigured: true, perDeviceTokens: true, nexus: missingExecution },
+    devicePresence: {
+      paired: 1,
+      recentlySeen: true,
+      lastSeenAt: "2026-11-23T19:59:00.000Z",
+      deviceId: "dev_private_identifier",
+      name: "Owner Pixel",
+      details: { manufacturer: "Google", model: "Pixel 9" }
+    },
+    storage: { taskRepositoryReady: true, contentJobRepositoryReady: true, dispatchLeaseReady: true, secretVaultReady: true },
+    providers: { groq: true },
+    routes: { chat: true, deviceCommands: true, axCommand: true, nexusRuntime: false },
+    execution: missingExecution
+  });
+
+  const serialized = JSON.stringify(status);
+  for (const privateValue of [
+    "private task title",
+    "private objective text",
+    "private result body",
+    "dev_private_identifier",
+    "Owner Pixel",
+    "Pixel 9"
+  ]) {
+    assert.equal(serialized.includes(privateValue), false, privateValue + " leaked into status");
+  }
+
+  // Coarse presence is public; exact check-in time and identifiers are not.
+  assert.equal(status.components.device.lastSeenAt, undefined);
+  assert.equal(status.components.device.deviceId, undefined);
+  assert.equal(status.components.device.paired, 1);
+
+  const worker = status.components.workers.items[0];
+  for (const field of ["capabilities", "model", "lastRunAt", "lastStatus"]) {
+    assert.equal(field in worker, false, field + " must not be public");
+  }
+  assert.equal(status.redaction.applied, true);
+  assert.equal(status.secretsExposed, false);
 });
