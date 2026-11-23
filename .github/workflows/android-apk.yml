@@ -32,8 +32,14 @@ jobs:
           test -d "$SDK" || { echo "::error::preinstalled Android SDK not found"; exit 1; }
           echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
           echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
-          echo "$SDK/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
-          sdkmanager --install "platforms;android-35" "build-tools;34.0.0"
+          # GITHUB_PATH only affects later steps, so resolve the binary for this one explicitly.
+          SDKMANAGER=""
+          for candidate in "$SDK/cmdline-tools/latest/bin/sdkmanager" "$SDK/cmdline-tools/16.0/bin/sdkmanager" "$SDK/tools/bin/sdkmanager"; do
+            if [ -x "$candidate" ]; then SDKMANAGER="$candidate"; break; fi
+          done
+          [ -n "$SDKMANAGER" ] || { echo "::error::sdkmanager not found under $SDK"; exit 1; }
+          echo "$(dirname "$SDKMANAGER")" >> "$GITHUB_PATH"
+          "$SDKMANAGER" --install "platforms;android-35" "build-tools;34.0.0"
       - uses: gradle/actions/setup-gradle@v4
         with:
           # The repository intentionally has no wrapper jar; pin the same Gradle line as the docs.
