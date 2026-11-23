@@ -778,7 +778,7 @@ footer{color:#527080;font-size:10px;letter-spacing:.1em;text-align:center;paddin
   $("send-cmd").addEventListener("click",async function(){
     text("cmd-err","");
     try{var r=await api("/bridge/console/send",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({action:$("cmd-action").value,arg:$("cmd-arg").value.trim()})});
-      $("cmd-arg").value="";text("cmd-err","queued "+String(r.id).slice(0,8)+" — the phone executes it only while the launcher is on screen");await load();
+      $("cmd-arg").value="";text("cmd-err","queued "+String(r.id).slice(0,8)+" — waiting for Habitat Bridge to receive and acknowledge it");await load();
     }catch(e){text("cmd-err",e.message)}
   });
 
