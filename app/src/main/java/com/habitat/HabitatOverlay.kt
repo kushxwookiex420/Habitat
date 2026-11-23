@@ -9,6 +9,10 @@ import kotlin.math.min
 class HabitatOverlay(ctx: Context) : View(ctx) {
     var onSectionChanged: ((Int) -> Unit)? = null
     var onSystemCheckRun: (() -> Unit)? = null
+    // Worker rows used to be painted decoration: a tap fell through to "close panel". These
+    // callbacks are the navigation contract the Activity wires to the real /workers/:id endpoint.
+    var onWorkerSelected: ((String) -> Unit)? = null
+    var onWorkerAction: ((String) -> Unit)? = null
     private val names = arrayOf("CHAT", "WORKERS", "TASKS", "NOTIFY")
     private var selected = 0
     private var panel = false
@@ -19,6 +23,17 @@ class HabitatOverlay(ctx: Context) : View(ctx) {
     private var touchDownY = 0f
     private var lastTouchY = 0f
     private var draggingChat = false
+    private var workerPanel: WorkerPanel? = null
+    private var workerScroll = 0f
+
+    private data class WorkerPanel(
+        val id: String,
+        val title: String,
+        val status: String,
+        val lines: List<String>,
+        val canRetry: Boolean,
+        val canRunCheck: Boolean
+    )
     private val messages = mutableListOf(
         "AX  •  Neural core online.",
         "Ready. Give me a command or delegate a task."
@@ -56,6 +71,22 @@ class HabitatOverlay(ctx: Context) : View(ctx) {
         invalidate()
     }
 
+    fun openWorker(id: String, title: String) {
+        workerPanel = WorkerPanel(id, title, "LOADING", listOf("Loading verified runtime data…"), false, false)
+        workerScroll = 0f
+        invalidate()
+    }
+
+    fun setWorkerDetail(id: String, title: String, status: String, lines: List<String>, canRetry: Boolean, canRunCheck: Boolean) {
+        workerPanel = WorkerPanel(id, title, status, lines, canRetry, canRunCheck)
+        invalidate()
+    }
+
+    fun closeWorker() {
+        workerPanel = null
+        invalidate()
+    }
+
     fun replaceLastAxMessage(msg: String) {
         for (i in messages.indices.reversed()) {
             if (messages[i].startsWith("AX  •")) {
@@ -86,7 +117,7 @@ class HabitatOverlay(ctx: Context) : View(ctx) {
         chip(c, width * .685f, height * .118f, width * .945f, "● MESH READY")
         drawAxBrain(c)
         drawOrbitHud(c)
-        if (panel) drawPanel(c)
+        if (workerPanel != null) drawWorkerPanel(c) else if (panel) drawPanel(c)
 
         val y = height * .855f
         val cell = width / 4f
@@ -292,6 +323,69 @@ class HabitatOverlay(ctx: Context) : View(ctx) {
         }
     }
 
+    private fun drawWorkerPanel(c: Canvas) {
+        val detail = workerPanel ?: return
+        val s = min(width, height).toFloat()
+        val left = width * .045f
+        val right = width * .955f
+        val top = height * .13f
+        val bottom = height * .86f
+        paint.style = Paint.Style.FILL
+        paint.color = Color.argb(235, 3, 10, 26)
+        paint.setShadowLayer(24f, 0f, 8f, Color.argb(120, 0, 190, 240))
+        c.drawRoundRect(left, top, right, bottom, 30f, 30f, paint)
+        paint.clearShadowLayer()
+        paint.style = Paint.Style.STROKE
+        paint.strokeWidth = 2.2f
+        paint.color = Color.argb(200, 75, 215, 255)
+        c.drawRoundRect(left, top, right, bottom, 30f, 30f, paint)
+
+        text(c, detail.title, width / 2f, top + height * .050f, s * .030f, Color.WHITE)
+        text(c, detail.status, width / 2f, top + height * .082f, s * .018f, Color.rgb(120, 235, 255))
+        paint.color = Color.argb(80, 100, 225, 255)
+        paint.strokeWidth = 1.5f
+        c.drawLine(left + 20, top + height * .098f, right - 20, top + height * .098f, paint)
+
+        val contentLeft = left + 22f
+        val maxWidth = (right - left) - 44f
+        var yy = top + height * .128f - workerScroll
+        val clipTop = top + height * .108f
+        val clipBottom = height * .685f
+        c.save()
+        c.clipRect(left, clipTop, right, clipBottom)
+        for (line in detail.lines) {
+            for (wrapped in wrapText(line, maxWidth, s * .0155f)) {
+                if (yy >= clipTop - 20 && yy <= clipBottom) {
+                    text(c, wrapped, contentLeft, yy, s * .0155f, Color.rgb(208, 232, 240), Paint.Align.LEFT)
+                }
+                yy += height * .0235f
+            }
+        }
+        c.restore()
+
+        button(c, "BACK", width * .07f, height * .705f, width * .32f, height * .758f)
+        button(c, "REFRESH", width * .38f, height * .705f, width * .63f, height * .758f)
+        if (detail.canRetry) {
+            button(c, "RETRY JOB", width * .69f, height * .705f, width * .93f, height * .758f)
+        } else if (detail.canRunCheck) {
+            button(c, "RUN CHECK", width * .69f, height * .705f, width * .93f, height * .758f)
+        }
+        if (detail.canRetry && detail.canRunCheck) {
+            button(c, "RUN CHECK", width * .69f, height * .768f, width * .93f, height * .821f)
+        }
+    }
+
+    private fun button(c: Canvas, label: String, l: Float, top: Float, r: Float, bottom: Float) {
+        paint.style = Paint.Style.FILL
+        paint.color = Color.argb(185, 8, 112, 145)
+        c.drawRoundRect(l, top, r, bottom, 18f, 18f, paint)
+        paint.style = Paint.Style.STROKE
+        paint.strokeWidth = 1.6f
+        paint.color = Color.rgb(90, 238, 255)
+        c.drawRoundRect(l, top, r, bottom, 18f, 18f, paint)
+        text(c, label, (l + r) / 2f, (top + bottom) / 2f + min(width, height) * .007f, min(width, height) * .016f, Color.WHITE)
+    }
+
     private fun row(c: Canvas, title: String, status: String, y: Float, active: Boolean) {
         val l = width * .085f
         val r = width * .915f
@@ -336,6 +430,13 @@ class HabitatOverlay(ctx: Context) : View(ctx) {
                 return true
             }
             MotionEvent.ACTION_MOVE -> {
+                if (workerPanel != null && e.y < height * .70f) {
+                    val dy = lastTouchY - e.y
+                    if (kotlin.math.abs(e.y - touchDownY) > 8f) workerScroll += dy
+                    lastTouchY = e.y
+                    invalidate()
+                    return true
+                }
                 if (panel && selected == 0 && e.y < height * .70f) {
                     val dy = lastTouchY - e.y
                     if (kotlin.math.abs(e.y - touchDownY) > 8f) draggingChat = true
@@ -355,7 +456,31 @@ class HabitatOverlay(ctx: Context) : View(ctx) {
         }
 
         if (e.actionMasked != MotionEvent.ACTION_UP) return true
+
+        // A worker detail view owns the whole screen until BACK is tapped. It is hit-tested before
+        // the generic "tap anywhere closes the panel" rule that swallowed worker taps.
+        val detail = workerPanel
+        if (detail != null) {
+            val backLeft = width * .07f; val backRight = width * .32f
+            val refreshLeft = width * .38f; val refreshRight = width * .63f
+            val actionLeft = width * .69f; val actionRight = width * .93f
+            val firstRowTop = height * .705f; val firstRowBottom = height * .758f
+            val secondRowTop = height * .768f; val secondRowBottom = height * .821f
+            if (e.y in firstRowTop..firstRowBottom) {
+                if (e.x in backLeft..backRight) { workerPanel = null; invalidate(); return true }
+                if (e.x in refreshLeft..refreshRight) { onWorkerAction?.invoke("refresh"); return true }
+                if (detail.canRetry && e.x in actionLeft..actionRight) { onWorkerAction?.invoke("retry"); return true }
+                if (!detail.canRetry && detail.canRunCheck && e.x in actionLeft..actionRight) { onWorkerAction?.invoke("run"); return true }
+            }
+            if (detail.canRetry && detail.canRunCheck && e.y in secondRowTop..secondRowBottom && e.x in actionLeft..actionRight) {
+                onWorkerAction?.invoke("run")
+                return true
+            }
+            return true
+        }
+
         if (e.y >= navY) {
+            workerPanel = null
             selected = ((e.x / (width / 4f)).toInt()).coerceIn(0, 3)
             panel = true
             onSectionChanged?.invoke(selected)
@@ -373,6 +498,23 @@ class HabitatOverlay(ctx: Context) : View(ctx) {
                 return true
             }
             if (e.y >= panelTop && e.y < height * .70f) return true
+        }
+        // WORKERS rows: real hit targets that open the detail view.
+        if (panel && selected == 1 && e.y < height * .70f) {
+            val panelTop = height * .18f
+            val rows = listOf(
+                "ax" to panelTop + height * .150f,
+                "product-scout" to panelTop + height * .245f,
+                "listing-opt" to panelTop + height * .340f,
+                "growth-ops" to panelTop + height * .435f
+            )
+            for ((workerId, rowTop) in rows) {
+                if (e.y >= rowTop && e.y <= rowTop + height * .070f) {
+                    onWorkerSelected?.invoke(workerId)
+                    return true
+                }
+            }
+            return true
         }
         if (panel && e.y < height * .70f) {
             panel = false

@@ -374,6 +374,59 @@ class MainActivity : Activity() {
         input.setOnEditorActionListener { _, _, _ -> submit(); true }
         voice.setOnClickListener { startVoice() }
 
+        // Worker mesh navigation: the rows are canvas hit targets wired to the real detail endpoint.
+        var activeWorkerId = ""
+        var activeRetryTaskId = ""
+        fun workerTitle(id: String): String = when (id) {
+            "product-scout" -> "PRODUCT SCOUT"
+            "listing-opt" -> "LISTING OPT"
+            "growth-ops" -> "GROWTH OPS"
+            else -> "AX ORCHESTRATOR"
+        }
+        fun loadWorker(id: String) {
+            activeWorkerId = id
+            ui.openWorker(id, workerTitle(id))
+            brain.fetchWorkerDetail(id) { result ->
+                runOnUiThread {
+                    when (result.state) {
+                        BrainAdapter.State.CONNECTED -> {
+                            val lines = result.text.lines()
+                            val status = lines.firstOrNull { it.startsWith("STATUS:") }
+                                ?.removePrefix("STATUS:")?.trim().orEmpty().ifEmpty { "UNKNOWN" }
+                            activeRetryTaskId = lines.firstOrNull { it.startsWith("RETRY TASK:") }
+                                ?.removePrefix("RETRY TASK:")?.trim().orEmpty()
+                            ui.setWorkerDetail(
+                                id, workerTitle(id), status, lines,
+                                lines.contains("CAN RETRY: YES"),
+                                lines.contains("CAN RUN CHECK: YES")
+                            )
+                        }
+                        BrainAdapter.State.ERROR -> ui.setWorkerDetail(
+                            id, workerTitle(id), "ERROR",
+                            listOf("Worker detail could not be loaded.", result.detail), false, false
+                        )
+                        else -> Unit
+                    }
+                }
+            }
+        }
+        ui.onWorkerSelected = { id -> loadWorker(id) }
+        ui.onWorkerAction = { action ->
+            when (action) {
+                "refresh" -> if (activeWorkerId.isNotEmpty()) loadWorker(activeWorkerId)
+                "retry" -> if (activeRetryTaskId.isNotEmpty()) {
+                    ui.addChatMessage("AX", "Retrying ${workerTitle(activeWorkerId)} job $activeRetryTaskId…")
+                    brain.retryWorkerTask(activeRetryTaskId) { result ->
+                        runOnUiThread {
+                            ui.addChatMessage("AX", result.text.ifBlank { result.detail })
+                            loadWorker(activeWorkerId)
+                        }
+                    }
+                }
+                "run" -> ui.onSystemCheckRun?.invoke()
+            }
+        }
+
         ui.onSectionChanged = { section ->
             space.setMode(section)
             composer.visibility = if (section == 0) View.VISIBLE else View.GONE
