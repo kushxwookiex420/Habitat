@@ -9,8 +9,6 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.os.IBinder
-import androidx.core.app.NotificationCompat
-import androidx.core.content.ContextCompat
 
 /**
  * Keeps the paired device credential alive outside the Activity.
@@ -28,8 +26,7 @@ class HabitatPresenceService : Service() {
         fun start(context: Context): Boolean {
             if (!AndroidDeviceBridge(context.applicationContext) {}.isConfigured()) return false
             return runCatching {
-                ContextCompat.startForegroundService(
-                    context.applicationContext,
+                context.applicationContext.startForegroundService(
                     Intent(context.applicationContext, HabitatPresenceService::class.java)
                 )
                 true
@@ -97,14 +94,14 @@ class HabitatPresenceService : Service() {
             Intent(this, MainActivity::class.java),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
-        return NotificationCompat.Builder(this, CHANNEL_ID)
+        return Notification.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.stat_notify_sync)
             .setContentTitle("Habitat AX presence")
             .setContentText("Authenticated phone check-in is active")
             .setContentIntent(open)
             .setOngoing(true)
-            .setSilent(true)
-            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setOnlyAlertOnce(true)
+            .setPriority(Notification.PRIORITY_LOW)
             .build()
     }
 }
