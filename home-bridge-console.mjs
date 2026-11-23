@@ -241,11 +241,15 @@ export function registerHomeBridgeConsole(app, { env = process.env, fetchImpl = 
       const items = (rows || []).map((record) => {
         const completed = record.status === "completed";
         const failed = completed && record.result && record.result.ok === false;
+        // A queued or claimed command that is past its deadline can never run. Reporting it as
+        // "queued" would be a misleading indicator, so it is labelled expired instead. A completed
+        // command keeps its real outcome even after the deadline.
+        const expired = !completed && Boolean(record.expiresAt) && Date.parse(record.expiresAt) <= Date.now();
         return {
           id: short(record.id, 64),
           deviceId: short(record.deviceId, 64),
           type: short(record.type, 40),
-          state: failed ? "failed" : completed ? "completed" : record.status === "claimed" ? "received" : "queued",
+          state: failed ? "failed" : completed ? "completed" : expired ? "expired" : record.status === "claimed" ? "received" : "queued",
           queuedAt: record.createdAt || null,
           receivedAt: record.claimedAt || null,
           completedAt: record.completedAt || null,
@@ -764,7 +768,7 @@ footer{color:#527080;font-size:10px;letter-spacing:.1em;text-align:center;paddin
     text("device-cmd-count",deviceItems.length+" recent");
     $("device-cmd-list").innerHTML=deviceItems.map(function(c){
       var state=String(c.state||"queued");
-      var times="queued "+when(c.queuedAt)+(c.receivedAt?" · received "+when(c.receivedAt):"")+(c.completedAt?" · completed "+when(c.completedAt):"");
+      var times="queued "+when(c.queuedAt)+(c.receivedAt?" · received "+when(c.receivedAt):"")+(c.completedAt?" · completed "+when(c.completedAt):"")+(state==="expired"?" · expired "+when(c.expiresAt):"");
       return '<div class="item '+(state==="completed"?"done":state==="failed"?"":"cyan")+'"><div class="meta">'+esc(state.toUpperCase())+' · '+esc(c.type||"")+' · '+esc(String(c.id||"").slice(0,14))+'</div><div class="body">'+esc(c.deviceId||"")+'</div><div class="meta">'+esc(times)+'</div>'+(c.summary?'<div class="meta">'+esc(c.summary)+'</div>':'')+'</div>'
     }).join("")||(deviceCommands.available===false?'<div class="item meta">durable device queue not available</div>':'<div class="item meta">no durable device commands</div>');
 

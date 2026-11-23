@@ -390,10 +390,11 @@ test("status command reports when no active paired phone exists", async () => {
 
 test("durable command receipts are read-only and map queued, received, completed and failed", async () => {
   const seenAt = new Date().toISOString();
-  const t1 = "2026-11-23T20:00:00.000Z";
-  const t2 = "2026-11-23T20:00:05.000Z";
-  const t3 = "2026-11-23T20:00:09.000Z";
-  const t4 = "2026-11-23T20:05:00.000Z";
+  const t1 = new Date(Date.now() - 60_000).toISOString();
+  const t2 = new Date(Date.now() - 50_000).toISOString();
+  const t3 = new Date(Date.now() - 40_000).toISOString();
+  const t4 = new Date(Date.now() + 240_000).toISOString();
+  const past = new Date(Date.now() - 5_000).toISOString();
   const queried = [];
   const app = makeApp();
   registerHomeBridgeConsole(app, {
@@ -409,7 +410,10 @@ test("durable command receipts are read-only and map queued, received, completed
           { id: "dc_queued", deviceId: "android-87ccece6", type: "device.status", status: "queued", createdAt: t1, expiresAt: t4, payload: {} },
           { id: "dc_received", deviceId: "android-87ccece6", type: "device.status", status: "claimed", createdAt: t1, claimedAt: t2, expiresAt: t4, payload: {} },
           { id: "dc_completed", deviceId: "android-87ccece6", type: "device.status", status: "completed", createdAt: t1, claimedAt: t2, completedAt: t3, expiresAt: t4, result: { ok: true, summary: "Habitat Android device is online and responding" } },
-          { id: "dc_failed", deviceId: "android-87ccece6", type: "device.status", status: "completed", createdAt: t1, claimedAt: t2, completedAt: t3, expiresAt: t4, result: { ok: false, summary: "Unsupported command rejected by Android agent" } }
+          { id: "dc_failed", deviceId: "android-87ccece6", type: "device.status", status: "completed", createdAt: t1, claimedAt: t2, completedAt: t3, expiresAt: t4, result: { ok: false, summary: "Unsupported command rejected by Android agent" } },
+          { id: "dc_expired_queued", deviceId: "android-87ccece6", type: "device.status", status: "queued", createdAt: t1, expiresAt: past },
+          { id: "dc_expired_claimed", deviceId: "android-87ccece6", type: "device.status", status: "claimed", createdAt: t1, claimedAt: t2, expiresAt: past },
+          { id: "dc_completed_after_deadline", deviceId: "android-87ccece6", type: "device.status", status: "completed", createdAt: t1, claimedAt: t2, completedAt: t3, expiresAt: past, result: { ok: true, summary: "done before the deadline mattered" } }
         ];
       }
     }
@@ -418,7 +422,8 @@ test("durable command receipts are read-only and map queued, received, completed
   assert.equal(res.statusCode, 200);
   assert.deepEqual(queried, [{ deviceId: "android-87ccece6", limit: 10 }], "receipts are scoped to the active phone and bounded");
   assert.equal(res.body.deviceCommands.available, true);
-  assert.deepEqual(res.body.deviceCommands.items.map((item) => item.state), ["queued", "received", "completed", "failed"]);
+  assert.deepEqual(res.body.deviceCommands.items.map((item) => item.state), ["queued", "received", "completed", "failed", "expired", "expired", "completed"]);
+  assert.equal(res.body.deviceCommands.items.every((item) => item.state !== "expired" || item.completedAt === null), true, "an expired receipt never claims completion");
   const completed = res.body.deviceCommands.items.find((item) => item.id === "dc_completed");
   assert.equal(completed.deviceId, "android-87ccece6");
   assert.equal(completed.queuedAt, t1);
