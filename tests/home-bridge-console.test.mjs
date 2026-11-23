@@ -262,6 +262,57 @@ test("the console page separates AX Core from the legacy home relay", async () =
   assert.equal(html.includes("RELAY · home bridge"), false);
 });
 
+function registryStub(seenAt) {
+  return {
+    async listDevices() {
+      return [{ device_id: "android-87ccece6", created_at: "2026-11-23T20:00:00.000Z", last_seen_at: seenAt, device_json: null, revoked_at: null }];
+    }
+  };
+}
+
+test("phone last check-in falls back to the durable registry when the relay is down", async () => {
+  const seenAt = new Date().toISOString();
+  const app = makeApp();
+  // Same shape as production: the operator credential is set, the legacy relay roles are not.
+  registerHomeBridgeConsole(app, {
+    env: { HABITAT_AX_BRIDGE_TOKEN: OPERATOR },
+    fetchImpl: async () => { throw new Error("relay unreachable"); },
+    deviceRepository: registryStub(seenAt)
+  });
+  const res = await invoke(app, "GET /bridge/console/dashboard", operator);
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.body.relay.health, "unavailable", "relay health stays separately reported");
+  assert.equal(res.body.phone.ok, true);
+  assert.equal(res.body.phone.name, "android-87ccece6");
+  assert.equal(res.body.phone.lastSeen, seenAt);
+  assert.equal(res.body.phone.online, true);
+  assert.equal(res.body.devices.link, "LIVE");
+});
+
+test("a healthy relay still wins for the phone check-in values", async () => {
+  const seenAt = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+  const app = makeApp();
+  registerHomeBridgeConsole(app, {
+    env: {
+      HABITAT_AX_BRIDGE_TOKEN: OPERATOR,
+      HOME_BRIDGE_AX_TOKEN: "hb_ax_" + "1".repeat(48),
+      HOME_BRIDGE_BUFF_TOKEN: "hb_buff_" + "2".repeat(48),
+      HOME_BRIDGE_URL: "https://relay.test"
+    },
+    fetchImpl: relayStub([]),
+    deviceRepository: registryStub(seenAt)
+  });
+  const res = await invoke(app, "GET /bridge/console/dashboard", operator);
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.body.relay.health, "ok");
+  // The relay reports epoch milliseconds and the name "phone"; the registry would supply an ISO
+  // string and a device id, so these two assertions prove the relay path was taken.
+  assert.equal(typeof res.body.phone.lastSeen, "number");
+  assert.notEqual(res.body.phone.lastSeen, seenAt);
+  assert.equal(res.body.phone.name, "phone");
+  assert.equal(res.body.phone.online, true);
+});
+
 test("phone actions are allowlisted and forwarded", async () => {
   const { app, calls } = setup();
   const bad = await invoke(app, "POST /bridge/console/send", { ...operator, body: { action: "shell", arg: "id" } });

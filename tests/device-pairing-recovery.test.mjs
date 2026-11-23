@@ -265,6 +265,29 @@ test("the pairing response never contains the operator credential", async () => 
   assert.equal(JSON.stringify(pair.body).includes(CODE), false);
 });
 
+test("phone last check-in falls back to the device registry when the relay is unavailable", async () => {
+  // This harness mounts the bridge without HOME_BRIDGE_* roles, exactly like production.
+  const { app } = await setup([{ code: CODE, expiresAt: future() }]);
+  const minted = await invoke(app, "POST /bridge/console/pairing", { ...tokenHeaders(OPERATOR), body: { deviceId: "launcher-a" } });
+  assert.equal(minted.statusCode, 201);
+  const paired = await invoke(app, "POST /device/pair", { body: { deviceId: "launcher-a", code: minted.body.pairing.code } });
+  assert.equal(paired.statusCode, 200);
+  const heartbeat = await invoke(app, "POST /device/heartbeat", {
+    headers: { authorization: "Bearer " + paired.body.token },
+    body: { deviceId: "launcher-a", details: { model: "Pixel" } }
+  });
+  assert.equal(heartbeat.statusCode, 200);
+
+  const dashboard = await invoke(app, "GET /bridge/console/dashboard", tokenHeaders(OPERATOR));
+  assert.equal(dashboard.statusCode, 200);
+  assert.equal(dashboard.body.relay.health, "unavailable");
+  assert.equal(dashboard.body.phone.ok, true);
+  assert.equal(dashboard.body.phone.name, "launcher-a");
+  assert.equal(dashboard.body.phone.online, true);
+  assert.equal(dashboard.body.phone.lastSeen, dashboard.body.devices.device.lastSeenAt);
+  assert.equal(dashboard.body.phone.lastSeen, heartbeat.body.lastSeenAt);
+});
+
 test("the Control Center page exposes the pairing-code generator", async () => {
   const { renderConsole } = await import("../home-bridge-console.mjs");
   const html = renderConsole();

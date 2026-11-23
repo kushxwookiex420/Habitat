@@ -271,12 +271,15 @@ export function registerHomeBridgeConsole(app, { env = process.env, fetchImpl = 
         activity: replyRows.map((r) => ({ at: r.iso, text: short(r.text, 200), taskId: r.taskId, artifacts: r.artifacts || [] })),
         artifacts: replyRows.flatMap((r) => r.artifacts || [])
       },
+      // A healthy relay still wins. When the legacy relay has no role credential the durable
+      // paired-device registry is the honest source for the phone's presence, so the panel never
+      // reports "never" for a phone that is polling and heartbeating every minute.
       phone: {
-        ok: state.ok,
-        name: state.data?.name || null,
-        online: Boolean(state.data?.online),
-        lastSeen: state.data?.lastSeen || null,
-        lastSeenIso: state.data?.commands?.[0]?.iso || null,
+        ok: state.ok || phone.ok,
+        name: state.data?.name || phone.device?.deviceId || null,
+        online: Boolean(state.data?.online) || phone.link === "LIVE",
+        lastSeen: state.data?.lastSeen || phone.device?.lastSeenAt || null,
+        lastSeenIso: state.data?.commands?.[0]?.iso || phone.device?.lastSeenAt || null,
         commands,
         error: state.ok ? null : state.error
       },
