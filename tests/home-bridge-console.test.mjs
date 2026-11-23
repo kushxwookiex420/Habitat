@@ -215,6 +215,53 @@ test("a missing relay credential is reported instead of faked", async () => {
   assert.ok(res.body.errors.length > 0);
 });
 
+test("AX Core reports the device bridge credential, not the legacy relay token", async () => {
+  const app = makeApp();
+  registerHomeBridgeConsole(app, {
+    env: { HABITAT_AX_BRIDGE_TOKEN: OPERATOR },
+    fetchImpl: async () => { throw new Error("should not be called"); },
+    bridgeStatus: () => ({ ready: true, durable: true, axTokenConfigured: true, perDeviceTokens: true })
+  });
+  const res = await invoke(app, "GET /bridge/console/dashboard", operator);
+  assert.equal(res.statusCode, 200);
+  // the surface the phone depends on
+  assert.equal(res.body.deviceBridge.available, true);
+  assert.equal(res.body.deviceBridge.axTokenConfigured, true);
+  assert.equal(res.body.deviceBridge.ready, true);
+  // the legacy relay keeps its own, separately reported credential state
+  assert.equal(res.body.relay.credentials.ax, false);
+  assert.equal(res.body.relay.credentials.buff, false);
+  assert.equal(res.body.relay.health, "unavailable");
+  const serialized = JSON.stringify(res.body);
+  assert.equal(serialized.includes(OPERATOR), false);
+  assert.equal(serialized.includes("hb_ax_"), false);
+});
+
+test("a device bridge status probe that fails degrades to missing, never to present", async () => {
+  const app = makeApp();
+  registerHomeBridgeConsole(app, {
+    env: { HABITAT_AX_BRIDGE_TOKEN: OPERATOR },
+    fetchImpl: async () => { throw new Error("no"); },
+    bridgeStatus: () => { throw new Error("store unavailable"); }
+  });
+  const res = await invoke(app, "GET /bridge/console/dashboard", operator);
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.body.deviceBridge.available, false);
+  assert.equal(res.body.deviceBridge.axTokenConfigured, false);
+});
+
+test("the console page separates AX Core from the legacy home relay", async () => {
+  const { app } = setup();
+  const res = await invoke(app, "GET /bridge/console", {});
+  const html = String(res.html);
+  assert.match(html, /AX · CORE/);
+  assert.match(html, /HOME RELAY/);
+  assert.match(html, /device bridge ax credential/);
+  assert.match(html, /home relay credentials/);
+  assert.equal(html.includes("AX · brain"), false);
+  assert.equal(html.includes("RELAY · home bridge"), false);
+});
+
 test("phone actions are allowlisted and forwarded", async () => {
   const { app, calls } = setup();
   const bad = await invoke(app, "POST /bridge/console/send", { ...operator, body: { action: "shell", arg: "id" } });

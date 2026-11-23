@@ -580,7 +580,14 @@ export function registerDeviceCommandBridge(app, {
   // /bridge/console routes and never changes the device command bridge above.
   let consoleApi = null;
   try {
-    consoleApi = registerHomeBridgeConsole(app, { env, fetchImpl, deviceRepository: store });
+    consoleApi = registerHomeBridgeConsole(app, {
+      env,
+      fetchImpl,
+      deviceRepository: store,
+      // AX Core credential reporting reads the device bridge's own token presence. The legacy Home
+      // Bridge relay keeps its separate ax/buff role credentials and is labelled HOME RELAY.
+      bridgeStatus: () => ({ ready, durable: Boolean(store?.durable), axTokenConfigured: Boolean(axToken), perDeviceTokens: true })
+    });
   } catch (error) {
     console.error("HOME_BRIDGE_CONSOLE_MOUNT_FAILED", String(error?.message || error));
   }

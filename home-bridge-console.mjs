@@ -52,7 +52,7 @@ function short(value, max = 200) {
   return String(value == null ? "" : value).slice(0, max);
 }
 
-export function registerHomeBridgeConsole(app, { env = process.env, fetchImpl = fetch, deviceRepository = null } = {}) {
+export function registerHomeBridgeConsole(app, { env = process.env, fetchImpl = fetch, deviceRepository = null, bridgeStatus = null } = {}) {
   const client = createHomeBridgeClient({
     baseUrl: env.HOME_BRIDGE_URL,
     axToken: env.HOME_BRIDGE_AX_TOKEN,
@@ -204,6 +204,29 @@ export function registerHomeBridgeConsole(app, { env = process.env, fetchImpl = 
     }
   }
 
+  /**
+   * AX Core credential reporting. The credential that matters for the phone is the device bridge's
+   * own inbound token, which is a different secret from the legacy Home Bridge relay role tokens.
+   * Only booleans leave this function; a probe that throws degrades to "unknown", never to present.
+   */
+  function deviceBridgeStatus() {
+    const unknown = { ok: false, available: false, ready: false, durable: false, axTokenConfigured: false, perDeviceTokens: false };
+    try {
+      const status = typeof bridgeStatus === "function" ? bridgeStatus() : bridgeStatus;
+      if (!status || typeof status !== "object") return unknown;
+      return {
+        ok: true,
+        available: true,
+        ready: Boolean(status.ready),
+        durable: Boolean(status.durable),
+        axTokenConfigured: Boolean(status.axTokenConfigured),
+        perDeviceTokens: Boolean(status.perDeviceTokens)
+      };
+    } catch {
+      return unknown;
+    }
+  }
+
   async function dashboard() {
     const [health, state, tasks, replies, files, queue, commits, phone] = await Promise.all([
       client.health(),
@@ -258,6 +281,7 @@ export function registerHomeBridgeConsole(app, { env = process.env, fetchImpl = 
         error: state.ok ? null : state.error
       },
       devices: phone,
+      deviceBridge: deviceBridgeStatus(),
       cloud: {
         relayOk: health.ok,
         github: commits,
@@ -438,7 +462,7 @@ footer{color:#527080;font-size:10px;letter-spacing:.1em;text-align:center;paddin
 <div class="wrap">
 <header class="top">
   <div class="brand"><span class="orb"></span>HABITAT · AX CORE</div>
-  <span class="chip" id="link-chip">LINK …</span>
+  <span class="chip" id="link-chip">HOME RELAY …</span>
 </header>
 
 <section id="login-view" class="panel login">
@@ -464,7 +488,10 @@ footer{color:#527080;font-size:10px;letter-spacing:.1em;text-align:center;paddin
 
   <div class="cols">
     <section class="panel" data-view="ax">
-      <h2>AX · BRAIN <span id="ax-status">—</span></h2>
+      <h2>AX · CORE <span id="ax-status">—</span></h2>
+      <div class="row"><span class="k">device bridge</span><span class="v" id="ax-bridge">—</span></div>
+      <div class="row"><span class="k">home relay</span><span class="v" id="ax-relay">—</span></div>
+      <p class="note">AX credential is this server's device bridge token, the one that authenticates the phone. HOME RELAY is the separate legacy relay; its own ax/buff role credentials are reported in CLOUD.</p>
       <div class="row"><span class="k">queued</span><span class="v" id="ax-queued">—</span></div>
       <div class="row"><span class="k">working</span><span class="v" id="ax-working">—</span></div>
       <div class="row"><span class="k">done</span><span class="v" id="ax-done">—</span></div>
@@ -529,7 +556,8 @@ footer{color:#527080;font-size:10px;letter-spacing:.1em;text-align:center;paddin
 
     <section class="panel hidden" data-view="cloud">
       <h2>CLOUD · SERVICES <span id="cloud-status">—</span></h2>
-      <div class="row"><span class="k">relay</span><span class="v" id="cloud-relay">—</span></div>
+      <div class="row"><span class="k">home relay</span><span class="v" id="cloud-relay">—</span></div>
+      <div class="row"><span class="k">home relay credentials</span><span class="v" id="cloud-relay-cred">—</span></div>
       <div class="row"><span class="k">github</span><span class="v" id="cloud-github">—</span></div>
       <h2 style="margin-top:14px">COMMITS</h2>
       <div class="list" id="commit-list"></div>
@@ -566,10 +594,14 @@ footer{color:#527080;font-size:10px;letter-spacing:.1em;text-align:center;paddin
   function render(data){
     state.data=data;
     var relay=data.relay||{},ax=data.ax||{},buff=data.buff||{},phone=data.phone||{},cloud=data.cloud||{},files=data.files||{};
-    text("link-chip",relay.health==="ok"?"RELAY ONLINE":"RELAY OFFLINE");
-    $("link-chip").className="chip "+(relay.health==="ok"?"on":"");
+    var bridge=data.deviceBridge||{},bridgeAx=bridge.axTokenConfigured===true,relayOk=relay.health==="ok",relayCred=relay.credentials||{};
+    text("link-chip",relayOk?"HOME RELAY ONLINE":"HOME RELAY OFFLINE");
+    $("link-chip").className="chip "+(relayOk?"on":"");
+    $("link-chip").title="home relay: "+(relay.healthDetail||(relayOk?"reachable":"unavailable"));
     text("stamp","SYNCED "+when(data.generatedAt));
-    text("ax-status","ax credential "+(relay.credentials&&relay.credentials.ax?"present":"missing"));
+    text("ax-status","device bridge ax credential "+(bridgeAx?"present":"missing"));
+    text("ax-bridge",bridge.ready?(bridge.durable?"ready · durable":"ready"):"not ready");
+    text("ax-relay",relayOk?"online":("offline · "+(relay.healthDetail||"unreachable")));
     text("ax-queued",(ax.counts&&ax.counts.queued)??"—");
     text("ax-working",(ax.counts&&ax.counts.working)??"—");
     text("ax-done",(ax.counts&&ax.counts.done)??"—");
@@ -587,16 +619,17 @@ footer{color:#527080;font-size:10px;letter-spacing:.1em;text-align:center;paddin
     text("pair-confirmed",current&&current.lastSeenAt?when(current.lastSeenAt):"never");
     if(devices.ok===false&&!$("pair-err").textContent)text("pair-err",devices.error||"pairing store unavailable");
     $("pair-device").placeholder=current?("optional: bind the code to "+current.deviceId):"optional: phone device ID to bind the code to";
-    text("cloud-status",relay.health==="ok"?"nominal":"degraded");
+    text("cloud-status",relayOk?"nominal":"degraded");
     text("cloud-relay",relay.url||"—");
+    text("cloud-relay-cred","ax "+(relayCred.ax?"present":"missing")+" · buff "+(relayCred.buff?"present":"missing"));
     text("cloud-github",(cloud.github&&cloud.github.ok)?((cloud.github.repo||"")+" · "+cloud.github.commits.length+" commits"):((cloud.github&&cloud.github.error)||"not configured"));
     text("files-count",(files.count||0)+" files");
 
     var workers=[
-      {name:"AX · brain",state:(relay.credentials&&relay.credentials.ax)&&ax.ok?"active":"offline",detail:"submits tasks, reads replies, queues phone commands"},
+      {name:"AX · relay tasks",state:(relayCred.ax&&ax.ok)?"active":"offline",detail:"relay task API · device bridge ax credential "+(bridgeAx?"present":"missing")},
       {name:"BUFF · agent",state:buff.ok?(buff.queue.length?"assigned":"idle"):"offline",detail:(buff.queue||[]).length+" queued · "+(buff.activity||[]).length+" replies on record"},
       {name:"PHONE · poller",state:phone.online?"polling":"idle",detail:phone.lastSeen?("last check-in "+when(phone.lastSeen)):"no check-in yet"},
-      {name:"RELAY · home bridge",state:relay.health==="ok"?"online":"unreachable",detail:relay.url||""},
+      {name:"HOME RELAY · legacy",state:relayOk?"online":"unreachable",detail:(relay.url||"")+(relayOk?"":" · "+(relay.healthDetail||"unavailable"))},
       {name:"GITHUB · commits",state:(cloud.github&&cloud.github.ok)?"online":"unavailable",detail:(cloud.github&&cloud.github.ok)?((cloud.github.repo||"")+" · "+cloud.github.commits.length+" commits"):((cloud.github&&cloud.github.error)||"not configured")}
     ];
     text("workers-status",workers.filter(function(w){return w.state!=="offline"&&w.state!=="unreachable"}).length+" reporting");
@@ -655,7 +688,7 @@ footer{color:#527080;font-size:10px;letter-spacing:.1em;text-align:center;paddin
     }catch(e){text("login-err",e.message)}
   });
   $("probe").addEventListener("click",async function(){
-    try{var s=await api("/bridge/console/session");text("login-err","relay credentials: ax "+(s.relay.ax?"yes":"no")+", buff "+(s.relay.buff?"yes":"no"))}
+    try{var s=await api("/bridge/console/session");text("login-err","home relay credentials: ax "+(s.relay.ax?"yes":"no")+", buff "+(s.relay.buff?"yes":"no"))}
     catch(e){text("login-err",e.message)}
   });
   $("refresh").addEventListener("click",load);
