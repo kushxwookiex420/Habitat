@@ -25,6 +25,10 @@ import javax.crypto.spec.GCMParameterSpec
  */
 class AndroidDeviceBridge(
     context: Context,
+    // The foreground service owns the connection it creates; only the Activity-started bridge is
+    // allowed to start or stop that service. This stays ahead of the callback so existing trailing
+    // lambda call sites keep compiling.
+    private val startForegroundService: Boolean = true,
     private val onStatus: (String) -> Unit
 ) {
     companion object {
@@ -111,6 +115,7 @@ class AndroidDeviceBridge(
     @Synchronized
     fun start() {
         if (!isConfigured() || executor != null) return
+        if (startForegroundService) HabitatBridgeService.start(appContext)
         executor = Executors.newSingleThreadScheduledExecutor()
         executor?.scheduleWithFixedDelay({ pollOnce() }, 0, 5, TimeUnit.SECONDS)
         onStatus("AX device bridge polling started")
@@ -120,6 +125,7 @@ class AndroidDeviceBridge(
     fun stop() {
         executor?.shutdownNow()
         executor = null
+        if (startForegroundService) HabitatBridgeService.stop(appContext)
     }
 
     fun pollOnceNow() = pollOnce()
@@ -167,25 +173,55 @@ class AndroidDeviceBridge(
             val command = next.optJSONObject("command") ?: return
             val id = command.optString("id")
             val type = command.optString("type")
+            val payload = command.optJSONObject("payload") ?: JSONObject()
             if (id.isBlank()) return
             val result = when (type) {
-                "device.status" -> JSONObject().apply {
-                    put("ok", true)
-                    put("summary", "Habitat Android device is online and responding")
-                    put("details", JSONObject().apply {
-                        put("deviceId", deviceId)
-                        put("manufacturer", Build.MANUFACTURER)
-                        put("model", Build.MODEL)
-                        put("androidSdk", Build.VERSION.SDK_INT)
-                        put("androidRelease", Build.VERSION.RELEASE)
-                        put("app", "Habitat Android")
-                    })
+                "device.status" -> success("Habitat Android device is online and responding", JSONObject().apply {
+                    put("deviceId", deviceId)
+                    put("manufacturer", Build.MANUFACTURER)
+                    put("model", Build.MODEL)
+                    put("androidSdk", Build.VERSION.SDK_INT)
+                    put("androidRelease", Build.VERSION.RELEASE)
+                    put("app", "Habitat Android")
+                })
+                "device.screen" -> {
+                    val service = HabitatAccessibilityService.instance
+                    if (service == null) failure("Accessibility is not enabled on this phone") else success("Screen snapshot captured", service.snapshot())
                 }
-                else -> JSONObject().apply {
-                    put("ok", false)
-                    put("summary", "Unsupported command rejected by Android agent")
-                    put("details", JSONObject().put("type", type))
+                "device.screenshot" -> captureScreenshot(token)
+                "device.tap" -> {
+                    val service = HabitatAccessibilityService.instance
+                    if (service == null) failure("Accessibility is not enabled on this phone")
+                    else if (service.tap(payload.optInt("x", -1), payload.optInt("y", -1))) success("Tap dispatched", JSONObject())
+                    else failure("Android rejected the tap gesture")
                 }
+                "device.swipe" -> {
+                    val service = HabitatAccessibilityService.instance
+                    if (service == null) failure("Accessibility is not enabled on this phone")
+                    else if (service.swipe(
+                        payload.optInt("x1", -1), payload.optInt("y1", -1),
+                        payload.optInt("x2", -1), payload.optInt("y2", -1),
+                        payload.optInt("durationMs", 300)
+                    )) success("Swipe dispatched", JSONObject())
+                    else failure("Android rejected the swipe gesture")
+                }
+                "device.type" -> {
+                    val service = HabitatAccessibilityService.instance
+                    if (service == null) failure("Accessibility is not enabled on this phone")
+                    else {
+                        val text = payload.optString("text", "")
+                        if (service.type(text)) success("Text entered into the focused field", JSONObject().put("characters", text.length))
+                        else failure("No editable, non-password field is focused")
+                    }
+                }
+                "device.key" -> {
+                    val service = HabitatAccessibilityService.instance
+                    val name = payload.optString("name", "")
+                    if (service == null) failure("Accessibility is not enabled on this phone")
+                    else if (service.key(name)) success("Navigation key dispatched", JSONObject().put("key", name))
+                    else failure("Android rejected the navigation key")
+                }
+                else -> failure("Unsupported command rejected by Android agent", JSONObject().put("type", type))
             }
             val body = JSONObject().put("deviceId", deviceId).put("result", result)
             request("POST", "/device/commands/$id/result", token, body)
@@ -199,6 +235,45 @@ class AndroidDeviceBridge(
                 onStatus("AX bridge temporarily unavailable: " + message.take(100))
             }
         }
+    }
+
+    private fun success(summary: String, details: JSONObject): JSONObject = JSONObject().apply {
+        put("ok", true)
+        put("summary", summary.take(200))
+        put("details", details)
+    }
+
+    private fun failure(summary: String, details: JSONObject = JSONObject()): JSONObject = JSONObject().apply {
+        put("ok", false)
+        put("summary", summary.take(200))
+        put("details", details)
+    }
+
+    /**
+     * One screenshot: the accessibility service produces a downscaled JPEG, the phone uploads it with
+     * its own device token, and the receipt carries only the server-side id — never the image bytes.
+     */
+    private fun captureScreenshot(token: String): JSONObject {
+        val service = HabitatAccessibilityService.instance
+            ?: return failure("Accessibility is not enabled on this phone")
+        if (Build.VERSION.SDK_INT < 30) return failure("Screenshots require Android 11 or newer")
+        val latch = java.util.concurrent.CountDownLatch(1)
+        var captured: String? = null
+        service.captureJpegBase64 { data ->
+            captured = data
+            latch.countDown()
+        }
+        if (!latch.await(12, java.util.concurrent.TimeUnit.SECONDS)) return failure("Screen capture timed out")
+        val image = captured ?: return failure("Android declined the screenshot")
+        val body = JSONObject()
+            .put("deviceId", deviceId)
+            .put("mime", "image/jpeg")
+            .put("data", image)
+            .put("capturedAt", java.time.Instant.now().toString())
+        val response = request("POST", "/device/screenshots", token, body)
+        val screenshotId = response.optJSONObject("screenshot")?.optString("id").orEmpty()
+        if (!response.optBoolean("ok") || screenshotId.isBlank()) return failure("The server rejected the screenshot")
+        return success("Screenshot captured", JSONObject().put("screenshotId", screenshotId))
     }
 
     private fun request(method: String, path: String, token: String?, body: JSONObject? = null): JSONObject {
