@@ -222,8 +222,11 @@ fun AppsPage(model: LauncherModel, onToast: (String) -> Unit) {
             }
         }
         items(filtered, key = { it.packageName }) { app ->
-            AppTile(app) { if (!model.openApp(app.packageName)) onToast("Could not open ${app.label}.") }
-                { actionApp = app }
+            AppTile(
+                app = app,
+                onOpen = { if (!model.openApp(app.packageName)) onToast("Could not open ${app.label}.") },
+                onLongPress = { actionApp = app }
+            )
         }
     }
 
@@ -296,6 +299,7 @@ private fun AppTile(app: InstalledApp, onOpen: () -> Unit, onLongPress: () -> Un
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun FavoriteDragRow(model: LauncherModel, apps: List<InstalledApp>, onOpen: (String) -> Unit) {
     val density = LocalDensity.current

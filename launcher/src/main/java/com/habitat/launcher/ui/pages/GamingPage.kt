@@ -37,7 +37,8 @@ fun GamingPage(model: LauncherModel, onToast: (String) -> Unit) {
     val refreshRate = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
         context.display?.refreshRate ?: 60f
     } else {
-        context.windowManager.defaultDisplay.refreshRate
+        val windowManager = context.getSystemService(android.content.Context.WINDOW_SERVICE) as? android.view.WindowManager
+        windowManager?.defaultDisplay?.refreshRate ?: 60f
     }
 
     LazyColumn(
