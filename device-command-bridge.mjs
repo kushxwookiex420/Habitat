@@ -1225,6 +1225,22 @@ export function registerDeviceCommandBridge(app, {
       if (!store || !ready) return [];
       return store.listDevices();
     },
+    /**
+     * Verify a paired-device bearer credential for a non-/device route. The raw token is never
+     * stored: the repository hashes the supplied value and compares it in constant time. Returns
+     * false when storage is not ready, so an unauthenticated caller can never be upgraded by
+     * accident while the bridge is degraded.
+     */
+    async verifyDevice({ deviceId, token } = {}) {
+      if (!store || !ready) return false;
+      if (!validDeviceId(deviceId) || !token) return false;
+      try {
+        return await store.verifyDeviceToken(String(token), String(deviceId));
+      } catch (error) {
+        console.error("DEVICE_TOKEN_VERIFY_FAILED", String(error?.message || error).slice(0, 160));
+        return false;
+      }
+    },
     async requestDeviceStatus() {
       if (!store || !ready) return { ok: false, error: "Device command bridge is not ready." };
       const rows = await store.listDevices();
@@ -1250,6 +1266,46 @@ export function registerDeviceCommandBridge(app, {
     async getCommand(id) {
       if (!store || !ready) return null;
       return store.get(String(id || ""));
+    },
+    /**
+     * Bridge-chat entry into the universal command router.
+     *
+     * The phone never holds the Ax credential: this process submits on its behalf through the same
+     * engine the /ax/command routes use, so approvals, evidence gates and lifecycle rules are
+     * identical. A queued task is returned as queued — submission is not execution.
+     */
+    async submitCommandObjective({ objective, requestedBy = "bridge-chat", role = "ax", idempotencyKey = null, adapter = null } = {}) {
+      if (!commandApi) {
+        return { ok: false, error: "The AX command router is not available on this process." };
+      }
+      if (!commandApi.engine) {
+        return { ok: false, error: "AX command storage is not configured; command objectives cannot be queued." };
+      }
+      const commandStore = commandApi.store?.() || null;
+      if (!commandStore) {
+        return { ok: false, error: "AX command storage is not configured; command objectives cannot be queued." };
+      }
+      try {
+        await commandStore.initialize();
+      } catch (error) {
+        console.error("COMMAND_STORE_INIT_FAILED", String(error?.message || error));
+        return { ok: false, error: "AX command storage is not ready; the objective was not queued." };
+      }
+      try {
+        return await commandApi.engine.submit({ objective, requestedBy, role, idempotencyKey, adapter });
+      } catch (error) {
+        console.error("COMMAND_SUBMIT_FAILED", String(error?.message || error));
+        return { ok: false, error: "The AX command engine could not store the objective." };
+      }
+    },
+    async getCommandTask(taskId) {
+      if (!commandApi || !commandApi.engine) {
+        return { ok: false, error: "The AX command router is not available on this process." };
+      }
+      return commandApi.engine.get(String(taskId || ""));
+    },
+    commandDiagnostics() {
+      return diagnosticsRef();
     },
     status() {
       return {
