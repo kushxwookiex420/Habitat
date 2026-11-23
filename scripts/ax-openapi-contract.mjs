@@ -42,6 +42,10 @@ const EXCLUSIONS = Object.freeze([
     reason: "NEXUS surface guarded by AX_NEXUS_TOKEN; an Ax client must never receive it"
   },
   {
+    test: key => / \/ax\/command\/network(\/|$)/.test(key),
+    reason: "capability network, supplier catalog, approvals and treasury; decisions need the paired owner device and are never exposed to ChatGPT"
+  },
+  {
     test: key => / \/ax\/command\/(memory|notifications|history)(\/|$)/.test(key),
     reason: "operator memory, inbox and mission history; not needed to submit or follow work"
   },

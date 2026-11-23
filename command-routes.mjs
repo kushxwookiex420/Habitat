@@ -137,7 +137,10 @@ export function registerUniversalCommandRoutes(app, {
   messageProvider = null,
   // Mission 17: the agent work cycle that turns an objective into specialist work and verifies it.
   workProvider = null,
-  plannerProvider = null
+  plannerProvider = null,
+  // P1 capability network: capabilities, supplier catalog, channel eligibility, approvals and
+  // treasury reporting. Absent, its routes answer 503 rather than pretending the surface exists.
+  networkProvider = null
 } = {}) {
   // Two credentials, two permission sets. The bridge token is device-capable and predates this
   // work. The command token may only reach /ax/command, and it can never satisfy an owner action.
@@ -1703,6 +1706,197 @@ export function registerUniversalCommandRoutes(app, {
     const detail = await projects.detail(req.params.id);
     if (!detail) return reply(res, { ok: false, code: "not_found", error: "No project with that id." });
     res.json(detail);
+  }));
+
+  // ------------------------------------------- AX capability network (P1: reporting and approval)
+  //
+  // Capabilities, the supplier catalog, channel eligibility, the approval ledger and treasury
+  // reporting. There is deliberately no purchase, order, transfer, OAuth or payout-execution route:
+  // P1 stops at a quote decision and a request. Recording a settled amount or a payout observation
+  // needs the owner device, so an agent cannot inflate the cash the treasury reports.
+  const NETWORK_STATUS_BY_CODE = Object.freeze({
+    not_found: 404,
+    owner_required: 403,
+    invalid_approval_kind: 400,
+    invalid_approval_request: 400,
+    secret_material_refused: 400,
+    quote_expired: 409,
+    quote_window_too_long: 400,
+    duplicate_request: 409,
+    duplicate_event: 409,
+    already_decided: 409,
+    already_consumed: 409,
+    approval_expired: 409,
+    not_approved: 409,
+    approval_binding_mismatch: 409,
+    invalid_revenue_state: 400,
+    invalid_amount: 400,
+    invalid_currency: 400,
+    invalid_occurred_at: 400,
+    invalid_payout_state: 400,
+    revenue_id_required: 400,
+    revenue_source_required: 400,
+    cash_evidence_required: 400,
+    payout_id_required: 400
+  });
+
+  const networkService = () => resolveService(networkProvider);
+
+  function networkUnavailable(res) {
+    res.status(503).json({
+      ok: false,
+      code: "network_not_configured",
+      error: "The AX capability network is not mounted on this service; nothing was read or written."
+    });
+  }
+
+  function networkReply(res, outcome, created = false) {
+    if (outcome?.ok) return res.status(created ? 201 : 200).json(outcome);
+    const status = NETWORK_STATUS_BY_CODE[outcome?.code] || 400;
+    return res.status(status).json({
+      ok: false,
+      code: outcome?.code || "invalid_request",
+      error: outcome?.error || "The request could not be completed."
+    });
+  }
+
+  route.get("/ax/command/network/status", requireAx, serviceGuard(async (_req, res) => {
+    const service = networkService();
+    if (!service) return networkUnavailable(res);
+    res.json(await service.status());
+  }));
+
+  route.get("/ax/command/network/capabilities", requireAx, serviceGuard(async (_req, res) => {
+    const service = networkService();
+    if (!service) return networkUnavailable(res);
+    res.json(await service.capabilities());
+  }));
+
+  route.get("/ax/command/network/suppliers", requireAx, serviceGuard(async (req, res) => {
+    const service = networkService();
+    if (!service) return networkUnavailable(res);
+    res.json(await service.suppliers({
+      layer: req.query?.layer || null,
+      orderModel: req.query?.orderModel || null,
+      country: req.query?.country || null
+    }));
+  }));
+
+  route.get("/ax/command/network/suppliers/:id", requireAx, serviceGuard(async (req, res) => {
+    const service = networkService();
+    if (!service) return networkUnavailable(res);
+    networkReply(res, await service.supplier(req.params.id));
+  }));
+
+  route.post("/ax/command/network/suppliers/fit", requireAx, serviceGuard(async (req, res) => {
+    const service = networkService();
+    if (!service) return networkUnavailable(res);
+    res.json(await service.evaluateSupplier(req.body || {}));
+  }));
+
+  route.get("/ax/command/network/channels", requireAx, serviceGuard(async (_req, res) => {
+    const service = networkService();
+    if (!service) return networkUnavailable(res);
+    res.json(await service.channels());
+  }));
+
+  route.post("/ax/command/network/channels/eligibility", requireAx, serviceGuard(async (req, res) => {
+    const service = networkService();
+    if (!service) return networkUnavailable(res);
+    res.json(await service.evaluateChannel(req.body || {}));
+  }));
+
+  route.get("/ax/command/network/treasury", requireAx, serviceGuard(async (_req, res) => {
+    const service = networkService();
+    if (!service) return networkUnavailable(res);
+    res.json(await service.treasury());
+  }));
+
+  route.get("/ax/command/network/treasury/events", requireAx, serviceGuard(async (req, res) => {
+    const service = networkService();
+    if (!service) return networkUnavailable(res);
+    res.json(await service.revenueEvents({ limit: req.query?.limit }));
+  }));
+
+  route.post("/ax/command/network/treasury/events", requireAx, serviceGuard(async (req, res) => {
+    const service = networkService();
+    if (!service) return networkUnavailable(res);
+    const state = String(req.body?.state || "").trim().toLowerCase();
+    let actor = "ax:" + (req.axRole || "unknown");
+    // "Money is real" is an owner claim. An agent may record pipeline; only the paired owner device
+    // may move a figure into settled or available, which is what treasury counts as cash.
+    if (state === "settled" || state === "available") {
+      const deviceId = await authorizeOwnerAction(req, res, "Recording settled cash");
+      if (!deviceId) return undefined;
+      actor = "owner:" + deviceId;
+    }
+    networkReply(res, await service.recordRevenue({ ...(req.body || {}), actor }), true);
+  }));
+
+  route.get("/ax/command/network/treasury/payouts", requireAx, serviceGuard(async (req, res) => {
+    const service = networkService();
+    if (!service) return networkUnavailable(res);
+    res.json(await service.payouts({ limit: req.query?.limit }));
+  }));
+
+  // An observation, not a transfer: this records where a channel says a payout is. It cannot start,
+  // change or cancel one, and it is owner-only because it changes reported in-transit cash.
+  route.post("/ax/command/network/treasury/payouts", requireAx, serviceGuard(async (req, res) => {
+    const service = networkService();
+    if (!service) return networkUnavailable(res);
+    const deviceId = await authorizeOwnerAction(req, res, "Recording a payout observation");
+    if (!deviceId) return undefined;
+    networkReply(res, await service.recordPayout({ ...(req.body || {}), actor: "owner:" + deviceId }), true);
+  }));
+
+  route.post("/ax/command/network/approvals", requireAx, serviceGuard(async (req, res) => {
+    const service = networkService();
+    if (!service) return networkUnavailable(res);
+    // `requestedBy` comes from the authenticated surface, never from the body.
+    const outcome = await service.requestApproval({
+      ...(req.body || {}),
+      requestedBy: "ax:" + (req.axRole || "unknown")
+    });
+    if (outcome?.ok !== false) {
+      await recordAudit({ event: "network.approval.requested", actorDeviceId: "ax", targetDeviceId: outcome.approval?.id || null });
+    }
+    networkReply(res, outcome, outcome?.created === true);
+  }));
+
+  route.get("/ax/command/network/approvals", requireAx, serviceGuard(async (req, res) => {
+    const service = networkService();
+    if (!service) return networkUnavailable(res);
+    res.json(await service.approvals({ status: req.query?.status || null, kind: req.query?.kind || null, limit: req.query?.limit }));
+  }));
+
+  route.get("/ax/command/network/approvals/:id", requireAx, serviceGuard(async (req, res) => {
+    const service = networkService();
+    if (!service) return networkUnavailable(res);
+    networkReply(res, await service.approval(req.params.id));
+  }));
+
+  route.post("/ax/command/network/approvals/:id/approve", requireAx, serviceGuard(async (req, res) => {
+    const deviceId = await authorizeOwnerAction(req, res, "Approval decision");
+    if (!deviceId) return undefined;
+    const service = networkService();
+    if (!service) return networkUnavailable(res);
+    const outcome = await service.approve({ id: req.params.id, by: "owner:" + deviceId, reason: req.body?.reason || null });
+    if (outcome?.ok !== false) {
+      await recordAudit({ event: "network.approval.approved", actorDeviceId: deviceId, targetDeviceId: req.params.id });
+    }
+    networkReply(res, outcome);
+  }));
+
+  route.post("/ax/command/network/approvals/:id/deny", requireAx, serviceGuard(async (req, res) => {
+    const deviceId = await authorizeOwnerAction(req, res, "Approval denial");
+    if (!deviceId) return undefined;
+    const service = networkService();
+    if (!service) return networkUnavailable(res);
+    const outcome = await service.deny({ id: req.params.id, by: "owner:" + deviceId, reason: req.body?.reason || null });
+    if (outcome?.ok !== false) {
+      await recordAudit({ event: "network.approval.denied", actorDeviceId: deviceId, targetDeviceId: req.params.id });
+    }
+    networkReply(res, outcome);
   }));
 
   return { engine, registry: registryInstance, store: () => store };

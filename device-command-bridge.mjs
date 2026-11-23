@@ -36,6 +36,7 @@ import { detectSandbox } from "./nexus-sandbox.mjs";
 import { createD1AxMessageRepository } from "./d1-ax-message-repository.mjs";
 import { createMessageChannel } from "./ax-message-channel.mjs";
 import { autonomousPolicy, dispatchObjective } from "./ax-objective-dispatch.mjs";
+import { createAxNetworkService } from "./ax-network-service.mjs";
 
 // The command contract lives in device-commands.mjs so the allowlist, the payload validation and
 // the Android agent cannot drift apart. Sensitive input commands require explicit owner approval.
@@ -763,6 +764,19 @@ export function registerDeviceCommandBridge(app, {
   // without waiting for an HTTP request to do it first.
   let orchestratorResolver = null;
   let commandApi = null;
+  // P1 capability network: read-only against every provider, with one approval ledger. Built before
+  // the command routes so their provider closure can see it; a construction failure leaves the
+  // routes answering 503 rather than the process failing to boot.
+  let axNetwork = null;
+  try {
+    axNetwork = createAxNetworkService({ env, fetchImpl });
+    Promise.resolve(axNetwork.initialize()).catch(error =>
+      log.error?.("AX_NETWORK_SEED_FAILED", String(error?.message || error))
+    );
+  } catch (error) {
+    log.error?.("AX_NETWORK_MOUNT_FAILED", String(error?.message || error));
+    axNetwork = null;
+  }
   // Resolved after mounting, because diagnostics probe the engine and runtime this function builds.
   let diagnosticsRef = () => ({ status: "not_ready", note: "Diagnostics are not mounted yet." });
   let agentRuntimeRef = null;
@@ -888,7 +902,9 @@ export function registerDeviceCommandBridge(app, {
         return axOrchestrator;
       }),
       // Mission 14: the durable Ax <-> NEXUS message channel.
-      messageProvider: () => messages
+      messageProvider: () => messages,
+      // P1 capability network. Null when construction failed, which the routes report as 503.
+      networkProvider: () => axNetwork
     });
   } catch (error) {
     console.error("UNIVERSAL_COMMAND_MOUNT_FAILED", String(error?.message || error));

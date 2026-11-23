@@ -56,7 +56,15 @@ export async function runMigrationChecks() {
       "habitat_ax_security_events",
       "habitat_ax_scheduler",
       "habitat_ax_messages",
-      "habitat_ax_cost_ledger"
+      "habitat_ax_cost_ledger",
+      "habitat_ax_capabilities",
+      "habitat_ax_access_requests",
+      "habitat_ax_suppliers",
+      "habitat_ax_supplier_offers",
+      "habitat_ax_channel_rules",
+      "habitat_ax_revenue_events",
+      "habitat_ax_payouts",
+      "habitat_ax_treasury_accounts"
     ]) {
       check("fresh table " + name, freshTables.includes(name));
     }
@@ -67,7 +75,15 @@ export async function runMigrationChecks() {
       "habitat_ax_security_events_category",
       "habitat_ax_messages_correlation",
       "habitat_ax_messages_status_updated",
-      "habitat_ax_cost_ledger_updated_at"
+      "habitat_ax_cost_ledger_updated_at",
+      "habitat_ax_capabilities_kind",
+      "habitat_ax_capabilities_state",
+      "habitat_ax_access_requests_status",
+      "habitat_ax_access_requests_fingerprint",
+      "habitat_ax_suppliers_layer",
+      "habitat_ax_channel_rules_channel",
+      "habitat_ax_revenue_events_state",
+      "habitat_ax_payouts_state"
     ]) {
       check("fresh index " + name, freshIndexes.includes(name));
     }
@@ -126,6 +142,30 @@ export async function runMigrationChecks() {
     check("upgrade adds the Ax-NEXUS message table", tables(upgrade).includes("habitat_ax_messages"));
   } finally {
     upgrade.close();
+  }
+
+  // Upgrade path for the P1 network: stop before 0008, write cost-ledger and task data, then apply
+  // 0008/0009. Nothing that existed before may be lost.
+  const networkUpgrade = new DatabaseSync(":memory:");
+  try {
+    const before = files.filter(file => Number(file.name.slice(0, 4)) <= 7);
+    const after = files.filter(file => Number(file.name.slice(0, 4)) >= 8);
+    await applyAll(networkUpgrade, before);
+    networkUpgrade.prepare("INSERT INTO habitat_ax_cost_ledger (day, state_json, updated_at) VALUES (?, ?, ?)")
+      .run("2026-11-23", JSON.stringify({ spentUsd: 0.02 }), new Date().toISOString());
+    await applyAll(networkUpgrade, after);
+    const ledgerRow = networkUpgrade.prepare("SELECT state_json FROM habitat_ax_cost_ledger WHERE day = '2026-11-23'").get();
+    check("P1 upgrade preserves the cost ledger", ledgerRow?.state_json?.includes("spentUsd"));
+    check("P1 upgrade adds the capability registry", tables(networkUpgrade).includes("habitat_ax_capabilities"));
+    check("P1 upgrade adds the approval ledger", tables(networkUpgrade).includes("habitat_ax_access_requests"));
+    check("P1 upgrade adds treasury reporting tables", tables(networkUpgrade).includes("habitat_ax_revenue_events") && tables(networkUpgrade).includes("habitat_ax_payouts"));
+    // The approval ledger accepts a financial row with no capability, which is the point of one table.
+    networkUpgrade.prepare("INSERT INTO habitat_ax_access_requests (id, kind, capability_id, status, fingerprint, amount_cents, currency, requested_at, expires_at, record_json, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+      .run("apr_fin", "purchase", null, "requested", "sha256:test", 1234, "USD", new Date().toISOString(), new Date(Date.now() + 60000).toISOString(), "{}", new Date().toISOString());
+    const approvalRow = networkUpgrade.prepare("SELECT kind, capability_id FROM habitat_ax_access_requests WHERE id = 'apr_fin'").get();
+    check("financial approvals do not need a capability id", approvalRow?.kind === "purchase" && approvalRow?.capability_id === null);
+  } finally {
+    networkUpgrade.close();
   }
 
   report.summary = {

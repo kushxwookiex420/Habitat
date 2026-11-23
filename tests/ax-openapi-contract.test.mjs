@@ -42,9 +42,10 @@ test("the published document is a valid OpenAPI 3.1 description", () => {
 
 test("the document describes only endpoints the real module registers", () => {
   const routeKeys = expressRouteKeys(mountRoutes());
-  // 84 through Mission 16, plus the three Mission 17 mission-work routes and Mission 19's
-  // agents/restore. None of the operator routes enter the ChatGPT-facing document.
-  assert.equal(routeKeys.length, 88);
+  // 84 through Mission 16, plus the three Mission 17 mission-work routes, Mission 19's
+  // agents/restore and the 17 P1 capability-network routes. None of the operator routes enter the
+  // ChatGPT-facing document, so the advertised surface stays at ten operations.
+  assert.equal(routeKeys.length, 105);
   const parity = compareSpecToRoutes(spec(), routeKeys);
   assert.equal(parity.ok, true, parity.errors.join("\n"));
   assert.equal(parity.documented.length, 10);
