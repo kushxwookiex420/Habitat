@@ -17,7 +17,10 @@ data class HabitatStatus(
     val ok: Boolean,
     val access: String,
     val detail: String,
-    val deviceCount: Int
+    val deviceCount: Int,
+    val liveCount: Int? = null,
+    val registeredCount: Int? = null,
+    val lastSeenAt: String? = null
 )
 
 data class TaskSummary(
@@ -69,7 +72,10 @@ object HabitatParsers {
             ok = root.optBoolean("ok", false),
             access = root.optString("androidDeviceAccess", "UNKNOWN"),
             detail = root.optString("detail", ""),
-            deviceCount = root.optInt("deviceCount", 0)
+            deviceCount = root.optInt("deviceCount", 0),
+            liveCount = if (root.has("liveCount")) root.optInt("liveCount", 0) else null,
+            registeredCount = if (root.has("deviceCount")) root.optInt("deviceCount", 0) else null,
+            lastSeenAt = clean(root.optString("lastSeenAt"))
         )
     }
 

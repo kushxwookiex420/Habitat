@@ -1,5 +1,6 @@
 package com.habitat.launcher.ui.pages
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -18,7 +19,11 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -31,6 +36,7 @@ import com.habitat.launcher.ui.components.SectionHeader
 import com.habitat.launcher.ui.components.StatusPill
 import com.habitat.launcher.ui.components.openUrl
 import com.habitat.launcher.ui.components.toneFor
+import com.habitat.launcher.ui.TaskDetailSheet
 import com.habitat.launcher.ui.theme.Cyan
 import com.habitat.launcher.ui.theme.Ice
 import com.habitat.launcher.ui.theme.Muted
@@ -44,6 +50,7 @@ import java.util.Locale
 fun HabitatPage(model: LauncherModel, onNavigate: (String) -> Unit, onToast: (String) -> Unit) {
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
+    var detailTaskId by remember { mutableStateOf<String?>(null) }
 
     LazyColumn(
         modifier = Modifier.fillMaxWidth(),
@@ -86,7 +93,15 @@ fun HabitatPage(model: LauncherModel, onNavigate: (String) -> Unit, onToast: (St
                 }
                 Spacer(Modifier.height(10.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    StatusPill("${model.habitatStatus?.deviceCount ?: 0} devices", Cyan)
+                    val live = model.habitatStatus?.liveCount
+                    StatusPill(
+                        if (live != null) "$live live" else "${model.habitatStatus?.deviceCount ?: 0} devices",
+                        Cyan
+                    )
+                    StatusPill(
+                        "${model.habitatStatus?.registeredCount ?: model.habitatStatus?.deviceCount ?: 0} registered",
+                        Muted
+                    )
                     StatusPill(
                         model.lastSyncAt?.let { "synced " + SimpleDateFormat("HH:mm", Locale.US).format(Date(it)) } ?: "not synced",
                         if (model.habitatError == null) Cyan else Warning
@@ -159,7 +174,7 @@ fun HabitatPage(model: LauncherModel, onNavigate: (String) -> Unit, onToast: (St
         } else {
             items(model.tasks.size) { index ->
                 val task = model.tasks[index]
-                GlassCard(modifier = Modifier.fillMaxWidth()) {
+                GlassCard(modifier = Modifier.fillMaxWidth().clickable { detailTaskId = task.id }) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Column(Modifier.weight(1f)) {
                             Text(task.title.ifBlank { task.id }, style = MaterialTheme.typography.titleMedium, color = Ice)
@@ -183,5 +198,9 @@ fun HabitatPage(model: LauncherModel, onNavigate: (String) -> Unit, onToast: (St
                 }
             }
         }
+    }
+
+    detailTaskId?.let { taskId ->
+        TaskDetailSheet(taskId = taskId, model = model, onDismiss = { detailTaskId = null }, onToast = onToast)
     }
 }

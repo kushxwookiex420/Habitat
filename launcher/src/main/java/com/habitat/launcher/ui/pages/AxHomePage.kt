@@ -41,6 +41,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.foundation.clickable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -55,6 +56,7 @@ import com.habitat.launcher.ui.components.NeuralBrain
 import com.habitat.launcher.ui.components.SectionHeader
 import com.habitat.launcher.ui.components.StatusPill
 import com.habitat.launcher.ui.components.toneFor
+import com.habitat.launcher.ui.TaskDetailSheet
 import com.habitat.launcher.ui.theme.Cyan
 import com.habitat.launcher.ui.theme.Ice
 import com.habitat.launcher.ui.theme.Muted
@@ -71,6 +73,7 @@ fun AxHomePage(
     onToast: (String) -> Unit
 ) {
     var command by remember { mutableStateOf("") }
+    var detailTaskId by remember { mutableStateOf<String?>(null) }
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val voice = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
@@ -217,7 +220,9 @@ fun AxHomePage(
         } else {
             items(model.tasks.take(3).size) { index ->
                 val task = model.tasks[index]
-                GlassCard(modifier = Modifier.fillMaxWidth().padding(bottom = 10.dp)) {
+                GlassCard(
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 10.dp).clickable { detailTaskId = task.id }
+                ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Column(Modifier.weight(1f)) {
                             Text(task.title.ifBlank { task.id }, style = MaterialTheme.typography.titleMedium, color = Ice)
@@ -236,6 +241,10 @@ fun AxHomePage(
                 }
             }
         }
+    }
+
+    detailTaskId?.let { taskId ->
+        TaskDetailSheet(taskId = taskId, model = model, onDismiss = { detailTaskId = null }, onToast = onToast)
     }
 }
 

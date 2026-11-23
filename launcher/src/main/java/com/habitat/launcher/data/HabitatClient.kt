@@ -17,6 +17,8 @@ class HabitatClient(private val baseUrl: () -> String) {
 
     suspend fun tasks(): Result<String> = get("/tasks")
 
+    suspend fun task(id: String): Result<String> = get("/tasks/" + java.net.URLEncoder.encode(id, "UTF-8"))
+
     private suspend fun get(path: String): Result<String> = withContext(Dispatchers.IO) {
         runCatching {
             val base = baseUrl().trim().trimEnd('/')

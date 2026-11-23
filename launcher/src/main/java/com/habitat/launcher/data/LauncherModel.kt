@@ -59,6 +59,9 @@ class LauncherModel(context: Context) {
         device = DeviceInfoProvider.snapshot(appContext)
     }
 
+    suspend fun loadTaskReceipt(id: String): Result<TaskReceipt> =
+        habitatClient.task(id).mapCatching { TaskReceiptParser.parseTaskDetail(it) }
+
     fun movePage(id: String, delta: Int) {
         pageOrder = PageOrder.move(pageOrder, id, delta)
         prefs.pageOrder = PageOrder.toCsv(pageOrder)
