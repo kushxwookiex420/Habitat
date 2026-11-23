@@ -17,6 +17,22 @@ test("worker rows are hit-tested before the generic panel-close rule", () => {
   }
 });
 
+test("the hit rectangles use exactly the row positions the canvas draws", () => {
+  // drawPanel places rows at top + .150/.245/.340/.435 of the panel height, each .070 tall.
+  for (const [hit, drawn] of [[".150f", ".15f"], [".245f", ".245f"], [".340f", ".34f"], [".435f", ".435f"]]) {
+    assert.equal(overlay.includes(`panelTop + height * ${hit}`), true, "hit row " + hit);
+    assert.equal(overlay.includes(`top + height * ${drawn}`), true, "drawn row " + drawn);
+  }
+  assert.equal(overlay.includes("e.y <= rowTop + height * .070f"), true, "row height must match");
+  assert.equal(overlay.includes("panel && selected == 1"), true, "only the WORKERS tab owns these rows");
+});
+
+test("the detail view replaces the mesh and BACK restores it", () => {
+  assert.equal(overlay.includes("if (workerPanel != null) drawWorkerPanel(c) else if (panel) drawPanel(c)"), true);
+  assert.equal(overlay.includes("onWorkerAction?.invoke(\"refresh\")"), true);
+  assert.equal(overlay.includes("if (e.x in backLeft..backRight) { workerPanel = null; invalidate(); return true }"), true);
+});
+
 test("worker detail is a real view with callbacks, not decorative text", () => {
   assert.equal(overlay.includes("var onWorkerSelected"), true);
   assert.equal(overlay.includes("var onWorkerAction"), true);
