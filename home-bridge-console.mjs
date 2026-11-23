@@ -227,6 +227,43 @@ export function registerHomeBridgeConsole(app, { env = process.env, fetchImpl = 
     }
   }
 
+  /**
+   * Read-only receipts from the durable paired-device queue. They are the only honest evidence that
+   * a queued command was received and executed: the record carries the claim and completion times and
+   * the phone's own summary. Nothing here writes, and a receipt never contains a token.
+   */
+  async function deviceReceipts(deviceId) {
+    if (!deviceRepository || typeof deviceRepository.listCommands !== "function") {
+      return { ok: false, available: false, items: [], error: "durable command receipts are not available" };
+    }
+    try {
+      const rows = await deviceRepository.listCommands({ deviceId: deviceId || null, limit: 10 });
+      const items = (rows || []).map((record) => {
+        const completed = record.status === "completed";
+        const failed = completed && record.result && record.result.ok === false;
+        return {
+          id: short(record.id, 64),
+          deviceId: short(record.deviceId, 64),
+          type: short(record.type, 40),
+          state: failed ? "failed" : completed ? "completed" : record.status === "claimed" ? "received" : "queued",
+          queuedAt: record.createdAt || null,
+          receivedAt: record.claimedAt || null,
+          completedAt: record.completedAt || null,
+          expiresAt: record.expiresAt || null,
+          summary: record.result && record.result.summary ? short(record.result.summary, 200) : null
+        };
+      });
+      return { ok: true, available: true, items, error: null };
+    } catch (error) {
+      console.error("CONSOLE_DEVICE_RECEIPTS_READ_FAILED", JSON.stringify({
+        event: "device_receipts_read_failed",
+        code: short(error?.code || "unknown", 64),
+        message: short(error?.message || error, 200)
+      }));
+      return { ok: false, available: true, items: [], error: "unable to read durable command receipts" };
+    }
+  }
+
   async function dashboard() {
     const [health, state, tasks, replies, files, queue, commits, phone] = await Promise.all([
       client.health(),
@@ -244,6 +281,7 @@ export function registerHomeBridgeConsole(app, { env = process.env, fetchImpl = 
     const queueRows = queue.data?.tasks || [];
     const fileRows = files.data?.files || [];
     const commands = state.data?.commands || [];
+    const deviceCommands = await deviceReceipts(phone.device?.deviceId || null);
 
     return {
       ok: true,
@@ -285,6 +323,7 @@ export function registerHomeBridgeConsole(app, { env = process.env, fetchImpl = 
       },
       devices: phone,
       deviceBridge: deviceBridgeStatus(),
+      deviceCommands,
       cloud: {
         relayOk: health.ok,
         github: commits,
@@ -396,6 +435,7 @@ export function registerHomeBridgeConsole(app, { env = process.env, fetchImpl = 
           typeof deviceRepository.enqueue !== "function") {
         return res.status(503).json({ ok: false, error: "Durable paired-device command queue is unavailable." });
       }
+      let targetDeviceId = null;
       try {
         const rows = await deviceRepository.listDevices();
         const active = (rows || []).filter((row) => !row.revoked_at).sort((left, right) =>
@@ -406,6 +446,7 @@ export function registerHomeBridgeConsole(app, { env = process.env, fetchImpl = 
         if (!device?.device_id) {
           return res.status(409).json({ ok: false, error: "No active paired phone is registered." });
         }
+        targetDeviceId = device.device_id;
         const createdAt = new Date().toISOString();
         const command = {
           id: "dc_" + randomUUID(),
@@ -428,6 +469,16 @@ export function registerHomeBridgeConsole(app, { env = process.env, fetchImpl = 
           detail: "queued; phone execution is not yet confirmed"
         });
       } catch (error) {
+        // Structured, single-line and credential-free: the enqueue request contains no token, and
+        // both fields are bounded so a driver error cannot spill a payload into the log.
+        console.error("CONSOLE_DEVICE_COMMAND_ENQUEUE_FAILED", JSON.stringify({
+          event: "device_command_enqueue_failed",
+          action: "status",
+          type: "device.status",
+          deviceId: short(targetDeviceId, 64),
+          code: short(error?.code || "unknown", 64),
+          message: short(error?.message || error, 200)
+        }));
         return res.status(503).json({ ok: false, error: "Unable to queue the paired-phone status command." });
       }
     }
@@ -603,6 +654,9 @@ footer{color:#527080;font-size:10px;letter-spacing:.1em;text-align:center;paddin
       <div class="err" id="cmd-err"></div>
       <h2 style="margin-top:14px">RESULTS</h2>
       <div class="list" id="cmd-list"></div>
+      <h2 style="margin-top:14px">DURABLE DEVICE QUEUE <span id="device-cmd-count">—</span></h2>
+      <div class="list" id="device-cmd-list"></div>
+      <p class="note">Read-only receipts from the durable paired-device queue: queued, received by the phone, then completed or failed with the phone's own summary.</p>
     </section>
 
     <section class="panel hidden" data-view="cloud">
@@ -646,6 +700,7 @@ footer{color:#527080;font-size:10px;letter-spacing:.1em;text-align:center;paddin
     state.data=data;
     var relay=data.relay||{},ax=data.ax||{},buff=data.buff||{},phone=data.phone||{},cloud=data.cloud||{},files=data.files||{};
     var bridge=data.deviceBridge||{},bridgeAx=bridge.axTokenConfigured===true,relayOk=relay.health==="ok",relayCred=relay.credentials||{};
+    var deviceCommands=data.deviceCommands||{};
     text("link-chip",relayOk?"HOME RELAY ONLINE":"HOME RELAY OFFLINE");
     $("link-chip").className="chip "+(relayOk?"on":"");
     $("link-chip").title="home relay: "+(relay.healthDetail||(relayOk?"reachable":"unavailable"));
@@ -704,6 +759,14 @@ footer{color:#527080;font-size:10px;letter-spacing:.1em;text-align:center;paddin
     $("cmd-list").innerHTML=(phone.commands||[]).map(function(c){
       return '<div class="item '+(c.status==="done"?"done":"cyan")+'"><div class="meta">'+esc(c.action)+(c.arg?" · "+esc(c.arg):"")+' · '+esc(c.status||"")+' · '+when(c.iso)+'</div><div class="body">'+esc(c.output||"awaiting phone result")+'</div></div>'
     }).join("")||'<div class="item meta">no commands</div>';
+
+    var deviceItems=deviceCommands.items||[];
+    text("device-cmd-count",deviceItems.length+" recent");
+    $("device-cmd-list").innerHTML=deviceItems.map(function(c){
+      var state=String(c.state||"queued");
+      var times="queued "+when(c.queuedAt)+(c.receivedAt?" · received "+when(c.receivedAt):"")+(c.completedAt?" · completed "+when(c.completedAt):"");
+      return '<div class="item '+(state==="completed"?"done":state==="failed"?"":"cyan")+'"><div class="meta">'+esc(state.toUpperCase())+' · '+esc(c.type||"")+' · '+esc(String(c.id||"").slice(0,14))+'</div><div class="body">'+esc(c.deviceId||"")+'</div><div class="meta">'+esc(times)+'</div>'+(c.summary?'<div class="meta">'+esc(c.summary)+'</div>':'')+'</div>'
+    }).join("")||(deviceCommands.available===false?'<div class="item meta">durable device queue not available</div>':'<div class="item meta">no durable device commands</div>');
 
     $("commit-list").innerHTML=((cloud.github&&cloud.github.commits)||[]).map(function(c){
       return '<div class="item"><div class="meta">'+esc(c.short)+' · '+when(c.date)+'</div><div class="body">'+esc(c.message)+'</div></div>'
