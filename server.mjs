@@ -16,6 +16,8 @@ import { registerShopifyOAuth } from "./shopify-oauth.mjs";
 import { registerPublicPages } from "./public-pages.mjs";
 import { registerControlCenter } from "./control-center.mjs";
 import { readFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { buildSystemStatus, classifyWorkers, inferReadOnlyAdapter, isSystemStatusRequest, parseAxCommand, summarizeWorkerCounts } from "./system-status.mjs";
 
 import express from "express";
 
@@ -579,6 +581,29 @@ app.get("/health", (req, res) => {
   });
 });
 
+// /chat is unauthenticated: the installed Bridge sends no device credential on this route. Command
+// submission therefore gets a per-address budget. Execution being disabled does not make
+// unlimited durable writes harmless, so the bound applies even while NEXUS is off.
+const AX_CHAT_COMMAND_LIMIT = 10;
+const AX_CHAT_COMMAND_WINDOW_MS = 10 * 60 * 1000;
+const axChatCommandHits = new Map();
+function allowAxChatCommand(address, now = Date.now()) {
+  const key = String(address || "unknown");
+  const entry = axChatCommandHits.get(key);
+  if (!entry || now - entry.window >= AX_CHAT_COMMAND_WINDOW_MS) {
+    if (axChatCommandHits.size > 5000) {
+      for (const [candidate, value] of axChatCommandHits) {
+        if (now - value.window >= AX_CHAT_COMMAND_WINDOW_MS) axChatCommandHits.delete(candidate);
+      }
+    }
+    axChatCommandHits.set(key, { window: now, count: 1 });
+    return true;
+  }
+  if (entry.count >= AX_CHAT_COMMAND_LIMIT) return false;
+  entry.count += 1;
+  return true;
+}
+
 app.post("/chat", async (req, res) => {
   try {
     const message = String(
@@ -683,6 +708,79 @@ app.post("/chat", async (req, res) => {
         habitat: "online",
         free_brain: true,
         deterministic: true
+      });
+    }
+
+    // "ask ax system status" must be telemetry, not a model answer. This runs before any prompt so
+    // the phone cannot receive an invented status table.
+    if (isSystemStatusRequest(message)) {
+      try {
+        const status = await collectSystemStatus();
+        return res.json({
+          response: status.report,
+          systemStatus: status,
+          deterministic: true,
+          habitat: "online",
+          secretsExposed: false
+        });
+      } catch (error) {
+        console.error("AX SYSTEM STATUS FAILED", String(error?.message || error));
+        return res.status(503).json({
+          response: "AX SYSTEM STATUS\nStatus: UNAVAILABLE\nThe status probe could not complete on this process.",
+          deterministic: true,
+          error: "status_probe_failed"
+        });
+      }
+    }
+
+    // Explicit Ax commands ("ax: …", "ask ax to …", "ax run …") go into the universal command
+    // router instead of a prompt. A task that is queued is reported as queued: no execution is
+    // claimed, and the executor's real state is included in the answer.
+    const axObjective = parseAxCommand(message);
+    if (axObjective) {
+      if (!allowAxChatCommand(req.ip)) {
+        return res.status(429).json({
+          response: "AX COMMAND RATE LIMITED\nAt most " + AX_CHAT_COMMAND_LIMIT + " command objectives per 10 minutes from this address.",
+          deterministic: true,
+          commandRouter: "rate_limited"
+        });
+      }
+      const adapter = inferReadOnlyAdapter(axObjective);
+      const submitted = await deviceCommandBridge.submitCommandObjective({
+        objective: axObjective,
+        requestedBy: "bridge-chat",
+        role: "ax",
+        // Only a read-only adapter this engine allowlists. Without one the task is queued but no
+        // worker may claim it, and the response says so.
+        adapter,
+        idempotencyKey: "bridge-chat:" + createHash("sha256")
+          .update(axObjective + "|" + Math.floor(Date.now() / 300000))
+          .digest("hex")
+          .slice(0, 32)
+      });
+      if (!submitted?.ok) {
+        return res.status(503).json({
+          response: "AX COMMAND NOT QUEUED\n" + (submitted?.error || "The AX command router rejected the objective."),
+          deterministic: true,
+          commandRouter: "unavailable"
+        });
+      }
+      const task = submitted.task || {};
+      const executor = deviceCommandBridge.status().nexus || null;
+      const executionNote = executor?.configured === true
+        ? "Executor is mounted; execution is not confirmed until a worker claims the task."
+        : "No executor is mounted (" + (executor?.reason || "disabled") + "); the task is queued and will not run yet.";
+      return res.status(202).json({
+        response: "AX COMMAND QUEUED\nTask: " + (task.id || "unknown") +
+          "\nStatus: " + (task.status || "queued") +
+          "\nAdapter: " + (adapter || "none — this objective names no read-only subject, so no worker will claim it") +
+          "\nObjective: " + axObjective + "\n" + executionNote,
+        taskId: task.id || null,
+        status: task.status || "queued",
+        replayed: submitted.replayed === true,
+        deterministic: true,
+        commandRouter: "connected",
+        habitat: "online"
       });
     }
     // Android connectivity is a deterministic backend/device check. Never send this to the LLM.
@@ -1378,6 +1476,113 @@ async function runSystemCheck() {
   return { task, checks, report, overall };
 }
 
+function configuredProviders(env = process.env) {
+  return {
+    groq: Boolean(String(env.GROQ_API_KEY || "").trim()),
+    gemini: Boolean(String(env.GEMINI_API_KEY || "").trim()),
+    openrouter: Boolean(String(env.OPENROUTER_API_KEY || "").trim()),
+    cerebras: Boolean(String(env.CEREBRAS_API_KEY || "").trim()),
+    cloudflare: Boolean(String(env.CLOUDFLARE_API_TOKEN || "").trim()) && Boolean(String(env.CLOUDFLARE_ACCOUNT_ID || "").trim())
+  };
+}
+
+/**
+ * One read-only status gather used by GET /system/status and the Bridge chat intent. It reports
+ * only what this process can observe; nothing is estimated and no secret value is copied.
+ */
+async function collectSystemStatus() {
+  const startedAt = Date.now();
+  let tasks = [];
+  try {
+    tasks = await listStoredTasks();
+  } catch {
+    tasks = Array.from(taskStore.values());
+  }
+
+  let devicePresence = { paired: 0, recentlySeen: false, lastSeenAt: null };
+  try {
+    const access = await androidAccessStatus();
+    const devices = Array.isArray(access?.devices) ? access.devices : [];
+    const lastSeenAt = devices
+      .map(device => device?.lastSeenAt)
+      .filter(Boolean)
+      .sort()
+      .pop() || null;
+    devicePresence = {
+      paired: devices.length,
+      recentlySeen: access?.status === "PASS",
+      lastSeenAt
+    };
+  } catch (error) {
+    console.warn("STATUS_DEVICE_PRESENCE_FAILED", String(error?.message || error));
+  }
+
+  const bridgeStatus = deviceCommandBridge.status();
+  let execution = bridgeStatus.nexus || null;
+  const runtime = typeof deviceCommandBridge.nexus === "function" ? deviceCommandBridge.nexus() : null;
+  if (runtime && typeof runtime.presence === "function") {
+    try {
+      const presence = await runtime.presence();
+      execution = {
+        configured: presence?.executor?.configured === true,
+        started: presence?.executor?.started === true,
+        canExecute: presence?.canExecute === true,
+        heartbeat: presence?.heartbeat || null,
+        queue: presence?.queue || null,
+        liveWorkers: presence?.heartbeat?.liveWorkers ?? null,
+        reason: presence?.executor?.reason || null
+      };
+    } catch (error) {
+      console.warn("STATUS_EXECUTOR_PRESENCE_FAILED", String(error?.message || error));
+    }
+  }
+
+  return buildSystemStatus({
+    env: process.env,
+    version: process.env.HABITAT_VERSION || "0.5.0",
+    commit: process.env.RENDER_GIT_COMMIT || process.env.GIT_COMMIT || process.env.HABITAT_COMMIT || null,
+    startedAtMs: Date.now() - Math.round(process.uptime() * 1000),
+    latencyMs: Date.now() - startedAt,
+    registry: workerRegistry,
+    tasks,
+    deviceBridge: bridgeStatus,
+    devicePresence,
+    storage: {
+      taskRepositoryReady: taskRepository && taskStorageReady,
+      contentJobRepositoryReady: contentStorageReady,
+      dispatchLeaseReady,
+      secretVaultReady: Boolean(secretVault)
+    },
+    providers: configuredProviders(),
+    routes: {
+      chat: true,
+      // These routes are registered by registerDeviceCommandBridge regardless of credentials or
+      // storage readiness; readiness is reported separately by the auth and storage components.
+      deviceCommands: true,
+      axCommand: true,
+      nexusRuntime: bridgeStatus.nexus?.configured === true
+    },
+    execution
+  });
+}
+
+// Public, redacted, read-only. It names configuration keys and reports booleans; it never returns a
+// value, and it does not probe providers, so it cannot spend quota.
+app.get("/system/status", async (_req, res) => {
+  try {
+    const status = await collectSystemStatus();
+    res.setHeader("cache-control", "no-store");
+    return res.json(status);
+  } catch (error) {
+    console.error("SYSTEM_STATUS_FAILED", String(error?.message || error));
+    return res.status(503).json({
+      ok: false,
+      error: "System status could not be assembled on this process.",
+      secretsExposed: false
+    });
+  }
+});
+
 app.get("/capabilities", async (_req, res) => {
   const device = await androidAccessStatus();
   return res.json(buildCapabilityStatus({
@@ -1390,11 +1595,22 @@ app.get("/capabilities", async (_req, res) => {
   }));
 });
 
-app.get("/workers", (req, res) => {
-  return res.json({
-    ok: true,
-    workers: Array.from(workerRegistry.values()).map(w => ({ ...w }))
-  });
+// Truthful worker inventory: registration is not health. `running` counts tasks this process is
+// holding, `healthy` requires a recent verified run, and a worker without evidence is idle.
+app.get("/workers", async (_req, res) => {
+  try {
+    const tasks = await listStoredTasks();
+    const workers = classifyWorkers({ registry: workerRegistry, tasks });
+    return res.json({
+      ok: true,
+      counts: summarizeWorkerCounts(workers),
+      workers,
+      note: "Counts are derived from registered workers and the task records this process holds. A registered worker is not proof of health."
+    });
+  } catch (error) {
+    console.error("WORKER_INVENTORY_FAILED", String(error?.message || error));
+    return res.status(503).json({ ok: false, error: "Worker inventory could not be read." });
+  }
 });
 
 app.get("/storage/check", async (_req, res) => {

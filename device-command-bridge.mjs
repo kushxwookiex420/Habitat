@@ -1130,6 +1130,46 @@ export function registerDeviceCommandBridge(app, {
       if (!store || !ready) return null;
       return store.get(String(id || ""));
     },
+    /**
+     * Bridge-chat entry into the universal command router.
+     *
+     * The phone never holds the Ax credential: this process submits on its behalf through the same
+     * engine the /ax/command routes use, so approvals, evidence gates and lifecycle rules are
+     * identical. A queued task is returned as queued — submission is not execution.
+     */
+    async submitCommandObjective({ objective, requestedBy = "bridge-chat", role = "ax", idempotencyKey = null, adapter = null } = {}) {
+      if (!commandApi) {
+        return { ok: false, error: "The AX command router is not available on this process." };
+      }
+      if (!commandApi.engine) {
+        return { ok: false, error: "AX command storage is not configured; command objectives cannot be queued." };
+      }
+      const commandStore = commandApi.store?.() || null;
+      if (!commandStore) {
+        return { ok: false, error: "AX command storage is not configured; command objectives cannot be queued." };
+      }
+      try {
+        await commandStore.initialize();
+      } catch (error) {
+        console.error("COMMAND_STORE_INIT_FAILED", String(error?.message || error));
+        return { ok: false, error: "AX command storage is not ready; the objective was not queued." };
+      }
+      try {
+        return await commandApi.engine.submit({ objective, requestedBy, role, idempotencyKey, adapter });
+      } catch (error) {
+        console.error("COMMAND_SUBMIT_FAILED", String(error?.message || error));
+        return { ok: false, error: "The AX command engine could not store the objective." };
+      }
+    },
+    async getCommandTask(taskId) {
+      if (!commandApi || !commandApi.engine) {
+        return { ok: false, error: "The AX command router is not available on this process." };
+      }
+      return commandApi.engine.get(String(taskId || ""));
+    },
+    commandDiagnostics() {
+      return diagnosticsRef();
+    },
     status() {
       return {
         ready,
