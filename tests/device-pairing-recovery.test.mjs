@@ -314,3 +314,48 @@ test("the dashboard reports the registered phone and its confirmed timestamp wit
   assert.equal(serialized.includes(token), false, "device token is never echoed to the console");
   assert.equal(serialized.includes(OPERATOR), false, "operator credential is never echoed");
 });
+
+test("a dedicated operator token opens the console while the bridge token no longer does", async () => {
+  const BRIDGE = "ax_bridge_" + "b".repeat(40);
+  const OPERATOR_ONLY = "operator_" + "c".repeat(40);
+  const store = fakeStore();
+  const app = makeApp();
+  const bridge = registerDeviceCommandBridge(app, {
+    env: { HABITAT_AX_BRIDGE_TOKEN: BRIDGE, HABITAT_OPERATOR_TOKEN: OPERATOR_ONLY },
+    fetchImpl: async () => { throw new Error("network disabled in this test"); },
+    repository: store
+  });
+  await bridge.initialize();
+
+  // Separating the credentials must not leave the bridge token able to open the console.
+  const asBridge = await invoke(app, "POST /bridge/console/pairing", { ...tokenHeaders(BRIDGE), body: {} });
+  assert.equal(asBridge.statusCode, 401);
+  const bridgeCookie = await invoke(app, "POST /bridge/console/login", { body: { token: BRIDGE } });
+  assert.equal(bridgeCookie.statusCode, 401);
+
+  const login = await invoke(app, "POST /bridge/console/login", { body: { token: OPERATOR_ONLY } });
+  assert.equal(login.statusCode, 200);
+  const setCookie = String(login.headers["set-cookie"] || "");
+  assert.match(setCookie, /^habitat_bridge_session=/);
+  assert.match(setCookie, /HttpOnly/);
+  assert.match(setCookie, /SameSite=Strict/);
+
+  const session = { headers: { cookie: setCookie.split(";")[0] } };
+  const dashboard = await invoke(app, "GET /bridge/console/dashboard", session);
+  assert.equal(dashboard.statusCode, 200);
+
+  const minted = await invoke(app, "POST /bridge/console/pairing", { ...session, body: { deviceId: "launcher-a" } });
+  assert.equal(minted.statusCode, 201);
+  assert.equal(minted.headers["cache-control"], "no-store", "a short-lived code is never cached");
+  const code = minted.body.pairing.code;
+  assert.equal(code.length, 22, "16 random bytes encode to 22 base64url characters");
+  const ttlSeconds = Math.round((Date.parse(minted.body.pairing.expiresAt) - Date.now()) / 1000);
+  assert.ok(ttlSeconds > 590 && ttlSeconds <= 600, "the code expires in 600 seconds, got " + ttlSeconds);
+  assert.equal(minted.body.pairing.singleUse, true);
+
+  // The minted code exists only in that one response: not in the dashboard, not in the page.
+  const afterMint = await invoke(app, "GET /bridge/console/dashboard", session);
+  assert.equal(afterMint.statusCode, 200);
+  assert.equal(JSON.stringify(afterMint.body).includes(code), false);
+  assert.equal(JSON.stringify(afterMint.body).includes(OPERATOR_ONLY), false);
+});

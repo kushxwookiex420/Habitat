@@ -59,7 +59,10 @@ export function registerHomeBridgeConsole(app, { env = process.env, fetchImpl = 
     buffToken: env.HOME_BRIDGE_BUFF_TOKEN,
     fetchImpl
   });
-  const operatorToken = String(env.HABITAT_AX_BRIDGE_TOKEN || "").trim();
+  // The console is the browser-facing surface, so it prefers its own credential. The bridge token
+  // that authenticates machine callers is only a compatibility fallback, which keeps an existing
+  // deployment working until HABITAT_OPERATOR_TOKEN is configured.
+  const operatorToken = String(env.HABITAT_OPERATOR_TOKEN || env.HABITAT_AX_BRIDGE_TOKEN || "").trim();
   const githubRepo = String(env.HABITAT_GITHUB_REPO || "kushxwookiex420/home-launcher").trim();
   const githubToken = String(env.GITHUB_TOKEN || "").trim();
   const sessions = new Map();
@@ -82,7 +85,7 @@ export function registerHomeBridgeConsole(app, { env = process.env, fetchImpl = 
 
   function requireOperator(req, res, next) {
     if (!operatorToken) {
-      return res.status(503).json({ ok: false, error: "HABITAT_AX_BRIDGE_TOKEN is not configured; console access is disabled." });
+      return res.status(503).json({ ok: false, error: "HABITAT_OPERATOR_TOKEN (or HABITAT_AX_BRIDGE_TOKEN) is not configured; console access is disabled." });
     }
     if (safeEqual(bearer(req), operatorToken) || operatorFromSession(req)) return next();
     return res.status(401).json({ ok: false, error: "Operator authentication required." });
@@ -97,7 +100,7 @@ export function registerHomeBridgeConsole(app, { env = process.env, fetchImpl = 
 
   app.post("/bridge/console/login", (req, res) => {
     if (!operatorToken) {
-      return res.status(503).json({ ok: false, error: "HABITAT_AX_BRIDGE_TOKEN is not configured; console access is disabled." });
+      return res.status(503).json({ ok: false, error: "HABITAT_OPERATOR_TOKEN (or HABITAT_AX_BRIDGE_TOKEN) is not configured; console access is disabled." });
     }
     const supplied = String(req.body?.token || bearer(req) || "").trim();
     if (!safeEqual(supplied, operatorToken)) {
@@ -440,7 +443,7 @@ footer{color:#527080;font-size:10px;letter-spacing:.1em;text-align:center;paddin
 
 <section id="login-view" class="panel login">
   <h2>OPERATOR ACCESS <span>session</span></h2>
-  <p class="note">Paste the Habitat operator token (HABITAT_AX_BRIDGE_TOKEN). It is sent once, exchanged for an HttpOnly session, and never stored in this page.</p>
+  <p class="note">Paste the Habitat operator token (HABITAT_OPERATOR_TOKEN). It is sent once, exchanged for an HttpOnly session, and never stored in this page.</p>
   <input id="token" type="password" autocomplete="off" placeholder="operator token" aria-label="Operator token">
   <div class="grid2"><button id="login">UNLOCK</button><button class="ghost" id="probe">CHECK RELAY</button></div>
   <div class="err" id="login-err"></div>
