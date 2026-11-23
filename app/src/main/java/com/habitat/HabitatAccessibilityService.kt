@@ -157,14 +157,9 @@ class HabitatAccessibilityService : AccessibilityService() {
         "back" -> performGlobalAction(GLOBAL_ACTION_BACK)
         "home" -> performGlobalAction(GLOBAL_ACTION_HOME)
         "recents" -> performGlobalAction(GLOBAL_ACTION_RECENTS)
-        "enter" -> sendImeEnter()
+        // IME "enter" has no public AccessibilityService action. The server contract rejects it
+        // instead of pretending it was delivered; back/home/recents remain available.
         else -> false
-    }
-
-    private fun sendImeEnter(): Boolean {
-        if (Build.VERSION.SDK_INT < 30) return false
-        val focused = findFocus(AccessibilityNodeInfo.FOCUS_INPUT) ?: return false
-        return focused.performAction(AccessibilityNodeInfo.ACTION_IME_ENTER)
     }
 
     /**

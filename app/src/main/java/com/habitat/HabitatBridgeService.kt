@@ -59,7 +59,7 @@ class HabitatBridgeService : Service() {
             startForeground(NOTIFICATION_ID, notification)
         }
         // The service owns the foreground connection; the bridge must not try to start it again.
-        bridge = AndroidDeviceBridge(applicationContext, {}, startForegroundService = false)
+        bridge = AndroidDeviceBridge(applicationContext, false) {}
         bridge?.start()
     }
 

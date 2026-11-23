@@ -25,10 +25,11 @@ import javax.crypto.spec.GCMParameterSpec
  */
 class AndroidDeviceBridge(
     context: Context,
-    private val onStatus: (String) -> Unit,
     // The foreground service owns the connection it creates; only the Activity-started bridge is
-    // allowed to start or stop that service.
-    private val startForegroundService: Boolean = true
+    // allowed to start or stop that service. This stays ahead of the callback so existing trailing
+    // lambda call sites keep compiling.
+    private val startForegroundService: Boolean = true,
+    private val onStatus: (String) -> Unit
 ) {
     companion object {
         private const val PREFS = "habitat_ax_device_bridge"

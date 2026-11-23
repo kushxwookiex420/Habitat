@@ -71,7 +71,6 @@ No `QUERY_ALL_PACKAGES`, no `READ_SMS`, no `MANAGE_EXTERNAL_STORAGE`, no `SYSTEM
 | App install | API 26+ | not supported |
 | Accessibility snapshot/gestures/typing | API 26+ (gesture dispatch 24+) | — |
 | `device.screenshot` via `AccessibilityService.takeScreenshot` | **API 30+** | returns `Screenshots require Android 11 or newer` |
-| `device.key enter` (`ACTION_IME_ENTER`) | **API 30+** | returns "rejected"; back/home/recents still work |
 | Foreground `dataSync` service | API 29+ type API; 34+ permission declared | older versions use plain `startForeground` |
 | Foreground service runtime cap | Android 15+ limits `dataSync` to roughly 6 h/day | job fallback continues at 15 min |
 | Notification permission | API 33+ runtime prompt | below 33 granted at install |
