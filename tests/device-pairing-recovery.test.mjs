@@ -59,6 +59,7 @@ async function invoke(app, key, req = {}) {
 function fakeStore(seed = []) {
   const pairings = new Map();
   const devices = new Map();
+  const rows = [];
   for (const entry of seed) {
     pairings.set(digest(entry.code), {
       deviceId: entry.deviceId || "*",
@@ -69,6 +70,7 @@ function fakeStore(seed = []) {
   return {
     pairings,
     devices,
+    rows,
     async initialize() { return { ok: true, durable: true }; },
     async createPairing({ codeHash, deviceId, expiresAt }) {
       pairings.set(codeHash, { deviceId, expiresAt, consumedAt: null });
@@ -88,18 +90,31 @@ function fakeStore(seed = []) {
       row.consumedAt = consumedAt;
       return true;
     },
-    async registerDevice({ deviceId, tokenHash }) {
+    async registerDevice({ deviceId, tokenHash, createdAt }) {
       devices.set(deviceId, tokenHash);
+      const row = rows.find(entry => entry.device_id === deviceId);
+      if (row) row.revoked_at = null;
+      else rows.push({ device_id: deviceId, created_at: createdAt, last_seen_at: null, revoked_at: null, device_json: null });
       return true;
     },
     async verifyDeviceToken(token, deviceId) {
       return devices.get(deviceId) === digest(token);
     },
-    async touchDevice() { return true; },
+    async touchDevice(deviceId, seenAt) {
+      const row = rows.find(entry => entry.device_id === deviceId);
+      if (row) row.last_seen_at = seenAt;
+      return true;
+    },
     async updateDeviceInfo(deviceId, seenAt, details) {
       this.lastHeartbeat = { deviceId, seenAt, details };
+      const row = rows.find(entry => entry.device_id === deviceId);
+      if (row) {
+        row.last_seen_at = seenAt;
+        row.device_json = JSON.stringify(details);
+      }
       return true;
-    }
+    },
+    async listDevices() { return rows.slice(); }
   };
 }
 
@@ -248,4 +263,54 @@ test("the pairing response never contains the operator credential", async () => 
   assert.equal(JSON.stringify(pair.body).includes(OPERATOR), false);
   assert.equal(JSON.stringify(minted.body).includes(OPERATOR), false);
   assert.equal(JSON.stringify(pair.body).includes(CODE), false);
+});
+
+test("the Control Center page exposes the pairing-code generator", async () => {
+  const { renderConsole } = await import("../home-bridge-console.mjs");
+  const html = renderConsole();
+  // Without these controls the owner has no way to mint the code the Bridge asks for.
+  assert.match(html, /id="pair-create"/);
+  assert.match(html, /id="pair-device"/);
+  assert.match(html, /id="pair-value"/);
+  assert.match(html, /\/bridge\/console\/pairing/);
+  // A code is only ever written from the API response, never rendered into the page on the server.
+  assert.match(html, /text\("pair-value",r\.pairing\.code\)/);
+  assert.equal(/id="pair-value"[^>]*>\s*[A-Za-z0-9_-]{20,}/.test(html), false);
+});
+
+test("the dashboard reports the registered phone and its confirmed timestamp without leaking secrets", async () => {
+  const { app } = await setup([{ code: CODE, expiresAt: future() }]);
+  const minted = await invoke(app, "POST /bridge/console/pairing", {
+    ...tokenHeaders(OPERATOR),
+    body: { deviceId: "launcher-a" }
+  });
+  assert.equal(minted.statusCode, 201);
+  const code = minted.body.pairing.code;
+
+  const before = await invoke(app, "GET /bridge/console/dashboard", tokenHeaders(OPERATOR));
+  assert.equal(before.statusCode, 200);
+  assert.equal(before.body.devices.link, "UNPAIRED");
+  assert.equal(before.body.devices.count, 0);
+
+  const paired = await invoke(app, "POST /device/pair", { body: { deviceId: "launcher-a", code } });
+  assert.equal(paired.statusCode, 200);
+  const token = paired.body.token;
+
+  const heartbeat = await invoke(app, "POST /device/heartbeat", {
+    headers: { authorization: "Bearer " + token },
+    body: { deviceId: "launcher-a", details: { model: "Pixel" } }
+  });
+  assert.equal(heartbeat.statusCode, 200);
+
+  const after = await invoke(app, "GET /bridge/console/dashboard", tokenHeaders(OPERATOR));
+  assert.equal(after.statusCode, 200);
+  assert.equal(after.body.devices.link, "LIVE");
+  assert.equal(after.body.devices.device.deviceId, "launcher-a");
+  assert.ok(after.body.devices.device.pairedAt, "paired timestamp is reported");
+  assert.equal(after.body.devices.device.lastSeenAt, heartbeat.body.lastSeenAt);
+
+  const serialized = JSON.stringify(after.body);
+  assert.equal(serialized.includes(code), false, "pairing code is never echoed to the console");
+  assert.equal(serialized.includes(token), false, "device token is never echoed to the console");
+  assert.equal(serialized.includes(OPERATOR), false, "operator credential is never echoed");
 });

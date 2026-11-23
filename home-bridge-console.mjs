@@ -52,7 +52,7 @@ function short(value, max = 200) {
   return String(value == null ? "" : value).slice(0, max);
 }
 
-export function registerHomeBridgeConsole(app, { env = process.env, fetchImpl = fetch } = {}) {
+export function registerHomeBridgeConsole(app, { env = process.env, fetchImpl = fetch, deviceRepository = null } = {}) {
   const client = createHomeBridgeClient({
     baseUrl: env.HOME_BRIDGE_URL,
     axToken: env.HOME_BRIDGE_AX_TOKEN,
@@ -163,15 +163,54 @@ export function registerHomeBridgeConsole(app, { env = process.env, fetchImpl = 
     }
   }
 
+  /**
+   * The device registry as the console can honestly show it: who is paired, when the pairing was
+   * recorded, and when the phone last authenticated. No token, hash or pairing code is included.
+   * When the store is unavailable the console says so instead of implying the phone is unpaired.
+   */
+  async function phoneRegistry() {
+    if (!deviceRepository || typeof deviceRepository.listDevices !== "function") {
+      return { ok: false, available: false, link: "UNKNOWN", devices: [], error: "phone pairing store is not available" };
+    }
+    try {
+      const rows = await deviceRepository.listDevices();
+      const devices = (rows || []).map((row) => ({
+        deviceId: row.device_id,
+        pairedAt: row.created_at || null,
+        lastSeenAt: row.last_seen_at || null,
+        revoked: Boolean(row.revoked_at),
+        deviceInfo: (() => { try { return row.device_json ? JSON.parse(row.device_json) : null; } catch { return null; } })()
+      }));
+      const active = devices.filter((row) => !row.revoked);
+      const ordered = (active.length ? active : devices).slice().sort((a, b) =>
+        Date.parse(b.lastSeenAt || b.pairedAt || 0) - Date.parse(a.lastSeenAt || a.pairedAt || 0)
+      );
+      const current = ordered[0] || null;
+      const live = Boolean(current?.lastSeenAt && Date.now() - Date.parse(current.lastSeenAt) < 45000);
+      return {
+        ok: true,
+        available: true,
+        link: !devices.length ? "UNPAIRED" : live ? "LIVE" : "LINKED",
+        count: devices.length,
+        device: current,
+        devices,
+        error: null
+      };
+    } catch (error) {
+      return { ok: false, available: true, link: "UNKNOWN", devices: [], error: "unable to read paired phones" };
+    }
+  }
+
   async function dashboard() {
-    const [health, state, tasks, replies, files, queue, commits] = await Promise.all([
+    const [health, state, tasks, replies, files, queue, commits, phone] = await Promise.all([
       client.health(),
       client.state(),
       client.tasks({ limit: 20 }),
       client.replies({ limit: 20 }),
       client.listFiles(),
       client.configured("buff") ? client.queue() : Promise.resolve({ ok: false, status: 0, error: "buff credential not configured" }),
-      latestCommits()
+      latestCommits(),
+      phoneRegistry()
     ]);
 
     const taskRows = tasks.data?.tasks || [];
@@ -215,6 +254,7 @@ export function registerHomeBridgeConsole(app, { env = process.env, fetchImpl = 
         commands,
         error: state.ok ? null : state.error
       },
+      devices: phone,
       cloud: {
         relayOk: health.ok,
         github: commits,
@@ -455,6 +495,17 @@ footer{color:#527080;font-size:10px;letter-spacing:.1em;text-align:center;paddin
       <h2>PHONE · RELAY <span id="phone-status">—</span></h2>
       <div class="row"><span class="k">device</span><span class="v" id="phone-name">—</span></div>
       <div class="row"><span class="k">last check-in</span><span class="v" id="phone-seen">—</span></div>
+      <h2 style="margin-top:14px">PAIR PHONE <span id="pair-link">—</span></h2>
+      <div class="row"><span class="k">registered phone</span><span class="v" id="pair-device-id">—</span></div>
+      <div class="row"><span class="k">paired at</span><span class="v" id="pair-paired-at">—</span></div>
+      <div class="row"><span class="k">confirmed</span><span class="v" id="pair-confirmed">never</span></div>
+      <input id="pair-device" placeholder="optional: phone device ID to bind the code to" aria-label="Phone device ID">
+      <div class="grid2"><button id="pair-create">GENERATE PAIRING CODE</button><button class="ghost" id="pair-clear">CLEAR CODE</button></div>
+      <div class="err" id="pair-err"></div>
+      <div id="pair-code" class="hidden">
+        <div class="item cyan"><div class="meta" id="pair-meta"></div><div class="body" id="pair-value" style="font-size:16px;letter-spacing:.14em;user-select:all"></div></div>
+        <p class="note">Open the Bridge app → LINK → paste this as the one-time AX pairing code. Single use, shown only once, expires after 10 minutes.</p>
+      </div>
       <h2 style="margin-top:14px">APPROVED COMMAND</h2>
       <select id="cmd-action" aria-label="Action">
         <option value="status">status</option>
@@ -524,6 +575,15 @@ footer{color:#527080;font-size:10px;letter-spacing:.1em;text-align:center;paddin
     text("phone-status",phone.online?"ONLINE":"LAST KNOWN");
     text("phone-name",phone.name||"—");
     text("phone-seen",phone.lastSeen?when(new Date(phone.lastSeen).toISOString()):"never");
+
+    var devices=data.devices||{};
+    var current=devices.device||null;
+    text("pair-link",devices.link||"UNKNOWN");
+    text("pair-device-id",current?current.deviceId:"none registered");
+    text("pair-paired-at",current&&current.pairedAt?when(current.pairedAt):"—");
+    text("pair-confirmed",current&&current.lastSeenAt?when(current.lastSeenAt):"never");
+    if(devices.ok===false&&!$("pair-err").textContent)text("pair-err",devices.error||"pairing store unavailable");
+    $("pair-device").placeholder=current?("optional: bind the code to "+current.deviceId):"optional: phone device ID to bind the code to";
     text("cloud-status",relay.health==="ok"?"nominal":"degraded");
     text("cloud-relay",relay.url||"—");
     text("cloud-github",(cloud.github&&cloud.github.ok)?((cloud.github.repo||"")+" · "+cloud.github.commits.length+" commits"):((cloud.github&&cloud.github.error)||"not configured"));
@@ -598,7 +658,24 @@ footer{color:#527080;font-size:10px;letter-spacing:.1em;text-align:center;paddin
   $("refresh").addEventListener("click",load);
   $("buff-refresh").addEventListener("click",load);
   $("phone-refresh").addEventListener("click",load);
-  $("logout").addEventListener("click",async function(ev){ev.preventDefault();try{await api("/bridge/console/logout",{method:"POST"})}catch(e){};location.reload()});
+  function clearPairingCode(){
+    $("pair-code").classList.add("hidden");
+    text("pair-value","");
+    text("pair-meta","");
+  }
+  $("pair-clear").addEventListener("click",clearPairingCode);
+  $("pair-create").addEventListener("click",async function(){
+    text("pair-err","");clearPairingCode();
+    var button=$("pair-create");button.disabled=true;button.textContent="GENERATING…";
+    try{
+      var r=await api("/bridge/console/pairing",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({deviceId:$("pair-device").value.trim()})});
+      text("pair-value",r.pairing.code);
+      text("pair-meta","single-use · expires "+when(new Date(r.pairing.expiresAt).toISOString())+(r.pairing.deviceId?" · bound to "+r.pairing.deviceId:" · binds to the first phone that uses it"));
+      $("pair-code").classList.remove("hidden");
+    }catch(e){text("pair-err",e.message)}
+    finally{button.disabled=false;button.textContent="GENERATE PAIRING CODE"}
+  });
+  $("logout").addEventListener("click",async function(ev){ev.preventDefault();clearPairingCode();try{await api("/bridge/console/logout",{method:"POST"})}catch(e){};location.reload()});
 
   $("submit-task").addEventListener("click",async function(){
     text("task-err","");

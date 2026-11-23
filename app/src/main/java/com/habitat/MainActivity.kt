@@ -623,7 +623,7 @@ class MainActivity : Activity() {
             setTextColor(Color.DKGRAY)
         }
         val help = TextView(this).apply {
-            text = "Create a one-time pairing code with Ax, then paste it here. The code expires after 10 minutes and can only be used once. Your phone credential is encrypted with Android Keystore."
+            text = "Open the Habitat Command Center (/bridge/console) → PHONE → GENERATE PAIRING CODE, then paste the code here. It is single use and expires after 10 minutes. If this screen closes, tap LINK and pair again. Your phone credential is encrypted with Android Keystore."
             textSize = 13f
             setTextColor(Color.DKGRAY)
         }

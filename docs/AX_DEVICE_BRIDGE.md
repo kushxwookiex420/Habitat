@@ -22,7 +22,29 @@ This branch adds a D1-backed command queue, one-time device pairing, per-device 
 - D1 is mandatory for command storage. If D1 is unavailable, the bridge fails closed instead of silently using process memory.
 - Public publishing, purchases, destructive changes, and permission changes remain user-approval gated.
 
+## Where the one-time code comes from
+
+The Bridge app never generates the code; it only redeems one. The code is always minted by the
+Habitat backend and handed to the owner:
+
+1. Open the Command Center at `https://<habitat-host>/bridge/console` and sign in with the operator
+   token.
+2. PHONE tab → PAIR PHONE → **GENERATE PAIRING CODE**. Optionally type the phone's device ID (shown
+   in the Bridge dialog) to bind the code to that phone; otherwise it binds to the first phone that
+   redeems it.
+3. Paste the code into the Bridge app → LINK. The code is single use, expires after 10 minutes, and
+   is shown once. The console then reports the registered phone ID, its pairing time, and its last
+   authenticated check-in.
+
+Without a generator in the console the owner has no way to obtain the code the Bridge asks for, so
+that panel is part of the pairing contract, not an optional convenience.
+
 ## API
+
+Operator/Control Center side (operator token or HttpOnly session):
+- `POST /bridge/console/pairing` with optional `deviceId` — mint a one-time pairing code for the owner.
+- `GET /bridge/console/dashboard` — relay state plus `devices`: link state (`UNPAIRED`/`LINKED`/`LIVE`),
+  the registered phone, pairing time and last authenticated check-in. No token, hash or code is returned.
 
 Ax/MCP side (Ax bearer token):
 - `POST /ax/device/pairings` with `deviceId` — issue a one-time pairing code.
