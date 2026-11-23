@@ -313,6 +313,81 @@ test("a healthy relay still wins for the phone check-in values", async () => {
   assert.equal(res.body.phone.online, true);
 });
 
+test("status commands use the durable paired-device queue without a HOME RELAY credential", async () => {
+  const app = makeApp();
+  const queued = [];
+  const calls = [];
+  const deviceRepository = {
+    async listDevices() {
+      return [
+        { device_id: "android-87ccece6-c9db-41c4-8956-b0e078b4d069", created_at: "2026-11-22T21:50:54.000Z", last_seen_at: new Date().toISOString(), revoked_at: null }
+      ];
+    },
+    async enqueue(command) { queued.push(command); return command; }
+  };
+  registerHomeBridgeConsole(app, {
+    env: { HABITAT_AX_BRIDGE_TOKEN: OPERATOR },
+    fetchImpl: relayStub(calls),
+    deviceRepository
+  });
+
+  const response = await invoke(app, "POST /bridge/console/send", {
+    ...operator,
+    body: { action: "status", arg: "" }
+  });
+
+  assert.equal(response.statusCode, 202);
+  assert.equal(response.body.ok, true);
+  assert.equal(response.body.action, "status");
+  assert.equal(response.body.type, "device.status");
+  assert.equal(response.body.deviceId, "android-87ccece6-c9db-41c4-8956-b0e078b4d069");
+  assert.equal(response.body.status, "queued");
+  assert.match(response.body.id, /^dc_/);
+  assert.equal(queued.length, 1);
+  assert.equal(queued[0].type, "device.status");
+  assert.deepEqual(queued[0].payload, {});
+  assert.equal(queued[0].status, "queued");
+  assert.equal(calls.some((call) => call.path === "/send"), false, "status must bypass legacy HOME RELAY");
+});
+
+test("status command rejects an unexpected argument", async () => {
+  const app = makeApp();
+  const deviceRepository = {
+    async listDevices() { return [{ device_id: "android-87", created_at: new Date().toISOString(), revoked_at: null }]; },
+    async enqueue() { assert.fail("invalid status argument must not enqueue"); }
+  };
+  registerHomeBridgeConsole(app, {
+    env: { HABITAT_AX_BRIDGE_TOKEN: OPERATOR },
+    fetchImpl: async () => { throw new Error("legacy relay must not be used"); },
+    deviceRepository
+  });
+  const response = await invoke(app, "POST /bridge/console/send", {
+    ...operator,
+    body: { action: "status", arg: "unexpected" }
+  });
+  assert.equal(response.statusCode, 400);
+  assert.match(response.body.error, /does not accept an argument/);
+});
+
+test("status command reports when no active paired phone exists", async () => {
+  const app = makeApp();
+  const deviceRepository = {
+    async listDevices() { return [{ device_id: "android-old", revoked_at: "2026-11-22T00:00:00.000Z" }]; },
+    async enqueue() { assert.fail("no active phone must not enqueue"); }
+  };
+  registerHomeBridgeConsole(app, {
+    env: { HABITAT_AX_BRIDGE_TOKEN: OPERATOR },
+    fetchImpl: async () => { throw new Error("legacy relay must not be used"); },
+    deviceRepository
+  });
+  const response = await invoke(app, "POST /bridge/console/send", {
+    ...operator,
+    body: { action: "status", arg: "" }
+  });
+  assert.equal(response.statusCode, 409);
+  assert.match(response.body.error, /No active paired phone/);
+});
+
 test("phone actions are allowlisted and forwarded", async () => {
   const { app, calls } = setup();
   const bad = await invoke(app, "POST /bridge/console/send", { ...operator, body: { action: "shell", arg: "id" } });
