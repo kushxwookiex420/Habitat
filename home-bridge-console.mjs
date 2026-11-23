@@ -16,7 +16,7 @@
 // for a session cookie so a browser never stores a credential in JavaScript. The relay's own
 // role tokens (ax/buff) stay on the server and are never part of a response body.
 
-import { randomBytes, timingSafeEqual } from "node:crypto";
+import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { createHomeBridgeClient } from "./home-bridge-client.mjs";
 
 const SESSION_COOKIE = "habitat_bridge_session";
@@ -385,6 +385,54 @@ export function registerHomeBridgeConsole(app, { env = process.env, fetchImpl = 
     if (!ALLOWED_PHONE_ACTIONS.has(action)) {
       return res.status(400).json({ ok: false, error: `action must be one of ${[...ALLOWED_PHONE_ACTIONS].join(", ")}` });
     }
+
+    // "status" is the first command supported by the durable paired-device agent. Route it
+    // directly into the D1 device queue instead of the legacy HOME RELAY /send endpoint, whose
+    // HOME_BRIDGE_AX_TOKEN is intentionally independent from HABITAT_AX_BRIDGE_TOKEN.
+    if (action === "status") {
+      if (arg) return res.status(400).json({ ok: false, error: "status does not accept an argument." });
+      if (!deviceRepository ||
+          typeof deviceRepository.listDevices !== "function" ||
+          typeof deviceRepository.enqueue !== "function") {
+        return res.status(503).json({ ok: false, error: "Durable paired-device command queue is unavailable." });
+      }
+      try {
+        const rows = await deviceRepository.listDevices();
+        const active = (rows || []).filter((row) => !row.revoked_at).sort((left, right) =>
+          Date.parse(right.last_seen_at || right.created_at || 0) -
+          Date.parse(left.last_seen_at || left.created_at || 0)
+        );
+        const device = active[0];
+        if (!device?.device_id) {
+          return res.status(409).json({ ok: false, error: "No active paired phone is registered." });
+        }
+        const createdAt = new Date().toISOString();
+        const command = {
+          id: "dc_" + randomUUID(),
+          deviceId: device.device_id,
+          type: "device.status",
+          payload: {},
+          status: "queued",
+          createdAt,
+          expiresAt: new Date(Date.now() + 5 * 60 * 1000).toISOString()
+        };
+        await deviceRepository.enqueue(command);
+        return res.status(202).json({
+          ok: true,
+          id: command.id,
+          action,
+          type: command.type,
+          deviceId: command.deviceId,
+          status: command.status,
+          expiresAt: command.expiresAt,
+          detail: "queued; phone execution is not yet confirmed"
+        });
+      } catch (error) {
+        return res.status(503).json({ ok: false, error: "Unable to queue the paired-phone status command." });
+      }
+    }
+
+    // Other legacy actions still use HOME RELAY and require its separate role credential.
     const result = await client.sendPhoneAction({ action, arg });
     return res.status(result.ok ? 200 : 502).json({
       ok: result.ok,
