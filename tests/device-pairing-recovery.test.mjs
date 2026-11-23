@@ -253,6 +253,41 @@ test("the Control Center can mint a fresh code, and only with its credential", a
   assert.equal(exchanged.statusCode, 200);
 });
 
+test("device revocation is recorded in the security audit chain", async () => {
+  const store = fakeStore([{ code: CODE, expiresAt: future() }]);
+  // The shared fixture predates revocation; add the one method this route needs.
+  store.revokeDevice = async (deviceId, revokedAt) => {
+    const row = store.rows.find((entry) => entry.device_id === deviceId);
+    if (row) row.revoked_at = revokedAt;
+    return true;
+  };
+  const events = [];
+  const app = makeApp();
+  const bridge = registerDeviceCommandBridge(app, {
+    env: { HABITAT_AX_BRIDGE_TOKEN: OPERATOR },
+    fetchImpl: async () => { throw new Error("network disabled in this test"); },
+    repository: store,
+    securityRepository: { async append(event) { events.push(event); return event; } }
+  });
+  await bridge.initialize();
+  const paired = await invoke(app, "POST /device/pair", { body: { deviceId: "launcher-a", code: CODE } });
+  assert.equal(paired.statusCode, 200);
+
+  const revoke = await invoke(app, "POST /ax/device/:deviceId/revoke", {
+    ...tokenHeaders(OPERATOR),
+    params: { deviceId: "launcher-a" }
+  });
+  assert.equal(revoke.statusCode, 200);
+  // The audit append is deliberately fire-and-forget so a slow log cannot delay revocation.
+  await new Promise((resolve) => setImmediate(resolve));
+  const recorded = events.find((event) => event.category === "device.revocation");
+  assert.ok(recorded, "revocation is audited, not only returned in the response");
+  assert.equal(recorded.deviceId, "launcher-a");
+  assert.equal(recorded.outcome, "allowed");
+  assert.equal(recorded.severity, "high");
+  assert.equal(JSON.stringify(events).includes(OPERATOR), false);
+});
+
 test("the pairing response never contains the operator credential", async () => {
   const { app } = await setup([{ code: CODE, expiresAt: future() }]);
   const pair = await invoke(app, "POST /device/pair", { body: { deviceId: "launcher-a", code: CODE } });

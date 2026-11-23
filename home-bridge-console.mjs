@@ -52,7 +52,7 @@ function short(value, max = 200) {
   return String(value == null ? "" : value).slice(0, max);
 }
 
-export function registerHomeBridgeConsole(app, { env = process.env, fetchImpl = fetch, deviceRepository = null, bridgeStatus = null } = {}) {
+export function registerHomeBridgeConsole(app, { env = process.env, fetchImpl = fetch, deviceRepository = null, bridgeStatus = null, securityEvents = null } = {}) {
   const client = createHomeBridgeClient({
     baseUrl: env.HOME_BRIDGE_URL,
     axToken: env.HOME_BRIDGE_AX_TOKEN,
@@ -70,6 +70,22 @@ export function registerHomeBridgeConsole(app, { env = process.env, fetchImpl = 
 
   function pruneSessions(now) {
     for (const [id, expiry] of sessions) if (expiry <= now) sessions.delete(id);
+  }
+
+  /**
+   * Audit hook for owner-authentication events. Authentication must never depend on the audit log
+   * being reachable, so this is fail-open: the security service already logs its own persistence
+   * failure, and an unavailable log must not lock the owner out. No credential, token or request
+   * body is ever passed as evidence.
+   */
+  function recordSecurity(entry) {
+    if (!securityEvents || typeof securityEvents.record !== "function") return;
+    try {
+      const pending = securityEvents.record(entry);
+      if (pending && typeof pending.catch === "function") pending.catch(() => {});
+    } catch {
+      // fail-open by design
+    }
   }
 
   function operatorFromSession(req) {
@@ -100,10 +116,12 @@ export function registerHomeBridgeConsole(app, { env = process.env, fetchImpl = 
 
   app.post("/bridge/console/login", (req, res) => {
     if (!operatorToken) {
+      recordSecurity({ category: "auth.failure", severity: "medium", outcome: "denied", actor: "operator:console", summary: "Console login refused: no operator credential is configured" });
       return res.status(503).json({ ok: false, error: "HABITAT_OPERATOR_TOKEN (or HABITAT_AX_BRIDGE_TOKEN) is not configured; console access is disabled." });
     }
     const supplied = String(req.body?.token || bearer(req) || "").trim();
     if (!safeEqual(supplied, operatorToken)) {
+      recordSecurity({ category: "auth.failure", severity: "medium", outcome: "denied", actor: "operator:console", summary: "Console login rejected: invalid operator token" });
       return res.status(401).json({ ok: false, error: "Invalid operator token." });
     }
     const now = Date.now();
@@ -111,6 +129,7 @@ export function registerHomeBridgeConsole(app, { env = process.env, fetchImpl = 
     const id = sessionId();
     sessions.set(id, now + SESSION_TTL_MS);
     setSessionCookie(res, id);
+    recordSecurity({ category: "auth.success", severity: "info", outcome: "allowed", actor: "operator:console", summary: "Console session issued to the operator", evidence: { expiresInSeconds: Math.floor(SESSION_TTL_MS / 1000), sessionCount: sessions.size } });
     return res.json({ ok: true, expiresInSeconds: Math.floor(SESSION_TTL_MS / 1000) });
   });
 
@@ -118,7 +137,26 @@ export function registerHomeBridgeConsole(app, { env = process.env, fetchImpl = 
     const id = cookies(req)[SESSION_COOKIE];
     if (id) sessions.delete(id);
     res.setHeader("Set-Cookie", `${SESSION_COOKIE}=; Path=/bridge/console; HttpOnly; SameSite=Strict; Max-Age=0`);
+    recordSecurity({ category: "auth.success", severity: "info", outcome: "recorded", actor: "operator:console", summary: "Console session ended by the operator", evidence: { sessionCount: sessions.size } });
     return res.json({ ok: true });
+  });
+
+  // Emergency lockdown: invalidate every console session immediately. It deliberately requires the
+  // operator credential itself rather than a session cookie, so a stolen cookie cannot lock the real
+  // owner out of their own sessions. The credential is not rotated by this action.
+  app.post("/bridge/console/lockdown", (req, res) => {
+    if (!operatorToken) {
+      return res.status(503).json({ ok: false, error: "HABITAT_OPERATOR_TOKEN (or HABITAT_AX_BRIDGE_TOKEN) is not configured; console access is disabled." });
+    }
+    if (!safeEqual(bearer(req), operatorToken)) {
+      recordSecurity({ category: "owner.rejection", severity: "high", outcome: "denied", actor: "operator:console", summary: "Emergency lockdown refused: operator credential required" });
+      return res.status(401).json({ ok: false, error: "Operator credential required for lockdown." });
+    }
+    const invalidatedSessions = sessions.size;
+    sessions.clear();
+    res.setHeader("Set-Cookie", `${SESSION_COOKIE}=; Path=/bridge/console; HttpOnly; SameSite=Strict; Max-Age=0`);
+    recordSecurity({ category: "owner.authorization", severity: "high", outcome: "allowed", actor: "operator:console", summary: "Emergency lockdown invalidated every console session", evidence: { invalidatedSessions } });
+    return res.json({ ok: true, invalidatedSessions, note: "console sessions only; the operator credential is unchanged" });
   });
 
   app.get("/bridge/console/session", (req, res) => {
