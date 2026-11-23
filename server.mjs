@@ -17,6 +17,7 @@ import { registerShopifyOAuth } from "./shopify-oauth.mjs";
 import { registerPublicPages } from "./public-pages.mjs";
 import { registerControlCenter } from "./control-center.mjs";
 import { readFile } from "node:fs/promises";
+import { buildWorkerList, buildWorkerDetail, resolveWorkerId, describeVerification, normalizeError } from "./worker-catalog.mjs";
 
 import express from "express";
 
@@ -116,37 +117,31 @@ function canonicalTaskReport(task) {
   const status = task?.status || "unknown";
   const worker = task?.worker || "unknown";
   const result = String(task?.result || "");
-  const error = String(task?.error || "");
-  let verification = null;
-  try { verification = JSON.parse(result)?.verification || null; } catch (_) {}
+  const error = normalizeError(task?.error);
+  let parsed = null;
+  try { parsed = JSON.parse(result); } catch (_) {}
+  const verification = parsed?.verification || null;
 
   if (!verification) {
     return "Status: " + status + "\nWorker: " + worker + (error ? "\nError: " + error : "\nResult: " + (result || "No worker result."));
   }
 
+  // Every FAIL/UNKNOWN line explains itself. A blocked check with no reason is a reporting bug, so
+  // describeVerification substitutes an explicit "no reason was reported" instead of a blank.
+  const described = describeVerification(verification, parsed?.verificationDetails || {});
   const lines = [
     "Status: " + status,
     "Worker: " + worker,
     "",
     "CANONICAL MACHINE CHECKS:",
-    "Backend health: " + (verification.backendHealth || "UNKNOWN"),
-    "Model worker: " + (verification.modelWorker || "UNKNOWN"),
-    "Android heartbeat: " + (verification.androidHeartbeat || "UNKNOWN"),
-    "Android device access: " + (verification.androidDeviceAccess || "UNKNOWN"),
-    "Task creation: " + (verification.taskCreation || "UNKNOWN"),
-    "Storage: " + (verification.storage || "UNKNOWN")
+    ...described.lines
   ];
 
-  const verified =
-    status.toLowerCase() === "verified" &&
-    verification.backendHealth === "PASS" &&
-    verification.modelWorker === "PASS" &&
-    verification.androidHeartbeat === "PASS" &&
-    verification.androidDeviceAccess === "PASS" &&
-    verification.taskCreation === "PASS" &&
-    verification.storage === "PASS";
-
+  const verified = status.toLowerCase() === "verified" && described.verified;
   lines.push("", "CANONICAL RESULT: " + (verified ? "VERIFIED PASS" : "PARTIAL / BLOCKED"));
+  if (described.blockers.length > 0) {
+    lines.push("BLOCKERS: " + described.blockers.map((blocker) => blocker.check + ": " + blocker.detail).join(" | "));
+  }
   if (error) lines.push("Worker error: " + error);
   return lines.join("\n");
 }
@@ -1093,6 +1088,35 @@ const workerRegistry = new Map([
     model,
     capabilities: ["topic-research", "content-planning"],
     lastRunAt: null
+  }],
+  // The Android worker mesh shows these three rows; without registry entries the detail page would
+  // have nothing real to report. They are execution profiles, not separate model providers.
+  ["dropilot-listing-optimizer", {
+    id: "dropilot-listing-optimizer",
+    name: "DropPilot Listing Optimizer",
+    kind: "specialist",
+    status: hasAnyAiProviderKey() ? "available" : "blocked",
+    model,
+    capabilities: ["listing-copy", "pricing-review", "conversion-audit"],
+    lastRunAt: null
+  }],
+  ["dropilot-growth-operator", {
+    id: "dropilot-growth-operator",
+    name: "DropPilot Growth Operator",
+    kind: "specialist",
+    status: hasAnyAiProviderKey() ? "available" : "blocked",
+    model,
+    capabilities: ["campaign-planning", "creator-outreach", "sales-tracking"],
+    lastRunAt: null
+  }],
+  ["habitat-orchestrator", {
+    id: "habitat-orchestrator",
+    name: "Ax Orchestrator",
+    kind: "orchestrator",
+    status: hasAnyAiProviderKey() ? "available" : "blocked",
+    model,
+    capabilities: ["planning", "delegation", "mission-control"],
+    lastRunAt: null
   }]
 ]);
 
@@ -1259,6 +1283,16 @@ async function runSystemCheck() {
       detail: "Real model-backed QA execution completed without an error."
     };
 
+    // Every check carries its own detail so a BLOCKED result can name the failing subsystem
+    // instead of surfacing a null placeholder.
+    const verificationDetails = Object.fromEntries(
+      Object.entries(checks).map(([name, check]) => [name, { status: check.status, detail: check.detail }])
+    );
+    const blockedReason = Object.entries(checks)
+      .filter(([, check]) => check.status !== "PASS")
+      .map(([name, check]) => name + ": " + check.detail)
+      .join(" | ");
+
     task.result = JSON.stringify({
       verification: {
         backendHealth: checks.backendHealth.status,
@@ -1268,6 +1302,8 @@ async function runSystemCheck() {
         taskCreation: checks.taskCreation.status,
         storage: checks.storage.status
       },
+      verificationDetails,
+      blockedReason: blockedReason || null,
       model: modelName,
       provider: providerName,
       latencyMs,
@@ -1322,11 +1358,35 @@ app.get("/capabilities", async (_req, res) => {
   }));
 });
 
-app.get("/workers", (req, res) => {
+app.get("/workers", async (_req, res) => {
+  let tasks = [];
+  try { tasks = await listStoredTasks(); } catch { tasks = []; }
   return res.json({
     ok: true,
-    workers: Array.from(workerRegistry.values()).map(w => ({ ...w }))
+    workers: buildWorkerList({
+      workers: Array.from(workerRegistry.values()),
+      tasks,
+      providerConfigured: hasAnyAiProviderKey()
+    })
   });
+});
+
+// Read-only worker detail used by the Android worker mesh: runtime status, capabilities, recent
+// jobs, an execution log and the real blocker. No credential is ever part of this payload.
+app.get("/workers/:id", async (req, res) => {
+  const id = resolveWorkerId(req.params.id);
+  const worker = workerRegistry.get(id);
+  if (!worker) {
+    return res.status(404).json({ ok: false, error: "worker not found", workerId: id });
+  }
+  let tasks = [];
+  try { tasks = await listStoredTasks(); } catch { tasks = []; }
+  const detail = buildWorkerDetail({
+    worker,
+    tasks,
+    providerConfigured: hasAnyAiProviderKey()
+  });
+  return res.json({ ok: true, worker: detail });
 });
 
 app.get("/storage/check", async (_req, res) => {
@@ -1611,6 +1671,23 @@ app.post("/tasks/:id/delegate", async (req, res) => {
       taskCreation,
       storage
     };
+    const verificationDetails = {
+      backendHealth: { status: "PASS", detail: "The local /health endpoint answered online and ready." },
+      modelWorker: { status: "PASS", detail: "The model returned a non-empty result after one real retry." },
+      androidHeartbeat: {
+        status: androidHeartbeat,
+        detail: latestDevice
+          ? "Last authenticated check-in " + latestDevice.lastSeenAt + " (" + Math.round((heartbeatAgeMs || 0) / 1000) + "s ago)."
+          : "No paired Android device checked in within the 45-minute heartbeat window, so device-dependent checks cannot pass. Open the Habitat app or check the bridge connection."
+      },
+      androidDeviceAccess: { status: androidAccess.status, detail: androidAccess.detail },
+      taskCreation: { status: taskCreation, detail: "The task record is present in the configured task store." },
+      storage: { status: storage, detail: "The task storage write/read self-test passed." }
+    };
+    const blockedReason = Object.entries(verificationDetails)
+      .filter(([, check]) => check.status !== "PASS")
+      .map(([name, check]) => name + ": " + check.detail)
+      .join(" | ");
 
     const fullyVerified =
       verification.backendHealth === "PASS" &&
@@ -1622,6 +1699,8 @@ app.post("/tasks/:id/delegate", async (req, res) => {
 
     task.result = JSON.stringify({
       verification,
+      verificationDetails,
+      blockedReason: blockedReason || null,
       androidDevice: latestDevice,
       heartbeatAgeMs,
       workerReport: result
