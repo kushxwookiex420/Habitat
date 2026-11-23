@@ -229,8 +229,8 @@ fun SettingsSheet(model: LauncherModel, onDismiss: () -> Unit, onToast: (String)
             }
 
             SectionHeader("Layout and gestures")
-            ToggleRow("Bottom app dock", model.taskbar) { model.setTaskbar(it) }
-            ToggleRow("Swipe up for search", model.swipeUpSearch) { model.setSwipeUpSearch(it) }
+            ToggleRow("Bottom app dock", model.taskbar) { model.updateTaskbar(it) }
+            ToggleRow("Swipe up for search", model.swipeUpSearch) { model.updateSwipeUpSearch(it) }
 
             SectionHeader("Habitat endpoint", "Read-only status. No credential is stored in the launcher.")
             OutlinedTextField(

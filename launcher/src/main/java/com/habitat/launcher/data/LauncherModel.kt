@@ -77,12 +77,12 @@ class LauncherModel(context: Context) {
         }
     }
 
-    fun setTaskbar(enabled: Boolean) {
+    fun updateTaskbar(enabled: Boolean) {
         taskbar = enabled
         prefs.taskbar = enabled
     }
 
-    fun setSwipeUpSearch(enabled: Boolean) {
+    fun updateSwipeUpSearch(enabled: Boolean) {
         swipeUpSearch = enabled
         prefs.swipeUpSearch = enabled
     }
