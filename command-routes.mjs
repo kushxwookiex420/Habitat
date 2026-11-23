@@ -1738,10 +1738,51 @@ export function registerUniversalCommandRoutes(app, {
     revenue_id_required: 400,
     revenue_source_required: 400,
     cash_evidence_required: 400,
-    payout_id_required: 400
+    payout_id_required: 400,
+    unknown_capability: 400,
+    refund_reference_required: 400,
+    duplicate_refund: 409
   });
 
   const networkService = () => resolveService(networkProvider);
+
+  // Mutating network calls get their own, stricter bucket on top of the shared command limiter. The
+  // shared limiter bounds the process; this bounds how often one credential can create approvals or
+  // move treasury figures, which is the abuse that matters on this surface. Reads keep the shared
+  // limiter only, so a status poll is never starved by a write-heavy caller on another route.
+  const networkWriteMax = positiveSetting(env.AX_NETWORK_WRITE_RATE_MAX, 60, 1);
+  const networkWriteWindowMs = positiveSetting(env.AX_NETWORK_WRITE_RATE_WINDOW_MS, 60_000, 1000);
+  const networkWriteBuckets = new Map();
+  function takeNetworkWriteSlot(role) {
+    const now = Date.now();
+    const bucket = networkWriteBuckets.get(role);
+    if (!bucket || now - bucket.start >= networkWriteWindowMs) {
+      networkWriteBuckets.set(role, { start: now, count: 1 });
+      return null;
+    }
+    bucket.count += 1;
+    if (bucket.count <= networkWriteMax) return null;
+    return { retryAfterMs: Math.max(0, networkWriteWindowMs - (now - bucket.start)), limit: networkWriteMax };
+  }
+  function networkWriteLimit(req, res, next) {
+    const role = req.axRole || "unknown";
+    const limited = takeNetworkWriteSlot(role);
+    if (!limited) return next();
+    recordSecurity({
+      category: "auth.rate_limited",
+      severity: "medium",
+      outcome: "denied",
+      actor: "ax:" + role + "-token",
+      summary: "Rejected network write over the per-credential limit: " + String(req.method || "?") + " " + String(req.originalUrl || req.path || "?")
+    });
+    res.setHeader("retry-after", String(Math.ceil(limited.retryAfterMs / 1000)));
+    return res.status(429).json({
+      ok: false,
+      code: "network_rate_limited",
+      error: "Too many network writes in the current window; retry after " + Math.ceil(limited.retryAfterMs / 1000) + " seconds.",
+      retryAfterMs: limited.retryAfterMs
+    });
+  }
 
   function networkUnavailable(res) {
     res.status(503).json({
@@ -1819,7 +1860,7 @@ export function registerUniversalCommandRoutes(app, {
     res.json(await service.revenueEvents({ limit: req.query?.limit }));
   }));
 
-  route.post("/ax/command/network/treasury/events", requireAx, serviceGuard(async (req, res) => {
+  route.post("/ax/command/network/treasury/events", requireAx, networkWriteLimit, serviceGuard(async (req, res) => {
     const service = networkService();
     if (!service) return networkUnavailable(res);
     const state = String(req.body?.state || "").trim().toLowerCase();
@@ -1843,7 +1884,7 @@ export function registerUniversalCommandRoutes(app, {
 
   // An observation, not a transfer: this records where a channel says a payout is. It cannot start,
   // change or cancel one, and it is owner-only because it changes reported in-transit cash.
-  route.post("/ax/command/network/treasury/payouts", requireAx, serviceGuard(async (req, res) => {
+  route.post("/ax/command/network/treasury/payouts", requireAx, networkWriteLimit, serviceGuard(async (req, res) => {
     const service = networkService();
     if (!service) return networkUnavailable(res);
     const deviceId = await authorizeOwnerAction(req, res, "Recording a payout observation");
@@ -1851,7 +1892,7 @@ export function registerUniversalCommandRoutes(app, {
     networkReply(res, await service.recordPayout({ ...(req.body || {}), actor: "owner:" + deviceId }), true);
   }));
 
-  route.post("/ax/command/network/approvals", requireAx, serviceGuard(async (req, res) => {
+  route.post("/ax/command/network/approvals", requireAx, networkWriteLimit, serviceGuard(async (req, res) => {
     const service = networkService();
     if (!service) return networkUnavailable(res);
     // `requestedBy` comes from the authenticated surface, never from the body.
@@ -1877,7 +1918,7 @@ export function registerUniversalCommandRoutes(app, {
     networkReply(res, await service.approval(req.params.id));
   }));
 
-  route.post("/ax/command/network/approvals/:id/approve", requireAx, serviceGuard(async (req, res) => {
+  route.post("/ax/command/network/approvals/:id/approve", requireAx, networkWriteLimit, serviceGuard(async (req, res) => {
     const deviceId = await authorizeOwnerAction(req, res, "Approval decision");
     if (!deviceId) return undefined;
     const service = networkService();
@@ -1889,7 +1930,7 @@ export function registerUniversalCommandRoutes(app, {
     networkReply(res, outcome);
   }));
 
-  route.post("/ax/command/network/approvals/:id/deny", requireAx, serviceGuard(async (req, res) => {
+  route.post("/ax/command/network/approvals/:id/deny", requireAx, networkWriteLimit, serviceGuard(async (req, res) => {
     const deviceId = await authorizeOwnerAction(req, res, "Approval denial");
     if (!deviceId) return undefined;
     const service = networkService();

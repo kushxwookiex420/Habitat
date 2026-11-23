@@ -16,6 +16,8 @@ export const SCHEDULER_LIMITS = Object.freeze({
   tickIntervalMs: 60_000,
   stuckObjectiveMs: 15 * 60_000,
   approvalTtlMs: 24 * 60 * 60_000,
+  // How far ahead an approval counts as "expiring soon" for the owner warning.
+  approvalExpirySoonMs: 60 * 60_000,
   maxObjectives: 200,
   maxFindings: 40
 });
@@ -33,6 +35,10 @@ export function createSchedulerService({
   // Mission 14: one bounded autonomy pass per tick. It is a callback, not a second scheduler: the
   // lease above still decides who runs, and the callback owns its own idempotency.
   autonomy = null,
+  // Mission P1 follow-up: approval-expiry monitoring for the capability network. A callback on this
+  // tick, not a second scheduler: the same lease decides who runs.
+  approvalExpiry = null,
+  approvalExpirySoonMs = SCHEDULER_LIMITS.approvalExpirySoonMs,
   now = () => new Date().toISOString(),
   nowMs = () => Date.now(),
   leaseMs = SCHEDULER_LIMITS.leaseMs,
@@ -87,6 +93,97 @@ export function createSchedulerService({
         safeAction: "notify_owner",
         objectiveId: item.id
       }));
+  }
+
+  /**
+   * Turn the capability network's expiry report into findings. The ledger persists its own expiry
+   * transitions; this function only reports, and a failure here is reported rather than failing the
+   * whole tick, because the rest of the maintenance pass is still useful.
+   */
+  async function approvalExpiryFindings() {
+    if (typeof approvalExpiry !== "function") return { findings: [], report: null };
+    let report;
+    try {
+      report = await approvalExpiry({ withinMs: approvalExpirySoonMs });
+    } catch (error) {
+      log.error?.("AX_SCHEDULER_APPROVAL_MONITOR_FAILED", clean(error?.message, 160));
+      return {
+        findings: [{
+          kind: "approval.monitor_failed",
+          severity: "warning",
+          subject: "approval-ledger",
+          title: "Approval expiry monitor did not run",
+          detail: "The approval ledger could not be read, so expiries were not checked this tick.",
+          recommendation: "Inspect the approval store. An expired request is still refused when it is decided or consumed.",
+          safeAction: "notify_owner"
+        }],
+        report: { ok: false, code: "approval_monitor_failed" }
+      };
+    }
+    if (!report || report.ok === false) {
+      return {
+        findings: [{
+          kind: "approval.monitor_failed",
+          severity: "warning",
+          subject: "approval-ledger",
+          title: "Approval expiry monitor reported a problem",
+          detail: clean(report?.code || "approval_monitor_unavailable", 160),
+          recommendation: "Inspect the approval store; this tick changed no approval.",
+          safeAction: "notify_owner"
+        }],
+        report: { ok: false, code: report?.code || "approval_monitor_unavailable" }
+      };
+    }
+    const findings = [];
+    const expired = Array.isArray(report.expired) ? report.expired : [];
+    const soon = Array.isArray(report.expiringSoon) ? report.expiringSoon : [];
+    const failed = Array.isArray(report.failed) ? report.failed : [];
+    for (const item of expired.slice(0, 10)) {
+      findings.push({
+        kind: "approval.expired",
+        severity: "high",
+        subject: "approval:" + item.id,
+        title: "Approval expired without a decision",
+        detail: "A " + clean(item.kind || "request", 40) + " request for " + clean(item.vendor || "an unnamed vendor", 80) +
+          " (" + Number(item.amountCents || 0) + " " + clean(item.currency || "", 3) + ") expired at " + clean(item.expiresAt || "an unknown time", 40) + ".",
+        recommendation: "Re-request with a fresh quote if the action is still wanted; an expired approval can never be consumed.",
+        safeAction: "notify_owner"
+      });
+    }
+    for (const item of soon.slice(0, 10)) {
+      const remaining = Math.max(0, Date.parse(String(item.expiresAt || "")) - nowMs());
+      findings.push({
+        kind: "approval.expiring",
+        severity: "warning",
+        subject: "approval:" + item.id,
+        title: "Approval expires soon",
+        detail: "A " + clean(item.kind || "request", 40) + " request for " + clean(item.vendor || "an unnamed vendor", 80) +
+          " expires in about " + Math.max(0, Math.round(remaining / 60_000)) + " minute(s).",
+        recommendation: "Decide it from the paired owner device, or let it expire.",
+        safeAction: "notify_owner"
+      });
+    }
+    if (failed.length) {
+      findings.push({
+        kind: "approval.sweep_incomplete",
+        severity: "warning",
+        subject: "approval-ledger",
+        title: "Some approvals could not be marked expired",
+        detail: String(failed.length) + " request(s) changed while the sweep was running: " + failed.slice(0, 5).join(", "),
+        recommendation: "They were not modified. The next tick retries the sweep.",
+        safeAction: "notify_owner"
+      });
+    }
+    return {
+      findings,
+      report: {
+        ok: true,
+        expired: expired.length,
+        expiringSoon: soon.length,
+        failed: failed.length,
+        withinMs: Number(report.withinMs) || approvalExpirySoonMs
+      }
+    };
   }
 
   async function tick({ trigger = "manual" } = {}) {
@@ -196,6 +293,8 @@ export function createSchedulerService({
       }
       findings.push(...await stuckObjectives());
       findings.push(...await expiredApprovals());
+      const approvalMonitor = await approvalExpiryFindings();
+      findings.push(...approvalMonitor.findings);
       const high = findings.filter(item => ["high", "critical"].includes(item.severity));
       const deadLetters = findings.filter(item => !item.safeAction);
       let notification = null;
@@ -228,6 +327,7 @@ export function createSchedulerService({
           summary: recoveryResult.report?.summary || null
         } : null,
         reconciledReservations: reconciled,
+        approvals: approvalMonitor.report,
         autonomy: autonomyResult,
         notification,
         startedAt: new Date(startedAtMs).toISOString(),
@@ -290,6 +390,6 @@ export function createSchedulerService({
     tick,
     status,
     heartbeat,
-    limits: Object.freeze({ leaseMs, tickIntervalMs, stuckObjectiveMs, approvalTtlMs })
+    limits: Object.freeze({ leaseMs, tickIntervalMs, stuckObjectiveMs, approvalTtlMs, approvalExpirySoonMs })
   });
 }

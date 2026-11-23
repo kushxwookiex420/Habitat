@@ -152,6 +152,49 @@ export function createApprovalGate({
     return written.record;
   }
 
+  /**
+   * The status a caller should act on, without writing anything. A read must not mutate: previously a
+   * GET settled expiry, which made an idempotent read a write and put the expiry clock in the read
+   * path. Expiry is now persisted only by the decision paths and by the scheduler's sweep.
+   */
+  function effective(record) {
+    if (!record || record.status !== "requested" || !expired(record)) return record;
+    return { ...record, status: "expired", expired: true, expiredAt: record.expiredAt || record.expiresAt };
+  }
+
+  /**
+   * Persist the expiries that are due. Called by the existing scheduler tick so the ledger is swept
+   * once per tick under the same lease, instead of being mutated by every read. Returns what was
+   * swept, what is about to expire, and which rows changed underneath the sweep.
+   */
+  async function expiryReport({ withinMs = 60 * 60_000, limit = maxListLimit } = {}) {
+    if (!repository) return unavailable();
+    const rows = await repository.list({ limit: Math.max(1, Math.min(maxListLimit, Math.floor(Number(limit) || maxListLimit))) });
+    const at = nowMs();
+    const expiredNow = [];
+    const expiringSoon = [];
+    const failed = [];
+    for (const row of rows) {
+      if (row.status !== "requested") continue;
+      const expiresAt = Date.parse(String(row.expiresAt || ""));
+      if (!Number.isFinite(expiresAt)) continue;
+      if (expiresAt <= at) {
+        const written = await commit({ ...row, status: "expired", expiredAt: now(), updatedAt: now() }, "requested");
+        if (written.ok) {
+          expiredNow.push(written.record);
+        } else {
+          // Another writer may already have expired it; only a genuine mismatch is a failure.
+          const reread = await repository.get(row.id);
+          if (reread && reread.status === "expired") expiredNow.push(reread);
+          else failed.push(row.id);
+        }
+      } else if (expiresAt - at <= withinMs) {
+        expiringSoon.push(row);
+      }
+    }
+    return { ok: true, expired: expiredNow, expiringSoon, failed, withinMs, checkedAt: now() };
+  }
+
   async function request(input = {}) {
     if (!repository) return unavailable();
     const kind = clean(input.kind, 40).toLowerCase();
@@ -381,16 +424,17 @@ export function createApprovalGate({
 
   async function get(id) {
     if (!repository) return unavailable();
-    const record = await settleExpiry(await repository.get(String(id || "")));
-    return record ? { ok: true, approval: record } : { ok: false, code: "not_found", error: "No approval request with that id." };
+    const record = await repository.get(String(id || ""));
+    return record
+      ? { ok: true, approval: effective(record) }
+      : { ok: false, code: "not_found", error: "No approval request with that id." };
   }
 
   async function list({ status = null, kind = null, limit = 50 } = {}) {
     if (!repository) return unavailable();
     const rows = await repository.list({ limit: Math.max(1, Math.min(maxListLimit, Math.floor(Number(limit) || 50))) });
-    const settled = [];
-    for (const row of rows) settled.push(await settleExpiry(row));
-    const filtered = settled
+    const filtered = rows
+      .map(effective)
       .filter(item => (status ? item.status === String(status) : true))
       .filter(item => (kind ? item.kind === String(kind) : true));
     return { ok: true, count: filtered.length, approvals: filtered };
@@ -401,6 +445,7 @@ export function createApprovalGate({
     if (!repository) return [];
     const rows = await repository.list({ limit: maxListLimit });
     return rows
+      .map(effective)
       .filter(item => item.status === "approved" && !item.consumedAt && !expired(item))
       .filter(item => FINANCIAL_KINDS.includes(item.kind));
   }
@@ -415,6 +460,7 @@ export function createApprovalGate({
     consume,
     get,
     list,
+    expiryReport,
     pendingCommitments,
     actorKind
   });

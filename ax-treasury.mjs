@@ -34,6 +34,20 @@ export function isCashState(state) {
   return CASH_STATES.includes(String(state || "").trim().toLowerCase());
 }
 
+/**
+ * Which settlement ledger an event belongs to, or null when the event is pipeline only.
+ *
+ * `cash` is one receipt that may be observed as settled and then as available; `refund` is one
+ * reversal that may arrive twice. Both are deduplicated on the referenced transaction and amount,
+ * but they are separate ledgers, so a refund never cancels the cash it reverses in the dedupe key.
+ */
+export function settlementFamily(state) {
+  const value = String(state || "").trim().toLowerCase();
+  if (CASH_STATES.includes(value)) return "cash";
+  if (NEGATIVE_STATES.includes(value)) return "refund";
+  return null;
+}
+
 function isoOrNull(value) {
   const at = Date.parse(String(value ?? ""));
   return Number.isFinite(at) ? new Date(at).toISOString() : null;
@@ -89,6 +103,17 @@ export function validateRevenueEvent(event = {}) {
       error: "A settled or available amount needs evidence: a payout id, settlement reference or statement line."
     };
   }
+  // A refund is only meaningful against a named transaction. Without that reference the same refund
+  // can arrive twice under two ids with two evidence strings and cancel twice as much cash, which is
+  // exactly the gap a reconciler cannot see. Requiring it here makes the duplicate detectable.
+  const externalId = cleanText(event.externalId, 160) || null;
+  if (NEGATIVE_STATES.includes(state) && !externalId) {
+    return {
+      ok: false,
+      code: "refund_reference_required",
+      error: "A refunded or reversed amount must name the transaction it reverses (externalId)."
+    };
+  }
 
   return {
     ok: true,
@@ -101,7 +126,7 @@ export function validateRevenueEvent(event = {}) {
       source,
       evidence,
       channel: cleanText(event.channel, 60) || null,
-      externalId: cleanText(event.externalId, 160) || null,
+      externalId,
       note: cleanText(event.note, 300) || null
     }
   };
@@ -176,8 +201,9 @@ export function summarizeTreasury({
   const rejected = [];
   const seen = new Set();
   const seenPayouts = new Set();
-  // The same underlying cash transaction may not be counted twice, even across states.
-  const cashTransactions = new Set();
+    // The same underlying cash transaction may not be counted twice, even across states.
+
+  const settlementTransactions = new Set();
 
   const bucketFor = currency => {
     if (!currencies[currency]) currencies[currency] = bucket();
@@ -199,13 +225,18 @@ export function summarizeTreasury({
     seen.add(event.id);
     // A transaction that moved from settled to available is one receipt, not two. The key is the
     // external reference plus the amount, so a payout covering several orders still counts each.
-    if (CASH_STATES.includes(event.state) && event.externalId) {
-      const transaction = event.externalId + ":" + event.amountCents;
-      if (cashTransactions.has(transaction)) {
-        rejected.push({ id: event.id, code: "duplicate_cash_transaction", error: "The same external transaction and amount already counted as cash." });
+    // Refunds and reversals use the same rule: one referenced transaction and amount is one
+    // adjustment, so replaying it under a new event id cannot reduce cash a second time.
+    const family = settlementFamily(event.state);
+    if (family && event.externalId) {
+      const key = family + ":" + event.externalId + ":" + event.amountCents;
+      if (settlementTransactions.has(key)) {
+        rejected.push(family === "refund"
+          ? { id: event.id, code: "duplicate_refund", error: "The same referenced transaction and amount is already recorded as a refund or reversal." }
+          : { id: event.id, code: "duplicate_cash_transaction", error: "The same external transaction and amount already counted as cash." });
         continue;
       }
-      cashTransactions.add(transaction);
+      settlementTransactions.add(key);
     }
     const target = bucketFor(event.currency);
     target.eventCount += 1;

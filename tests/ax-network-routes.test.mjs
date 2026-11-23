@@ -64,13 +64,13 @@ async function invoke(app, key, req = {}) {
   return res;
 }
 
-function mount({ withNetwork = true } = {}) {
+function mount({ withNetwork = true, env = {} } = {}) {
   const app = makeApp();
   const network = withNetwork
     ? createAxNetworkService({ env: {}, repository: createMemoryNetworkRepository() })
     : null;
   registerUniversalCommandRoutes(app, {
-    env: { HABITAT_AX_BRIDGE_TOKEN: BRIDGE, HABITAT_AX_COMMAND_TOKEN: COMMAND },
+    env: { HABITAT_AX_BRIDGE_TOKEN: BRIDGE, HABITAT_AX_COMMAND_TOKEN: COMMAND, ...env },
     repository: null,
     verifyDevice: async (token, deviceId) => token === OWNER_TOKEN && deviceId === OWNER_DEVICE,
     ownerDeviceIds: OWNER_DEVICE,
@@ -273,6 +273,63 @@ test("a fulfiller is refused by the supplier fit check through the route", async
   assert.equal(res.body.evaluation.ok, false);
   assert.ok(res.body.evaluation.reasons.includes("automation_or_fulfiller_not_a_supplier"));
   assert.equal(res.body.evaluation.orderSubmitted, false);
+});
+
+test("an approval naming an unregistered capability is refused with 400", async () => {
+  const app = mount();
+  const res = await invoke(app, "POST /ax/command/network/approvals", {
+    headers: commandAuth,
+    body: { ...purchaseBody, capabilityId: "made.up.capability" }
+  });
+  assert.equal(res.statusCode, 400);
+  assert.equal(res.body.code, "unknown_capability");
+
+  const listed = await invoke(app, "GET /ax/command/network/approvals", { headers: bridgeAuth });
+  assert.equal(listed.body.count, 0, "the refused request is not stored");
+});
+
+test("a replayed refund is refused by the ledger with 409", async () => {
+  const app = mount();
+  const body = {
+    id: "rev_refund_1",
+    state: "refunded",
+    amountCents: 1200,
+    currency: "USD",
+    occurredAt,
+    source: "manual-report",
+    evidence: ["refund_9"],
+    externalId: "refund_9"
+  };
+  const first = await invoke(app, "POST /ax/command/network/treasury/events", { headers: { ...bridgeAuth, ...ownerHeaders }, body });
+  assert.equal(first.statusCode, 201);
+
+  const replay = await invoke(app, "POST /ax/command/network/treasury/events", {
+    headers: { ...bridgeAuth, ...ownerHeaders },
+    body: { ...body, id: "rev_refund_2", evidence: ["case_12"] }
+  });
+  assert.equal(replay.statusCode, 409);
+  assert.equal(replay.body.code, "duplicate_refund");
+
+  const treasury = await invoke(app, "GET /ax/command/network/treasury", { headers: bridgeAuth });
+  assert.equal(treasury.body.primary.refundedCents, 1200);
+});
+
+test("network writes are limited per credential while reads are not", async () => {
+  const app = mount({ env: { AX_NETWORK_WRITE_RATE_MAX: "2", AX_NETWORK_WRITE_RATE_WINDOW_MS: "60000" } });
+  const body = (vendor, amountCents) => ({ kind: "subscription", vendor, amountCents, currency: "USD" });
+
+  const first = await invoke(app, "POST /ax/command/network/approvals", { headers: commandAuth, body: body("zendrop", 100) });
+  assert.equal(first.statusCode, 201);
+  const second = await invoke(app, "POST /ax/command/network/approvals", { headers: commandAuth, body: body("spocket", 200) });
+  assert.equal(second.statusCode, 201);
+
+  const third = await invoke(app, "POST /ax/command/network/approvals", { headers: commandAuth, body: body("syncee", 300) });
+  assert.equal(third.statusCode, 429);
+  assert.equal(third.body.code, "network_rate_limited");
+  assert.ok(Number(third.headers["retry-after"]) >= 0);
+
+  const read = await invoke(app, "GET /ax/command/network/status", { headers: commandAuth });
+  assert.equal(read.statusCode, 200, "the write bucket does not starve reads");
 });
 
 test("an agent cannot post a refund, which would reduce reported cash", async () => {

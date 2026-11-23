@@ -109,6 +109,10 @@ documents every route with its credential, and route tests cover each one.
 
 ## 7. Gaps not fixed (reported, not hidden)
 
+> Follow-up: G1, G2, G3, G5 and G6 were closed locally after this review; G4 remains open by design.
+> See `docs/LOCAL_HARDENING_G1_G6.md` for the change and the tests. The text below is the state as
+> reviewed at `8ca2b3b`.
+
 - **G1 — scheduler not wired.** Approval expiry is enforced at read/decide/consume time, which is
   fail-closed, but no scheduler tick produces a proactive "approval expiring" finding. The existing
   scheduler already reports expired *objective* approvals; extending it to the network ledger is the

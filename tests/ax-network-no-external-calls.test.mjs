@@ -20,6 +20,7 @@ async function exercise(service) {
   await service.approvals();
   await service.approval(created.approval.id);
   await service.approve({ id: created.approval.id, by: "owner:phone-1" });
+  await service.approvalExpiry();
   await service.status();
   return created;
 }

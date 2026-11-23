@@ -56,7 +56,7 @@ test("settled and available amounts count, refunds subtract, and cash can go neg
     revenueEvents: [
       event("s1", "settled", 4000, { evidence: ["payout_123"] }),
       event("a1", "available", 1000, { evidence: ["statement_2026_11"] }),
-      event("r1", "refunded", 1500, { evidence: ["refund_9"] })
+      event("r1", "refunded", 1500, { evidence: ["refund_9"], externalId: "refund_9" })
     ],
     now: NOW
   });
@@ -65,7 +65,7 @@ test("settled and available amounts count, refunds subtract, and cash can go neg
   assert.equal(summary.primary.refundedCents, 1500);
 
   const overdrawn = summarizeTreasury({
-    revenueEvents: [event("s2", "settled", 100, { evidence: ["payout_1"] }), event("r2", "refunded", 900, { evidence: ["refund_1"] })],
+    revenueEvents: [event("s2", "settled", 100, { evidence: ["payout_1"] }), event("r2", "refunded", 900, { evidence: ["refund_1"], externalId: "refund_1" })],
     now: NOW
   });
   assert.equal(overdrawn.primary.cashCents, -800);
@@ -94,7 +94,9 @@ test("malformed events are rejected with a specific code", () => {
     [event("x4", "estimated", 100, { currency: "US" }), "invalid_currency"],
     [event("x5", "estimated", 100, { occurredAt: "not-a-date" }), "invalid_occurred_at"],
     [event("x6", "estimated", 100, { source: "" }), "revenue_source_required"],
-    [{ ...event("x7", "estimated", 100), id: "" }, "revenue_id_required"]
+    [{ ...event("x7", "estimated", 100), id: "" }, "revenue_id_required"],
+    [event("x8", "refunded", 100, { evidence: ["refund_1"] }), "refund_reference_required"],
+    [event("x9", "reversed", 100), "refund_reference_required"]
   ];
   for (const [input, code] of cases) {
     const checked = validateRevenueEvent(input);
@@ -104,6 +106,23 @@ test("malformed events are rejected with a specific code", () => {
   const summary = summarizeTreasury({ revenueEvents: cases.map(([input]) => input), now: NOW });
   assert.equal(summary.rejectedCount, cases.length);
   assert.equal(summary.primary.cashCents, 0);
+});
+
+test("the same refund cannot be replayed under a second id or a different evidence string", () => {
+  const summary = summarizeTreasury({
+    revenueEvents: [
+      event("s1", "settled", 5000, { evidence: ["payout_9"], externalId: "payout_9" }),
+      event("r1", "refunded", 1200, { evidence: ["refund_9", "case_7"], externalId: "refund_9" }),
+      event("r2", "refunded", 1200, { evidence: ["case_12"], externalId: "refund_9" }),
+      event("r3", "reversed", 1200, { evidence: ["refund_9"], externalId: "refund_9" })
+    ],
+    now: NOW
+  });
+  assert.equal(summary.primary.refundedCents, 1200);
+  assert.equal(summary.primary.reversedCents, 0);
+  assert.equal(summary.primary.cashCents, 3800);
+  assert.equal(summary.rejectedCount, 2);
+  assert.deepEqual(summary.rejectedEvents.map(item => item.code), ["duplicate_refund", "duplicate_refund"]);
 });
 
 test("the same event recorded twice does not double the cash", () => {

@@ -216,6 +216,13 @@ export function registerDeviceCommandBridge(app, {
       notifications,
       // One bounded autonomy pass per tick, under the same lease as recovery.
       autonomy: () => runAutonomy(),
+      // Approval-expiry monitoring rides this same tick and lease. It never decides an approval and
+      // never starts work: it sweeps due expiries in the approval ledger and reports them.
+      approvalExpiry: ({ withinMs } = {}) => (
+        axNetwork && typeof axNetwork.approvalExpiry === "function"
+          ? axNetwork.approvalExpiry({ withinMs })
+          : null
+      ),
       log
     });
     return schedulerRef;
