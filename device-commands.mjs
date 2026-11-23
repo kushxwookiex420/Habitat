@@ -45,7 +45,7 @@ export const DEVICE_COMMANDS = Object.freeze({
   "device.key": Object.freeze({
     permission: "android.accessibility.key",
     sensitive: true,
-    description: "Back, home, recents or enter."
+    description: "Back, home or recents."
   })
 });
 
@@ -111,7 +111,10 @@ export function validateDeviceCommand(type, payload = {}) {
   }
 
   if (type === "device.key") {
-    const names = ["back", "home", "recents", "enter"];
+    // "enter" is deliberately absent: the Android agent has no public
+    // AccessibilityService IME action, so accepting it here would promise a
+    // delivery the phone cannot make.
+    const names = ["back", "home", "recents"];
     if (!names.includes(payload.name)) return failure("key name must be one of " + names.join(", "));
     return { ok: true, payload: { name: payload.name } };
   }

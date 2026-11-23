@@ -21,8 +21,12 @@ test("the payload keys the phone reads are the keys the validator accepts", () =
   for (const key of ["x", "y", "x1", "y1", "x2", "y2", "durationMs", "text", "name"]) {
     assert.equal(android.includes(`"${key}"`), true, "phone reads payload key " + key);
   }
-  // Enter is no longer advertised: the SDK has no AccessibilityService IME action.
+  // Enter is rejected by both sides: the SDK has no AccessibilityService IME action.
   assert.equal(android.includes("sendImeEnter"), false);
+  assert.equal(validateDeviceCommand("device.key", { name: "enter" }).ok, false);
+  for (const name of ["back", "home", "recents"]) {
+    assert.equal(validateDeviceCommand("device.key", { name }).ok, true);
+  }
 });
 
 test("the screenshot endpoint and limits agree on both sides", () => {
