@@ -1,0 +1,141 @@
+name: NEXUS Free D1 Scheduler
+
+# GitHub-hosted runners execute the existing one-shot NEXUS tick.
+# Scheduled runs are disabled until the owner explicitly sets the repository
+# variable NEXUS_SCHEDULER_ENABLED=true. Manual runs require run_tick=true.
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+    inputs:
+      run_tick:
+        description: "Execute one NEXUS tick (requires D1 repository secrets)"
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nexus-d1-scheduler
+  cancel-in-progress: false
+
+jobs:
+  tick:
+    name: Run one guarded NEXUS tick
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check explicit execution gate and required secrets
+        id: gate
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          MANUAL_RUN_TICK: ${{ inputs.run_tick }}
+          SCHEDULER_ENABLED: ${{ vars.NEXUS_SCHEDULER_ENABLED }}
+          HABITAT_BASE_URL: ${{ vars.HABITAT_BASE_URL }}
+          AX_SCHEDULER_TOKEN: ${{ secrets.AX_SCHEDULER_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          HABITAT_D1_DATABASE_ID: ${{ secrets.HABITAT_D1_DATABASE_ID }}
+          HABITAT_D1_API_TOKEN: ${{ secrets.HABITAT_D1_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_NAME" == "workflow_dispatch" && "$MANUAL_RUN_TICK" != "true" ]]; then
+            echo "execute=false" >> "$GITHUB_OUTPUT"
+            echo "NEXUS tick not run: manual execution was not selected." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          if [[ "$EVENT_NAME" == "schedule" && "$SCHEDULER_ENABLED" != "true" ]]; then
+            echo "execute=false" >> "$GITHUB_OUTPUT"
+            echo "NEXUS scheduler remains disabled. Set repository variable NEXUS_SCHEDULER_ENABLED=true only after reviewing the D1 secrets and production target." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          missing=()
+          [[ -n "$HABITAT_BASE_URL" ]] || missing+=("repository variable HABITAT_BASE_URL")
+          [[ -n "$AX_SCHEDULER_TOKEN" ]] || missing+=("AX_SCHEDULER_TOKEN")
+          [[ -n "$CLOUDFLARE_ACCOUNT_ID" ]] || missing+=("CLOUDFLARE_ACCOUNT_ID")
+          [[ -n "$HABITAT_D1_DATABASE_ID" ]] || missing+=("HABITAT_D1_DATABASE_ID")
+          [[ -n "$HABITAT_D1_API_TOKEN" ]] || missing+=("HABITAT_D1_API_TOKEN")
+          if (( ${#missing[@]} > 0 )); then
+            printf 'NEXUS tick refused: missing GitHub Actions secrets: %s\n' "${missing[*]}" >&2
+            exit 3
+          fi
+          echo "execute=true" >> "$GITHUB_OUTPUT"
+          echo "Execution gate passed. Habitat autonomy scheduler and one read-only-adapter NEXUS tick will run." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Trigger Habitat autonomy scheduler
+        if: steps.gate.outputs.execute == 'true'
+        shell: bash
+        env:
+          HABITAT_BASE_URL: ${{ vars.HABITAT_BASE_URL }}
+          AX_SCHEDULER_TOKEN: ${{ secrets.AX_SCHEDULER_TOKEN }}
+        run: |
+          set -euo pipefail
+          base="${HABITAT_BASE_URL%/}"
+          response="$(curl --silent --show-error --fail-with-body --max-time 90 \
+            -X POST "$base/ax/command/scheduler/tick" \
+            -H "X-Scheduler-Token: $AX_SCHEDULER_TOKEN" \
+            -H "Content-Type: application/json" \
+            --data '{"trigger":"github-actions"}')"
+          printf '%s\n' "$response" | jq .
+          printf '%s\n' "$response" | jq -e '.ok == true' >/dev/null
+          {
+            echo "## Habitat autonomy scheduler: PASS"
+            echo ""
+            printf '%s\n' "$response" | jq .
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/checkout@v4
+        if: steps.gate.outputs.execute == 'true'
+
+      - uses: actions/setup-node@v4
+        if: steps.gate.outputs.execute == 'true'
+        with:
+          node-version: 22
+
+      - name: Install runtime dependencies
+        if: steps.gate.outputs.execute == 'true'
+        run: npm install --omit=dev --ignore-scripts --no-audit --no-fund
+
+      - name: Execute one NEXUS tick
+        if: steps.gate.outputs.execute == 'true'
+        shell: bash
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          HABITAT_D1_DATABASE_ID: ${{ secrets.HABITAT_D1_DATABASE_ID }}
+          HABITAT_D1_API_TOKEN: ${{ secrets.HABITAT_D1_API_TOKEN }}
+          NEXUS_RUNTIME_ENABLED: "true"
+          NEXUS_HEARTBEAT_SECONDS: "30"
+          NEXUS_RETENTION_DAYS: "7"
+          NEXUS_STALE_QUEUE_SECONDS: "600"
+          NEXUS_MAX_ATTEMPTS: "3"
+        run: |
+          set -euo pipefail
+          set +e
+          report="$(node scripts/nexus-tick.mjs)"
+          tick_status=$?
+          set -e
+          printf '%s\n' "$report" | jq .
+          {
+            if [[ "$tick_status" -eq 0 ]]; then
+              echo "## NEXUS tick: PASS"
+            else
+              echo "## NEXUS tick: FAILED (exit $tick_status)"
+            fi
+            echo ""
+            echo 'JSON report:'
+            printf '%s\n' "$report" | jq .
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$tick_status"
+
+      - name: Record tick failure without exposing credentials
+        if: failure()
+        shell: bash
+        run: |
+          {
+            echo "## NEXUS tick: FAILED"
+            echo ""
+            echo "The one-shot tick failed or reported a stale queue. Review this run's redacted logs."
+            echo "Exit 1 = D1/claim/runtime failure; exit 2 = stale eligible queue; exit 3 = missing configuration."
+          } >> "$GITHUB_STEP_SUMMARY"

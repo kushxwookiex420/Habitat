@@ -1,0 +1,852 @@
+{
+  "schemaVersion": 1,
+  "mission": 15,
+  "evidenceLevel": "local",
+  "transport": "real HTTP over 127.0.0.1; node:sqlite behind a D1-shaped fetch shim",
+  "simulated": [
+    "D1 network transport",
+    "Chat Completions provider (not used for message execution)"
+  ],
+  "checkedAt": "2026-11-22T05:26:49.940Z",
+  "correlationId": "mission15-live-707a892c",
+  "messageId": "msg_5a9dd35f8cc7bc68ca4b1c87",
+  "passed": 20,
+  "total": 20,
+  "ok": true,
+  "checks": [
+    {
+      "name": "live server answers authenticated presence over HTTP",
+      "ok": true,
+      "detail": {
+        "status": 200,
+        "body": {
+          "schemaVersion": 1,
+          "ok": true,
+          "presence": {
+            "reachable": true,
+            "executor": {
+              "configured": true,
+              "started": false,
+              "state": "mounted_not_started"
+            },
+            "heartbeat": {
+              "verified": false,
+              "liveWorkers": 0,
+              "asleep": true,
+              "lastHeartbeatAgeSeconds": null
+            },
+            "queue": {
+              "ok": true,
+              "eligible": 0,
+              "blocked": 0,
+              "claimable": false,
+              "oldestEligibleAt": null,
+              "oldestEligibleAgeSeconds": null,
+              "staleAfterSeconds": 600,
+              "stale": false
+            },
+            "staleQueue": false,
+            "canExecute": false,
+            "willExecuteWithoutScheduler": false,
+            "heartbeatSeconds": 30,
+            "lastTick": null,
+            "observedAt": "2026-11-22T05:26:49.654Z"
+          }
+        }
+      }
+    },
+    {
+      "name": "Ax submits over HTTP and the message is durably queued",
+      "ok": true,
+      "detail": {
+        "status": 201,
+        "body": {
+          "schemaVersion": 1,
+          "ok": true,
+          "replayed": false,
+          "message": {
+            "id": "msg_5a9dd35f8cc7bc68ca4b1c87",
+            "schemaVersion": 1,
+            "correlationId": "mission15-live-707a892c",
+            "project": "habitat",
+            "from": "ax",
+            "to": "nexus",
+            "origin": {
+              "client": "ax-command-token",
+              "role": "ax-client"
+            },
+            "kind": "task",
+            "status": "queued",
+            "objective": "report runtime health",
+            "adapter": "runtime.health",
+            "body": "Harmless live acceptance probe",
+            "taskId": null,
+            "runId": null,
+            "idempotencyKey": "mission15-live-task",
+            "attempts": 0,
+            "maxAttempts": 3,
+            "result": null,
+            "error": null,
+            "evidence": [],
+            "timeline": [
+              {
+                "at": "2026-11-22T05:26:49.675Z",
+                "from": "ax",
+                "to": "nexus",
+                "type": "submitted",
+                "status": "queued",
+                "note": null
+              }
+            ],
+            "createdAt": "2026-11-22T05:26:49.675Z",
+            "updatedAt": "2026-11-22T05:26:49.675Z",
+            "acknowledgedAt": null,
+            "completedAt": null
+          },
+          "correlationId": "mission15-live-707a892c"
+        }
+      }
+    },
+    {
+      "name": "direction is assigned by the authenticated surface",
+      "ok": true,
+      "detail": "ax"
+    },
+    {
+      "name": "unauthenticated submission is rejected",
+      "ok": true,
+      "detail": {
+        "status": 401,
+        "body": {
+          "schemaVersion": 1,
+          "ok": false,
+          "code": "invalid_token",
+          "error": "Ax command authentication required."
+        }
+      }
+    },
+    {
+      "name": "duplicate idempotency key replays the original message",
+      "ok": true,
+      "detail": {
+        "status": 200,
+        "body": {
+          "schemaVersion": 1,
+          "ok": true,
+          "replayed": true,
+          "message": {
+            "id": "msg_5a9dd35f8cc7bc68ca4b1c87",
+            "schemaVersion": 1,
+            "correlationId": "mission15-live-707a892c",
+            "project": "habitat",
+            "from": "ax",
+            "to": "nexus",
+            "origin": {
+              "client": "ax-command-token",
+              "role": "ax-client"
+            },
+            "kind": "task",
+            "status": "queued",
+            "objective": "report runtime health",
+            "adapter": "runtime.health",
+            "body": "Harmless live acceptance probe",
+            "taskId": null,
+            "runId": null,
+            "idempotencyKey": "mission15-live-task",
+            "attempts": 0,
+            "maxAttempts": 3,
+            "result": null,
+            "error": null,
+            "evidence": [],
+            "timeline": [
+              {
+                "at": "2026-11-22T05:26:49.675Z",
+                "from": "ax",
+                "to": "nexus",
+                "type": "submitted",
+                "status": "queued",
+                "note": null
+              }
+            ],
+            "createdAt": "2026-11-22T05:26:49.675Z",
+            "updatedAt": "2026-11-22T05:26:49.675Z",
+            "acknowledgedAt": null,
+            "completedAt": null
+          },
+          "correlationId": "mission15-live-707a892c"
+        }
+      }
+    },
+    {
+      "name": "Ax credential is refused on the NEXUS surface",
+      "ok": true,
+      "detail": {
+        "status": 401,
+        "body": {
+          "schemaVersion": 1,
+          "ok": false,
+          "code": "invalid_nexus_token",
+          "error": "NEXUS message authentication required."
+        }
+      }
+    },
+    {
+      "name": "NEXUS acknowledges over HTTP with its own credential",
+      "ok": true,
+      "detail": {
+        "status": 200,
+        "body": {
+          "schemaVersion": 1,
+          "ok": true,
+          "replayed": false,
+          "message": {
+            "id": "msg_5a9dd35f8cc7bc68ca4b1c87",
+            "schemaVersion": 1,
+            "correlationId": "mission15-live-707a892c",
+            "project": "habitat",
+            "from": "ax",
+            "to": "nexus",
+            "origin": {
+              "client": "ax-command-token",
+              "role": "ax-client"
+            },
+            "kind": "task",
+            "status": "acknowledged",
+            "objective": "report runtime health",
+            "adapter": "runtime.health",
+            "body": "Harmless live acceptance probe",
+            "taskId": null,
+            "runId": null,
+            "idempotencyKey": "mission15-live-task",
+            "attempts": 0,
+            "maxAttempts": 3,
+            "result": null,
+            "error": null,
+            "evidence": [],
+            "timeline": [
+              {
+                "at": "2026-11-22T05:26:49.675Z",
+                "from": "ax",
+                "to": "nexus",
+                "type": "submitted",
+                "status": "queued",
+                "note": null
+              },
+              {
+                "at": "2026-11-22T05:26:49.690Z",
+                "from": "nexus",
+                "to": "ax",
+                "type": "acknowledgement",
+                "status": "acknowledged",
+                "note": null
+              }
+            ],
+            "createdAt": "2026-11-22T05:26:49.675Z",
+            "updatedAt": "2026-11-22T05:26:49.690Z",
+            "acknowledgedAt": "2026-11-22T05:26:49.690Z",
+            "completedAt": null,
+            "acknowledgedBy": "nexus"
+          },
+          "code": null
+        }
+      }
+    },
+    {
+      "name": "scheduler tick drains and dispatches the message",
+      "ok": true,
+      "detail": {
+        "ok": true,
+        "messages": {
+          "ok": true,
+          "examined": 1,
+          "submitted": 1,
+          "completed": 0,
+          "failed": 0,
+          "deadLettered": 0,
+          "stillWorking": 0,
+          "errors": []
+        },
+        "objectives": {
+          "ok": false,
+          "code": "provider_unconfigured",
+          "reason": "objective autonomy needs a configured Ax run store"
+        }
+      }
+    },
+    {
+      "name": "message moved to working with a bound task id",
+      "ok": true,
+      "detail": {
+        "id": "msg_5a9dd35f8cc7bc68ca4b1c87",
+        "schemaVersion": 1,
+        "correlationId": "mission15-live-707a892c",
+        "project": "habitat",
+        "from": "ax",
+        "to": "nexus",
+        "origin": {
+          "client": "ax-command-token",
+          "role": "ax-client"
+        },
+        "kind": "task",
+        "status": "working",
+        "objective": "report runtime health",
+        "adapter": "runtime.health",
+        "body": "Harmless live acceptance probe",
+        "taskId": "cmd_92ff16b34e8d9cca45d93339",
+        "runId": null,
+        "idempotencyKey": "mission15-live-task",
+        "attempts": 0,
+        "maxAttempts": 3,
+        "result": null,
+        "error": null,
+        "evidence": [],
+        "timeline": [
+          {
+            "at": "2026-11-22T05:26:49.675Z",
+            "from": "ax",
+            "to": "nexus",
+            "type": "submitted",
+            "status": "queued",
+            "note": null
+          },
+          {
+            "at": "2026-11-22T05:26:49.690Z",
+            "from": "nexus",
+            "to": "ax",
+            "type": "acknowledgement",
+            "status": "acknowledged",
+            "note": null
+          },
+          {
+            "at": "2026-11-22T05:26:49.704Z",
+            "from": "nexus",
+            "to": "ax",
+            "type": "dispatched",
+            "status": "working",
+            "note": "task cmd_92ff16b34e8d9cca45d93339"
+          }
+        ],
+        "createdAt": "2026-11-22T05:26:49.675Z",
+        "updatedAt": "2026-11-22T05:26:49.704Z",
+        "acknowledgedAt": "2026-11-22T05:26:49.690Z",
+        "completedAt": null,
+        "acknowledgedBy": "nexus"
+      }
+    },
+    {
+      "name": "real NEXUS tick executes the permitted task",
+      "ok": true,
+      "detail": {
+        "schemaVersion": 1,
+        "ok": true,
+        "state": "ticked",
+        "workerId": "nexus-c9b91447",
+        "tickStartedAt": "2026-11-22T05:26:49.710Z",
+        "finishedAt": "2026-11-22T05:26:49.721Z",
+        "tick": {
+          "ok": true,
+          "at": "2026-11-22T05:26:49.714Z",
+          "finishedAt": "2026-11-22T05:26:49.720Z",
+          "claimed": 1,
+          "completed": 1,
+          "failed": 0,
+          "recovered": 0,
+          "error": null,
+          "stage": "complete"
+        },
+        "counters": {
+          "claimed": 1,
+          "completed": 1,
+          "failed": 0,
+          "recovered": 0,
+          "exhausted": 0,
+          "stale": 0,
+          "renewals": 0
+        },
+        "queue": {
+          "ok": true,
+          "eligible": 0,
+          "blocked": 0,
+          "claimable": false,
+          "oldestEligibleAt": null,
+          "oldestEligibleAgeSeconds": null,
+          "staleAfterSeconds": 600,
+          "stale": false
+        },
+        "staleQueue": false,
+        "heartbeat": {
+          "at": 1795325209720,
+          "state": "idle"
+        },
+        "config": {
+          "pollMs": 5000,
+          "leaseMs": 300000,
+          "maxAttempts": 3,
+          "heartbeatSeconds": 30,
+          "retentionDays": 7,
+          "staleQueueSeconds": 600
+        }
+      }
+    },
+    {
+      "name": "second tick completes the message from real evidence",
+      "ok": true,
+      "detail": {
+        "ok": true,
+        "messages": {
+          "ok": true,
+          "examined": 1,
+          "submitted": 0,
+          "completed": 1,
+          "failed": 0,
+          "deadLettered": 0,
+          "stillWorking": 0,
+          "errors": []
+        },
+        "objectives": {
+          "ok": false,
+          "code": "provider_unconfigured",
+          "reason": "objective autonomy needs a configured Ax run store"
+        }
+      }
+    },
+    {
+      "name": "Ax retrieves the completed result by correlation id",
+      "ok": true,
+      "detail": {
+        "schemaVersion": 1,
+        "ok": true,
+        "correlationId": "mission15-live-707a892c",
+        "count": 1,
+        "messages": [
+          {
+            "id": "msg_5a9dd35f8cc7bc68ca4b1c87",
+            "schemaVersion": 1,
+            "correlationId": "mission15-live-707a892c",
+            "project": "habitat",
+            "from": "ax",
+            "to": "nexus",
+            "origin": {
+              "client": "ax-command-token",
+              "role": "ax-client"
+            },
+            "kind": "task",
+            "status": "completed",
+            "objective": "report runtime health",
+            "adapter": "runtime.health",
+            "body": "Harmless live acceptance probe",
+            "taskId": "cmd_92ff16b34e8d9cca45d93339",
+            "runId": null,
+            "idempotencyKey": "mission15-live-task",
+            "attempts": 0,
+            "maxAttempts": 3,
+            "result": {
+              "summary": "Workers: 1 live, 0 stale, 0 stopped; 1 task(s) in working state.",
+              "evidence": [
+                "runtime:workers=1:live=1:stale=0:stopped=0:working=1@observed=2026-11-22T05:26:49.718Z"
+              ]
+            },
+            "error": null,
+            "evidence": [
+              "runtime:workers=1:live=1:stale=0:stopped=0:working=1@observed=2026-11-22T05:26:49.718Z"
+            ],
+            "timeline": [
+              {
+                "at": "2026-11-22T05:26:49.675Z",
+                "from": "ax",
+                "to": "nexus",
+                "type": "submitted",
+                "status": "queued",
+                "note": null
+              },
+              {
+                "at": "2026-11-22T05:26:49.690Z",
+                "from": "nexus",
+                "to": "ax",
+                "type": "acknowledgement",
+                "status": "acknowledged",
+                "note": null
+              },
+              {
+                "at": "2026-11-22T05:26:49.704Z",
+                "from": "nexus",
+                "to": "ax",
+                "type": "dispatched",
+                "status": "working",
+                "note": "task cmd_92ff16b34e8d9cca45d93339"
+              },
+              {
+                "at": "2026-11-22T05:26:49.727Z",
+                "from": "nexus",
+                "to": "ax",
+                "type": "result",
+                "status": "completed",
+                "note": "Workers: 1 live, 0 stale, 0 stopped; 1 task(s) in working state."
+              }
+            ],
+            "createdAt": "2026-11-22T05:26:49.675Z",
+            "updatedAt": "2026-11-22T05:26:49.727Z",
+            "acknowledgedAt": "2026-11-22T05:26:49.690Z",
+            "completedAt": "2026-11-22T05:26:49.727Z",
+            "acknowledgedBy": "nexus"
+          }
+        ],
+        "terminal": [
+          {
+            "id": "msg_5a9dd35f8cc7bc68ca4b1c87",
+            "kind": "task",
+            "status": "completed",
+            "result": {
+              "summary": "Workers: 1 live, 0 stale, 0 stopped; 1 task(s) in working state.",
+              "evidence": [
+                "runtime:workers=1:live=1:stale=0:stopped=0:working=1@observed=2026-11-22T05:26:49.718Z"
+              ]
+            },
+            "error": null
+          }
+        ],
+        "awaitingDecision": []
+      }
+    },
+    {
+      "name": "no decision is left pending",
+      "ok": true,
+      "detail": []
+    },
+    {
+      "name": "audit records submission, completion and the auth failure",
+      "ok": true,
+      "detail": [
+        "ax.message.completed",
+        "ax.message.acknowledged",
+        "auth.failure",
+        "auth.failure",
+        "ax.message.submitted"
+      ]
+    },
+    {
+      "name": "result survives a real server-process restart",
+      "ok": true,
+      "detail": {
+        "schemaVersion": 1,
+        "ok": true,
+        "correlationId": "mission15-live-707a892c",
+        "count": 1,
+        "messages": [
+          {
+            "id": "msg_5a9dd35f8cc7bc68ca4b1c87",
+            "schemaVersion": 1,
+            "correlationId": "mission15-live-707a892c",
+            "project": "habitat",
+            "from": "ax",
+            "to": "nexus",
+            "origin": {
+              "client": "ax-command-token",
+              "role": "ax-client"
+            },
+            "kind": "task",
+            "status": "completed",
+            "objective": "report runtime health",
+            "adapter": "runtime.health",
+            "body": "Harmless live acceptance probe",
+            "taskId": "cmd_92ff16b34e8d9cca45d93339",
+            "runId": null,
+            "idempotencyKey": "mission15-live-task",
+            "attempts": 0,
+            "maxAttempts": 3,
+            "result": {
+              "summary": "Workers: 1 live, 0 stale, 0 stopped; 1 task(s) in working state.",
+              "evidence": [
+                "runtime:workers=1:live=1:stale=0:stopped=0:working=1@observed=2026-11-22T05:26:49.718Z"
+              ]
+            },
+            "error": null,
+            "evidence": [
+              "runtime:workers=1:live=1:stale=0:stopped=0:working=1@observed=2026-11-22T05:26:49.718Z"
+            ],
+            "timeline": [
+              {
+                "at": "2026-11-22T05:26:49.675Z",
+                "from": "ax",
+                "to": "nexus",
+                "type": "submitted",
+                "status": "queued",
+                "note": null
+              },
+              {
+                "at": "2026-11-22T05:26:49.690Z",
+                "from": "nexus",
+                "to": "ax",
+                "type": "acknowledgement",
+                "status": "acknowledged",
+                "note": null
+              },
+              {
+                "at": "2026-11-22T05:26:49.704Z",
+                "from": "nexus",
+                "to": "ax",
+                "type": "dispatched",
+                "status": "working",
+                "note": "task cmd_92ff16b34e8d9cca45d93339"
+              },
+              {
+                "at": "2026-11-22T05:26:49.727Z",
+                "from": "nexus",
+                "to": "ax",
+                "type": "result",
+                "status": "completed",
+                "note": "Workers: 1 live, 0 stale, 0 stopped; 1 task(s) in working state."
+              }
+            ],
+            "createdAt": "2026-11-22T05:26:49.675Z",
+            "updatedAt": "2026-11-22T05:26:49.727Z",
+            "acknowledgedAt": "2026-11-22T05:26:49.690Z",
+            "completedAt": "2026-11-22T05:26:49.727Z",
+            "acknowledgedBy": "nexus"
+          }
+        ],
+        "terminal": [
+          {
+            "id": "msg_5a9dd35f8cc7bc68ca4b1c87",
+            "kind": "task",
+            "status": "completed",
+            "result": {
+              "summary": "Workers: 1 live, 0 stale, 0 stopped; 1 task(s) in working state.",
+              "evidence": [
+                "runtime:workers=1:live=1:stale=0:stopped=0:working=1@observed=2026-11-22T05:26:49.718Z"
+              ]
+            },
+            "error": null
+          }
+        ],
+        "awaitingDecision": []
+      }
+    },
+    {
+      "name": "duplicate still replays after restart",
+      "ok": true,
+      "detail": {
+        "schemaVersion": 1,
+        "ok": true,
+        "replayed": true,
+        "message": {
+          "id": "msg_5a9dd35f8cc7bc68ca4b1c87",
+          "schemaVersion": 1,
+          "correlationId": "mission15-live-707a892c",
+          "project": "habitat",
+          "from": "ax",
+          "to": "nexus",
+          "origin": {
+            "client": "ax-command-token",
+            "role": "ax-client"
+          },
+          "kind": "task",
+          "status": "completed",
+          "objective": "report runtime health",
+          "adapter": "runtime.health",
+          "body": "Harmless live acceptance probe",
+          "taskId": "cmd_92ff16b34e8d9cca45d93339",
+          "runId": null,
+          "idempotencyKey": "mission15-live-task",
+          "attempts": 0,
+          "maxAttempts": 3,
+          "result": {
+            "summary": "Workers: 1 live, 0 stale, 0 stopped; 1 task(s) in working state.",
+            "evidence": [
+              "runtime:workers=1:live=1:stale=0:stopped=0:working=1@observed=2026-11-22T05:26:49.718Z"
+            ]
+          },
+          "error": null,
+          "evidence": [
+            "runtime:workers=1:live=1:stale=0:stopped=0:working=1@observed=2026-11-22T05:26:49.718Z"
+          ],
+          "timeline": [
+            {
+              "at": "2026-11-22T05:26:49.675Z",
+              "from": "ax",
+              "to": "nexus",
+              "type": "submitted",
+              "status": "queued",
+              "note": null
+            },
+            {
+              "at": "2026-11-22T05:26:49.690Z",
+              "from": "nexus",
+              "to": "ax",
+              "type": "acknowledgement",
+              "status": "acknowledged",
+              "note": null
+            },
+            {
+              "at": "2026-11-22T05:26:49.704Z",
+              "from": "nexus",
+              "to": "ax",
+              "type": "dispatched",
+              "status": "working",
+              "note": "task cmd_92ff16b34e8d9cca45d93339"
+            },
+            {
+              "at": "2026-11-22T05:26:49.727Z",
+              "from": "nexus",
+              "to": "ax",
+              "type": "result",
+              "status": "completed",
+              "note": "Workers: 1 live, 0 stale, 0 stopped; 1 task(s) in working state."
+            }
+          ],
+          "createdAt": "2026-11-22T05:26:49.675Z",
+          "updatedAt": "2026-11-22T05:26:49.727Z",
+          "acknowledgedAt": "2026-11-22T05:26:49.690Z",
+          "completedAt": "2026-11-22T05:26:49.727Z",
+          "acknowledgedBy": "nexus"
+        },
+        "correlationId": "mission15-live-707a892c"
+      }
+    },
+    {
+      "name": "nothing is claimable after restart",
+      "ok": true,
+      "detail": {
+        "ok": true,
+        "messages": {
+          "ok": true,
+          "examined": 0,
+          "submitted": 0,
+          "completed": 0,
+          "failed": 0,
+          "deadLettered": 0,
+          "stillWorking": 0,
+          "errors": []
+        },
+        "objectives": {
+          "ok": false,
+          "code": "provider_unconfigured",
+          "reason": "objective autonomy needs a configured Ax run store"
+        }
+      }
+    },
+    {
+      "name": "no duplicate execution after restart",
+      "ok": true,
+      "detail": {
+        "schemaVersion": 1,
+        "ok": true,
+        "state": "ticked",
+        "workerId": "nexus-6c546c48",
+        "tickStartedAt": "2026-11-22T05:26:49.907Z",
+        "finishedAt": "2026-11-22T05:26:49.909Z",
+        "tick": {
+          "ok": true,
+          "at": "2026-11-22T05:26:49.908Z",
+          "finishedAt": "2026-11-22T05:26:49.909Z",
+          "claimed": 0,
+          "completed": 0,
+          "failed": 0,
+          "recovered": 0,
+          "error": null,
+          "stage": "complete"
+        },
+        "counters": {
+          "claimed": 0,
+          "completed": 0,
+          "failed": 0,
+          "recovered": 0,
+          "exhausted": 0,
+          "stale": 0,
+          "renewals": 0
+        },
+        "queue": {
+          "ok": true,
+          "eligible": 0,
+          "blocked": 0,
+          "claimable": false,
+          "oldestEligibleAt": null,
+          "oldestEligibleAgeSeconds": null,
+          "staleAfterSeconds": 600,
+          "stale": false
+        },
+        "staleQueue": false,
+        "heartbeat": {
+          "at": 1795325209909,
+          "state": "idle"
+        },
+        "config": {
+          "pollMs": 5000,
+          "leaseMs": 300000,
+          "maxAttempts": 3,
+          "heartbeatSeconds": 30,
+          "retentionDays": 7,
+          "staleQueueSeconds": 600
+        }
+      }
+    },
+    {
+      "name": "scheduler advances the next permitted task autonomously",
+      "ok": true,
+      "detail": {
+        "nextId": "msg_93a5a1280b67f8f53d094e79",
+        "autonomy": {
+          "ok": true,
+          "messages": {
+            "ok": true,
+            "examined": 1,
+            "submitted": 1,
+            "completed": 0,
+            "failed": 0,
+            "deadLettered": 0,
+            "stillWorking": 0,
+            "errors": []
+          },
+          "objectives": {
+            "ok": false,
+            "code": "provider_unconfigured",
+            "reason": "objective autonomy needs a configured Ax run store"
+          }
+        },
+        "tick": {
+          "ok": true,
+          "at": "2026-11-22T05:26:49.925Z",
+          "finishedAt": "2026-11-22T05:26:49.929Z",
+          "claimed": 1,
+          "completed": 1,
+          "failed": 0,
+          "recovered": 0,
+          "error": null,
+          "stage": "complete"
+        },
+        "settle": {
+          "ok": true,
+          "messages": {
+            "ok": true,
+            "examined": 1,
+            "submitted": 0,
+            "completed": 1,
+            "failed": 0,
+            "deadLettered": 0,
+            "stillWorking": 0,
+            "errors": []
+          },
+          "objectives": {
+            "ok": false,
+            "code": "provider_unconfigured",
+            "reason": "objective autonomy needs a configured Ax run store"
+          }
+        },
+        "thread": "completed"
+      }
+    },
+    {
+      "name": "NEXUS surface fails closed without its credential",
+      "ok": true,
+      "detail": {
+        "status": 401,
+        "body": {
+          "schemaVersion": 1,
+          "ok": false,
+          "code": "invalid_nexus_token",
+          "error": "NEXUS message authentication required."
+        }
+      }
+    }
+  ]
+}

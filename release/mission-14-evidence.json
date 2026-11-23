@@ -1,0 +1,180 @@
+{
+  "schemaVersion": 1,
+  "mission": "NEXUS_MASTER_MISSION_14",
+  "recordedAt": "2026-11-22",
+  "branch": "ax-nexus/revision-4.6-nexus-mainline-integration",
+  "baseHead": "216f9ebb146a2a391d47f447937dd327c90955d5",
+  "evidenceLevels": {
+    "implemented": [
+      "durable Ax-NEXUS message channel (habitat_ax_messages, migration 0006)",
+      "NEXUS surface authenticated by AX_NEXUS_TOKEN, separate from every Ax credential",
+      "idempotent submission, correlation ids, thread retrieval, rate limiting, redaction, audit",
+      "question/answer and approval-request messages from NEXUS to Ax",
+      "message drain with retry limit, dead-letter and duplicate-execution protection",
+      "autonomy pass in the scheduler tick: messages plus eligible objectives",
+      "autonomousPolicy: low-risk, no-approval, no-prohibited-permission plans only",
+      "shared objective dispatch module used by the autonomy pass",
+      "release gate inputs for Mission 14 documents, migration 0006 and evidence artifact"
+    ],
+    "locallyTested": [
+      "tests/ax-message-channel.test.mjs \u2014 9 tests",
+      "tests/ax-nexus-e2e.test.mjs \u2014 3 tests through registerDeviceCommandBridge",
+      "full suite and migration checks on Node 26.13.1",
+      "Android debug APK compiled and packaged; no device or emulator"
+    ],
+    "ciVerified": {
+      "head": "113e2983cdb96605a79bb09fe169eab883e2d4d1",
+      "workflows": [
+        {
+          "check": "syntax",
+          "conclusion": "success"
+        },
+        {
+          "check": "test",
+          "conclusion": "success"
+        },
+        {
+          "check": "verify",
+          "conclusion": "success"
+        },
+        {
+          "check": "backend-regression",
+          "conclusion": "success"
+        },
+        {
+          "check": "d1-repository",
+          "conclusion": "success"
+        },
+        {
+          "check": "sandbox guarantees (portable tier + honest capability report)",
+          "conclusion": "success"
+        }
+      ],
+      "observedAt": "2026-11-22T05:13:45Z",
+      "note": "All six check runs completed success on the release-record commit. Annotations are warnings, not failures."
+    },
+    "stagingVerified": "NOT RUN \u2014 no disposable D1 database, credentials or owner approval id",
+    "physicallyDeviceVerified": "BUILD ONLY \u2014 no phone or emulator attached; 15-check sheet unexecuted",
+    "productionVerified": "NOT DEPLOYED \u2014 no production change was made"
+  },
+  "channel": {
+    "table": "habitat_ax_messages",
+    "migration": "migrations/0006_ax_nexus_messages.sql",
+    "allowedAdapters": [
+      "repo.inspect",
+      "task.inspect",
+      "runtime.health"
+    ],
+    "limits": {
+      "bodyMax": 4000,
+      "evidenceItems": 12,
+      "maxAttempts": 3,
+      "rateMax": 30,
+      "rateWindowMs": 60000
+    },
+    "credentials": {
+      "ax": [
+        "HABITAT_AX_COMMAND_TOKEN",
+        "HABITAT_AX_BRIDGE_TOKEN"
+      ],
+      "nexus": [
+        "AX_NEXUS_TOKEN"
+      ]
+    },
+    "acceptance": {
+      "submissionPersisted": true,
+      "idempotentReplay": true,
+      "unauthorizedRejected": true,
+      "nexusSpoofRejected": true,
+      "acknowledgedByNexus": true,
+      "executedByRealTick": true,
+      "evidenceRecorded": true,
+      "retrievedByCorrelationId": true,
+      "auditVisible": true,
+      "restartReconstructed": true,
+      "duplicateExecutionPrevented": true
+    }
+  },
+  "autonomy": {
+    "trigger": "scheduler tick (external cron, AX_SCHEDULER_TOKEN call, or an Ax-authenticated call)",
+    "messageQueue": "queued -> acknowledged -> working -> completed | failed | dead_letter",
+    "objectiveEligibility": "planned|authorized, approval not required, risk low, no prohibited permission, allowlisted adapters only",
+    "budget": "reservation before run, settlement after, stale reservation reconciliation on tick",
+    "approval": "owner device only; command token refused structurally",
+    "continuousOperation": false,
+    "continuousOperationNote": "A Render Free instance sleeps; autonomy runs when a trigger arrives, not continuously."
+  },
+  "android": {
+    "artifact": "app/build/outputs/apk/debug/app-debug.apk",
+    "bytes": 908446,
+    "sha256": "e20a0729e2f7a954b49b2a58e07ba5bec589d3e7fb32211700a062cde92653b4",
+    "package": "com.habitat.axbridge",
+    "versionCode": 85,
+    "versionName": "0.8.5",
+    "sourceChanges": [
+      "android:launchMode=singleTop",
+      "android:windowSoftInputMode=adjustResize"
+    ],
+    "physicalVerification": "none"
+  },
+  "staging": {
+    "status": "NOT RUN",
+    "code": "staging_not_configured",
+    "missing": [
+      "CLOUDFLARE_ACCOUNT_ID",
+      "HABITAT_D1_DATABASE_ID",
+      "HABITAT_D1_API_TOKEN",
+      "STAGING_ALLOW_WRITES",
+      "STAGING_OBJECTIVE_KEY",
+      "STAGING_OWNER_APPROVAL_ID"
+    ],
+    "networkRequests": 0,
+    "ownerAction": "docs/HABITAT_ACTIVATION_RUNBOOK.md \u00a71"
+  },
+  "render": {
+    "deployed": false,
+    "dashboardAccessed": false,
+    "liveHealthProbed": false,
+    "cronCreated": false,
+    "readinessDocument": "docs/RENDER_MISSION_14_READINESS.md"
+  },
+  "axConnection": {
+    "channelAvailable": true,
+    "chatGptSessionConnected": false,
+    "reason": "No deployed origin, no managed ChatGPT workspace, no authorised connector in this session. A personal ChatGPT plan cannot create a GPT/Action.",
+    "ownerAction": "docs/AX_NEXUS_COMMUNICATION.md \u00a77"
+  },
+  "forbiddenActionsTaken": {
+    "productionDeploy": false,
+    "productionD1Change": false,
+    "productionEnvironmentChange": false,
+    "paidProviderCall": false,
+    "secretExposed": false,
+    "purchaseOrRefund": false,
+    "phoneCommand": false,
+    "merge": false,
+    "forcePush": false
+  },
+  "codeCommit": "282da02b0e77ce2a6dfc9a542cdbf9036e5a1a4a",
+  "localVerification": {
+    "syntaxCheck": "exit 0",
+    "tests": {
+      "total": 703,
+      "passed": 703,
+      "failed": 0,
+      "node": "26.13.1"
+    },
+    "migrationChecks": {
+      "checks": 22,
+      "passed": 22,
+      "failed": 0
+    },
+    "releaseGate": {
+      "checks": 13,
+      "releaseReady": true
+    },
+    "androidBuild": {
+      "multiple": "BUILD SUCCESSFUL"
+    }
+  }
+}

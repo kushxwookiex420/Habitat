@@ -1,0 +1,94 @@
+{
+  "schemaVersion": 1,
+  "mission": 13,
+  "capturedAt": "2026-11-22T04:00:00.000Z",
+  "sourceHeadAtStart": "5f2175d00e60649f0330f20f89d4327744cb7f7a",
+  "validatedCommit": "recorded in release/manifest.json",
+  "environment": {
+    "stagingCredentialsPresent": false,
+    "renderCredentialsPresent": false,
+    "adbPresent": false,
+    "physicalDeviceAttached": false
+  },
+  "staging": {
+    "status": "NOT RUN",
+    "reason": "No disposable staging D1 database, credentials or owner approval id were available",
+    "harnessRefusalExitCode": 2,
+    "harnessRefusalCode": "staging_not_configured",
+    "missingVariableNames": [
+      "CLOUDFLARE_ACCOUNT_ID",
+      "HABITAT_D1_DATABASE_ID",
+      "HABITAT_D1_API_TOKEN",
+      "STAGING_ALLOW_WRITES",
+      "STAGING_OBJECTIVE_KEY",
+      "STAGING_OWNER_APPROVAL_ID"
+    ],
+    "databaseIdentity": null,
+    "migrationsAppliedToD1": 0,
+    "productionAccessed": false
+  },
+  "localTests": {
+    "node26": { "tests": 691, "pass": 691, "fail": 0 },
+    "node22": { "tests": 691, "pass": 691, "fail": 0 },
+    "migrations": { "checks": 18, "passed": 18, "failed": 0, "engine": "node:sqlite in-memory" },
+    "releaseGateAndStagingHarnessTests": { "tests": 6, "pass": 6, "fail": 0 }
+  },
+  "controlCenter": {
+    "backend": "local authenticated HTTP harness with in-memory storage; real control-center page and command routes",
+    "evidenceLevel": "locally tested, not staging or production",
+    "unauthenticatedObjectivesStatus": 401,
+    "badTokenObjectivesStatus": 401,
+    "controlPageStatus": 200,
+    "tabs": 11,
+    "objective": {
+      "id": "obj_2b7427bc582fcf9c624772a5",
+      "status": "completed",
+      "budgetUsd": 0.05,
+      "spentUsd": 0.004,
+      "reservedUsd": 0,
+      "criteriaMet": "2/2",
+      "executionId": "run_harness",
+      "executionStatus": "settled"
+    },
+    "security": {
+      "integrity": "verified",
+      "observedHeadHash": "059a22d9e48da0ad5a0a19bdb028dcc674862269b86d4ac99808856fe5b86efa",
+      "firstSeq": 1,
+      "lastSeq": 5,
+      "note": "The screenshot was captured at sequence 1-3; the final API read was sequence 1-5 after additional harness events."
+    },
+    "scheduler": { "status": "healthy", "missedTicks": 0, "lease": "free" },
+    "failClosed": {
+      "device": "device_state_not_configured",
+      "health": "diagnostics_unavailable",
+      "header": "Degraded"
+    },
+    "screenshots": [
+      "release/m13-control-live-mobile-detail.png",
+      "release/m13-control-live-security-mobile.png",
+      "release/m13-control-live-desktop.png"
+    ]
+  },
+  "android": {
+    "status": "BUILD ONLY",
+    "buildResult": "BUILD SUCCESSFUL",
+    "sourceTree": "unchanged Android sources from 5f2175d; rebuilt for Mission 13",
+    "apk": "app/build/outputs/apk/debug/app-debug.apk",
+    "bytes": 908394,
+    "sha256": "aa022d8b3f56f8cf9c45c8e5f79fdb8706e64d80cb9e8a006d7afbc61e71f950",
+    "applicationId": "com.habitat.axbridge",
+    "versionName": "0.8.4",
+    "permissions": ["INTERNET", "ACCESS_NETWORK_STATE", "RECEIVE_BOOT_COMPLETED", "RECORD_AUDIO"],
+    "emulatorTested": false,
+    "physicalTested": false,
+    "pairingClaimedFixed": false
+  },
+  "render": {
+    "status": "repository-inspected only",
+    "dashboardAccessed": false,
+    "deployed": false,
+    "productionVariablesChanged": false,
+    "continuousOperationClaimed": false
+  },
+  "productionImpact": "None: no production D1, Render, secret, deployment, merge or device command."
+}
