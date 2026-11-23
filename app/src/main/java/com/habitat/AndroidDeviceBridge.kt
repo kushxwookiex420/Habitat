@@ -31,11 +31,19 @@ class AndroidDeviceBridge(
         private const val PREFS = "habitat_ax_device_bridge"
         private const val KEY_ALIAS = "habitat_ax_device_bridge_v1"
         private const val BASE_URL = "https://habitat-1-szzd.onrender.com"
+        // Must stay below the dialog's 30 s button watchdog so the bridge reports the expiry first.
+        private const val PAIRING_ATTEMPT_TIMEOUT_MS = 25_000L
     }
 
     private val appContext = context.applicationContext
     private val prefs = appContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
     private var executor: ScheduledExecutorService? = null
+    private val pairingTimeout = Executors.newSingleThreadScheduledExecutor { runnable ->
+        Thread(runnable, "Habitat-Pair-Timeout").apply { isDaemon = true }
+    }
+    private val pairing = PairingSingleFlight(PAIRING_ATTEMPT_TIMEOUT_MS) { action, delay ->
+        pairingTimeout.schedule(action, delay, TimeUnit.MILLISECONDS)
+    }
 
     val deviceId: String
         get() {
@@ -54,34 +62,54 @@ class AndroidDeviceBridge(
             onComplete(false, "Pairing code format is invalid. Request a fresh code.")
             return
         }
-        Thread({
-            var failureReason = "Pairing failed. Check the code and phone ID."
-            val success = try {
-                val response = request(
-                    "POST", "/device/pair", null,
-                    JSONObject().put("deviceId", deviceId).put("code", clean)
-                )
-                val token = response.optJSONObject("device")?.optString("token").orEmpty()
-                if (!response.optBoolean("ok") || token.length < 40) {
-                    failureReason = response.optString("error").ifBlank { "Server returned an invalid pairing response." }
+        val token = pairing.start {
+            // The deadline released the gate. Tell the UI so it can offer a retry; a response that
+            // arrives later is ignored by finish() because it no longer owns the gate.
+            onComplete(false, "Pairing timed out. Request a fresh code and try again.")
+        } ?: run {
+            onComplete(false, "A pairing attempt is already running. Give it a moment, then retry.")
+            return
+        }
+        try {
+            Thread({
+                var failureReason = "Pairing failed. Check the code and phone ID."
+                val success = try {
+                    val response = request(
+                        "POST", "/device/pair", null,
+                        JSONObject().put("deviceId", deviceId).put("code", clean)
+                    )
+                    val tokenValue = response.optJSONObject("device")?.optString("token").orEmpty()
+                    if (!response.optBoolean("ok") || tokenValue.length < 40) {
+                        failureReason = response.optString("error").ifBlank { "Server returned an invalid pairing response." }
+                        false
+                    } else if (!pairing.isCurrent(token)) {
+                        // The attempt expired while the request was in flight. Do not let a stale
+                        // credential overwrite one stored by a newer attempt.
+                        failureReason = "Pairing attempt expired before the response arrived."
+                        false
+                    } else {
+                        val stored = storeToken(tokenValue)
+                        if (!stored) failureReason = "Android Keystore could not save the phone credential."
+                        stored
+                    }
+                } catch (error: Throwable) {
+                    failureReason = (error.message ?: error.javaClass.simpleName).take(180)
                     false
-                } else {
-                    val stored = storeToken(token)
-                    if (!stored) failureReason = "Android Keystore could not save the phone credential."
-                    stored
                 }
-            } catch (error: Throwable) {
-                failureReason = (error.message ?: error.javaClass.simpleName).take(180)
-                false
+                if (!pairing.finish(token)) return@Thread
+                try {
+                    onComplete(success, if (success) "Paired" else failureReason)
+                } catch (_: Throwable) {
+                    // A destroyed Activity must not crash the pairing worker.
+                }
+            }, "Habitat-Phone-Pair").apply {
+                isDaemon = true
+                start()
             }
-            try {
-                onComplete(success, if (success) "Paired" else failureReason)
-            } catch (_: Throwable) {
-                // A destroyed Activity must not crash the pairing worker.
-            }
-        }, "Habitat-Phone-Pair").apply {
-            isDaemon = true
-            start()
+        } catch (startError: Throwable) {
+            // The worker never started; release the gate so pairing is not locked out.
+            pairing.finish(token)
+            onComplete(false, "Could not start pairing: " + (startError.message ?: startError.javaClass.simpleName).take(120))
         }
     }
 
