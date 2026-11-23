@@ -121,12 +121,35 @@ export function createApprovalGate({
     return Number.isFinite(at) && at <= nowMs();
   }
 
+  /**
+   * Persist a transition only while the row is still in the state the decision was based on. Both
+   * stores expose `transition`; a repository without it still works, but then two concurrent
+   * decisions can both write and the result is last-writer-wins. That is why the stores implement it.
+   */
+  async function commit(record, expectStatus) {
+    if (typeof repository.transition === "function") {
+      const stored = await repository.transition(record.id, { expectStatus, next: record });
+      if (!stored) {
+        return {
+          ok: false,
+          code: "approval_conflict",
+          error: "This approval changed while the update was being recorded; re-read it before retrying."
+        };
+      }
+      return { ok: true, record: stored };
+    }
+    await repository.put(record);
+    return { ok: true, record };
+  }
+
   /** Persist an expiry transition once, so a stale approval cannot be revived by a later write. */
   async function settleExpiry(record) {
     if (!record || record.status !== "requested" || !expired(record)) return record;
     const next = { ...record, status: "expired", expiredAt: now(), updatedAt: now() };
-    await repository.put(next);
-    return next;
+    const written = await commit(next, "requested");
+    // Losing this race means another writer already changed the row; report what is actually stored.
+    if (!written.ok) return (await repository.get(record.id)) || record;
+    return written.record;
   }
 
   async function request(input = {}) {
@@ -288,8 +311,9 @@ export function createApprovalGate({
       decisionReason: reason ? clean(reason, 300) : null,
       updatedAt: at
     };
-    await repository.put(next);
-    return { ok: true, replayed: false, approved: approved === true, approval: next, externalActionPerformed: false };
+    const written = await commit(next, "requested");
+    if (!written.ok) return written;
+    return { ok: true, replayed: false, approved: approved === true, approval: written.record, externalActionPerformed: false };
   }
 
   async function cancel({ id, by, reason = null } = {}) {
@@ -297,9 +321,14 @@ export function createApprovalGate({
     if (!record) return { ok: false, code: "not_found", error: "No approval request with that id." };
     if (actorKind(by) !== "owner") return { ok: false, code: "owner_required", error: "Only the owner may cancel an approval request." };
     if (record.status === "consumed") return { ok: false, code: "already_decided", error: "A consumed approval cannot be cancelled." };
+    // Cancelling an expired request would otherwise rewrite it back to a live-looking status.
+    if (record.status === "expired" || expired(record)) {
+      return { ok: false, code: "approval_expired", error: "This approval expired; it cannot be cancelled." };
+    }
     const next = { ...record, status: "cancelled", cancelledAt: now(), cancelledBy: clean(by, 160), decisionReason: reason ? clean(reason, 300) : null, updatedAt: now() };
-    await repository.put(next);
-    return { ok: true, approval: next };
+    const written = await commit(next, record.status);
+    if (!written.ok) return written;
+    return { ok: true, approval: written.record };
   }
 
   /**
@@ -345,8 +374,9 @@ export function createApprovalGate({
       executionKey: clean(executionKey, 160),
       updatedAt: at
     };
-    await repository.put(next);
-    return { ok: true, replayed: false, approval: next, externalActionPerformed: false };
+    const written = await commit(next, "approved");
+    if (!written.ok) return written;
+    return { ok: true, replayed: false, approval: written.record, externalActionPerformed: false };
   }
 
   async function get(id) {

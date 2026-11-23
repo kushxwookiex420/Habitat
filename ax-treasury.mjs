@@ -175,6 +175,9 @@ export function summarizeTreasury({
   const currencies = {};
   const rejected = [];
   const seen = new Set();
+  const seenPayouts = new Set();
+  // The same underlying cash transaction may not be counted twice, even across states.
+  const cashTransactions = new Set();
 
   const bucketFor = currency => {
     if (!currencies[currency]) currencies[currency] = bucket();
@@ -194,6 +197,16 @@ export function summarizeTreasury({
       continue;
     }
     seen.add(event.id);
+    // A transaction that moved from settled to available is one receipt, not two. The key is the
+    // external reference plus the amount, so a payout covering several orders still counts each.
+    if (CASH_STATES.includes(event.state) && event.externalId) {
+      const transaction = event.externalId + ":" + event.amountCents;
+      if (cashTransactions.has(transaction)) {
+        rejected.push({ id: event.id, code: "duplicate_cash_transaction", error: "The same external transaction and amount already counted as cash." });
+        continue;
+      }
+      cashTransactions.add(transaction);
+    }
     const target = bucketFor(event.currency);
     target.eventCount += 1;
     if (event.state === "settled") target.settledCents += event.amountCents;
@@ -212,6 +225,11 @@ export function summarizeTreasury({
       continue;
     }
     const payout = checked.payout;
+    if (seenPayouts.has(payout.id)) {
+      rejected.push({ id: payout.id, code: "duplicate_payout", error: "The same payout id was supplied more than once." });
+      continue;
+    }
+    seenPayouts.add(payout.id);
     const target = bucketFor(payout.currency);
     if (payout.state === "paid") target.payoutsPaidCents += payout.amountCents;
     else if (payout.state === "requested" || payout.state === "in_transit") target.payoutsInTransitCents += payout.amountCents;
@@ -251,7 +269,13 @@ export function summarizeTreasury({
   }
 
   const primary = String(primaryCurrency || "USD").toUpperCase();
-  const primaryBucket = currencies[primary] || bucket();
+  // A quiet treasury still reports the same shape: callers read primary.selfFunding, and an
+  // unfinished empty bucket would hand them undefined instead of a zeroed result.
+  const primaryBucket = currencies[primary] || {
+    ...bucket(),
+    currency: primary,
+    selfFunding: { settledGrossCents: 0, spendCents: 0, ratio: null, covered: false }
+  };
 
   return {
     ok: true,

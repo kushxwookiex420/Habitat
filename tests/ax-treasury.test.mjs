@@ -173,3 +173,43 @@ test("a spend check refuses more than settled cash allows", () => {
   assert.equal(assertSpendable(summary, { amountCents: 0 }).code, "invalid_amount");
   assert.equal(assertSpendable(summary, { amountCents: 100, currency: "EUR" }).code, "unknown_currency");
 });
+
+test("an empty treasury still reports a complete primary bucket", () => {
+  const summary = summarizeTreasury({});
+  assert.equal(summary.primary.currency, "USD");
+  assert.equal(summary.primary.cashCents, 0);
+  assert.equal(summary.primary.availableToSpendCents, 0);
+  assert.deepEqual(summary.primary.selfFunding, { settledGrossCents: 0, spendCents: 0, ratio: null, covered: false });
+  assert.equal(summary.mixedCurrencies, false);
+});
+
+test("the same payout id is never counted twice", () => {
+  const payout = { id: "p1", state: "in_transit", amountCents: 800, currency: "USD" };
+  const summary = summarizeTreasury({ payouts: [payout, payout], now: NOW });
+  assert.equal(summary.primary.payoutsInTransitCents, 800);
+  assert.ok(summary.rejectedEvents.some(item => item.code === "duplicate_payout"));
+});
+
+test("settled and available for the same external transaction count once", () => {
+  const summary = summarizeTreasury({
+    revenueEvents: [
+      event("s1", "settled", 1000, { evidence: ["payout_1"], externalId: "txn_1" }),
+      event("a1", "available", 1000, { evidence: ["payout_1"], externalId: "txn_1" })
+    ],
+    now: NOW
+  });
+  assert.equal(summary.primary.cashCents, 1000);
+  assert.ok(summary.rejectedEvents.some(item => item.code === "duplicate_cash_transaction"));
+});
+
+test("one payout covering several differently priced orders still counts each order", () => {
+  const summary = summarizeTreasury({
+    revenueEvents: [
+      event("s1", "settled", 1000, { evidence: ["payout_1"], externalId: "payout_1" }),
+      event("s2", "settled", 2500, { evidence: ["payout_1"], externalId: "payout_1" })
+    ],
+    now: NOW
+  });
+  assert.equal(summary.primary.cashCents, 3500);
+  assert.equal(summary.rejectedCount, 0);
+});

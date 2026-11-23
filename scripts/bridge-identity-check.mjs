@@ -122,7 +122,9 @@ export function parseDumpsysPackage(text) {
   const packageName = /Package\s+\[([^\]]+)\]/.exec(body)?.[1] ?? null;
   const versionName = /versionName=(\S+)/.exec(body)?.[1] ?? null;
   const versionCodeMatch = /versionCode=(\d+)(?:\s+minSdk=(\d+))?(?:\s+targetSdk=(\d+))?/.exec(body);
-  const signatures = /signatures=PackageSignatures\{[^\[]*\[([0-9a-fA-F,]+)\]/.exec(body);
+  // Restrict the prefix to the current line: a greedy cross-line match could pick up a later
+  // bracket, hash the wrong certificate and report a false identity result.
+  const signatures = /signatures=PackageSignatures\{[^\[\]\n]*\[([0-9a-fA-F,]+)\]/.exec(body);
   const firstCertificate = signatures ? signatures[1].split(",")[0].trim() : "";
   return {
     packageName,

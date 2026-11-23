@@ -274,3 +274,18 @@ test("a fulfiller is refused by the supplier fit check through the route", async
   assert.ok(res.body.evaluation.reasons.includes("automation_or_fulfiller_not_a_supplier"));
   assert.equal(res.body.evaluation.orderSubmitted, false);
 });
+
+test("an agent cannot post a refund, which would reduce reported cash", async () => {
+  const app = mount();
+  for (const state of ["refunded", "reversed"]) {
+    const res = await invoke(app, "POST /ax/command/network/treasury/events", {
+      headers: commandAuth,
+      body: { id: "rev_" + state, state, amountCents: 100000, currency: "USD", occurredAt, source: "manual", evidence: ["refund_1"] }
+    });
+    assert.equal(res.statusCode, 403, state);
+    assert.equal(res.body.code, "command_token_cannot_approve", state);
+  }
+  const treasury = await invoke(app, "GET /ax/command/network/treasury", { headers: bridgeAuth });
+  assert.equal(treasury.body.primary.cashCents, 0);
+  assert.equal(treasury.body.primary.refundedCents, 0);
+});

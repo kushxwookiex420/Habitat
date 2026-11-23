@@ -1729,6 +1729,7 @@ export function registerUniversalCommandRoutes(app, {
     approval_expired: 409,
     not_approved: 409,
     approval_binding_mismatch: 409,
+    approval_conflict: 409,
     invalid_revenue_state: 400,
     invalid_amount: 400,
     invalid_currency: 400,
@@ -1823,9 +1824,10 @@ export function registerUniversalCommandRoutes(app, {
     if (!service) return networkUnavailable(res);
     const state = String(req.body?.state || "").trim().toLowerCase();
     let actor = "ax:" + (req.axRole || "unknown");
-    // "Money is real" is an owner claim. An agent may record pipeline; only the paired owner device
-    // may move a figure into settled or available, which is what treasury counts as cash.
-    if (state === "settled" || state === "available") {
+    // "Money is real" is an owner claim. An agent may record pipeline, but only the paired owner
+    // device may move a figure into or out of cash. Refunds and reversals are included: an agent
+    // that could post a refund could otherwise make the treasury report a loss that never happened.
+    if (["settled", "available", "refunded", "reversed"].includes(state)) {
       const deviceId = await authorizeOwnerAction(req, res, "Recording settled cash");
       if (!deviceId) return undefined;
       actor = "owner:" + deviceId;

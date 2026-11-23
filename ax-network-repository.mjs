@@ -53,6 +53,9 @@ const DEFINITIONS = Object.freeze({
       "consumed_at", "record_json", "updated_at"
     ]),
     filters: Object.freeze({ status: "status", kind: "kind" }),
+    // Approval transitions are compare-and-swap on status, so two concurrent decisions cannot both
+    // win and a consumed approval cannot be overwritten by a stale writer.
+    casColumn: "status",
     orderBy: "updated_at",
     project: record => ({
       id: record.id,
@@ -216,7 +219,17 @@ function memoryStore(definition) {
         .sort((left, right) => String(right[definition.orderBy] ?? "").localeCompare(String(left[definition.orderBy] ?? "")))
         .slice(0, clampLimit(limit));
       return result.map(item => structuredClone(item));
-    }
+    },
+    ...(definition.casColumn ? {
+      async transition(id, { expectStatus = null, next = null } = {}) {
+        const current = records.get(String(id));
+        if (!current || !next) return null;
+        if (String(current[definition.casColumn]) !== String(expectStatus)) return null;
+        if (String(next.id) !== String(id)) return null;
+        records.set(String(id), structuredClone(next));
+        return structuredClone(next);
+      }
+    } : {})
   });
 }
 
@@ -257,7 +270,20 @@ function d1Store(definition, query) {
         params
       );
       return rowsOf(result).map(row => decode(row.record_json)).filter(Boolean);
-    }
+    },
+    ...(definition.casColumn ? {
+      async transition(id, { expectStatus = null, next = null } = {}) {
+        if (!next || String(next.id) !== String(id)) return null;
+        const projected = definition.project(next);
+        const mutable = columns.filter(column => column !== "id");
+        const sql = "UPDATE " + definition.name + " SET " + mutable.map(column => column + " = ?").join(", ") +
+          " WHERE id = ? AND " + definition.casColumn + " = ? RETURNING id";
+        const params = mutable.map(column => projected[column] ?? null).concat([String(id), String(expectStatus)]);
+        const result = await query(sql, params);
+        if (rowsOf(result).length !== 1) return null;
+        return structuredClone(next);
+      }
+    } : {})
   });
 }
 

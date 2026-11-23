@@ -115,3 +115,38 @@ test("reports a version mismatch from the device instead of accepting it", async
   assert.equal(report.code, "identity_mismatch");
   assert.deepEqual(report.mismatches.map(item => item.field), ["versionName", "versionCode"]);
 });
+
+test("a signature block without a same-line certificate yields no fingerprint", () => {
+  // A greedy cross-line match would reach the bracket on the next line and hash the wrong value,
+  // reporting a confidently wrong identity. The parser must return null instead.
+  const text = [
+    "Package [com.habitat.axbridge]",
+    "    versionCode=87 minSdk=26 targetSdk=35",
+    "    versionName=0.8.7",
+    "    signatures=PackageSignatures{2f4a1c",
+    "    later [deadbeef]"
+  ].join("\n");
+  const observed = parseDumpsysPackage(text);
+  assert.equal(observed.certificateSha256, null);
+});
+
+test("a shell-like device id stays a single argv element and cannot inject a verb", async () => {
+  const seen = [];
+  const run = argv => {
+    seen.push(argv);
+    if (argv[1] === "devices") return "List of devices attached\nsemi;colon\tdevice\n";
+    return DUMPSYS;
+  };
+  const report = await runReadOnlyDeviceCheck({ run, expected: EXPECTED, deviceId: "semi;colon" });
+  assert.equal(report.readOnly, true);
+  const dumpsys = seen[1];
+  assert.deepEqual(dumpsys.slice(0, 3), ["adb", "-s", "semi;colon"]);
+  assert.equal(dumpsys.length, 7);
+  assert.equal(seen.every(argv => argv.every(token => !["install", "uninstall", "push", "reboot"].includes(String(token).toLowerCase()))), true);
+});
+
+test("getprop is allowed but settings and input are refused", () => {
+  assert.equal(assertReadOnlyCommand(["adb", "-s", "X", "shell", "getprop", "ro.build.version.sdk"]), true);
+  assert.throws(() => assertReadOnlyCommand(["adb", "shell", "settings", "put", "global", "a", "b"]), BridgeCommandRefused);
+  assert.throws(() => assertReadOnlyCommand(["adb", "-s", "X", "shell", "input", "keyevent", "26"]), BridgeCommandRefused);
+});
