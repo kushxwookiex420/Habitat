@@ -1,0 +1,75 @@
+name: Launcher APK
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "launcher/**"
+      - "settings.gradle.kts"
+      - "build.gradle.kts"
+      - ".github/workflows/launcher-apk.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+
+      # setup-android currently tries to install the removed "tools" package; use the runner SDK.
+      - name: Select the preinstalled Android SDK
+        run: |
+          set -euo pipefail
+          SDK=/usr/local/lib/android/sdk
+          test -d "$SDK"
+          echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
+          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
+          SDKMANAGER=""
+          for candidate in "$SDK/cmdline-tools/latest/bin/sdkmanager" "$SDK/cmdline-tools/16.0/bin/sdkmanager" "$SDK/tools/bin/sdkmanager"; do
+            if [ -x "$candidate" ]; then SDKMANAGER="$candidate"; break; fi
+          done
+          [ -n "$SDKMANAGER" ]
+          echo "$(dirname "$SDKMANAGER")" >> "$GITHUB_PATH"
+          "$SDKMANAGER" --install "platforms;android-35" "build-tools;34.0.0"
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.10.2"
+
+      - name: Launcher unit tests
+        run: gradle :launcher:testDebugUnitTest --no-daemon --console=plain
+
+      - name: Build debug launcher APK
+        run: gradle :launcher:assembleDebug --no-daemon --console=plain
+
+      - name: Verify APK signature
+        run: |
+          set -euo pipefail
+          while IFS= read -r -d '' apk; do
+            echo "== $apk"
+            "$ANDROID_HOME/build-tools/34.0.0/apksigner" verify --verbose --print-certs "$apk"
+          done < <(find launcher/build/outputs/apk -name '*.apk' -print0)
+
+      - name: Checksums
+        run: |
+          set -euo pipefail
+          find launcher/build/outputs/apk -name '*.apk' -print0 | while IFS= read -r -d '' apk; do
+            sha256sum "$apk" | tee "$apk.sha256"
+          done
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: habitat-launcher-apk
+          path: |
+            launcher/build/outputs/apk/**/*.apk
+            launcher/build/outputs/apk/**/*.apk.sha256
+          if-no-files-found: error
+          retention-days: 30
