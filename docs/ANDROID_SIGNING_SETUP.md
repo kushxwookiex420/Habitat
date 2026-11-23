@@ -11,6 +11,18 @@ This document covers both, and never asks for a key or password in chat or in th
 
 ## A. In-place update of the installed app
 
+**Resolved 2026-11-22.** The owner-supplied installed certificate
+`508c5a3e4b4812cbfbca2c685f5d369fde55b3bfd864727340038b59d14b247c` is this workspace's own debug
+keystore: `~/.android/debug.keystore`, alias `androiddebugkey`, `CN=Android Debug`, `PrivateKeyEntry`,
+created 2026-11-20. A 0.8.5 APK signed with it was built and verified here
+(`deliverables/apk/Habitat-0.8.5-ax-debug-installed-key.apk`, APK SHA-256 `e20a0729…2653b4`,
+signer SHA-256 equal to the installed fingerprint). Steps 1–2 below are therefore complete in this
+workspace; steps 3–5 apply only when the key has to be re-imported somewhere else.
+
+Caveats: it is a **debug** key with the public default password, and the APK is
+`android:debuggable="true"`. Use it only to preserve in-place update continuity; it is not a release
+signing identity.
+
 1. Read the installed certificate fingerprint with the phone-only procedure in
    `ANDROID_CERTIFICATE_PHONE_CHECK.md`.
 2. Find the machine that built 0.8.2. The most likely location is Android Studio's default debug
@@ -26,6 +38,10 @@ This document covers both, and never asks for a key or password in chat or in th
 5. Supply it to the build through CI secrets (section C), build 0.8.5 with `versionCode 85`, verify
    the certificate equals the phone fingerprint, then install with `adb install -r` when a device
    session is available.
+
+A copy is kept at `secrets/android-debug.keystore` (git-ignored via `secrets/`, mode 0600) so it
+survives workspace restores. Export it to encrypted offline storage and delete the workspace copy
+once that is done; never commit it or paste its password anywhere.
 
 If no machine or backup has that key, **there is no in-place update**. The only remaining path is an
 owner-approved uninstall + install + re-pair, which changes the device ID and needs the owner

@@ -43,6 +43,24 @@ or the pairing code unless a separate step explicitly asks for them.
 Normalise before comparing: remove `:`, spaces and newlines, lowercase. Then compare all 64 hex
 characters. A prefix match is not a match.
 
+## Result for this installation (resolved 2026-11-22)
+
+The owner reported the installed `com.habitat.axbridge` certificate SHA-256 as:
+
+```
+50:8C:5A:3E:4B:48:12:CB:FB:CA:2C:68:5F:5D:36:9F:DE:55:B3:BF:D8:64:72:73:40:03:8B:59:D1:4B:24:7C
+```
+
+It matches **no** published release asset and **no** CI artifact. It matches **exactly** the debug
+keystore in this workspace's home directory (`~/.android/debug.keystore`, alias `androiddebugkey`,
+`CN=Android Debug`, `PrivateKeyEntry`, created 2026-11-20) and therefore every artifact built here:
+the HomeLauncher 0.24–0.62 series (`com.jarvis.launcher`) and the local `com.habitat.axbridge`
+debug builds.
+
+Consequence: the installed app was sideloaded from a build produced in this workspace, and the
+private key that signed it is still available. **In-place update is possible** — see
+`ANDROID_SIGNING_SETUP.md` §A and `ANDROID_BRIDGE_085_UPGRADE.md` §2b.
+
 ## Historical artifacts and their certificates
 
 All values were computed directly from the APK files in this session. They are **public certificate
@@ -60,16 +78,18 @@ fingerprints**, not private keys.
 | `Habitat-v0.8-Ax-debug.apk` | run `45073390090` (`30334fa`, single-flight) | 911,006 | `3211d709…8021bdd` | `06b73dfabce6d48b4773f90e47056943d8eef078b611a470aa8132f7131789b0` |
 
 Pattern: two APKs produced by the same build share a certificate; **different builds do not**. Each
-GitHub runner generates a fresh debug keystore.
+GitHub runner generates a fresh debug keystore. Local builds in this workspace are the exception:
+they reuse `~/.android/debug.keystore`, which is why the installed certificate is stable across them
+and why it matches the local artifacts and not the CI ones.
 
 ## Interpreting the result
 
 - If the installed fingerprint **matches one row**, the installed build came from that artifact and
   the same private key signed it. That key is not in the repository or its caches; unless the owner
   still has the machine that built it, it is still unrecoverable.
-- If it **matches no row**, the installed 0.8.2 was built elsewhere (for example Android Studio's
-  `~/.android/debug.keystore` on the owner's computer). That machine is then the only possible
-  source of a compatible key.
+- If it **matches no row**, the installed 0.8.2 was built elsewhere. Check the build machine's
+  `~/.android/debug.keystore` or release keystore against the fingerprint (here it matched this
+  workspace's own debug keystore).
 - Either way, **do not uninstall**. The fingerprint decides which path applies; see
   `ANDROID_BRIDGE_085_UPGRADE.md` and `ANDROID_SIGNING_SETUP.md`.
 

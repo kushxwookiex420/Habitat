@@ -13,7 +13,7 @@ replacement.
 | Package | `com.habitat.axbridge` | `app/build.gradle.kts` on the release branch |
 | versionCode / versionName | `85` / `0.8.5` | same |
 | Signature | APK Signature Scheme v2, self-signed **CN=Android Debug, O=Android, C=US** | v2 certificate extracted from the APK (debug certificate) |
-| Installed app | **0.8.2** per the owner's report | **not independently verified** — no adb/device in this environment |
+| Installed app | **0.8.2** per the owner's report | version code still unverified (no adb); **signing certificate verified** by the owner: `508c5a3e…4b247c` |
 
 The installed version matters because release 0.8.5 contains the pairing-lifecycle fix:
 `configChanges`/`singleTop`/`adjustResize`, saved `pairingDialogOpen` state, a pairing-button
@@ -28,6 +28,9 @@ CI run's debug keystore; two CI runs do not share one unless a keystore is persi
 evidence that the installed 0.8.2 build shares a certificate with this 0.8.5 artifact.
 
 Therefore the plan is **verify first, decide after** — never uninstall to "make the update work".
+
+**Resolved 2026-11-22:** §2b replaces this uncertainty — the installed certificate matches a private
+key held in this workspace, so an in-place update is available.
 
 ## 2a. Signing investigation (2026-11-22)
 
@@ -66,6 +69,42 @@ Legitimate paths, in order:
 **Do not generate a new key and present it as compatible.** A fresh debug or release key produces
 `INSTALL_FAILED_UPDATE_INCOMPATIBLE` against the existing install; calling it a "release signing
 fix" would be false.
+
+## 2b. Certificate resolved — in-place update is available (2026-11-22)
+
+The owner supplied the installed certificate SHA-256:
+
+```
+50:8C:5A:3E:4B:48:12:CB:FB:CA:2C:68:5F:5D:36:9F:DE:55:B3:BF:D8:64:72:73:40:03:8B:59:D1:4B:24:7C
+```
+
+Comparison across every available artifact, recomputed in this session:
+
+| Check | Result |
+|---|---|
+| Release assets v0.7 / v0.8 | no — `5c145fcc…`, `7084dca8…` |
+| CI runs 43004059579 / 43198490592 / 45058300087 / 45073390090 | no — `8d51fe2b…`, `9d629b57…`, `23308fc6…`, `06b73dfa…` |
+| Local builds (HomeLauncher 0.24–0.62, `com.habitat.axbridge` debug builds) | **yes** — 44 files |
+| Matching private key | **yes** — `~/.android/debug.keystore`, alias `androiddebugkey`, `PrivateKeyEntry`, created 2026-11-20 |
+| Keystore in git history (all refs) | none |
+| Keystore in Actions secrets or caches | none (four Habitat token/base-URL secrets; npm caches only) |
+| New APK built with the recovered key | **yes** (below) |
+
+New artifact, built from the release integration tree and verified here:
+
+| Property | Value |
+|---|---|
+| Path | `deliverables/apk/Habitat-0.8.5-ax-debug-installed-key.apk` |
+| Size | 908,446 bytes |
+| APK SHA-256 | `e20a0729e2f7a954b49b2a58e07ba5bec589d3e7fb32211700a062cde92653b4` |
+| Signer SHA-256 | `508c5a3e4b4812cbfbca2c685f5d369fde55b3bfd864727340038b59d14b247c` (installed app) |
+| Package / version | `com.habitat.axbridge`, versionCode `85`, versionName `0.8.5` |
+| SDKs | minSdk 26, targetSdk 35 |
+| Signature scheme | v2 only (`apksigner verify` passes, min-sdk 26 — v2 is sufficient above Android 7.0) |
+| Build flag | `android:debuggable="true"` — update-continuity artifact, not a release build |
+
+Because signatures match and versionCode 85 is above the installed build, `adb install -r` keeps app
+data, the device ID and the pairing token; no re-pair and no owner-allowlist change are needed.
 
 ## 3. Gate 0 — preserve the current installation
 
@@ -122,7 +161,7 @@ existing pairing should continue. Verify: open the app, the bridge button reads 
 authenticated poll, and the Control Center shows a recent check-in. If the token is rejected (401),
 the app clears it and a re-pair is required — then follow section 6.
 
-### B. Certificates differ (expected)
+### B. Certificates differ (ruled out for this installation)
 
 Two options, **both requiring explicit owner approval**:
 
@@ -177,7 +216,7 @@ Consequences the owner must accept before B2:
 
 ## 9. What this plan does not claim
 
-- No device was available; the installed version, certificate match and lifecycle behaviour are
-  **unverified**.
+- No device was available; the installed version code and lifecycle behaviour are **unverified**.
+  The certificate match is verified from the owner's fingerprint plus the recovered private key.
 - The 0.8.5 APK was not rebuilt in this session; its hash and certificate are the CI artifact's.
 - This document performs no install, uninstall, data clear or environment change.
