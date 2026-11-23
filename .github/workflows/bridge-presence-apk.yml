@@ -46,6 +46,37 @@ jobs:
       - name: Build debug bridge APK
         run: gradle :app:assembleDebug --no-daemon --console=plain
 
+      - name: Re-sign with the installed Bridge certificate
+        # Optional: runs only after the owner provisions the four signing secrets.
+        # The keystore is decoded to the runner's temporary directory and removed
+        # afterwards; no private key material is stored in this repository.
+        if: ${{ secrets.HABITAT_KEYSTORE_BASE64 != '' && secrets.HABITAT_KEYSTORE_PASSWORD != '' && secrets.HABITAT_KEY_ALIAS != '' && secrets.HABITAT_KEY_PASSWORD != '' }}
+        env:
+          KEYSTORE_BASE64: ${{ secrets.HABITAT_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.HABITAT_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.HABITAT_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.HABITAT_KEY_PASSWORD }}
+          EXPECTED_CERT_SHA256: "508c5a3e4b4812cbfbca2c685f5d369fde55b3bfd864727340038b59d14b247c"
+        run: |
+          set -euo pipefail
+          umask 077
+          KS="$RUNNER_TEMP/habitat-update.jks"
+          trap 'rm -f "$KS" "$RUNNER_TEMP/app-debug.unsigned.apk"' EXIT
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$KS"
+          APK=app/build/outputs/apk/debug/app-debug.apk
+          test -f "$APK"
+          cp "$APK" "$RUNNER_TEMP/app-debug.unsigned.apk"
+          "$ANDROID_HOME/build-tools/34.0.0/apksigner" sign \
+            --ks "$KS" \
+            --ks-key-alias "$KEY_ALIAS" \
+            --ks-pass env:KEYSTORE_PASSWORD \
+            --key-pass env:KEY_PASSWORD \
+            --out "$APK" \
+            "$RUNNER_TEMP/app-debug.unsigned.apk"
+          CERT=$("$ANDROID_HOME/build-tools/34.0.0/apksigner" verify --print-certs "$APK" | awk -F': ' '/Signer #1 certificate SHA-256 digest/ {print $2; exit}')
+          test "$CERT" = "$EXPECTED_CERT_SHA256"
+          echo "Re-signed with the installed Bridge certificate."
+
       - name: Verify APK signature
         run: |
           set -euo pipefail
