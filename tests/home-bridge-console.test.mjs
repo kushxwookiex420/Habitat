@@ -313,6 +313,96 @@ test("a healthy relay still wins for the phone check-in values", async () => {
   assert.equal(res.body.phone.online, true);
 });
 
+function securityRecorder() {
+  const events = [];
+  return {
+    events,
+    async record(entry) { events.push(entry); return { ok: true, event: entry }; }
+  };
+}
+
+test("console login failure, success and logout are audited without credentials", async () => {
+  const security = securityRecorder();
+  const app = makeApp();
+  registerHomeBridgeConsole(app, {
+    env: { HABITAT_AX_BRIDGE_TOKEN: OPERATOR },
+    fetchImpl: async () => { throw new Error("relay unreachable"); },
+    securityEvents: security
+  });
+  const bad = await invoke(app, "POST /bridge/console/login", { body: { token: "wrong-token-value" } });
+  assert.equal(bad.statusCode, 401);
+  const good = await invoke(app, "POST /bridge/console/login", { body: { token: OPERATOR } });
+  assert.equal(good.statusCode, 200);
+  const cookie = good.headers["set-cookie"].split(";")[0];
+  const out = await invoke(app, "POST /bridge/console/logout", { headers: { cookie } });
+  assert.equal(out.statusCode, 200);
+
+  assert.deepEqual(security.events.map((entry) => entry.category), ["auth.failure", "auth.success", "auth.success"]);
+  assert.equal(security.events[0].outcome, "denied");
+  assert.equal(security.events[0].severity, "medium");
+  assert.equal(security.events[1].outcome, "allowed");
+  const serialized = JSON.stringify(security.events);
+  assert.equal(serialized.includes(OPERATOR), false, "the operator token is never audited");
+  assert.equal(serialized.includes("wrong-token-value"), false, "the supplied value is never audited");
+});
+
+test("emergency lockdown invalidates every session and requires the operator credential", async () => {
+  const security = securityRecorder();
+  const app = makeApp();
+  registerHomeBridgeConsole(app, {
+    env: { HABITAT_AX_BRIDGE_TOKEN: OPERATOR },
+    fetchImpl: async () => { throw new Error("relay unreachable"); },
+    securityEvents: security
+  });
+  const first = await invoke(app, "POST /bridge/console/login", { body: { token: OPERATOR } });
+  const second = await invoke(app, "POST /bridge/console/login", { body: { token: OPERATOR } });
+  assert.equal(first.statusCode, 200);
+  assert.equal(second.statusCode, 200);
+  const cookieA = first.headers["set-cookie"].split(";")[0];
+  const cookieB = second.headers["set-cookie"].split(";")[0];
+
+  // A stolen session cookie must not be able to lock the real owner out.
+  const refused = await invoke(app, "POST /bridge/console/lockdown", { headers: { cookie: cookieA } });
+  assert.equal(refused.statusCode, 401);
+  const stillValid = await invoke(app, "GET /bridge/console/dashboard", { headers: { cookie: cookieA } });
+  assert.equal(stillValid.statusCode, 200, "a refused lockdown changes nothing");
+
+  const locked = await invoke(app, "POST /bridge/console/lockdown", operator);
+  assert.equal(locked.statusCode, 200);
+  assert.ok(locked.body.invalidatedSessions >= 2);
+  assert.equal(locked.body.note, "console sessions only; the operator credential is unchanged");
+
+  for (const cookie of [cookieA, cookieB]) {
+    const after = await invoke(app, "GET /bridge/console/dashboard", { headers: { cookie } });
+    assert.equal(after.statusCode, 401, "every pre-lockdown session is invalidated");
+  }
+  // The credential itself is unchanged: the owner can create a fresh session immediately.
+  const again = await invoke(app, "POST /bridge/console/login", { body: { token: OPERATOR } });
+  assert.equal(again.statusCode, 200);
+
+  assert.equal(security.events.some((entry) => entry.category === "owner.rejection" && entry.outcome === "denied"), true);
+  assert.equal(security.events.some((entry) => entry.category === "owner.authorization" && entry.outcome === "allowed"), true);
+});
+
+test("an unavailable audit log never blocks authentication", async () => {
+  for (const record of [
+    () => { throw new Error("audit store down"); },
+    () => Promise.reject(new Error("audit store rejected"))
+  ]) {
+    const app = makeApp();
+    registerHomeBridgeConsole(app, {
+      env: { HABITAT_AX_BRIDGE_TOKEN: OPERATOR },
+      fetchImpl: async () => { throw new Error("relay unreachable"); },
+      securityEvents: { record }
+    });
+    const login = await invoke(app, "POST /bridge/console/login", { body: { token: OPERATOR } });
+    assert.equal(login.statusCode, 200, "a broken audit log must not lock the owner out");
+    assert.match(login.headers["set-cookie"], /HttpOnly/);
+    const bad = await invoke(app, "POST /bridge/console/login", { body: { token: "nope" } });
+    assert.equal(bad.statusCode, 401, "the decision itself is unchanged");
+  }
+});
+
 test("phone actions are allowlisted and forwarded", async () => {
   const { app, calls } = setup();
   const bad = await invoke(app, "POST /bridge/console/send", { ...operator, body: { action: "shell", arg: "id" } });

@@ -569,6 +569,15 @@ export function registerDeviceCommandBridge(app, {
     if (!validDeviceId(deviceId)) return res.status(400).json({ ok: false, error: "A valid deviceId is required." });
     try {
       await store.revokeDevice(deviceId, new Date().toISOString());
+      // Revocation is ownership-sensitive: it must be in the audit chain, not only in a console line.
+      securityEvents?.record({
+        category: "device.revocation",
+        severity: "high",
+        outcome: "allowed",
+        actor: "ax",
+        deviceId,
+        summary: "Paired device revoked; its token can no longer authenticate"
+      })?.catch?.(() => {});
       return res.json({ ok: true, deviceId, revoked: true });
     } catch (error) {
       console.error("DEVICE_REVOKE_FAILED", String(error?.message || error));
@@ -584,6 +593,7 @@ export function registerDeviceCommandBridge(app, {
       env,
       fetchImpl,
       deviceRepository: store,
+      securityEvents,
       // AX Core credential reporting reads the device bridge's own token presence. The legacy Home
       // Bridge relay keeps its separate ax/buff role credentials and is labelled HOME RELAY.
       bridgeStatus: () => ({ ready, durable: Boolean(store?.durable), axTokenConfigured: Boolean(axToken), perDeviceTokens: true })
