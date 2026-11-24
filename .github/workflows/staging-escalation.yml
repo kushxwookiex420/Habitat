@@ -40,9 +40,14 @@ jobs:
       - name: Controlled failure escalation
         env:
           HABITAT_AX_COMMAND_TOKEN: ${{ secrets.HABITAT_AX_COMMAND_TOKEN }}
-          STAGING_BASE_URL: ${{ vars.HABITAT_BASE_URL }}
+          # Hard-coded staging origin: the repository variable rightly points at production, and this
+          # probe must never be able to inherit it.
+          STAGING_BASE_URL: https://habitat-staging-e3ie.onrender.com
           ESCALATION_TIMEOUT_SECONDS: ${{ inputs.timeout_seconds }}
-        run: node scripts/staging-escalation-check.mjs | tee staging-escalation.json
+        # pipefail: without it, tee's exit status would hide a blocked or failed probe behind a green run.
+        run: |
+          set -o pipefail
+          node scripts/staging-escalation-check.mjs | tee staging-escalation.json
 
       - name: Upload evidence
         if: always()
