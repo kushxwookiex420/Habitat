@@ -42,8 +42,12 @@ rather than silently ignored.
   events advance the cursor only after a 2xx.
 - Secret rotation: a refresh with a different `whsec_` stores the old secret as `previousSecret` for a
   5-minute grace window and signs with both (`webhook-signature` space-separated).
-- Signing secrets are stored because delivery must sign; no endpoint, log line, status object or audit
-  record returns them. They are not encrypted at rest — see limits.
+- Signing secrets are stored **encrypted with AES-256-GCM** (`ax-secret-box.mjs`). A random 96-bit IV,
+  key id and auth tag are stored with the ciphertext, and AAD binds it to the subscription id. The key
+  comes from `HABITAT_MCP_SECRET_KEY` or `HABITAT_MCP_SECRET_KEYS`; missing/weak/malformed/ambiguous
+  configuration disables MCP rather than storing plaintext. No endpoint, log line, status object or
+  audit record returns a secret. Rotation keeps retired keys decryptable; revoking a key makes affected
+  deliveries `dead` (`signing_secret_unreadable`), never unsigned.
 
 ## Callback verification
 
@@ -112,12 +116,16 @@ IDs.
 
 ## Limits / security findings
 
-- **No real ChatGPT workspace, plugin, callback or subscription has been exercised.** Acceptance below is
+- **No real ChatGPT workspace, plugin, callback or subscription has been exercised.** Acceptance is
   blocked on a public HTTPS origin, staging D1 and ChatGPT Work access.
-- DNS is validated before connect but Node `fetch` re-resolves at connection time; an egress firewall or a
-  pinned connector is still required against DNS rebinding.
-- Signing secrets are plaintext in D1 (necessary for signing); protect the database and prefer an
-  application-level encryption key before production.
+- Callback delivery no longer uses Node `fetch`: `ax-callback-fetch.mjs` resolves once, validates every
+  address, refuses private/loopback/link-local/reserved/metadata destinations, pins the socket to the
+  validated address while preserving TLS hostname, and rejects redirects. A defence-in-depth egress
+  firewall is still recommended.
+- Signing secrets are ciphertext at rest, but the encryption key is a separate secret: losing it makes
+  subscriptions undeliverable, and the D1 backup alone cannot recover them. Backup the key separately.
+- Multi-instance dispatch uses a persistent lease table (`0016`); a live lease blocks a second worker and
+  an expired lease is reclaimed after a crash. Event ids are stable across retries.
 - No OAuth dynamic client registration; plugin auth is a static Bearer token with `mcp:events`.
 - One delivery executor per process; multiple replicas can race on the same due row (idempotent delivery
   prevents duplicate application effects, but add a lease before scaling).

@@ -12,7 +12,8 @@ export const MCP_TABLES = Object.freeze([
   "habitat_ax_mcp_subscriptions",
   "habitat_ax_mcp_verifications",
   "habitat_ax_mcp_events",
-  "habitat_ax_mcp_deliveries"
+  "habitat_ax_mcp_deliveries",
+  "habitat_ax_mcp_delivery_leases"
 ]);
 
 export const MCP_MIGRATION = "0015_ax_mcp_events";
@@ -26,13 +27,21 @@ export const MCP_DDL = Object.freeze([
   "CREATE INDEX IF NOT EXISTS habitat_ax_mcp_events_name_seq ON habitat_ax_mcp_events(name, seq)",
   "CREATE TABLE IF NOT EXISTS habitat_ax_mcp_deliveries (id TEXT PRIMARY KEY NOT NULL, subscription_id TEXT NOT NULL, event_seq INTEGER NOT NULL, event_id TEXT NOT NULL, status TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, next_attempt_at TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, delivered_at TEXT, last_error TEXT)",
   "CREATE UNIQUE INDEX IF NOT EXISTS habitat_ax_mcp_deliveries_identity ON habitat_ax_mcp_deliveries(subscription_id, event_id)",
-  "CREATE INDEX IF NOT EXISTS habitat_ax_mcp_deliveries_due ON habitat_ax_mcp_deliveries(status, next_attempt_at)"
+  "CREATE INDEX IF NOT EXISTS habitat_ax_mcp_deliveries_due ON habitat_ax_mcp_deliveries(status, next_attempt_at)",
+  "CREATE TABLE IF NOT EXISTS habitat_ax_mcp_delivery_leases (delivery_id TEXT PRIMARY KEY NOT NULL, owner TEXT NOT NULL, expires_at TEXT NOT NULL)",
+  "CREATE INDEX IF NOT EXISTS habitat_ax_mcp_delivery_leases_expiry ON habitat_ax_mcp_delivery_leases(expires_at)"
 ]);
 
-function parseSubscription(row) {
+function parseSubscription(row, secretBox = null) {
   if (!row) return null;
   let args = {};
   try { args = JSON.parse(row.args_json || "{}"); } catch { args = {}; }
+  const decode = (value, binding = "secret") => {
+    if (!value) return null;
+    if (!secretBox) return value;
+    const result = secretBox.decrypt(value, { aad: "mcp:" + row.id + ":" + binding });
+    return result.ok ? result.plaintext : null;
+  };
   return {
     id: row.id,
     principal: row.principal,
@@ -40,8 +49,9 @@ function parseSubscription(row) {
     arguments: args,
     argsCanonical: row.args_canonical,
     url: row.url,
-    secret: row.secret,
-    previousSecret: row.previous_secret || null,
+    secret: decode(row.secret, "secret"),
+    secretUnreadable: Boolean(row.secret) && secretBox ? decode(row.secret, "secret") === null : false,
+    previousSecret: decode(row.previous_secret, "previous"),
     secretGraceUntil: row.secret_grace_until || null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -72,12 +82,15 @@ function parseDelivery(row) {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     deliveredAt: row.delivered_at || null,
-    lastError: row.last_error || null
+    lastError: row.last_error || null,
+    leaseOwner: row.lease_owner || null,
+    leaseExpiresAt: row.lease_expires_at || null
   };
 }
 
-export function createMcpRepository({ query, now = () => new Date().toISOString() } = {}) {
+export function createMcpRepository({ query, now = () => new Date().toISOString(), secretBox = null } = {}) {
   if (typeof query !== "function") throw new Error("The MCP repository needs a query function.");
+  if (secretBox && typeof secretBox.encrypt !== "function") throw new Error("secretBox must provide encrypt/decrypt.");
   let initializing = null;
 
   return Object.freeze({
@@ -95,18 +108,27 @@ export function createMcpRepository({ query, now = () => new Date().toISOString(
     },
 
     async verifySchema() {
-      const rows = await query("SELECT name FROM sqlite_master WHERE type = 'table' AND name IN (?, ?, ?, ?)", MCP_TABLES);
+      const rows = await query("SELECT name FROM sqlite_master WHERE type = 'table' AND name IN (?, ?, ?, ?, ?)", MCP_TABLES);
       const present = new Set((rows || []).map(row => row.name));
       return { ok: MCP_TABLES.every(name => present.has(name)), missing: MCP_TABLES.filter(name => !present.has(name)) };
     },
 
     async saveSubscription(subscription) {
       const at = now();
+      const encode = (value, binding) => {
+        if (!value) return null;
+        if (!secretBox) return value;
+        const encrypted = secretBox.encrypt(value, { aad: "mcp:" + subscription.id + ":" + binding });
+        if (!encrypted) throw new Error("secret_encryption_failed");
+        return encrypted;
+      };
+      const secret = encode(subscription.secret, "secret");
+      const previousSecret = encode(subscription.previousSecret, "previous");
       await query(
         "INSERT INTO habitat_ax_mcp_subscriptions (id, principal, name, args_json, args_canonical, url, secret, previous_secret, secret_grace_until, created_at, updated_at, refresh_before, revoked_at, last_cursor, verified_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?) ON CONFLICT(id) DO UPDATE SET secret = excluded.secret, previous_secret = excluded.previous_secret, secret_grace_until = excluded.secret_grace_until, updated_at = excluded.updated_at, refresh_before = excluded.refresh_before, revoked_at = NULL, last_cursor = excluded.last_cursor, verified_at = excluded.verified_at",
         [
           subscription.id, subscription.principal, subscription.name, JSON.stringify(subscription.arguments || {}),
-          subscription.argsCanonical, subscription.url, subscription.secret, subscription.previousSecret || null,
+          subscription.argsCanonical, subscription.url, secret, previousSecret,
           subscription.secretGraceUntil || null, subscription.createdAt || at, at, subscription.refreshBefore || null,
           subscription.lastCursor ?? null, subscription.verifiedAt || at
         ]
@@ -116,19 +138,19 @@ export function createMcpRepository({ query, now = () => new Date().toISOString(
 
     async getSubscription(id) {
       const rows = await query("SELECT * FROM habitat_ax_mcp_subscriptions WHERE id = ?", [String(id)]);
-      return parseSubscription(rows?.[0]);
+      return parseSubscription(rows?.[0], secretBox);
     },
 
     async findSubscription({ principal, name, argsCanonical, url }) {
       const rows = await query("SELECT * FROM habitat_ax_mcp_subscriptions WHERE principal = ? AND name = ? AND args_canonical = ? AND url = ?", [String(principal), String(name), String(argsCanonical), String(url)]);
-      return parseSubscription(rows?.[0]);
+      return parseSubscription(rows?.[0], secretBox);
     },
 
     async listSubscriptions({ activeOnly = false, limit = 100 } = {}) {
       const rows = activeOnly
         ? await query("SELECT * FROM habitat_ax_mcp_subscriptions WHERE revoked_at IS NULL ORDER BY created_at ASC LIMIT ?", [Math.max(1, Math.min(500, Number(limit) || 100))])
         : await query("SELECT * FROM habitat_ax_mcp_subscriptions ORDER BY created_at ASC LIMIT ?", [Math.max(1, Math.min(500, Number(limit) || 100))]);
-      return (rows || []).map(parseSubscription);
+      return (rows || []).map(row => parseSubscription(row, secretBox));
     },
 
     async revokeSubscription(id, { at = now() } = {}) {
@@ -194,22 +216,41 @@ export function createMcpRepository({ query, now = () => new Date().toISOString(
     },
 
     async dueDeliveries({ at = now(), limit = 20 } = {}) {
-      const rows = await query("SELECT * FROM habitat_ax_mcp_deliveries WHERE status = 'pending' AND next_attempt_at <= ? ORDER BY event_seq ASC LIMIT ?", [String(at), Math.max(1, Math.min(100, Number(limit) || 20))]);
+      const rows = await query("SELECT d.* FROM habitat_ax_mcp_deliveries d LEFT JOIN habitat_ax_mcp_delivery_leases l ON l.delivery_id = d.id WHERE d.status = 'pending' AND d.next_attempt_at <= ? AND (l.expires_at IS NULL OR l.expires_at <= ?) ORDER BY d.event_seq ASC LIMIT ?", [String(at), String(at), Math.max(1, Math.min(100, Number(limit) || 20))]);
       return (rows || []).map(parseDelivery);
+    },
+
+    /** At-most-one worker per delivery: the update only wins when no live lease exists. */
+    async claimDelivery(id, { owner, leaseMs = 60_000, at = now() } = {}) {
+      const expires = new Date(Date.parse(at) + Math.max(1000, Number(leaseMs) || 60_000)).toISOString();
+      try {
+        await query(
+          "INSERT INTO habitat_ax_mcp_delivery_leases (delivery_id, owner, expires_at) VALUES (?, ?, ?) ON CONFLICT(delivery_id) DO UPDATE SET owner = excluded.owner, expires_at = excluded.expires_at WHERE habitat_ax_mcp_delivery_leases.expires_at <= ?",
+          [String(id), String(owner || "worker"), expires, String(at)]
+        );
+      } catch {
+        // A conflicting live lease leaves the row untouched; the owner comparison below decides.
+      }
+      const rows = await query("SELECT owner, expires_at FROM habitat_ax_mcp_delivery_leases WHERE delivery_id = ? AND expires_at > ?", [String(id), String(at)]);
+      const claimed = rows?.[0]?.owner === String(owner || "worker");
+      return { ok: true, claimed, delivery: await this.getDelivery(id) };
     },
 
     async markDelivered(id, { at = now() } = {}) {
       await query("UPDATE habitat_ax_mcp_deliveries SET status = 'delivered', attempts = attempts + 1, delivered_at = ?, updated_at = ?, last_error = NULL WHERE id = ? AND status = 'pending'", [at, at, String(id)]);
+      await query("DELETE FROM habitat_ax_mcp_delivery_leases WHERE delivery_id = ?", [String(id)]);
       return this.getDelivery(id);
     },
 
     async markAttempt(id, { at = now(), nextAttemptAt, error = null } = {}) {
       await query("UPDATE habitat_ax_mcp_deliveries SET attempts = attempts + 1, next_attempt_at = ?, updated_at = ?, last_error = ? WHERE id = ? AND status = 'pending'", [nextAttemptAt || at, at, error ? String(error).slice(0, 300) : null, String(id)]);
+      await query("DELETE FROM habitat_ax_mcp_delivery_leases WHERE delivery_id = ?", [String(id)]);
       return this.getDelivery(id);
     },
 
     async markDead(id, { at = now(), error = null } = {}) {
       await query("UPDATE habitat_ax_mcp_deliveries SET status = 'dead', attempts = attempts + 1, updated_at = ?, last_error = ? WHERE id = ? AND status = 'pending'", [at, error ? String(error).slice(0, 300) : null, String(id)]);
+      await query("DELETE FROM habitat_ax_mcp_delivery_leases WHERE delivery_id = ?", [String(id)]);
       return this.getDelivery(id);
     },
 
@@ -233,6 +274,9 @@ export function createMcpRepository({ query, now = () => new Date().toISOString(
   });
 }
 
-export function createD1McpRepository({ accountId, databaseId, apiToken, fetchImpl } = {}) {
-  return createMcpRepository({ query: createD1Query({ accountId, databaseId, apiToken, fetchImpl }) });
+export function createD1McpRepository({ accountId, databaseId, apiToken, fetchImpl, secretBox = null } = {}) {
+  return createMcpRepository({
+    query: createD1Query({ accountId, databaseId, apiToken, fetchImpl }),
+    secretBox
+  });
 }

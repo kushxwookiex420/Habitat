@@ -324,6 +324,7 @@ export function buildSystemStatus({
         configured: mcpEvents?.configured === true,
         flag: mcpEvents?.flag || "HABITAT_MCP_EVENTS_ENABLED",
         scope: mcpEvents?.scope || "mcp:events",
+        secretEncryption: mcpEvents?.secretEncryption || { configured: false, activeKeyId: null },
         detail: mcpEvents?.enabled
           ? mcpEvents.configured
             ? "MCP Events endpoint is enabled; subscriptions and deliveries require a scoped integration token."

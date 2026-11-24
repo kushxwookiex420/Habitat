@@ -1,5 +1,6 @@
 import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { lookup } from "node:dns/promises";
+import { createPinnedCallbackFetch } from "./ax-callback-fetch.mjs";
 
 /**
  * OpenAI MCP Events adapter.
@@ -198,9 +199,11 @@ function eventMatches(event, args) {
 export function createMcpEventsServer({
   repository,
   now = () => Date.now(),
-  callbackFetch = fetch,
+  callbackFetch = null,
   resolveHost = lookup,
   allowInsecureCallbacks = false,
+  owner = "mcp-worker-" + randomBytes(6).toString("hex"),
+  leaseMs = 60_000,
   fetchImpl = fetch,
   maxAttempts = 5,
   retryBaseMs = 30_000,
@@ -210,6 +213,8 @@ export function createMcpEventsServer({
   if (!repository) throw new Error("The MCP events server needs a repository.");
 
   const iso = () => new Date(now()).toISOString();
+  // Default to a DNS-pinned, redirect-rejecting fetch. Tests may inject one explicitly.
+  const effectiveFetch = callbackFetch || createPinnedCallbackFetch({ allowInsecure: allowInsecureCallbacks, resolveHost });
   const eventId = () => "evt_" + now().toString(36) + "_" + randomBytes(6).toString("hex");
 
   async function verifyCallback({ id, url, secret, principal }) {
@@ -224,7 +229,7 @@ export function createMcpEventsServer({
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 10_000);
     try {
-      const response = await callbackFetch(url, { method: "POST", headers, body, signal: controller.signal, redirect: "error" });
+      const response = await effectiveFetch(url, { method: "POST", headers, body, signal: controller.signal, redirect: "error" });
       if (!response.ok) return { ok: false, reason: "challenge_failed", status: response.status };
       let payload = null;
       try { payload = await response.json(); } catch { payload = null; }
@@ -369,7 +374,7 @@ export function createMcpEventsServer({
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 10_000);
     try {
-      const response = await callbackFetch(subscription.url, { method: "POST", headers, body, signal: controller.signal, redirect: "error" });
+      const response = await effectiveFetch(subscription.url, { method: "POST", headers, body, signal: controller.signal, redirect: "error" });
       if (response.ok) {
         await repository.markDelivered(delivery.id, { at: iso() });
         // Record progress only after a 2xx; a refresh cursor will not skip anything still queued.
@@ -409,6 +414,11 @@ export function createMcpEventsServer({
     let skipped = 0;
     for (const delivery of due) {
       const subscription = await repository.getSubscription(delivery.subscriptionId);
+      if (subscription?.secretUnreadable) {
+        await repository.markDead(delivery.id, { at: iso(), error: "signing_secret_unreadable" });
+        dead += 1;
+        continue;
+      }
       if (!subscription || subscription.revokedAt || (subscription.refreshBefore && Date.parse(subscription.refreshBefore) <= now())) {
         await repository.markDead(delivery.id, { at: iso(), error: "subscription_inactive" });
         dead += 1;
@@ -425,7 +435,12 @@ export function createMcpEventsServer({
         skipped += 1;
         continue;
       }
-      const result = await deliverOne({ subscription, event, delivery });
+      // Claim before sending: another replica must not send the same delivery while this lease is live.
+      const claim = typeof repository.claimDelivery === "function"
+        ? await repository.claimDelivery(delivery.id, { owner, leaseMs, at: iso() })
+        : { claimed: true, delivery };
+      if (!claim.claimed) { skipped += 1; continue; }
+      const result = await deliverOne({ subscription, event, delivery: claim.delivery || delivery });
       if (result.ok) delivered += 1;
       else if (result.dead) dead += 1;
       else failed += 1;

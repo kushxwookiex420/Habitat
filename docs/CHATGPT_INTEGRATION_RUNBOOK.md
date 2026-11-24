@@ -65,6 +65,8 @@ Order and expected objects:
 | 0012 | gateway clients/nonces/audit | unique token index, nonce composite key |
 | 0013 | heartbeat state/events/deliveries | unique dedupe key, pending index |
 | 0014 | gateway rate limits | composite primary key |
+| 0015 | MCP subscriptions/events/deliveries | unique identity and delivery keys |
+| 0016 | MCP delivery leases | lease expiry index |
 
 Procedure for each migration:
 
@@ -187,8 +189,10 @@ Researched 2026-11-24:
 - ChatGPT wake still is not proven: a real plugin, subscription and callback must be exercised. Ordinary
   inactive conversations cannot be woken; supported surfaces are Work chats (web/desktop Cloud) and dots.
 
-MCP setup: apply 0015, set `HABITAT_MCP_EVENTS_ENABLED=true`, mint a token with `mcp:events`, register
-`https://<origin>/mcp` as the plugin's MCP server with Bearer auth, rescan, then subscribe in a Work chat.
+MCP setup: apply 0015 and 0016, set `HABITAT_MCP_EVENTS_ENABLED=true` and `HABITAT_MCP_SECRET_KEY`
+(or a keyring), mint a token with `mcp:events`, register `https://<origin>/mcp` as the plugin's MCP
+server with Bearer auth, rescan, then subscribe in a Work chat. Full deployment details, key rotation,
+backup and costs are in `docs/STAGING_DEPLOYMENT_PACKAGE.md`.
 
 ## 9. Shared rate limiting (Priority 9)
 

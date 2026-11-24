@@ -57,9 +57,9 @@ export const WORKFORCE_INDEXES = Object.freeze([
   "habitat_ax_workers_specialty"
 ]);
 
-export const MCP_TABLES = Object.freeze(["habitat_ax_mcp_deliveries", "habitat_ax_mcp_events", "habitat_ax_mcp_verifications", "habitat_ax_mcp_subscriptions"]);
+export const MCP_TABLES = Object.freeze(["habitat_ax_mcp_delivery_leases", "habitat_ax_mcp_deliveries", "habitat_ax_mcp_events", "habitat_ax_mcp_verifications", "habitat_ax_mcp_subscriptions"]);
 
-export const MCP_INDEXES = Object.freeze(["habitat_ax_mcp_deliveries_due", "habitat_ax_mcp_deliveries_identity", "habitat_ax_mcp_events_name_seq", "habitat_ax_mcp_events_event_id", "habitat_ax_mcp_subscriptions_identity"]);
+export const MCP_INDEXES = Object.freeze(["habitat_ax_mcp_delivery_leases_expiry", "habitat_ax_mcp_deliveries_due", "habitat_ax_mcp_deliveries_identity", "habitat_ax_mcp_events_name_seq", "habitat_ax_mcp_events_event_id", "habitat_ax_mcp_subscriptions_identity"]);
 
 export function mcpRollbackStatements() {
   return [
