@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { criterionStatements } from "./ax-mission-plan.mjs";
-import { approvalBinding, approvalSigningFields, classifyAction, executionGate } from "./ax-mission-policy.mjs";
+import { approvalBinding, approvalSigningFields, classifyAction, executionGate, paramsFingerprint } from "./ax-mission-policy.mjs";
 
 /**
  * Mission Execution Engine.
@@ -227,6 +227,7 @@ export function createMissionEngine({
       ? item
       : {
           ...item,
+          id: "apr:" + id + ":mission",
           missionId: id,
           taskId: null,
           scope: "mission",
@@ -587,6 +588,16 @@ export function createMissionEngine({
     if (mission.status !== "approval_required" && !(mission.status === "running" && hasPending)) {
       return { ok: false, code: "approval_not_required", status: mission.status };
     }
+    // Shared replay protection. Missions persist the nonce each approval was signed with, so a second
+    // instance refuses reuse. If the shared store cannot answer, the decision fails closed.
+    if (attestation && typeof attestation.nonce === "string") {
+      if (typeof store.nonceUsed !== "function") return { ok: false, code: "owner_attestation_replay_unavailable" };
+      try {
+        if (await store.nonceUsed(attestation.nonce)) return { ok: false, code: "owner_attestation_replayed" };
+      } catch {
+        return { ok: false, code: "owner_attestation_replay_unavailable" };
+      }
+    }
 
     // A decision names exactly one authorization. It never sweeps up unrelated task approvals: one signature
     // must not authorise work the owner did not see.
@@ -680,6 +691,51 @@ export function createMissionEngine({
     return { ok: true, revoked: selected.map((item) => item.id), mission };
   }
 
+  /**
+   * The owner-facing signing view. Returns exactly the statement the engine will verify, plus the context
+   * Habitat needs to display a decision: task, action class, target, parameter fingerprint, expiry and status.
+   * It never reads or returns key material.
+   */
+  async function authorizations({ missionId } = {}) {
+    const loaded = await store.get(missionId);
+    if (!loaded) return { ok: false, code: "mission_not_found" };
+    const mission = loaded.record;
+    const entries = (mission.approvals || []).map((approval) => {
+      const task = approval.taskId ? (mission.tasks || []).find((item) => item.id === approval.taskId) || null : null;
+      const decision = approval.decision === "rejected" ? "reject" : "approve";
+      const fields = approvalSigningFields({ mission, approval, decision, owner: approval.decidedBy || "owner" });
+      const policy = task ? classifyAction(task) : { class: "mission" };
+      return {
+        missionId: mission.id,
+        approvalId: approval.id || null,
+        taskId: approval.taskId || null,
+        taskTitle: task?.title || null,
+        description: task?.title || "Mission-level authorization: " + clean(mission.objective, 200),
+        actionClass: policy.class,
+        action: task ? clean(task.action || task.title, 200) : clean(approval.action, 200),
+        target: task ? (task.target ?? null) : null,
+        parameters: task ? paramsFingerprint(task.params ?? null) : null,
+        expiresAt: approval.expiresAt || null,
+        status: approval.status || "pending",
+        decidedBy: approval.decidedBy || null,
+        decidedAt: approval.decidedAt || null,
+        reason: approval.reason || null,
+        signature: approval.signed ? { keyId: approval.signed.keyId, issuedAt: approval.signed.issuedAt, nonce: approval.signed.nonce } : null,
+        statement: approval.signed?.statement || fields.statement,
+        // The signed statement includes the decision, so the view offers both; nothing else differs.
+        rejectStatement: approval.signed?.statement || approvalSigningFields({ mission, approval, decision: "reject", owner: approval.decidedBy || "owner" }).statement
+      };
+    });
+    return {
+      ok: true,
+      missionId: mission.id,
+      missionStatus: mission.status,
+      pending: entries.filter((entry) => entry.status === "pending"),
+      history: entries,
+      generatedAt: now()
+    };
+  }
+
   async function summary() {
     const counts = typeof store.counts === "function" ? await store.counts() : { total: 0, byStatus: {} };
     return { ok: true, ...counts };
@@ -691,6 +747,7 @@ export function createMissionEngine({
     recover,
     approve,
     revoke,
+    authorizations,
     list: options => store.list(options),
     get: id => store.get(id),
     status: summary,

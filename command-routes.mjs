@@ -520,6 +520,32 @@ export function registerUniversalCommandRoutes(app, {
     res.json({ ok: true, decision, mission: outcome.mission });
   }));
 
+  route.get("/ax/missions/:missionId/authorizations", requireAx, serviceGuard(async (req, res) => {
+    const missions = resolveService(missionProvider);
+    if (!missions || typeof missions.authorizations !== "function") return missionUnavailable(res);
+    const view = await missions.authorizations({ missionId: String(req.params?.missionId || "") });
+    if (!view.ok) return res.status(404).json({ ok: false, code: view.code });
+    return res.json(view);
+  }));
+
+  route.post("/ax/missions/:missionId/revoke", requireAx, serviceGuard(async (req, res) => {
+    const missions = resolveService(missionProvider);
+    if (!missions || typeof missions.revoke !== "function") return missionUnavailable(res);
+    const missionId = String(req.params?.missionId || "");
+    const taskId = req.body?.taskId ? String(req.body.taskId) : null;
+    const approvalId = req.body?.approvalId ? String(req.body.approvalId) : null;
+    if (!taskId && !approvalId) return res.status(400).json({ ok: false, code: "approval_target_required" });
+    const existing = await missions.get(missionId);
+    if (!existing) return res.status(404).json({ ok: false, code: "mission_not_found" });
+    const outcome = await missions.revoke({
+      missionId, taskId, approvalId,
+      reason: req.body?.reason ? String(req.body.reason).slice(0, 200) : null,
+      by: "owner"
+    });
+    if (!outcome.ok) return res.status(409).json({ ok: false, code: outcome.code });
+    return res.json({ ok: true, revoked: outcome.revoked, mission: missionView(outcome.mission) });
+  }));
+
   route.post("/ax/missions/:missionId/run", requireAx, serviceGuard(async (req, res) => {
     const missions = resolveService(missionProvider);
     if (!missions || typeof missions.run !== "function") return missionUnavailable(res);

@@ -127,6 +127,7 @@ export async function createMissionService({
     run: (missionId, options) => pipeline.run(missionId, options),
     approve: (spec) => missions.approve(spec),
     revoke: (spec) => missions.revoke(spec),
+    authorizations: (spec) => missions.authorizations(spec),
     get: async (missionId) => {
       const loaded = await store.get(missionId);
       if (!loaded) return null;

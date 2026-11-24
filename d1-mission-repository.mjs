@@ -105,6 +105,24 @@ export function createMissionRepository({ query, now = () => new Date().toISOStr
       return { ok: false, code: current ? "mission_conflict" : "mission_missing", current };
     },
 
+    /**
+     * Shared replay protection: every stored approval carries the nonce it was signed with, so any instance
+     * can answer "has this attestation already been used?" from the database rather than local memory.
+     */
+    async nonceUsed(nonce) {
+      const needle = '%"nonce":"' + String(nonce).replace(/[\\%_]/g, "") + '"%';
+      const rows = await query("SELECT record_json FROM habitat_ax_missions WHERE record_json LIKE ? LIMIT 5", [needle]);
+      for (const row of rows || []) {
+        try {
+          const record = JSON.parse(row.record_json);
+          if ((record.approvals || []).some((item) => item?.signed?.nonce === nonce)) return true;
+        } catch {
+          // A malformed historical row cannot prove nonce reuse either way; ignore it here.
+        }
+      }
+      return false;
+    },
+
     async list({ status = null, limit = 50 } = {}) {
       const bound = Math.max(1, Math.min(100, Number(limit) || 50));
       const rows = status

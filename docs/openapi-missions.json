@@ -310,6 +310,98 @@
           }
         }
       }
+    },
+    "/ax/missions/{missionId}/authorizations": {
+      "get": {
+        "operationId": "listMissionAuthorizations",
+        "summary": "List authorizations with the exact signed statement",
+        "description": "Returns pending authorizations and history with the canonical statement, action class, target, parameter fingerprint and expiry. Never returns key material.",
+        "x-openai-isConsequential": false,
+        "parameters": [
+          {
+            "name": "missionId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Pending authorizations and history"
+          },
+          "401": {
+            "description": "Missing or invalid Ax credential"
+          },
+          "404": {
+            "description": "No mission with that id"
+          },
+          "503": {
+            "description": "The mission pipeline is not mounted"
+          }
+        }
+      }
+    },
+    "/ax/missions/{missionId}/revoke": {
+      "post": {
+        "operationId": "revokeMissionAuthorization",
+        "summary": "Revoke a granted authorization",
+        "description": "Withdraws one task or approval authorization before it is used. The record is kept for audit; the execution gate refuses it with approval_revoked.",
+        "x-openai-isConsequential": true,
+        "parameters": [
+          {
+            "name": "missionId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "taskId": {
+                    "type": "string"
+                  },
+                  "approvalId": {
+                    "type": "string"
+                  },
+                  "reason": {
+                    "type": "string",
+                    "maxLength": 200
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Authorization revoked"
+          },
+          "400": {
+            "description": "No approval target given"
+          },
+          "401": {
+            "description": "Missing or invalid Ax credential"
+          },
+          "404": {
+            "description": "No mission or matching approval"
+          },
+          "409": {
+            "description": "Revocation refused"
+          },
+          "503": {
+            "description": "The mission pipeline is not mounted"
+          }
+        }
+      }
     }
   }
 }

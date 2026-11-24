@@ -22,8 +22,10 @@ test("the mission OpenAPI document documents exactly the mission routes that are
     .sort();
   assert.deepEqual(mounted, [
     "get /ax/missions/{missionId}",
+    "get /ax/missions/{missionId}/authorizations",
     "post /ax/missions",
     "post /ax/missions/{missionId}/approve",
+    "post /ax/missions/{missionId}/revoke",
     "post /ax/missions/{missionId}/run"
   ], "the documented surface is the mounted surface");
 
