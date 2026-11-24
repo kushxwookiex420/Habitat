@@ -6,6 +6,7 @@ import { registerUniversalCommandRoutes } from "./command-routes.mjs";
 import { createD1Query, registerNexusRuntime } from "./nexus-runtime.mjs";
 import { buildReadOnlyNexusAdapters, READ_ONLY_ADAPTER_NAMES, READ_ONLY_ADAPTER_PREFIXES } from "./nexus-adapter-registration.mjs";
 import { createAxOrchestrator, resolveAxOrchestratorConfig } from "./ax-orchestrator.mjs";
+import { createImprovementMonitor } from "./ax-improvement.mjs";
 import {
   createAxPlannerFromProviderConfig,
   createProviderCircuitBreaker,
@@ -90,6 +91,10 @@ export function registerDeviceCommandBridge(app, {
   env = process.env,
   fetchImpl = fetch,
   repository = null,
+  // Optional: a function returning the same signals `improvementPass` accepts. When present, the
+  // improvement engine runs inside the existing scheduler tick. When absent, the scheduler behaves
+  // exactly as before and no improvement is claimed.
+  improvementSignals = null,
   // Optional injection points for tests and embedded use. In a deployment every one of these is
   // derived from the same env object, so /ax/command and the Nexus worker can only ever address
   // one database: the D1 id named by HABITAT_D1_DATABASE_ID.
@@ -216,6 +221,10 @@ export function registerDeviceCommandBridge(app, {
       notifications,
       // One bounded autonomy pass per tick, under the same lease as recovery.
       autonomy: () => runAutonomy(),
+      // Continuous improvement rides the same tick and the same lease, and can only read what the
+      // caller can observe. Nothing here notifies directly: the scheduler's existing bounded
+      // notification step carries it, so there is still one alerting path.
+      improvement: improvementSignals ? createImprovementMonitor({ readSignals: improvementSignals }).check : null,
       // Approval-expiry monitoring rides this same tick and lease. It never decides an approval and
       // never starts work: it sweeps due expiries in the approval ledger and reports them.
       approvalExpiry: ({ withinMs } = {}) => (

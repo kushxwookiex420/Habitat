@@ -26,6 +26,9 @@ function clean(value, max) {
   return String(value ?? "").replace(/\s+/g, " ").trim().slice(0, max);
 }
 
+/** Improvement severities mapped into this scheduler's vocabulary (it has no "info" level). */
+const IMPROVEMENT_SEVERITY = Object.freeze({ critical: "critical", high: "high", medium: "warning", low: "warning" });
+
 export function createSchedulerService({
   ticks,
   recovery = null,
@@ -39,6 +42,10 @@ export function createSchedulerService({
   // tick, not a second scheduler: the same lease decides who runs.
   approvalExpiry = null,
   approvalExpirySoonMs = SCHEDULER_LIMITS.approvalExpirySoonMs,
+  // Continuous improvement: a callback, not a second scheduler. It is supplied by the caller because
+  // only the process that assembles the status report can say what is actually true, and this
+  // scheduler must not invent an operational signal.
+  improvement = null,
   now = () => new Date().toISOString(),
   nowMs = () => Date.now(),
   leaseMs = SCHEDULER_LIMITS.leaseMs,
@@ -100,6 +107,43 @@ export function createSchedulerService({
    * transitions; this function only reports, and a failure here is reported rather than failing the
    * whole tick, because the rest of the maintenance pass is still useful.
    */
+  /** Improvement findings from the caller's verified signals, bounded and severity-mapped. */
+  async function improvementFindings() {
+    if (typeof improvement !== "function") return { findings: [], report: null };
+    try {
+      const result = await improvement();
+      const items = Array.isArray(result?.findings) ? result.findings : (Array.isArray(result) ? result : []);
+      return {
+        findings: items.slice(0, SCHEDULER_LIMITS.maxFindings).map(item => ({
+          kind: clean(item?.kind, 60) || "improvement.finding",
+          severity: IMPROVEMENT_SEVERITY[item?.severity] || "warning",
+          subject: clean(item?.subject, 120) || "improvement",
+          title: clean(item?.title, 160) || "Improvement finding",
+          detail: item?.detail ? clean(item.detail, 300) : null,
+          recommendation: clean(item?.recommendation, 200) || "Read the finding evidence before acting on it.",
+          safeAction: null,
+          source: "improvement"
+        })),
+        report: result?.report || result?.counts || null
+      };
+    } catch (error) {
+      log.error?.("AX_SCHEDULER_IMPROVEMENT_FAILED", clean(error?.message, 160));
+      return {
+        findings: [{
+          kind: "improvement.failed",
+          severity: "warning",
+          subject: "improvement",
+          title: "The improvement pass did not complete",
+          detail: clean(error?.message, 200),
+          recommendation: "The rest of the tick is unaffected; no improvement was recorded.",
+          safeAction: null,
+          source: "improvement"
+        }],
+        report: { ok: false }
+      };
+    }
+  }
+
   async function approvalExpiryFindings() {
     if (typeof approvalExpiry !== "function") return { findings: [], report: null };
     let report;
@@ -295,6 +339,8 @@ export function createSchedulerService({
       findings.push(...await expiredApprovals());
       const approvalMonitor = await approvalExpiryFindings();
       findings.push(...approvalMonitor.findings);
+      const improvementMonitor = await improvementFindings();
+      findings.push(...improvementMonitor.findings);
       const high = findings.filter(item => ["high", "critical"].includes(item.severity));
       const deadLetters = findings.filter(item => !item.safeAction);
       let notification = null;
@@ -328,6 +374,7 @@ export function createSchedulerService({
         } : null,
         reconciledReservations: reconciled,
         approvals: approvalMonitor.report,
+        improvement: improvementMonitor.report,
         autonomy: autonomyResult,
         notification,
         startedAt: new Date(startedAtMs).toISOString(),

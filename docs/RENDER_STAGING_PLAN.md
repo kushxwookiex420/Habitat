@@ -12,6 +12,19 @@ sitting; nothing here is deployed.
 - `origin/main` is `4d1f2e5` and **does not contain** `0d5eb6e`, so the production service tracks a
   branch other than `main`. That value must be read from the dashboard before staging is created.
 
+## Owner approvals required, one at a time
+
+1. **Paid plan** — creating `habitat-staging` on the `starter` plan commits to a recurring charge. Not
+   created, not started. If a free instance is preferred, scheduler and heartbeat testing must be
+   accepted as unreliable (it sleeps when idle).
+2. **Service creation** — the service itself does not exist. Nothing was created on any account.
+3. **Secrets entry** — the dashboard names in the table below must be filled by the owner; no value is
+   requested in chat and none is written to a file.
+4. **Production branch confirmation** — production tracks a branch that is not `main`; that value is
+   read-only information the owner must supply from the dashboard before staging is created.
+5. **Promotion** — deploying this branch to production remains a separate, explicit decision after the
+   acceptance run passes.
+
 ## Access still required (exact)
 
 Either of these, and nothing more:

@@ -24,6 +24,37 @@ catalog can be ranked, a product image can be turned into a video, text can be o
 result can be inspected without publishing anything. The remaining work is credentialing and
 distribution, not construction.
 
+## First local render, measured (2026-11-24)
+
+Run against a local server on 127.0.0.1, from `data/droppilot-active-product-video-manifest.json`,
+with no publishing:
+
+| Field | Value |
+| --- | --- |
+| File | `droppilot-car-seat-gap-organizer.mp4` |
+| Bytes | 858,276 |
+| Duration | 12.000 s |
+| Picture | 1080×1920 H.264, 360 frames |
+| SHA-256 | `54bd7ac39895d9711b4bf1a707afba47eb11c9bca4b06929beadc0316ca1bc12` |
+| Visual QA | `VISUAL_PASS` (file, container, streamSync, audioTrack, safeArea, blackFrames, freeze, sceneProgression) |
+| Published | **no** — `publishStatus: not_published`, and no publish path was called |
+
+Two defects were found and fixed to get there, both of which would have blocked production:
+
+1. `ffmpeg-static`'s binary had never been downloaded and `ffprobe-static` was absent, so the renderer
+   answered 503 while `/product-image-video/status` still reported some checks as fine.
+2. The available ffmpeg build has **no `drawtext`** (no libfreetype). The readiness check trusted
+   `ffmpeg -version`, so it reported ready and then failed at render time with a 502. It now probes the
+   filter list and falls back to libass subtitles (`subtitles=`), reporting `textOverlayMethod`.
+   A third fix: `visual-qa.mjs` failed a deliberately silent video with `stream_duration_mismatch`
+   (12s video vs 0s audio) although `requireAudio: false`; a missing audio track is now handled by the
+   audio-track check, not the sync check.
+
+Remaining blocker on the real catalog item: its title `Universal Car Seat Gap Organizer with Storage
+Pocket` is rejected by safe-area QA (`text_overflow_risk`, estimated 1597 px against 924 px max). The
+fix is typography (narrower wrap or smaller title), not a QA concession. Until then, the catalog item
+renders only with a shortened product name.
+
 ## Next concrete step (no spend, no publishing)
 
 Run the renderer against a single catalog entry in a scratch directory, produce one video file, and

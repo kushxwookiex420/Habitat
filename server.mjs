@@ -28,7 +28,11 @@ const app = express();
 
 app.use(express.json({ limit: "1mb" }));
 
-const deviceCommandBridge = registerDeviceCommandBridge(app);
+const deviceCommandBridge = registerDeviceCommandBridge(app, {
+  // The improvement engine reads the real status report this process assembles, so its findings are
+  // about observed state rather than a guess. It runs inside the existing scheduler tick.
+  improvementSignals: async () => ({ systemStatus: await collectSystemStatus() })
+});
 const chatCommandAuthorizer = createChatCommandAuthorizer({ env: process.env, deviceBridge: deviceCommandBridge });
 
 registerPublicPages(app);

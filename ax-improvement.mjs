@@ -28,6 +28,9 @@ export const FINDING_KINDS = Object.freeze([
 const DEFAULT_STALE_TASK_MS = 30 * 60_000;
 const MAX_EVIDENCE = 6;
 
+/** How an engine severity is reported by the scheduler, which has its own vocabulary. */
+export const SCHEDULER_SEVERITY = Object.freeze({ critical: "critical", high: "high", medium: "warning", low: "warning" });
+
 function text(value, limit = 200) {
   return String(value === undefined || value === null ? "" : value).replace(/\s+/g, " ").trim().slice(0, limit);
 }
@@ -248,4 +251,56 @@ export function rankImprovements({ findings = [], maxItems = 10 } = {}) {
 export function improvementPass(input = {}) {
   const collected = collectFindings(input);
   return { ...collected, ...rankImprovements({ findings: collected.findings, maxItems: input.maxItems }) };
+}
+
+/**
+ * A monitor the scheduler can call once per tick.
+ *
+ * `readSignals` must return the same input `improvementPass` accepts (`systemStatus`, `approvals`,
+ * `tasks`, `checks`). A monitor with no signal source is refused rather than returning an empty list
+ * that would look like a clean system.
+ *
+ * Only findings that have not already been reported are returned, so a persistent condition does not
+ * page on every tick. The memory is process-local and bounded: after a restart a still-present
+ * condition is reported once more, which is stated here instead of being hidden behind "durable".
+ */
+export function createImprovementMonitor({ readSignals, now = () => Date.now(), staleTaskMs, maxNew = 5, remember = 500 } = {}) {
+  if (typeof readSignals !== "function") {
+    throw new Error("The improvement monitor needs a signal source; it will not invent one.");
+  }
+  const reported = new Set();
+  return Object.freeze({
+    async check() {
+      const signals = await readSignals();
+      const pass = improvementPass({
+        ...(signals || {}),
+        now: now(),
+        ...(staleTaskMs ? { staleTaskMs } : {}),
+        maxItems: maxNew
+      });
+      const fresh = [];
+      let suppressed = 0;
+      for (const finding of pass.findings) {
+        if (reported.has(finding.id)) { suppressed += 1; continue; }
+        reported.add(finding.id);
+        fresh.push({ ...finding, schedulerSeverity: SCHEDULER_SEVERITY[finding.severity] || "warning" });
+      }
+      while (reported.size > remember) reported.delete(reported.values().next().value);
+      return {
+        findings: fresh,
+        report: {
+          ok: true,
+          reported: fresh.length,
+          suppressed,
+          active: pass.counts,
+          processLocalMemory: true
+        },
+        ranked: pass.next
+      };
+    },
+    /** Test and operator hook: forget what was reported, so the next check reports everything again. */
+    reset() {
+      reported.clear();
+    }
+  });
 }

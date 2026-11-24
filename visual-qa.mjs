@@ -99,7 +99,10 @@ export async function runVisualQA({ artifactPath, renderPlan = {}, expectedScene
     const videoDuration = Number(video.duration || 0);
     const audioDuration = Number(audio?.duration || 0);
     const streamDelta = Math.abs(videoDuration - audioDuration);
-    const streamSyncPass = videoDuration > 0 && audioDuration > 0 && streamDelta <= 0.12;
+    // A video with no audio stream has nothing to align. The audioTrack check below is the one that
+    // decides whether a missing track is acceptable; treating 0s versus Ns as a mismatch blocked
+    // every deliberately silent render with a defect the artifact did not have.
+    const streamSyncPass = videoDuration > 0 && (audio === null ? !requireAudio : audioDuration > 0 && streamDelta <= 0.12);
     checks.streamSync = {
       status: streamSyncPass ? "PASS" : "FAIL",
       videoDurationSeconds: videoDuration,

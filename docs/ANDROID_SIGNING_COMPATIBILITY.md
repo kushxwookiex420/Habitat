@@ -52,9 +52,40 @@ secrets are untouched, and no certificate is regenerated for an existing install
 - **Never** install an APK whose digest was not compared first, and never present a CI-successful
   build as a working install.
 
+## Measured, 2026-11-24 (no device required)
+
+The APK Signing Block was parsed directly (`scripts/apk-cert-fingerprint.mjs`, no JDK), giving each
+build's certificate SHA-256:
+
+| Build | Certificate SHA-256 | Meaning |
+| --- | --- | --- |
+| `45295570521` (pre-change) | `fc31bcc259f77a7c116cecd2eb72e75f66ac68309946a311dc141c93d2c79917` | one throwaway key |
+| `45296639342` (first with the cache) | `dc0c9c853f7d1192201f91e5c7278a82137b1732af78ec0487ee2dcac268fd3d` | a different throwaway key |
+| `45298386950` (second with the cache) | `ac30fae8718bbb31e38e2ee5f0771f53eef76876dbb63f5ab458a956219dcc91` | **also different** |
+
+So the `actions/cache` step did **not** give the builds one identity. Three builds, three
+certificates: the cache is not being restored (or is saved under a scope the next run misses), and the
+job still falls through to generating a keystore. The earlier claim that consecutive builds now share
+an identity was wrong and is corrected here.
+
+What this means for installing:
+
+- Consecutive CI builds still cannot replace each other, and none of them can replace an installed
+  build from a different signer.
+- Comparing `ac30fae8…` (or any build's own fingerprint) with the certificate of the installed
+  **0.8.7** app is the only way to know whether `adb install -r` can work. That comparison needs the
+  phone: `adb shell dumpsys package com.habitat.axbridge | grep -A3 signatures`.
+- The repository declares `versionName` **0.8.6**, while the installed app reports **0.8.7**, so the
+  installed build did not come from this tree's current state. Do not assume any APK here matches it.
+
+Next correct step, and it is an owner decision: either a debug keystore committed to the repo (a
+debug key with the public `android` password, referenced only by the `debug` build type), or a
+release keystore in the four `HABITAT_KEYSTORE_*` secrets. The cache approach should be removed rather
+than relied on.
+
 ## Status
 
-- CI signing is now stable between builds: implemented, not yet verified on a real run.
+- CI signing is stable between builds: **false, measured** — see the table above.
 - The APK's certificate against the phone's installed certificate: **not verified** — no device and
   no JDK here.
 - Release signing: **not configured** — the four secrets do not exist.
