@@ -9,6 +9,7 @@ on:
     branches: [staging/integration]
     paths:
       - ".github/workflows/staging-acceptance.yml"
+      - "scripts/staging-acceptance.mjs"
 
 permissions:
   contents: read
@@ -41,7 +42,9 @@ jobs:
           HABITAT_D1_API_TOKEN: ${{ secrets.HABITAT_D1_API_TOKEN }}
           STAGING_D1_DATABASE_ID: ${{ vars.HABITAT_STAGING_D1_DATABASE_ID }}
           PRODUCTION_D1_DATABASE_ID: ${{ vars.HABITAT_D1_DATABASE_ID }}
-        run: node scripts/staging-acceptance.mjs | tee staging-acceptance-evidence.json
+        run: |
+          set -o pipefail
+          node scripts/staging-acceptance.mjs | tee staging-acceptance-evidence.json
 
       - name: Upload evidence
         if: always()
