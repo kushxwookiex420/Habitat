@@ -20,21 +20,39 @@ connection has been exercised.** `HABITAT_GATEWAY_ENABLED` is unset, so every ro
 | GET | `/ax/v1/audit` | `status:read` | recent gateway requests |
 | GET | `/ax/v1/heartbeat` | `status:read` | reconnect trigger + current context + queued events |
 | POST | `/ax/v1/heartbeat/ack` | `events:write` | acknowledge delivered events (idempotent) |
-| GET | `/ax/v1/workforce` | `workforce:read` | workforce status: health, assignments, expirations, retries, stalled missions, durations |
+| GET | `/ax/v1/workforce` | `workforce:read` | workforce status: health, assignments, expirations, retries, stalled missions, durations, identity readiness, uncertain operations, reassignments |
 | GET | `/ax/v1/workforce/workers` | `workforce:read` | worker identities with derived health (`capability`, `state`, `healthy`) |
 | GET | `/ax/v1/workforce/workers/:id` | `workforce:read` | worker detail: assignments, leases, executions |
 | GET | `/ax/v1/workforce/assignments` | `workforce:read` | active leases and their expiry |
 | GET | `/ax/v1/workforce/health` | `workforce:read` | health summary and heartbeat ages |
 | GET | `/ax/v1/workforce/recovery` | `workforce:read` | recovery history (`missionId`, `kind`, `limit`) |
 | GET | `/ax/v1/workforce/missions/:id` | `workforce:read` | mission-to-worker relationships and attempts |
-| POST | `/ax/v1/workforce/workers` | `workforce:write` | register or update a worker identity |
-| POST | `/ax/v1/workforce/workers/:id/heartbeat` | `workforce:write` | record a heartbeat |
-| POST | `/ax/v1/workforce/workers/:id/deregister` | `workforce:write` | deregister (409 while leases are live unless `force`) |
+| POST | `/ax/v1/workforce/workers` | `workforce:admin` + owner attestation | register or update a worker identity |
+| POST | `/ax/v1/workforce/workers/:id/deregister` | `workforce:admin` + owner attestation | deregister (409 while leases are live unless `force`); revokes every credential |
+| GET | `/ax/v1/workforce/workers/:id/credentials` | `workforce:read` | credential metadata; never the verification key |
+| POST | `/ax/v1/workforce/credentials` | `workforce:admin` + owner attestation | issue a credential; the secret is shown once |
+| POST | `/ax/v1/workforce/credentials/:id/rotate` | `workforce:admin` + owner attestation | rotate the key, keep the worker id, old key valid only during `graceMs` |
+| POST | `/ax/v1/workforce/credentials/:id/revoke` | `workforce:admin` + owner attestation | revoke immediately (idempotent) |
+| POST | `/ax/v1/workforce/workers/:id/heartbeat` | worker credential | signed heartbeat; the path id must equal the authenticated worker |
+| POST | `/ax/v1/workforce/leases/acquire` | worker credential | acquire a lease; identity comes from the signature, not the body |
+| POST | `/ax/v1/workforce/leases/:leaseId/renew` | worker credential | renew; only the owning credential may renew |
+| POST | `/ax/v1/workforce/leases/:leaseId/release` | worker credential | release; only the owning credential may release |
+| GET | `/ax/v1/workforce/uncertain` | `workforce:read` | attempts with an unknown external outcome, with provider references |
+| GET | `/ax/v1/workforce/uncertain/:key` | `workforce:read` | read-only inspection of one uncertain attempt |
+| POST | `/ax/v1/workforce/uncertain/:key/reconcile` | `workforce:admin` + owner attestation | verdict `confirmed_success` / `confirmed_failure` / `not_executed` / `unknown` |
+| GET | `/ax/v1/workforce/recovery/queue` | `workforce:read` | expired and abandoned leases with the decision each needs |
+| GET | `/ax/v1/workforce/reassignments` | `workforce:read` | reassignment and recovery decisions (`missionId`, `limit`) |
+| GET | `/ax/v1/workforce/missions` | `workforce:read` | failed and stalled missions |
 | GET | `/ax/v1/openapi.json` | none | OpenAPI 3.1 document for ChatGPT Actions |
 
 The workforce routes require migration 0018; without it they answer
-`503 workforce_leases_not_attached` rather than returning an empty but healthy-looking workforce. The
-dashboard contract is in `docs/AUTONOMOUS_WORKFORCE_V1.md`.
+`503 workforce_leases_not_attached` rather than returning an empty but healthy-looking workforce. Signed
+worker routes additionally need 0019 and answer `503 workforce_identity_schema_missing` without it.
+
+Worker routes do **not** accept a gateway client token. A worker sends its credential in
+`x-ax-worker-credential` (or `Authorization: Worker …`) plus `x-ax-signature`, `x-ax-nonce` and
+`x-ax-timestamp`, all over the canonical statement documented in `docs/AUTONOMOUS_WORKFORCE_V1.md` §10.
+The dashboard contract is in `docs/AUTONOMOUS_WORKFORCE_V1.md`.
 
 Every response carries `requestId` and, where relevant, `delivery: {received, executed, verified}` so a
 caller cannot mistake acceptance for completion.

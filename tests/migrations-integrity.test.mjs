@@ -24,7 +24,7 @@ test("migration order is numeric, unique and includes every readiness migration"
   const prefixes = names.map(name => Number(name.slice(0, 4)));
   assert.deepEqual(prefixes, [...new Set(prefixes)], "duplicate migration prefixes");
   assert.deepEqual(prefixes, [...prefixes].sort((a, b) => a - b), "migrations are not in order");
-  for (const prefix of ["0010", "0011", "0012", "0013", "0014", "0015", "0016", "0017", "0018"]) {
+  for (const prefix of ["0010", "0011", "0012", "0013", "0014", "0015", "0016", "0017", "0018", "0019"]) {
     assert.ok(names.some(name => name.startsWith(prefix + "_")), "missing migration " + prefix);
   }
 });
@@ -41,9 +41,21 @@ test("a fresh database installs every migration with the expected tables and lea
     "habitat_ax_mcp_verifications", "habitat_ax_mcp_events", "habitat_ax_mcp_deliveries",
     "habitat_ax_mcp_delivery_leases", "habitat_ax_approval_nonces",
     "habitat_ax_workforce_workers", "habitat_ax_workforce_leases",
-    "habitat_ax_workforce_executions", "habitat_ax_workforce_recovery"
+    "habitat_ax_workforce_executions", "habitat_ax_workforce_recovery",
+    "habitat_ax_workforce_credentials", "habitat_ax_workforce_auth_nonces",
+    "habitat_ax_workforce_operations", "habitat_ax_workforce_reassignments"
   ]) {
     assert.ok(present.includes(table), "missing table " + table);
+  }
+  // A nonce is single-use per credential: the composite primary key is the replay boundary, not an index
+  // that a future migration could drop unnoticed.
+  const nonceKey = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'habitat_ax_workforce_auth_nonces'").get();
+  assert.match(String(nonceKey.sql), /PRIMARY KEY \(credential_id, nonce\)/i);
+  const operationStates = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'habitat_ax_workforce_operations'").get();
+  assert.match(String(operationStates.sql), /not_executed/);
+  const credentialColumns = db.prepare("PRAGMA table_info(habitat_ax_workforce_credentials)").all().map((row) => row.name);
+  for (const column of ["secret_key", "status", "grace_until", "rotated_to", "revoked_at"]) {
+    assert.ok(credentialColumns.includes(column), "credential table is missing " + column);
   }
   // One live lease per task is the structural guarantee behind "two workers cannot own one task".
   const leaseIndexes = db.prepare("SELECT name, sql FROM sqlite_master WHERE type = 'index' AND tbl_name = 'habitat_ax_workforce_leases'").all();

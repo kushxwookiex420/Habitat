@@ -205,12 +205,14 @@ Executor spies count releases, so "the task failed" and "the operation ran twice
    `executionBegin` before its first external effect — an executor that does its work before claiming the
    attempt would lose that protection.
 5. **Uncertainty is terminal by design.** There is no automatic reconciliation with the provider and no
-   "retry after checking" flow yet: an uncertain task needs a human or a new mission.
+   "retry after checking" flow yet: an uncertain task needs a human or a new mission. *(Superseded by §10:
+   an owner-attested reconciliation path exists; the decision is still manual and never automatic.)*
 6. **Ledger retention is unbounded.** Executions, leases and recovery rows are never deleted. A long-lived
    deployment will need an archival policy that keeps at least every `succeeded`/`uncertain` key.
 7. **Worker identity is not authenticated at the transport.** The engine trusts the caller that presents a
    worker id; route-level enforcement relies on the gateway client scope. A worker-facing credential per
-   identity is not implemented.
+   identity is not implemented. *(Resolved for the HTTP boundary by §10; in-process callers are still
+   trusted, which is the owner's own code.)*
 8. **The mission engine and the lease layer are not a distributed transaction either.** A lease can be
    acquired for a task whose mission record then fails to persist; the lease is released by the next
    reconcile, and the task is requeued only if no attempt started.
@@ -219,3 +221,117 @@ Executor spies count releases, so "the task failed" and "the operation ran twice
    but no D1 instance has executed this migration.
 10. **Load.** Capacity, lease and execution checks are separate reads; under heavy concurrency the
     database, not the process, is the bottleneck. No rate limit is applied to lease acquisition.
+
+## 10. Workforce security and recovery v2 (0019)
+
+v1 trusted whoever presented a worker id, and an `uncertain` attempt had no way back. v2 fixes both without
+changing the v1 lease or mission semantics.
+
+### 10.1 Signed worker requests
+
+A worker identity is durable; the right to act as it is a separate credential.
+
+```
+AX-WORKER-REQUEST-V1
+<workerId>
+<credentialId>
+<heartbeat|lease.acquire|lease.renew|lease.release>
+<nonce>
+<timestamp>
+<sha256 of canonical JSON body>
+```
+
+`x-ax-signature: v1,<base64url HMAC-SHA256>` with the credential secret. The server:
+
+1. parses `axw_<credentialId>_<secret>` and loads the credential (**constant-time compare** of the MAC);
+2. refuses `revoked` immediately, and `rotated` once `grace_until` has passed;
+3. requires `|now − timestamp| ≤ 5 min` and a 16–128 char nonce, checked **after** the MAC so a forgery
+   cannot burn a nonce;
+4. records the nonce under the credential's primary key — a replay loses at the database, not in a race;
+5. derives the worker id from the credential. The path id is compared to it for heartbeats
+   (`403 worker_identity_mismatch`), and lease operations are ownership-checked by the engine
+   (`403 lease_not_owned`).
+
+Signing the body hash is what stops a valid signature from being re-aimed at a different body; signing the
+operation is what stops a renewal signature from being replayed as a release.
+
+### 10.2 Credentials and owner authority
+
+| Operation | Route | Authority |
+| --- | --- | --- |
+| register | `POST /ax/v1/workforce/workers` | `workforce:admin` + owner attestation |
+| deregister | `POST /ax/v1/workforce/workers/:id/deregister` | `workforce:admin` + owner attestation; revokes all keys |
+| issue | `POST /ax/v1/workforce/credentials` | `workforce:admin` + owner attestation |
+| rotate | `POST /ax/v1/workforce/credentials/:id/rotate` | `workforce:admin` + owner attestation |
+| revoke | `POST /ax/v1/workforce/credentials/:id/revoke` | `workforce:admin` + owner attestation |
+
+The attestation reuses `HABITAT_OWNER_ATTESTATION_KEY` (no second trust root). Its `statement` field carries
+`workforce:<operation>:<workerId|credentialId>[:detail]`, where a registration's detail is
+`sha256(capabilities) + ":" + maxConcurrent`. The gateway re-derives the statement from the body and the
+engine compares it again, so a signature for one worker or capability set cannot be reused for another.
+
+Rotation returns a new secret once, marks the old credential `rotated` with `rotated_to` and a grace window,
+and leaves the worker id, leases and history untouched. Deregistration revokes every key the worker holds.
+
+### 10.3 Provider references and reconciliation
+
+Every attempt can record `provider` and `provider_reference`. The mission engine records them when the
+executor returns or throws them, so an uncertain attempt is never anonymous.
+
+`GET /ax/v1/workforce/uncertain[/:key]` is strictly read-only: it returns the execution, the lease, the
+provider reference and whether a retry is permitted. It never calls a provider.
+
+| verdict | execution | retry allowed | decision recorded |
+| --- | --- | --- | --- |
+| `unknown` | stays `uncertain` | no | `hold_uncertain` |
+| `confirmed_success` | `uncertain → succeeded` | no (`execution_already_succeeded`) | `completed` |
+| `confirmed_failure` | stays `uncertain` | no (`outcome_uncertain`) | `hold_uncertain` |
+| `not_executed` **with proof** | `uncertain → failed` | yes, next attempt may begin | `requeue` |
+
+Proof (`proof.evidence`, plus an optional provider reference) is mandatory for every verdict except
+`unknown`; without it the route answers `422 reconciliation_proof_required` and nothing changes. A settled
+verdict is never downgraded back to `unknown` by a later observation, though an owner may refine it with new
+proof.
+
+### 10.4 Recovery decisions
+
+- an expiry that interrupts an `inflight` attempt marks it `uncertain` and records `hold_uncertain`;
+- an expiry before any attempt records `requeue`;
+- forced deregistration records `requeue` or `hold_uncertain` for each abandoned lease;
+- every decision is appended to `habitat_ax_workforce_reassignments` (from/to worker, lease, reason,
+decision, detail) and to the recovery journal as `recovery.decision`.
+
+The sweep still uses one atomic `UPDATE`, so two concurrent `recover()` calls expire a lease exactly once
+and write exactly one decision.
+
+### 10.5 Health: slow versus dead
+
+`active_execution` is new: the heartbeat is older than `stalledAfterMs`, but an active lease was renewed
+inside `activeExecutionWindowMs`. It is reported with `stale: false`, excluded from `stalled`, and refused
+new work with `409 worker_executing`. A crashed process cannot renew, so it still becomes `stalled`. Set
+`activeExecutionWindowMs` to at least twice the renewal interval.
+
+### 10.6 Observability added
+
+`GET /ax/v1/workforce` gains `identity {ready, missing, credentials, workersWithCredentials, unresolved}`,
+`uncertainOperations {count, items, detail}`, `reassignments {recorded, decisions, recent}`,
+`workers.executing[]`, `lastHeartbeatAt` / `lastLeaseActivityAt` per worker, and `identityMigration`.
+
+Read routes: `/uncertain`, `/uncertain/:key`, `/recovery/queue`, `/reassignments`, `/missions` (failed and
+stalled). Gateway audit entries for worker routes carry `workerId` and `credentialId`.
+
+### 10.7 v2 residual risks
+
+1. **Symmetric secrets at rest.** `secret_key` must be readable to verify an HMAC. Anyone with database read
+   access can impersonate a worker. Rotate on suspicion; treat D1 access as identity access.
+2. **Proof is operator-supplied.** The engine cannot verify a provider's evidence; it records it. A wrong
+   `not_executed` verdict is a human error that the ledger cannot detect.
+3. **No automatic provider polling.** Reconciling an uncertain attempt is a manual, owner-attested action.
+4. **Nonce retention is unbounded.** Rows are single-use and expire by timestamp but nothing deletes them;
+   add pruning before long-lived deployment.
+5. **In-process trust.** `trusted: true` / `requireOwnerAuthorization: false` bypass owner attestation for
+   callers inside the process (runtime bootstrap, tests). The HTTP boundary never uses them.
+6. **Clock skew.** The 5-minute window tolerates skew but a badly skewed worker clock rejects every request;
+   there is no per-worker offset negotiation.
+7. **Single-instance rate limiting for workers is keyed by credential in memory** (the shared counter still
+   keys by client id), so a multi-instance deployment can exceed the per-credential budget.

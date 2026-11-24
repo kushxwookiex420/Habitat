@@ -69,7 +69,11 @@ export async function runMigrationChecks() {
       "habitat_ax_workforce_workers",
       "habitat_ax_workforce_leases",
       "habitat_ax_workforce_executions",
-      "habitat_ax_workforce_recovery"
+      "habitat_ax_workforce_recovery",
+      "habitat_ax_workforce_credentials",
+      "habitat_ax_workforce_auth_nonces",
+      "habitat_ax_workforce_operations",
+      "habitat_ax_workforce_reassignments"
     ]) {
       check("fresh table " + name, freshTables.includes(name));
     }
@@ -93,6 +97,12 @@ export async function runMigrationChecks() {
       "habitat_ax_workforce_workers_state",
       "habitat_ax_workforce_recovery_mission",
       "habitat_ax_workforce_recovery_kind",
+      "habitat_ax_workforce_credentials_worker",
+      "habitat_ax_workforce_credentials_expiry",
+      "habitat_ax_workforce_auth_nonces_expiry",
+      "habitat_ax_workforce_operations_state",
+      "habitat_ax_workforce_operations_reference",
+      "habitat_ax_workforce_reassignments_mission",
       "habitat_ax_capabilities_kind",
       "habitat_ax_capabilities_state",
       "habitat_ax_access_requests_status",

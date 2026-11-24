@@ -53,3 +53,30 @@ authoritative over `record_json` — otherwise a swept lease would still read as
 running without lease enforcement rather than silently claiming it.
 
 Contract and dashboard mapping: `docs/AUTONOMOUS_WORKFORCE_V1.md`.
+
+## Worker identity and reconciliation (0019)
+
+Workforce v2 adds four more tables. 0018 is unchanged: these sit beside it and are checked separately, so
+a database with 0018 but not 0019 still runs leases and answered signed worker traffic with
+`503 workforce_identity_schema_missing` instead of falling back to unauthenticated heartbeats.
+
+| Table | Key | Meaning |
+| --- | --- | --- |
+| `habitat_ax_workforce_credentials` | `credential_id` | one signing key per worker: `status` (`active`/`rotated`/`revoked`), `expires_at`, `grace_until`, `rotated_to`, `revoked_at`, `last_used_at` |
+| `habitat_ax_workforce_auth_nonces` | `(credential_id, nonce)` | single-use request nonces; the composite primary key is the replay boundary |
+| `habitat_ax_workforce_operations` | `idempotency_key` | provider name and reference per attempt, plus the reconciliation verdict and its proof |
+| `habitat_ax_workforce_reassignments` | `seq` | append-only ledger of every reassignment and recovery decision |
+
+`habitat_ax_workforce_operations.state` is a CHECK over `unknown`, `confirmed_success`,
+`confirmed_failure`, `not_executed`. A settled verdict is never downgraded back to `unknown` by a later
+observation; an owner may still refine it with new proof.
+
+`habitat_ax_workforce_credentials.secret_key` holds the HMAC **verification** key. That is unavoidable for
+symmetric request signing: the server must recompute the MAC. It is never returned by any route after
+issuance and must be protected at rest like `HABITAT_OWNER_ATTESTATION_KEY`.
+
+Indexes: credentials `(worker_id, status)`, `(status, expires_at)`; nonces `(expires_at)`; operations
+`(state, updated_at)`, `(provider, provider_reference)`; reassignments `(mission_id, seq)`.
+
+`GET /ax/v1/workforce` reports `identity: { ready, missing[], credentials, workersWithCredentials,
+unresolved[] }` so an environment without 0019 is visibly running without authenticated workers.

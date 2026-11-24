@@ -83,6 +83,33 @@ export function workforceV1RollbackStatements() {
   ];
 }
 
+/**
+ * 0019 is additive over 0018, so its rollback runs first. Dropping it revokes every worker credential and
+ * loses the nonce, operation and reassignment ledgers; the export requirement is the same as for 0018.
+ */
+export const WORKFORCE_IDENTITY_TABLES = Object.freeze([
+  "habitat_ax_workforce_reassignments",
+  "habitat_ax_workforce_operations",
+  "habitat_ax_workforce_auth_nonces",
+  "habitat_ax_workforce_credentials"
+]);
+
+export const WORKFORCE_IDENTITY_INDEXES = Object.freeze([
+  "habitat_ax_workforce_reassignments_mission",
+  "habitat_ax_workforce_operations_reference",
+  "habitat_ax_workforce_operations_state",
+  "habitat_ax_workforce_auth_nonces_expiry",
+  "habitat_ax_workforce_credentials_expiry",
+  "habitat_ax_workforce_credentials_worker"
+]);
+
+export function workforceIdentityRollbackStatements() {
+  return [
+    ...WORKFORCE_IDENTITY_INDEXES.map(name => "DROP INDEX IF EXISTS " + name),
+    ...WORKFORCE_IDENTITY_TABLES.map(name => "DROP TABLE IF EXISTS " + name)
+  ];
+}
+
 export const APPROVAL_NONCE_TABLES = Object.freeze(["habitat_ax_approval_nonces"]);
 
 export const APPROVAL_NONCE_INDEXES = Object.freeze([
@@ -211,6 +238,9 @@ export async function runRollbackChecks() {
     check("0015 creates every MCP events table", MCP_TABLES.every(name => tables(db).includes(name)));
     check("0017 creates the approval nonce registry", APPROVAL_NONCE_TABLES.every(name => tables(db).includes(name)));
     check("0018 creates every workforce v1 table", WORKFORCE_V1_TABLES.every(name => tables(db).includes(name)));
+    check("0019 creates every workforce identity table", WORKFORCE_IDENTITY_TABLES.every(name => tables(db).includes(name)));
+    // 0018 stands alone: a database that stops there still has a working lease layer.
+    check("0018 tables do not depend on 0019 tables", tables(db).includes("habitat_ax_workforce_leases") && tables(db).includes("habitat_ax_workforce_credentials"));
 
     db.prepare("INSERT INTO habitat_ax_capabilities (id, kind, state, requires_approval, record_json, updated_at) VALUES (?, ?, ?, ?, ?, ?)")
       .run("cap_1", "fulfillment", "policy_only", 1, JSON.stringify({ id: "cap_1" }), stamp);
@@ -220,6 +250,11 @@ export async function runRollbackChecks() {
       .run("rev_1", "settled", "USD", 4500, stamp, JSON.stringify({ id: "rev_1" }), stamp);
 
     // Rollback: later groups first, then P1.
+    for (const statement of workforceIdentityRollbackStatements()) db.exec(statement);
+    check("0019 rollback removes every workforce identity table and index",
+      WORKFORCE_IDENTITY_TABLES.every(name => !tables(db).includes(name)) &&
+      WORKFORCE_IDENTITY_INDEXES.every(name => objects(db).every(item => item !== "index:" + name)));
+    check("0019 rollback leaves the 0018 lease layer intact", WORKFORCE_V1_TABLES.every(name => tables(db).includes(name)));
     for (const statement of workforceV1RollbackStatements()) db.exec(statement);
     check("0018 rollback removes every workforce v1 table and index",
       WORKFORCE_V1_TABLES.every(name => !tables(db).includes(name)) &&

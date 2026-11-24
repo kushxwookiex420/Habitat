@@ -117,3 +117,36 @@ dashboard API are in `docs/AUTONOMOUS_WORKFORCE_V1.md`; the schema is in `docs/D
 
 Still blocked on the same environmental work: 0018 has not been applied to any D1 database, so lease
 enforcement is attached but not exercised on a deployed origin. `/ax/v1/workforce*` answers 503 until it is.
+
+## Workforce security and recovery v2 (0019, prepared not applied)
+
+v2 closes the two gaps v1 documented as risks: worker identity at the transport, and uncertainty with no
+reconciliation path.
+
+- **Authenticated workers.** Each worker holds an `axw_<credentialId>_<secret>` credential and signs every
+  heartbeat and lease request over `workerId | credentialId | operation | nonce | timestamp | bodyHash`.
+  The worker id used by the handler is derived from the credential, never from the URL or body, so one
+  worker cannot renew or release another worker's lease by naming it.
+- **Owner authority.** Registration, deregistration, credential issue/rotate/revoke and reconciliation need
+  `workforce:admin` **and** an owner attestation whose statement is re-derived from the request, so a
+  signature for one worker or capability set cannot be reused for another.
+- **Replay and revocation.** Nonces are single-use per credential at the primary-key level; revocation is
+  immediate; rotation keeps the durable worker id and leaves the previous key valid only for `graceMs`.
+- **Reconciliation.** Every attempt can carry a provider name and reference. `confirmed_success` settles the
+  attempt as done, `confirmed_failure` and `unknown` keep it held, and only `not_executed` **with recorded
+  proof** converts it into a retryable failure. At-most-once is preserved whenever proof is absent.
+- **Recovery decisions.** An expiry that interrupts an attempt marks it `uncertain` and records
+  `hold_uncertain`; an expiry before any attempt records `requeue`. Every decision is written to
+  `habitat_ax_workforce_reassignments` and the recovery journal.
+- **Slow versus dead.** A worker whose heartbeat is stale but whose lease was renewed inside
+  `activeExecutionWindowMs` reports `active_execution`, is not listed as stalled, and is refused new work
+  with `worker_executing`. A crashed process cannot renew, so it still becomes `stalled`.
+
+Adversarial coverage lives in `tests/workforce-identity-security.test.mjs` (12 tests) and
+`tests/workforce-identity-routes.test.mjs` (4 tests): forged signatures, body and operation swap, replayed
+nonces, stolen credentials, cross-worker renew/release, revocation, rotation, owner-authority mismatch,
+uncertain verdicts, crash during execution, concurrent sweeps, and 503 without 0019.
+
+Not applied: 0019 has been prepared and validated against `node:sqlite` only. Applying it to staging needs
+explicit owner authorization and a working staging `CLOUDFLARE_API_TOKEN` (the CI preflight currently fails
+`token_verifies` before any write).

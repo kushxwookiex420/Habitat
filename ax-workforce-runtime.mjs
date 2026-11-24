@@ -246,6 +246,9 @@ export function createWorkforceRuntime({
                 }));
             workforceV1 = createWorkforceV1({
               repository: leaseStore,
+              // Registration from this process is the owner's own bootstrap; anything arriving over HTTP
+              // still needs the owner attestation enforced in the gateway.
+              requireOwnerAuthorization: true,
               // The engine measures lease age in milliseconds; this runtime's clock is ISO for the store.
               now: () => { const parsed = Date.parse(now()); return Number.isFinite(parsed) ? parsed : Date.now(); },
               log
@@ -358,7 +361,8 @@ export function createWorkforceRuntime({
           adapterId: agent.adapterId,
           capabilities: agent.capabilities,
           maxConcurrent: agent.availability?.maxConcurrent || 1,
-          accepting: agent.availability?.accepting !== false
+          accepting: agent.availability?.accepting !== false,
+          trusted: true
         });
         if (!registered.ok) log.warn?.("WORKFORCE_V1_REGISTRATION_FAILED", JSON.stringify({ workerId: agent.id, code: registered.code }));
       } catch (error) {

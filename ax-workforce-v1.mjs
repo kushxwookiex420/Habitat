@@ -1,5 +1,14 @@
 import { randomBytes } from "node:crypto";
-import { LEASE_STATES, WORKER_STATES, WORKFORCE_V1_MIGRATION } from "./d1-workforce-v1-repository.mjs";
+import { LEASE_STATES, WORKER_STATES, WORKFORCE_V1_MIGRATION, WORKFORCE_IDENTITY_MIGRATION, OPERATION_STATES } from "./d1-workforce-v1-repository.mjs";
+import {
+  WORKER_REQUEST_WINDOW_MS,
+  WORKER_OPERATIONS,
+  capabilitiesFingerprint,
+  createWorkerSecret,
+  parseWorkerCredential,
+  verifyWorkerRequest,
+  workforceOwnerStatement
+} from "./ax-worker-auth.mjs";
 
 /**
  * Autonomous workforce v1.
@@ -70,6 +79,15 @@ export function createWorkforceV1({
   heartbeatIntervalMs = WORKFORCE_V1_LIMITS.heartbeatIntervalMs,
   stalledAfterMs = WORKFORCE_V1_LIMITS.stalledAfterMs,
   missionStallAfterMs = WORKFORCE_V1_LIMITS.missionStallAfterMs,
+  // A worker whose heartbeat is stale but whose lease was renewed inside this window is executing, not
+  // dead. Reviving it automatically would be wrong too: a slow executor still must not take new work.
+  activeExecutionWindowMs = WORKFORCE_V1_LIMITS.stalledAfterMs,
+  credentialGraceMs = 24 * 60 * 60_000,
+  requestWindowMs = WORKER_REQUEST_WINDOW_MS,
+  // The HTTP gateway always requires an owner attestation and passes it through. A process that
+  // constructs this engine directly is the owner's own code, so registration is allowed without one
+  // unless the caller opts into strict mode.
+  requireOwnerAuthorization = false,
   defaultMaxConcurrent = WORKFORCE_V1_LIMITS.maxConcurrent,
   log = console
 } = {}) {
@@ -90,12 +108,25 @@ export function createWorkforceV1({
     return entry;
   }
 
-  function deriveHealth(worker, at = now()) {
+  function deriveHealth(worker, at = now(), lastActivityAt = null) {
     if (worker.state === "deregistered") return { status: "deregistered", heartbeatAgeMs: null, stale: false };
     if (!worker.heartbeatAt) return { status: "never_heartbeat", heartbeatAgeMs: null, stale: true, detail: "The worker has registered but never sent a heartbeat." };
     const heartbeatAgeMs = age(worker.heartbeatAt, at);
     if (heartbeatAgeMs > stalledAfterMs) {
-      return { status: "stalled", heartbeatAgeMs, stale: true, detail: "No heartbeat for " + Math.round(heartbeatAgeMs / 1000) + "s; leases may expire." };
+      // Lease renewal is independent evidence of life: an executor that has been running for longer than the
+      // heartbeat interval keeps renewing, while a dead worker cannot. Reporting both as "stalled" would
+      // make an operator kill healthy long work; reporting both as healthy would hide a crashed process.
+      const activityAgeMs = lastActivityAt ? age(lastActivityAt, at) : null;
+      if (activityAgeMs !== null && activityAgeMs <= activeExecutionWindowMs) {
+        return {
+          status: "active_execution",
+          heartbeatAgeMs,
+          activityAgeMs,
+          stale: false,
+          detail: "Heartbeat is stale but the lease was renewed " + Math.round(activityAgeMs / 1000) + "s ago; an executor is active."
+        };
+      }
+      return { status: "stalled", heartbeatAgeMs, activityAgeMs, stale: true, detail: "No heartbeat for " + Math.round(heartbeatAgeMs / 1000) + "s; leases may expire." };
     }
     if (worker.state === "unavailable") return { status: "unavailable", heartbeatAgeMs, stale: false, detail: worker.detail || null };
     if (worker.state === "draining") return { status: "draining", heartbeatAgeMs, stale: false };
@@ -120,6 +151,25 @@ export function createWorkforceV1({
 
   /* ── worker identity ─────────────────────────────────────────────────────────────────────────── */
 
+  /**
+   * Owner authority for a workforce mutation. The in-process runtime bootstraps workers with `trusted`;
+   * every external registration, revocation or reconciliation must present an owner attestation, and the
+   * statement is re-derived here so a signature cannot be moved to a different worker or capability set.
+   */
+  function authorize(authorization, trusted, expectedStatement) {
+    if (trusted === true) return { ok: true, by: "runtime", statement: null };
+    if (!authorization) {
+      return requireOwnerAuthorization
+        ? { ok: false, code: "owner_authorization_required" }
+        : { ok: true, by: "in_process", statement: null };
+    }
+    if (authorization.ok !== true) return { ok: false, code: "owner_authorization_required" };
+    if (expectedStatement && authorization.statement && String(authorization.statement) !== expectedStatement) {
+      return { ok: false, code: "owner_authorization_mismatch", expected: expectedStatement };
+    }
+    return { ok: true, by: text(authorization.by, 64) || "owner", statement: authorization.statement || null };
+  }
+
   async function registerWorker({
     id: rawId,
     label = null,
@@ -129,7 +179,9 @@ export function createWorkforceV1({
     maxConcurrent = defaultMaxConcurrent,
     accepting = true,
     state = "online",
-    metadata = null
+    metadata = null,
+    authorization = null,
+    trusted = false
   } = {}) {
     const workerId = id(rawId);
     if (!workerId) return { ok: false, code: "worker_id_invalid" };
@@ -140,6 +192,12 @@ export function createWorkforceV1({
     if (!WORKER_STATES.includes(state) || state === "deregistered") return { ok: false, code: "worker_state_invalid" };
     const concurrency = Number(maxConcurrent);
     if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 32) return { ok: false, code: "max_concurrent_invalid" };
+    const authority = authorize(
+      authorization,
+      trusted,
+      workforceOwnerStatement({ operation: "worker.register", workerId, detail: capabilitiesFingerprint(caps) + ":" + concurrency })
+    );
+    if (!authority.ok) return authority;
 
     const at = iso(now());
     const existing = await repository.getWorker(workerId);
@@ -163,8 +221,11 @@ export function createWorkforceV1({
     } catch (error) {
       return { ok: false, code: "workforce_storage_unavailable", error: text(error?.message, 160) };
     }
-    await record(existing ? "worker.updated" : "worker.registered", { workerId, detail: { capabilities: caps, maxConcurrent: concurrency, revision: worker.revision } });
-    return { ok: true, worker, created: !existing };
+    await record(existing ? "worker.updated" : "worker.registered", {
+      workerId,
+      detail: { capabilities: caps, maxConcurrent: concurrency, revision: worker.revision, authorizedBy: authority.by }
+    });
+    return { ok: true, worker, created: !existing, authorizedBy: authority.by };
   }
 
   /**
@@ -172,9 +233,11 @@ export function createWorkforceV1({
    * it would strand the task with an owner that can never release it. With `force` its leases are marked
    * abandoned, so the task becomes eligible for a fresh acquisition instead of waiting for expiry.
    */
-  async function deregisterWorker({ id: rawId, reason = null, force = false } = {}) {
+  async function deregisterWorker({ id: rawId, reason = null, force = false, authorization = null, trusted = false } = {}) {
     const workerId = id(rawId);
     if (!workerId) return { ok: false, code: "worker_id_invalid" };
+    const authority = authorize(authorization, trusted, workforceOwnerStatement({ operation: "worker.revoke", workerId }));
+    if (!authority.ok) return authority;
     const worker = await repository.getWorker(workerId);
     if (!worker) return { ok: false, code: "worker_unknown" };
     const active = await repository.listLeases({ workerId, state: "active", limit: 200 });
@@ -194,8 +257,15 @@ export function createWorkforceV1({
     }
     const next = { ...worker, state: "deregistered", accepting: false, deregisteredAt: at, revision: Number(worker.revision) + 1 };
     await repository.saveWorker(next);
-    await record("worker.deregistered", { workerId, detail: { reason: text(reason, 200) || null, abandoned: abandoned.length } });
-    return { ok: true, worker: next, abandoned };
+    // Deregistration is a revocation: every credential for this identity stops working immediately. Leaving
+    // them active would let a retired worker keep acting as itself.
+    const revoked = await revokeWorkerCredentials({ workerId, reason: text(reason, 200) || "worker_deregistered", trusted: true });
+    for (const lease of active) await noteRecoveryDecision(lease, "worker_deregistered", at);
+    await record("worker.deregistered", {
+      workerId,
+      detail: { reason: text(reason, 200) || null, abandoned: abandoned.length, credentialsRevoked: revoked.revoked || 0, authorizedBy: authority.by }
+    });
+    return { ok: true, worker: next, abandoned, credentialsRevoked: revoked.revoked || 0 };
   }
 
   async function heartbeat({ id: rawId, state = null, detail = null } = {}) {
@@ -214,10 +284,15 @@ export function createWorkforceV1({
 
   async function workers({ capability = null, state = null, healthyOnly = false } = {}) {
     const at = now();
-    return (await repository.listWorkers()).map((worker) => ({ ...worker, health: deriveHealth(worker, at), activeLeases: 0 }))
+    const counts = await repository.workerCounts();
+    return (await repository.listWorkers()).map((worker) => ({
+      ...worker,
+      health: deriveHealth(worker, at, counts.lastActivityByWorker?.[worker.id] || null),
+      activeLeases: Number(counts.activeByWorker?.[worker.id] || 0)
+    }))
       .filter((worker) => (capability ? worker.capabilities.includes(capability) : true))
       .filter((worker) => (state ? worker.state === state : true))
-      .filter((worker) => (healthyOnly ? ["healthy", "busy", "degraded"].includes(worker.health.status) : true));
+      .filter((worker) => (healthyOnly ? ["healthy", "busy", "degraded", "active_execution"].includes(worker.health.status) : true));
   }
 
   async function workerDetail(rawId) {
@@ -230,9 +305,18 @@ export function createWorkforceV1({
       repository.listExecutions({ limit: 50 })
     ]);
     const active = leases.filter((lease) => lease.state === "active");
+    const counts = await repository.workerCounts();
+    const credentials = typeof repository.listCredentials === "function"
+      ? await repository.listCredentials({ workerId, limit: 50 })
+      : [];
     return {
       ok: true,
-      worker: { ...worker, health: deriveHealth(worker), activeLeases: active.length },
+      worker: {
+        ...worker,
+        health: deriveHealth(worker, now(), counts.lastActivityByWorker?.[workerId] || null),
+        activeLeases: active.length
+      },
+      credentials,
       assignments: active,
       leases: leases.slice(0, 20),
       executions: executions.filter((execution) => execution.workerId === workerId).slice(0, 20)
@@ -241,11 +325,12 @@ export function createWorkforceV1({
 
   /* ── leases ─────────────────────────────────────────────────────────────────────────────────── */
 
-  async function guardWorkerFor(worker, requires = []) {
+  async function guardWorkerFor(worker, requires = [], lastActivityAt = null) {
     if (!worker) return { ok: false, code: "worker_unknown" };
     if (worker.state === "deregistered") return { ok: false, code: "worker_deregistered" };
     if (worker.accepting !== true) return { ok: false, code: "worker_not_accepting" };
-    const health = deriveHealth(worker);
+    const health = deriveHealth(worker, now(), lastActivityAt);
+    if (health.status === "active_execution") return { ok: false, code: "worker_executing", health };
     if (health.status === "stalled" || health.status === "never_heartbeat") return { ok: false, code: "worker_stalled", health };
     if (worker.state === "unavailable") return { ok: false, code: "worker_unavailable", health };
     if (worker.state === "draining") return { ok: false, code: "worker_draining", health };
@@ -298,16 +383,17 @@ export function createWorkforceV1({
     } catch (error) {
       return { ok: false, code: "workforce_storage_unavailable", error: text(error?.message, 160) };
     }
-    const allowed = await guardWorkerFor(worker, requires);
-    if (!allowed.ok) return allowed;
-
     let activeCount = 0;
+    let lastActivityAt = null;
     try {
       const counts = await repository.workerCounts();
       activeCount = Number(counts.activeByWorker?.[workerId] || 0);
+      lastActivityAt = counts.lastActivityByWorker?.[workerId] || null;
     } catch (error) {
       return { ok: false, code: "workforce_storage_unavailable", error: text(error?.message, 160) };
     }
+    const allowed = await guardWorkerFor(worker, requires, lastActivityAt);
+    if (!allowed.ok) return allowed;
     if (activeCount >= Number(worker.maxConcurrent || 1)) return { ok: false, code: "worker_at_capacity", activeLeases: activeCount, maxConcurrent: worker.maxConcurrent };
 
     // A crashed owner must not block the task until someone notices. Expire its lease first, then let the
@@ -417,7 +503,445 @@ export function createWorkforceV1({
     return repository.getLease(leaseId);
   }
 
+  /* ── worker credentials ─────────────────────────────────────────────────────────────────────── */
+
+  function publicCredential(credential) {
+    return {
+      credentialId: credential.credentialId,
+      workerId: credential.workerId,
+      label: credential.label,
+      scopes: credential.scopes,
+      status: credential.status,
+      createdAt: credential.createdAt,
+      expiresAt: credential.expiresAt || null,
+      graceUntil: credential.graceUntil || null,
+      revokedAt: credential.revokedAt || null,
+      revokeReason: credential.revokeReason || null,
+      rotatedTo: credential.rotatedTo || null,
+      lastUsedAt: credential.lastUsedAt || null
+    };
+  }
+
+  async function identityStatus() {
+    if (typeof repository.verifyIdentitySchema !== "function") {
+      return { ok: false, missing: [], expected: 0, migration: WORKFORCE_IDENTITY_MIGRATION };
+    }
+    try {
+      return await repository.verifyIdentitySchema();
+    } catch (error) {
+      return { ok: false, missing: [], expected: 0, migration: WORKFORCE_IDENTITY_MIGRATION, error: text(error?.message, 160) };
+    }
+  }
+
+  /**
+   * Issue a credential. The secret is returned exactly once; the store keeps the verification key and no API
+   * ever reads it back. Registration and credential issuance are separate acts so a worker can be rotated
+   * without touching its durable identity.
+   */
+  async function issueCredential({ workerId: rawWorker, label = null, scopes = ["worker"], ttlMs = null, authorization = null, trusted = false } = {}) {
+    const workerId = id(rawWorker);
+    if (!workerId) return { ok: false, code: "worker_id_invalid" };
+    const readiness = await identityStatus();
+    if (!readiness.ok) return { ok: false, code: "workforce_identity_schema_missing", missing: readiness.missing };
+    const authority = authorize(authorization, trusted, workforceOwnerStatement({ operation: "credential.issue", workerId }));
+    if (!authority.ok) return authority;
+    const worker = await repository.getWorker(workerId);
+    if (!worker) return { ok: false, code: "worker_unknown" };
+    if (worker.state === "deregistered") return { ok: false, code: "worker_deregistered" };
+    const wanted = [...new Set((Array.isArray(scopes) ? scopes : []).map((scope) => text(scope, 32)).filter(Boolean))];
+    if (wanted.length === 0) return { ok: false, code: "credential_scopes_required" };
+
+    const created = createWorkerSecret();
+    const at = now();
+    const credential = {
+      credentialId: created.credentialId,
+      workerId,
+      label: text(label || worker.label + " credential", 120),
+      secretKey: created.secret,
+      scopes: wanted,
+      status: "active",
+      createdAt: iso(at),
+      expiresAt: ttlMs ? iso(at + Math.max(60_000, Number(ttlMs))) : null,
+      graceUntil: null,
+      revokedAt: null,
+      revokeReason: null,
+      rotatedTo: null,
+      lastUsedAt: null
+    };
+    await repository.saveCredential({ ...credential, record: { credentialId: credential.credentialId, workerId, label: credential.label, scopes: wanted, createdAt: credential.createdAt } });
+    await record("worker.credential_issued", { workerId, detail: { credentialId: credential.credentialId, label: credential.label, authorizedBy: authority.by } });
+    return { ok: true, credential: publicCredential(credential), secret: created.presented, authorizedBy: authority.by };
+  }
+
+  /** Rotation keeps the worker id; only the key changes, and the old key keeps working during a grace window. */
+  async function rotateCredential({ credentialId: rawCredential, label = null, graceMs = credentialGraceMs, ttlMs = null, authorization = null, trusted = false } = {}) {
+    const credentialId = text(rawCredential, 80);
+    if (!credentialId) return { ok: false, code: "credential_id_invalid" };
+    const readiness = await identityStatus();
+    if (!readiness.ok) return { ok: false, code: "workforce_identity_schema_missing", missing: readiness.missing };
+    const current = await repository.getCredential(credentialId);
+    if (!current) return { ok: false, code: "worker_credential_unknown" };
+    if (current.status === "revoked") return { ok: false, code: "worker_credential_revoked" };
+    const authority = authorize(
+      authorization,
+      trusted,
+      workforceOwnerStatement({ operation: "credential.rotate", workerId: current.workerId, credentialId })
+    );
+    if (!authority.ok) return authority;
+
+    const created = createWorkerSecret();
+    const at = now();
+    const grace = Math.max(0, Math.min(7 * 24 * 60 * 60_000, Number(graceMs) || 0));
+    const replacement = {
+      credentialId: created.credentialId,
+      workerId: current.workerId,
+      label: text(label || current.label, 120),
+      secretKey: created.secret,
+      scopes: current.scopes,
+      status: "active",
+      createdAt: iso(at),
+      expiresAt: ttlMs ? iso(at + Math.max(60_000, Number(ttlMs))) : current.expiresAt,
+      graceUntil: null,
+      revokedAt: null,
+      revokeReason: null,
+      rotatedTo: null,
+      lastUsedAt: null
+    };
+    const rotated = { ...current, status: "rotated", rotatedTo: replacement.credentialId, graceUntil: iso(at + grace) };
+    await repository.saveCredential({ ...rotated, record: { credentialId: rotated.credentialId, workerId: rotated.workerId, scopes: rotated.scopes, createdAt: rotated.createdAt } });
+    await repository.saveCredential({ ...replacement, record: { credentialId: replacement.credentialId, workerId: replacement.workerId, scopes: replacement.scopes, createdAt: replacement.createdAt } });
+    await record("worker.credential_rotated", {
+      workerId: current.workerId,
+      detail: { from: credentialId, to: replacement.credentialId, graceUntil: rotated.graceUntil, authorizedBy: authority.by }
+    });
+    return { ok: true, credential: publicCredential(replacement), previous: publicCredential(rotated), secret: created.presented, authorizedBy: authority.by };
+  }
+
+  async function revokeCredential({ credentialId: rawCredential, reason = null, authorization = null, trusted = false } = {}) {
+    const credentialId = text(rawCredential, 80);
+    if (!credentialId) return { ok: false, code: "credential_id_invalid" };
+    const readiness = await identityStatus();
+    if (!readiness.ok) return { ok: false, code: "workforce_identity_schema_missing", missing: readiness.missing };
+    const current = await repository.getCredential(credentialId);
+    if (!current) return { ok: false, code: "worker_credential_unknown" };
+    const authority = authorize(authorization, trusted, workforceOwnerStatement({ operation: "credential.revoke", credentialId }));
+    if (!authority.ok) return authority;
+    if (current.status === "revoked") return { ok: true, credential: publicCredential(current), idempotent: true };
+    const next = { ...current, status: "revoked", revokedAt: iso(now()), revokeReason: text(reason, 200) || "revoked", graceUntil: iso(now()) };
+    await repository.saveCredential({ ...next, record: { credentialId: next.credentialId, workerId: next.workerId, scopes: next.scopes, createdAt: next.createdAt } });
+    await record("worker.credential_revoked", { workerId: current.workerId, detail: { credentialId, reason: next.revokeReason, authorizedBy: authority.by } });
+    return { ok: true, credential: publicCredential(next), authorizedBy: authority.by };
+  }
+
+  /** Any revocation that is not tied to one credential (deregistration) revokes every key the worker holds. */
+  async function revokeWorkerCredentials({ workerId: rawWorker, reason = null, authorization = null, trusted = false } = {}) {
+    const workerId = id(rawWorker);
+    if (!workerId) return { ok: false, code: "worker_id_invalid" };
+    const readiness = await identityStatus();
+    if (!readiness.ok) return { ok: false, code: "workforce_identity_schema_missing", missing: readiness.missing, revoked: 0 };
+    const authority = authorize(authorization, trusted, workforceOwnerStatement({ operation: "worker.revoke", workerId }));
+    if (!authority.ok) return authority;
+    const existing = await repository.listCredentials({ workerId, limit: 100 });
+    let revoked = 0;
+    for (const credential of existing) {
+      if (credential.status === "revoked") continue;
+      const loaded = await repository.getCredential(credential.credentialId);
+      const next = { ...loaded, status: "revoked", revokedAt: iso(now()), revokeReason: text(reason, 200) || "worker_revoked" };
+      await repository.saveCredential({ ...next, record: { credentialId: next.credentialId, workerId, scopes: next.scopes, createdAt: next.createdAt } });
+      revoked += 1;
+    }
+    if (revoked > 0) await record("worker.credentials_revoked", { workerId, detail: { revoked, reason: text(reason, 200) || null, authorizedBy: authority.by } });
+    return { ok: true, revoked, workerId };
+  }
+
+  async function workerCredentials({ workerId: rawWorker } = {}) {
+    const workerId = id(rawWorker);
+    if (!workerId) return { ok: false, code: "worker_id_invalid" };
+    const readiness = await identityStatus();
+    if (!readiness.ok) return { ok: false, code: "workforce_identity_schema_missing", credentials: [] };
+    return { ok: true, credentials: await repository.listCredentials({ workerId, limit: 100 }) };
+  }
+
+  /**
+   * Verify one signed request. Order matters: the MAC is checked before the nonce is spent, so a forged
+   * request cannot burn a nonce, and the credential's status is checked before anything is written.
+   */
+  async function authenticateWorkerRequest({ presented = null, operation = null, nonce = null, timestamp = null, signature = null, body = {} } = {}) {
+    const readiness = await identityStatus();
+    if (!readiness.ok) return { ok: false, code: "workforce_identity_schema_missing", missing: readiness.missing };
+    const operationName = text(operation, 40);
+    if (!WORKER_OPERATIONS.includes(operationName)) return { ok: false, code: "worker_operation_invalid" };
+    const parsed = parseWorkerCredential(presented);
+    if (!parsed) return { ok: false, code: "worker_credential_invalid" };
+    const credential = await repository.getCredential(parsed.credentialId);
+    if (!credential) return { ok: false, code: "worker_credential_unknown" };
+    if (credential.status === "revoked") return { ok: false, code: "worker_credential_revoked" };
+    const at = now();
+    if (credential.status === "rotated") {
+      const grace = Date.parse(credential.graceUntil || "");
+      if (!Number.isFinite(grace) || grace <= at) return { ok: false, code: "worker_credential_rotated" };
+    }
+    if (credential.expiresAt && Date.parse(credential.expiresAt) <= at) return { ok: false, code: "worker_credential_expired" };
+    const worker = await repository.getWorker(credential.workerId);
+    if (!worker) return { ok: false, code: "worker_unknown" };
+    if (worker.state === "deregistered") return { ok: false, code: "worker_deregistered" };
+
+    const atMs = Number(timestamp);
+    if (!Number.isFinite(atMs) || Math.abs(at - atMs) > requestWindowMs) return { ok: false, code: "worker_request_timestamp_invalid" };
+    if (!/^[A-Za-z0-9_-]{16,128}$/.test(String(nonce || ""))) return { ok: false, code: "worker_request_nonce_invalid" };
+    const verified = verifyWorkerRequest({
+      secret: credential.secretKey,
+      signature,
+      operation: operationName,
+      workerId: credential.workerId,
+      credentialId: credential.credentialId,
+      nonce: String(nonce),
+      timestamp: atMs,
+      body
+    });
+    if (!verified.ok) return { ok: false, code: "worker_signature_invalid" };
+
+    let used;
+    try {
+      used = await repository.useWorkerNonce({
+        credentialId: credential.credentialId,
+        nonce: String(nonce),
+        operation: operationName,
+        at: iso(at),
+        expiresAt: iso(at + requestWindowMs)
+      });
+    } catch (error) {
+      return { ok: false, code: "worker_replay_store_unavailable", error: text(error?.message, 160) };
+    }
+    if (!used.ok) return { ok: false, code: used.code || "worker_request_replayed" };
+
+    try {
+      await repository.saveCredential({ ...credential, lastUsedAt: iso(at), record: { credentialId: credential.credentialId, workerId: credential.workerId, scopes: credential.scopes, createdAt: credential.createdAt } });
+    } catch { /* the request is authorised; a last-used timestamp is not worth failing it */ }
+    return { ok: true, workerId: credential.workerId, credentialId: credential.credentialId, worker, credential: publicCredential(credential), operation: operationName };
+  }
+
+  /* ── provider operations and reconciliation ───────────────────────────────────────────────── */
+
+  async function recordOperation({ idempotencyKey, missionId, taskId, workerId = null, provider = null, providerReference = null, state = "unknown", proof = null } = {}) {
+    if (typeof repository.saveOperation !== "function") return { ok: false, code: "workforce_identity_schema_missing" };
+    const key = text(idempotencyKey, 200);
+    if (!key) return { ok: false, code: "execution_key_invalid" };
+    const at = iso(now());
+    return repository.saveOperation({
+      idempotencyKey: key,
+      missionId: text(missionId, 120),
+      taskId: text(taskId, 200),
+      workerId: workerId ? id(workerId) : null,
+      provider: provider ? text(provider, 60) : null,
+      providerReference: providerReference ? text(providerReference, 200) : null,
+      state: OPERATION_STATES.includes(state) ? state : "unknown",
+      proof,
+      at,
+      createdAt: at
+    });
+  }
+
+  async function operation(rawKey) {
+    if (typeof repository.getOperation !== "function") return null;
+    const key = text(rawKey, 200);
+    if (!key) return null;
+    return repository.getOperation(key);
+  }
+
+  /** Every attempt whose external outcome is unknown, with the provider reference an operator needs. */
+  async function uncertainOperations({ limit = 50, missionId = null } = {}) {
+    if (typeof repository.listExecutions !== "function") return [];
+    const executions = await repository.listExecutions({ state: "uncertain", missionId, limit });
+    const items = [];
+    for (const execution of executions) {
+      const record = typeof repository.getOperation === "function" ? await repository.getOperation(execution.idempotencyKey).catch(() => null) : null;
+      items.push({
+        idempotencyKey: execution.idempotencyKey,
+        missionId: execution.missionId,
+        taskId: execution.taskId,
+        workerId: execution.workerId,
+        attempt: execution.attempt,
+        startedAt: execution.startedAt,
+        updatedAt: execution.updatedAt,
+        provider: record?.provider || null,
+        providerReference: record?.providerReference || null,
+        operationState: record?.state || "unknown",
+        proof: record?.proof || null,
+        retryable: record?.state === "not_executed" && Boolean(record?.proof)
+      });
+    }
+    return items;
+  }
+
+  /** Read-only inspection. It never changes a row and never calls a provider. */
+  async function inspectUncertain({ idempotencyKey } = {}) {
+    const key = text(idempotencyKey, 200);
+    if (!key) return { ok: false, code: "execution_key_invalid" };
+    const execution = await repository.getExecution(key);
+    if (!execution) return { ok: false, code: "execution_missing" };
+    const operationRow = typeof repository.getOperation === "function" ? await repository.getOperation(key) : null;
+    const lease = execution.leaseId ? await repository.getLease(execution.leaseId).catch(() => null) : null;
+    return {
+      ok: true,
+      readOnly: true,
+      execution: { ...execution, result: execution.result || null },
+      operation: operationRow,
+      lease: lease ? { leaseId: lease.leaseId, state: lease.state, workerId: lease.workerId, expiresAt: lease.expiresAt, releasedAt: lease.releasedAt } : null,
+      retryable: operationRow?.state === "not_executed" && Boolean(operationRow?.proof),
+      detail: execution.state === "uncertain"
+        ? (operationRow?.state === "unknown"
+            ? "The external outcome is unknown. Inspect the provider by reference before deciding; do not retry."
+            : "Provider verdict recorded: " + operationRow.state + ". " + (operationRow.state === "not_executed" ? "A retry is allowed because the provider proved the operation did not occur." : "The operation may have occurred; no automatic retry is allowed."))
+        : "This attempt is not uncertain."
+    };
+  }
+
+  /**
+   * Owner reconciliation of one uncertain attempt. Only `not_executed` with proof converts the attempt into
+   * a retryable failure; `confirmed_success` settles it as done; `confirmed_failure` and `unknown` keep the
+   * at-most-once boundary intact.
+   */
+  async function reconcileUncertain({ idempotencyKey, verdict = "unknown", proof = null, providerReference = null, provider = null, by = "owner", authorization = null, trusted = false } = {}) {
+    const key = text(idempotencyKey, 200);
+    if (!key) return { ok: false, code: "execution_key_invalid" };
+    if (!["unknown", "confirmed_success", "confirmed_failure", "not_executed"].includes(verdict)) return { ok: false, code: "reconciliation_verdict_invalid" };
+    const readiness = await identityStatus();
+    if (!readiness.ok) return { ok: false, code: "workforce_identity_schema_missing", missing: readiness.missing };
+    const authority = authorize(authorization, trusted, workforceOwnerStatement({ operation: "reconcile", credentialId: key, detail: verdict }));
+    if (!authority.ok) return authority;
+    const execution = await repository.getExecution(key);
+    if (!execution) return { ok: false, code: "execution_missing" };
+    if (execution.state !== "uncertain") return { ok: false, code: "execution_not_uncertain", state: execution.state };
+    if (verdict !== "unknown") {
+      if (!proof || typeof proof !== "object" || !proof.evidence) return { ok: false, code: "reconciliation_proof_required" };
+    }
+    const at = iso(now());
+    const inspectedBy = text(by, 64) || "owner";
+    const existing = await repository.getOperation(key);
+    const saved = await repository.saveOperation({
+      idempotencyKey: key,
+      missionId: execution.missionId,
+      taskId: execution.taskId,
+      workerId: execution.workerId,
+      provider: provider ? text(provider, 60) : existing?.provider || null,
+      providerReference: providerReference ? text(providerReference, 200) : existing?.providerReference || null,
+      state: verdict,
+      proof,
+      inspectedAt: at,
+      inspectedBy,
+      at,
+      createdAt: existing?.createdAt || execution.startedAt
+    });
+
+    let settled = null;
+    if (verdict === "confirmed_success") {
+      settled = await repository.settleUncertainExecution({
+        idempotencyKey: key,
+        state: "succeeded",
+        result: { reconciled: true, verdict, proof, at, by: inspectedBy },
+        at
+      });
+    } else if (verdict === "not_executed") {
+      settled = await repository.settleUncertainExecution({
+        idempotencyKey: key,
+        state: "failed",
+        result: { reconciled: true, verdict, proof, retryable: true, at, by: inspectedBy },
+        at
+      });
+    }
+    const decision = verdict === "confirmed_success" ? "completed" : verdict === "not_executed" ? "requeue" : "hold_uncertain";
+    if (typeof repository.recordReassignment === "function") {
+      try {
+        await repository.recordReassignment({
+          at,
+          missionId: execution.missionId,
+          taskId: execution.taskId,
+          fromWorker: execution.workerId,
+          toWorker: null,
+          leaseId: execution.leaseId,
+          reason: "reconciliation:" + verdict,
+          decision,
+          detail: { idempotencyKey: key, by: inspectedBy, providerReference: providerReference || existing?.providerReference || null }
+        });
+      } catch { /* the operation verdict above is authoritative */ }
+    }
+    await record("recovery.decision", {
+      missionId: execution.missionId,
+      taskId: execution.taskId,
+      workerId: execution.workerId,
+      leaseId: execution.leaseId,
+      detail: { kind: "reconciliation", verdict, decision, by: inspectedBy, idempotencyKey: key }
+    });
+    return {
+      ok: true,
+      verdict,
+      decision,
+      retryable: verdict === "not_executed",
+      operation: saved.operation,
+      execution: settled?.execution || execution,
+      authorizedBy: authority.by
+    };
+  }
+
   /* ── failure detection and recovery ─────────────────────────────────────────────────────────── */
+
+  /**
+   * Record what happens to a task whose lease ended without a clean release. An attempt that started is held
+   * as uncertain — it must never be reassigned — while a lease that expired before any attempt is requeued.
+   */
+  async function noteRecoveryDecision(lease, reason, at = iso(now())) {
+    if (!lease) return null;
+    let executions = [];
+    try {
+      executions = typeof repository.listExecutions === "function"
+        ? await repository.listExecutions({ leaseId: lease.leaseId, limit: 10 })
+        : [];
+    } catch { executions = []; }
+    for (const execution of executions.filter((item) => item.state === "inflight")) {
+      try {
+        await repository.finishExecution({
+          idempotencyKey: execution.idempotencyKey,
+          state: "uncertain",
+          result: { reason: "lease_expired_during_execution" },
+          at
+        });
+        await record("outcome.uncertain", {
+          missionId: lease.missionId,
+          taskId: lease.taskId,
+          workerId: lease.workerId,
+          leaseId: lease.leaseId,
+          detail: { idempotencyKey: execution.idempotencyKey, reason: "lease_expired_during_execution" }
+        });
+      } catch { /* the expiry below still prevents a silent retry */ }
+    }
+    const uncertain = executions.some((item) => item.state === "uncertain") || executions.some((item) => item.state === "inflight");
+    const decision = uncertain ? "hold_uncertain" : "requeue";
+    const entry = {
+      at,
+      missionId: lease.missionId,
+      taskId: lease.taskId,
+      fromWorker: lease.workerId || null,
+      toWorker: null,
+      leaseId: lease.leaseId,
+      reason: String(reason || "lease_expired"),
+      decision,
+      detail: { attempt: lease.attempt, executionStates: executions.map((item) => item.state) }
+    };
+    try {
+      if (typeof repository.recordReassignment === "function") await repository.recordReassignment(entry);
+    } catch (error) {
+      log.warn?.("WORKFORCE_REASSIGNMENT_LEDGER_FAILED", String(error?.message || error).slice(0, 160));
+    }
+    await record("recovery.decision", {
+      missionId: lease.missionId,
+      taskId: lease.taskId,
+      workerId: lease.workerId,
+      leaseId: lease.leaseId,
+      detail: { kind: "lease_recovery", reason: entry.reason, decision }
+    });
+    return entry;
+  }
 
   async function expireAbandonedLeases({ limit = 100 } = {}) {
     const at = iso(now());
@@ -428,6 +952,7 @@ export function createWorkforceV1({
       return { ok: false, code: "workforce_storage_unavailable", error: text(error?.message, 160) };
     }
     const expired = outcome.expired || [];
+    let held = 0;
     for (const entry of expired) {
       await record("lease.expired", {
         missionId: entry.missionId,
@@ -436,11 +961,15 @@ export function createWorkforceV1({
         leaseId: entry.leaseId,
         detail: { attempt: entry.attempt, expiresAt: entry.expiresAt, detectedBy: "sweep" }
       });
+      // The decision is recorded with the expiry: requeue only if no attempt had started, otherwise hold it
+      // uncertain. This is the point where a naive sweep would create a duplicate external effect.
+      const decision = await noteRecoveryDecision(entry, "lease_expired", at);
+      if (decision?.decision === "hold_uncertain") held += 1;
     }
     if (expired.length === 0 && Number(outcome.expiredCount || 0) > 0) {
       await record("lease.expired", { detail: { count: Number(outcome.expiredCount), detectedBy: "sweep", identities: "unavailable" } });
     }
-    return { ok: true, expired: expired.length || Number(outcome.expiredCount || 0), leases: expired };
+    return { ok: true, expired: expired.length || Number(outcome.expiredCount || 0), uncertain: held, leases: expired };
   }
 
   /**
@@ -450,10 +979,13 @@ export function createWorkforceV1({
   async function detectStalledWorkers() {
     const at = now();
     const known = await repository.listWorkers();
+    const counts = await repository.workerCounts();
     const stalled = [];
     for (const worker of known) {
       if (worker.state === "deregistered") continue;
-      const health = deriveHealth(worker, at);
+      // An executor that is still renewing its lease is working, not dead: lease activity is what separates
+      // a slow operation from a crashed process.
+      const health = deriveHealth(worker, at, counts.lastActivityByWorker?.[worker.id] || null);
       const isStalled = health.status === "stalled" || health.status === "never_heartbeat";
       const wasStalled = worker.stalled === true;
       if (isStalled !== wasStalled) {
@@ -510,7 +1042,8 @@ export function createWorkforceV1({
       ok: true,
       expired: expired.ok ? expired.expired : 0,
       stalled: stalled.ok ? stalled.stalled.length : 0,
-      uncertain: uncertain.ok ? uncertain.uncertain.length : 0,
+      // Attempts the sweep had to hold unknown count as recovered uncertainty, not as nothing.
+      uncertain: (expired.ok ? Number(expired.uncertain || 0) : 0) + (uncertain.ok ? uncertain.uncertain.length : 0),
       errors: [expired, stalled, uncertain].filter((item) => !item.ok).map((item) => item.code)
     };
   }
@@ -630,6 +1163,49 @@ export function createWorkforceV1({
     return repository.getExecution(key);
   }
 
+  /* ── recovery queue and reassignment history ───────────────────────────────────────────────── */
+
+  /**
+   * Everything that needs a human decision, in one place: leases that ended without a release, the uncertain
+   * attempts they left behind, and what the engine decided to do about each. Read-only.
+   */
+  async function recoveryQueue({ limit = 100 } = {}) {
+    const capped = Math.max(1, Math.min(200, Number(limit) || 100));
+    const [expired, abandoned] = await Promise.all([
+      repository.listLeases({ state: "expired", limit: capped }),
+      repository.listLeases({ state: "abandoned", limit: capped })
+    ]);
+    const uncertain = await uncertainOperations({ limit: capped });
+    const items = [];
+    for (const lease of [...expired, ...abandoned]) {
+      let executions = [];
+      try {
+        executions = typeof repository.listExecutions === "function" ? await repository.listExecutions({ leaseId: lease.leaseId, limit: 10 }) : [];
+      } catch { executions = []; }
+      const held = executions.some((execution) => ["inflight", "uncertain"].includes(execution.state));
+      items.push({
+        leaseId: lease.leaseId,
+        missionId: lease.missionId,
+        taskId: lease.taskId,
+        workerId: lease.workerId,
+        attempt: lease.attempt,
+        leaseState: lease.state,
+        expiresAt: lease.expiresAt,
+        releasedAt: lease.releasedAt || null,
+        decision: held ? "hold_uncertain" : "requeue",
+        reason: lease.state === "expired" ? "lease_expired" : "lease_abandoned",
+        executionStates: executions.map((execution) => execution.state)
+      });
+    }
+    return { ok: true, count: items.length, items, uncertain };
+  }
+
+  async function reassignments({ missionId = null, limit = 100 } = {}) {
+    if (typeof repository.listReassignments !== "function") return { ok: true, items: [], count: 0 };
+    const items = await repository.listReassignments({ missionId, limit });
+    return { ok: true, count: items.length, items };
+  }
+
   /* ── monitoring ────────────────────────────────────────────────────────────────────────────── */
 
   async function status({ missions = [] } = {}) {
@@ -645,7 +1221,14 @@ export function createWorkforceV1({
       repository.expiringLeases({ at: iso(at), before: iso(at + 60_000), limit: 50 })
     ]);
 
-    const health = known.map((worker) => ({ workerId: worker.id, state: worker.state, health: deriveHealth(worker, at), activeLeases: Number(workerTotals.activeByWorker?.[worker.id] || 0) }));
+    const health = known.map((worker) => ({
+      workerId: worker.id,
+      state: worker.state,
+      health: deriveHealth(worker, at, workerTotals.lastActivityByWorker?.[worker.id] || null),
+      lastHeartbeatAt: worker.heartbeatAt || null,
+      lastLeaseActivityAt: workerTotals.lastActivityByWorker?.[worker.id] || null,
+      activeLeases: Number(workerTotals.activeByWorker?.[worker.id] || 0)
+    }));
     const byHealth = {};
     for (const entry of health) byHealth[entry.health.status] = (byHealth[entry.health.status] || 0) + 1;
 
@@ -673,16 +1256,34 @@ export function createWorkforceV1({
     });
 
     const unresponsive = health.filter((entry) => ["stalled", "never_heartbeat", "unavailable"].includes(entry.health.status)).length;
+
+    const identity = await identityStatus();
+    let activeCredentials = [];
+    let reassignmentRows = [];
+    if (identity.ok) {
+      activeCredentials = await repository.listCredentials({ status: "active", limit: 500 }).catch(() => []);
+      reassignmentRows = await reassignments({ limit: 50 }).then((result) => result.items).catch(() => []);
+    }
+    const uncertainCount = Number(executionTotals.byState?.uncertain || 0);
     return {
       ok: true,
       migration: WORKFORCE_V1_MIGRATION,
+      identityMigration: WORKFORCE_IDENTITY_MIGRATION,
       generatedAt: iso(at),
+      identity: {
+        ready: identity.ok === true,
+        missing: identity.missing || [],
+        credentials: activeCredentials.length,
+        workersWithCredentials: new Set(activeCredentials.map((credential) => credential.workerId)).size,
+        unresolved: known.filter((worker) => worker.state !== "deregistered" && !activeCredentials.some((credential) => credential.workerId === worker.id)).map((worker) => worker.id)
+      },
       workers: {
         total: workerTotals.total,
         byState: workerTotals.byState,
         byHealth,
         accepting: known.filter((worker) => worker.accepting === true && worker.state !== "deregistered").length,
         stalled: health.filter((entry) => entry.health.status === "stalled" || entry.health.status === "never_heartbeat").map((entry) => entry.workerId),
+        executing: health.filter((entry) => entry.health.status === "active_execution").map((entry) => entry.workerId),
         health
       },
       activeAssignments: {
@@ -709,6 +1310,19 @@ export function createWorkforceV1({
         failedTasks: executionTotals.failedTasks
       },
       recovery: { total: recoveryTotals.total, byKind: recoveryTotals.byKind },
+      uncertainOperations: {
+        count: uncertainCount,
+        // The queue is only built when the identity migration is present; the count still comes from 0018.
+        items: identity.ok ? (await uncertainOperations({ limit: 25 })) : [],
+        detail: uncertainCount === 0
+          ? "No attempt has an unknown external outcome."
+          : "Inspect the provider by reference before deciding anything: an unknown outcome must never be retried."
+      },
+      reassignments: {
+        recorded: reassignmentRows.length,
+        decisions: reassignmentRows.reduce((acc, row) => { acc[row.decision] = (acc[row.decision] || 0) + 1; return acc; }, {}),
+        recent: reassignmentRows.slice(0, 10)
+      },
       missions: { tracked: tracked.length, stalled: stalledMissions.length, items: stalledMissions, durations },
       health: {
         ok: unresponsive === 0 && stalledMissions.length === 0,
@@ -778,11 +1392,26 @@ export function createWorkforceV1({
     executionComplete,
     execution,
     executionsFor,
+    issueCredential,
+    rotateCredential,
+    revokeCredential,
+    revokeWorkerCredentials,
+    workerCredentials,
+    authenticateWorkerRequest,
+    identityStatus,
+    recordOperation,
+    operation,
+    uncertainOperations,
+    inspectUncertain,
+    reconcileUncertain,
+    recoveryQueue,
+    reassignments,
+    noteRecoveryDecision,
     status,
     recoveryHistory,
     missionWorkers,
     healthOf: worker => deriveHealth(worker),
-    configuration: () => ({ leaseTtlMs, heartbeatIntervalMs, stalledAfterMs, missionStallAfterMs, defaultMaxConcurrent }),
-    states: { workers: WORKER_STATES, leases: LEASE_STATES }
+    configuration: () => ({ leaseTtlMs, heartbeatIntervalMs, stalledAfterMs, activeExecutionWindowMs, missionStallAfterMs, credentialGraceMs, requestWindowMs, defaultMaxConcurrent, requireOwnerAuthorization }),
+    states: { workers: WORKER_STATES, leases: LEASE_STATES, operations: OPERATION_STATES }
   });
 }

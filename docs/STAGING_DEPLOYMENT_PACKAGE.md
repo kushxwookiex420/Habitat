@@ -91,13 +91,17 @@ key-manager change and keep at least one retired key while old subscriptions exi
 | 0016 | MCP delivery leases | multi-instance delivery |
 | 0017 | durable approval nonce registry (indexed replay boundary) | owner-authorized mission execution |
 | 0018 | worker leases, execution ledger, recovery journal | autonomous workforce v1 (attached, not enforced without it) |
+| 0019 | worker credentials, auth nonces, provider operations, reassignment ledger | workforce security v2 (signed workers and reconciliation unavailable without it) |
 
 Before applying: confirm the staging database id, run `npm run staging:preflight` (read-only), record a
 Time Travel bookmark or export, then apply in order with `wrangler d1 execute --remote --file=...`.
 After each: check `sqlite_master`, run `npm run migrations:check` locally against a copy if available, and
-restart the isolated service to confirm schema detection. 0016 must follow 0015, 0017 must follow 0016, and
-0018 must follow 0017. 0017 and 0018 are **prepared, not applied** to staging: applying either needs
-explicit owner authorization. Do not apply any of these to production.
+restart the isolated service to confirm schema detection. 0016 must follow 0015, 0017 must follow 0016,
+0018 must follow 0017, and 0019 must follow 0018. 0017, 0018 and 0019 are **prepared, not applied** to
+staging: applying any of them needs explicit owner authorization. Do not apply any of these to production.
+
+0019 is additive over 0018 and is checked separately (`verifyIdentitySchema`). Its rollback drops only the
+identity tables and leaves the lease layer intact; applying it does not modify 0018.
 
 Without 0018 the workforce still runs, but `/ax/v1/workforce*` answers
 `503 workforce_leases_not_attached` and `/system/status` reports `workforceV1.enforced: false`. That is a

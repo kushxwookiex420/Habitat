@@ -531,6 +531,19 @@ export function createMissionEngine({
     } catch (error) {
       // An executor that cannot say whether the outside world acted must never be retried automatically.
       const uncertain = error?.uncertain === true || error?.code === "outcome_uncertain";
+      // An uncertain throw usually carries the provider reference the operator needs to look the operation up.
+      // Recording it now is what makes read-only reconciliation possible at all.
+      if (uncertain && execution && leases && typeof leases.recordOperation === "function") {
+        await leases.recordOperation({
+          idempotencyKey: execution.idempotencyKey,
+          missionId: mission.id,
+          taskId: missionTaskKey(mission.id, task.id),
+          workerId: agent.id,
+          provider: clean(error?.provider, 60) || null,
+          providerReference: clean(error?.providerReference || error?.providerRef, 200) || null,
+          state: "unknown"
+        });
+      }
       if (execution) {
         await leases.executionComplete({
           idempotencyKey: execution.idempotencyKey,
@@ -567,6 +580,24 @@ export function createMissionEngine({
     // The external operation has completed. Record the outcome before verification, so a verification
     // failure cannot make the engine believe the operation never happened and repeat it.
     if (execution) {
+      if (leases && typeof leases.recordOperation === "function") {
+        const provider = clean(implementation?.result?.provider || implementation?.provider, 60) || null;
+        const providerReference = clean(
+          implementation?.result?.providerReference || implementation?.result?.providerRef || implementation?.providerReference,
+          200
+        ) || null;
+        if (provider || providerReference) {
+          await leases.recordOperation({
+            idempotencyKey: execution.idempotencyKey,
+            missionId: mission.id,
+            taskId: missionTaskKey(mission.id, task.id),
+            workerId: agent.id,
+            provider,
+            providerReference,
+            state: "unknown"
+          });
+        }
+      }
       await leases.executionComplete({
         idempotencyKey: execution.idempotencyKey,
         state: "succeeded",

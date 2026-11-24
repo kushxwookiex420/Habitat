@@ -26,6 +26,19 @@ export const WORKFORCE_V1_TABLE_NAMES = Object.freeze([
   "habitat_ax_workforce_recovery"
 ]);
 
+/** 0019. Checked separately: a database with 0018 but not 0019 still runs the workforce. */
+export const WORKFORCE_IDENTITY_MIGRATION = "0019_ax_workforce_identity";
+
+export const WORKFORCE_IDENTITY_TABLE_NAMES = Object.freeze([
+  "habitat_ax_workforce_credentials",
+  "habitat_ax_workforce_auth_nonces",
+  "habitat_ax_workforce_operations",
+  "habitat_ax_workforce_reassignments"
+]);
+
+export const OPERATION_STATES = Object.freeze(["unknown", "confirmed_success", "confirmed_failure", "not_executed"]);
+export const CREDENTIAL_STATES = Object.freeze(["active", "rotated", "revoked"]);
+
 export const LEASE_STATES = Object.freeze(["active", "released", "completed", "expired", "abandoned", "uncertain"]);
 export const EXECUTION_STATES = Object.freeze(["inflight", "succeeded", "failed", "uncertain"]);
 export const WORKER_STATES = Object.freeze(["online", "busy", "draining", "unavailable", "deregistered"]);
@@ -43,7 +56,17 @@ export const WORKFORCE_V1_DDL = Object.freeze([
   "CREATE INDEX IF NOT EXISTS habitat_ax_workforce_executions_state ON habitat_ax_workforce_executions(state, updated_at)",
   "CREATE TABLE IF NOT EXISTS habitat_ax_workforce_recovery (seq INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT NOT NULL, kind TEXT NOT NULL, mission_id TEXT, task_id TEXT, worker_id TEXT, lease_id TEXT, detail_json TEXT NOT NULL)",
   "CREATE INDEX IF NOT EXISTS habitat_ax_workforce_recovery_mission ON habitat_ax_workforce_recovery(mission_id, seq)",
-  "CREATE INDEX IF NOT EXISTS habitat_ax_workforce_recovery_kind ON habitat_ax_workforce_recovery(kind, at)"
+  "CREATE INDEX IF NOT EXISTS habitat_ax_workforce_recovery_kind ON habitat_ax_workforce_recovery(kind, at)",
+  "CREATE TABLE IF NOT EXISTS habitat_ax_workforce_credentials (credential_id TEXT PRIMARY KEY NOT NULL, worker_id TEXT NOT NULL, label TEXT NOT NULL, secret_key TEXT NOT NULL, scopes_json TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'rotated', 'revoked')), created_at TEXT NOT NULL, expires_at TEXT, grace_until TEXT, revoked_at TEXT, revoke_reason TEXT, rotated_to TEXT, last_used_at TEXT, record_json TEXT NOT NULL)",
+  "CREATE INDEX IF NOT EXISTS habitat_ax_workforce_credentials_worker ON habitat_ax_workforce_credentials(worker_id, status)",
+  "CREATE INDEX IF NOT EXISTS habitat_ax_workforce_credentials_expiry ON habitat_ax_workforce_credentials(status, expires_at)",
+  "CREATE TABLE IF NOT EXISTS habitat_ax_workforce_auth_nonces (credential_id TEXT NOT NULL, nonce TEXT NOT NULL, operation TEXT NOT NULL, at TEXT NOT NULL, expires_at TEXT NOT NULL, PRIMARY KEY (credential_id, nonce))",
+  "CREATE INDEX IF NOT EXISTS habitat_ax_workforce_auth_nonces_expiry ON habitat_ax_workforce_auth_nonces(expires_at)",
+  "CREATE TABLE IF NOT EXISTS habitat_ax_workforce_operations (idempotency_key TEXT PRIMARY KEY NOT NULL, mission_id TEXT NOT NULL, task_id TEXT NOT NULL, worker_id TEXT, provider TEXT, provider_reference TEXT, state TEXT NOT NULL DEFAULT 'unknown' CHECK (state IN ('unknown', 'confirmed_success', 'confirmed_failure', 'not_executed')), proof_json TEXT, inspected_at TEXT, inspected_by TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)",
+  "CREATE INDEX IF NOT EXISTS habitat_ax_workforce_operations_state ON habitat_ax_workforce_operations(state, updated_at)",
+  "CREATE INDEX IF NOT EXISTS habitat_ax_workforce_operations_reference ON habitat_ax_workforce_operations(provider, provider_reference)",
+  "CREATE TABLE IF NOT EXISTS habitat_ax_workforce_reassignments (seq INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT NOT NULL, mission_id TEXT NOT NULL, task_id TEXT NOT NULL, from_worker TEXT, to_worker TEXT, lease_id TEXT, reason TEXT NOT NULL, decision TEXT NOT NULL CHECK (decision IN ('requeue', 'hold_uncertain', 'abandon', 'completed')), detail_json TEXT NOT NULL)",
+  "CREATE INDEX IF NOT EXISTS habitat_ax_workforce_reassignments_mission ON habitat_ax_workforce_reassignments(mission_id, seq)"
 ]);
 
 function parse(value, fallback = null) {
@@ -111,6 +134,23 @@ function leaseFrom(row) {
   };
 }
 
+function operationFrom(row) {
+  return {
+    idempotencyKey: row.idempotency_key,
+    missionId: row.mission_id,
+    taskId: row.task_id,
+    workerId: row.worker_id || null,
+    provider: row.provider || null,
+    providerReference: row.provider_reference || null,
+    state: row.state,
+    proof: parse(row.proof_json, null),
+    inspectedAt: row.inspected_at || null,
+    inspectedBy: row.inspected_by || null,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  };
+}
+
 function executionFrom(row) {
   return {
     idempotencyKey: row.idempotency_key,
@@ -156,6 +196,20 @@ export function createWorkforceV1Repository({ query, now = () => new Date().toIS
         missing: WORKFORCE_V1_TABLE_NAMES.filter((name) => !present.has(name)),
         expected: WORKFORCE_V1_TABLE_NAMES.length,
         migration: WORKFORCE_V1_MIGRATION
+      };
+    },
+
+    async verifyIdentitySchema() {
+      const rows = await query(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN (" + WORKFORCE_IDENTITY_TABLE_NAMES.map(() => "?").join(", ") + ")",
+        WORKFORCE_IDENTITY_TABLE_NAMES
+      );
+      const present = new Set(rowsOf(rows).map((row) => row.name));
+      return {
+        ok: WORKFORCE_IDENTITY_TABLE_NAMES.every((name) => present.has(name)),
+        missing: WORKFORCE_IDENTITY_TABLE_NAMES.filter((name) => !present.has(name)),
+        expected: WORKFORCE_IDENTITY_TABLE_NAMES.length,
+        migration: WORKFORCE_IDENTITY_MIGRATION
       };
     },
 
@@ -342,12 +396,13 @@ export function createWorkforceV1Repository({ query, now = () => new Date().toIS
       return row ? executionFrom(row) : null;
     },
 
-    async listExecutions({ missionId = null, taskId = null, state = null, limit = 50 } = {}) {
+    async listExecutions({ missionId = null, taskId = null, state = null, leaseId = null, limit = 50 } = {}) {
       const where = [];
       const params = [];
       if (missionId) { where.push("mission_id = ?"); params.push(String(missionId)); }
       if (taskId) { where.push("task_id = ?"); params.push(String(taskId)); }
       if (state) { where.push("state = ?"); params.push(String(state)); }
+      if (leaseId) { where.push("lease_id = ?"); params.push(String(leaseId)); }
       params.push(Math.max(1, Math.min(500, Number(limit) || 50)));
       const rows = await query(
         "SELECT * FROM habitat_ax_workforce_executions " + (where.length ? "WHERE " + where.join(" AND ") + " " : "") + "ORDER BY started_at ASC LIMIT ?",
@@ -367,6 +422,212 @@ export function createWorkforceV1Repository({ query, now = () => new Date().toIS
         return { ok: false, code: current ? "execution_already_settled" : "execution_missing", execution: current };
       }
       return { ok: true, execution: await this.getExecution(idempotencyKey) };
+    },
+
+    /**
+     * Reconciliation only. An `uncertain` attempt is settled by an owner decision backed by provider
+     * evidence, never by a retry. Only `uncertain -> succeeded|failed` is allowed here; `inflight` goes
+     * through `finishExecution` instead.
+     */
+    async settleUncertainExecution({ idempotencyKey, state, result = null, at }) {
+      if (!["succeeded", "failed"].includes(state)) return { ok: false, code: "execution_state_invalid" };
+      const rows = await query(
+        "UPDATE habitat_ax_workforce_executions SET state = ?, result_json = ?, updated_at = ? WHERE idempotency_key = ? AND state = 'uncertain' RETURNING idempotency_key",
+        [state, result === null ? null : JSON.stringify(result), String(at), String(idempotencyKey)]
+      );
+      if (affected(rows) === 0) {
+        const current = await this.getExecution(idempotencyKey);
+        return { ok: false, code: current ? "execution_not_uncertain" : "execution_missing", execution: current };
+      }
+      return { ok: true, execution: await this.getExecution(idempotencyKey) };
+    },
+
+    /* ── worker credentials ───────────────────────────────────────────────────────────────────── */
+
+    async saveCredential(credential) {
+      await query(
+        "INSERT INTO habitat_ax_workforce_credentials (credential_id, worker_id, label, secret_key, scopes_json, status, created_at, expires_at, grace_until, revoked_at, revoke_reason, rotated_to, last_used_at, record_json) " +
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(credential_id) DO UPDATE SET label = excluded.label, status = excluded.status, expires_at = excluded.expires_at, grace_until = excluded.grace_until, revoked_at = excluded.revoked_at, revoke_reason = excluded.revoke_reason, rotated_to = excluded.rotated_to, last_used_at = excluded.last_used_at, record_json = excluded.record_json",
+        [
+          credential.credentialId,
+          credential.workerId,
+          credential.label,
+          credential.secretKey,
+          JSON.stringify(credential.scopes || []),
+          credential.status,
+          credential.createdAt,
+          credential.expiresAt || null,
+          credential.graceUntil || null,
+          credential.revokedAt || null,
+          credential.revokeReason || null,
+          credential.rotatedTo || null,
+          credential.lastUsedAt || null,
+          JSON.stringify(credential.record || credential)
+        ]
+      );
+      return { ok: true };
+    },
+
+    async getCredential(credentialId) {
+      const rows = await query("SELECT * FROM habitat_ax_workforce_credentials WHERE credential_id = ?", [String(credentialId)]);
+      const row = rowsOf(rows)[0];
+      if (!row) return null;
+      return {
+        credentialId: row.credential_id,
+        workerId: row.worker_id,
+        label: row.label,
+        secretKey: row.secret_key,
+        scopes: parse(row.scopes_json, []),
+        status: row.status,
+        createdAt: row.created_at,
+        expiresAt: row.expires_at || null,
+        graceUntil: row.grace_until || null,
+        revokedAt: row.revoked_at || null,
+        revokeReason: row.revoke_reason || null,
+        rotatedTo: row.rotated_to || null,
+        lastUsedAt: row.last_used_at || null
+      };
+    },
+
+    async listCredentials({ workerId = null, status = null, limit = 100 } = {}) {
+      const where = [];
+      const params = [];
+      if (workerId) { where.push("worker_id = ?"); params.push(String(workerId)); }
+      if (status) { where.push("status = ?"); params.push(String(status)); }
+      params.push(Math.max(1, Math.min(500, Number(limit) || 100)));
+      const rows = await query(
+        "SELECT credential_id, worker_id, label, scopes_json, status, created_at, expires_at, grace_until, revoked_at, revoke_reason, rotated_to, last_used_at FROM habitat_ax_workforce_credentials " +
+        (where.length ? "WHERE " + where.join(" AND ") + " " : "") + "ORDER BY created_at DESC LIMIT ?",
+        params
+      );
+      return rowsOf(rows).map((row) => ({
+        credentialId: row.credential_id,
+        workerId: row.worker_id,
+        label: row.label,
+        scopes: parse(row.scopes_json, []),
+        status: row.status,
+        createdAt: row.created_at,
+        expiresAt: row.expires_at || null,
+        graceUntil: row.grace_until || null,
+        revokedAt: row.revoked_at || null,
+        revokeReason: row.revoke_reason || null,
+        rotatedTo: row.rotated_to || null,
+        lastUsedAt: row.last_used_at || null
+      }));
+    },
+
+    /** Single-use nonce. The composite primary key decides a replay race. */
+    async useWorkerNonce({ credentialId, nonce, operation, at, expiresAt }) {
+      try {
+        await query(
+          "INSERT INTO habitat_ax_workforce_auth_nonces (credential_id, nonce, operation, at, expires_at) VALUES (?, ?, ?, ?, ?)",
+          [String(credentialId), String(nonce), String(operation), String(at), String(expiresAt)]
+        );
+        return { ok: true };
+      } catch (error) {
+        const rows = await query(
+          "SELECT nonce FROM habitat_ax_workforce_auth_nonces WHERE credential_id = ? AND nonce = ? LIMIT 1",
+          [String(credentialId), String(nonce)]
+        ).catch(() => null);
+        if (rows === null) throw error;
+        if (rowsOf(rows).length > 0) return { ok: false, code: "worker_request_replayed" };
+        throw error;
+      }
+    },
+
+    /* ── provider operations and reconciliation ───────────────────────────────────────────── */
+
+    async saveOperation(operation) {
+      const at = operation.at;
+      await query(
+        "INSERT INTO habitat_ax_workforce_operations (idempotency_key, mission_id, task_id, worker_id, provider, provider_reference, state, proof_json, inspected_at, inspected_by, created_at, updated_at) " +
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(idempotency_key) DO UPDATE SET " +
+        "provider = COALESCE(excluded.provider, provider), provider_reference = COALESCE(excluded.provider_reference, provider_reference), " +
+        "worker_id = COALESCE(excluded.worker_id, worker_id), updated_at = excluded.updated_at, " +
+        // A settled verdict is never downgraded back to `unknown` by a later observation. A settled verdict
+        // may still be *refined* by an owner (confirmed_failure -> not_executed with proof), because the
+        // alternative is an operator who cannot correct a wrong decision.
+        "state = CASE WHEN excluded.state = 'unknown' AND habitat_ax_workforce_operations.state <> 'unknown' THEN habitat_ax_workforce_operations.state ELSE excluded.state END, " +
+        "proof_json = CASE WHEN excluded.state = 'unknown' AND habitat_ax_workforce_operations.state <> 'unknown' THEN habitat_ax_workforce_operations.proof_json ELSE COALESCE(excluded.proof_json, habitat_ax_workforce_operations.proof_json) END, " +
+        "inspected_at = COALESCE(excluded.inspected_at, inspected_at), inspected_by = COALESCE(excluded.inspected_by, inspected_by)",
+        [
+          operation.idempotencyKey,
+          operation.missionId,
+          operation.taskId,
+          operation.workerId || null,
+          operation.provider || null,
+          operation.providerReference || null,
+          OPERATION_STATES.includes(operation.state) ? operation.state : "unknown",
+          operation.proof === undefined || operation.proof === null ? null : JSON.stringify(operation.proof),
+          operation.inspectedAt || null,
+          operation.inspectedBy || null,
+          operation.createdAt || at,
+          at
+        ]
+      );
+      return { ok: true, operation: await this.getOperation(operation.idempotencyKey) };
+    },
+
+    async getOperation(idempotencyKey) {
+      const rows = await query("SELECT * FROM habitat_ax_workforce_operations WHERE idempotency_key = ?", [String(idempotencyKey)]);
+      const row = rowsOf(rows)[0];
+      return row ? operationFrom(row) : null;
+    },
+
+    async listOperations({ state = null, missionId = null, limit = 100 } = {}) {
+      const where = [];
+      const params = [];
+      if (state) { where.push("state = ?"); params.push(String(state)); }
+      if (missionId) { where.push("mission_id = ?"); params.push(String(missionId)); }
+      params.push(Math.max(1, Math.min(500, Number(limit) || 100)));
+      const rows = await query(
+        "SELECT * FROM habitat_ax_workforce_operations " + (where.length ? "WHERE " + where.join(" AND ") + " " : "") + "ORDER BY updated_at DESC LIMIT ?",
+        params
+      );
+      return rowsOf(rows).map(operationFrom);
+    },
+
+    /* ── reassignment ledger ─────────────────────────────────────────────────────────────────── */
+
+    async recordReassignment(entry) {
+      await query(
+        "INSERT INTO habitat_ax_workforce_reassignments (at, mission_id, task_id, from_worker, to_worker, lease_id, reason, decision, detail_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        [
+          entry.at || now(),
+          String(entry.missionId),
+          String(entry.taskId),
+          entry.fromWorker || null,
+          entry.toWorker || null,
+          entry.leaseId || null,
+          String(entry.reason || "unknown"),
+          String(entry.decision || "requeue"),
+          JSON.stringify(entry.detail || {})
+        ]
+      );
+      return { ok: true };
+    },
+
+    async listReassignments({ missionId = null, limit = 100 } = {}) {
+      const params = [];
+      let where = "";
+      if (missionId) { where = "WHERE mission_id = ? "; params.push(String(missionId)); }
+      params.push(Math.max(1, Math.min(500, Number(limit) || 100)));
+      const rows = await query(
+        "SELECT seq, at, mission_id, task_id, from_worker, to_worker, lease_id, reason, decision, detail_json FROM habitat_ax_workforce_reassignments " + where + "ORDER BY seq DESC LIMIT ?",
+        params
+      );
+      return rowsOf(rows).map((row) => ({
+        seq: Number(row.seq),
+        at: row.at,
+        missionId: row.mission_id,
+        taskId: row.task_id,
+        fromWorker: row.from_worker || null,
+        toWorker: row.to_worker || null,
+        leaseId: row.lease_id || null,
+        reason: row.reason,
+        decision: row.decision,
+        detail: parse(row.detail_json, {})
+      }));
     },
 
     /* ── recovery journal ─────────────────────────────────────────────────────────────────────── */
@@ -418,10 +679,16 @@ export function createWorkforceV1Repository({ query, now = () => new Date().toIS
       const states = await query("SELECT state, COUNT(*) AS total FROM habitat_ax_workforce_workers GROUP BY state");
       const byState = {};
       for (const row of rowsOf(states)) byState[row.state] = Number(row.total);
-      const leasing = await query("SELECT worker_id, COUNT(*) AS total FROM habitat_ax_workforce_leases WHERE state = 'active' GROUP BY worker_id");
+      const leasing = await query(
+        "SELECT worker_id, COUNT(*) AS total, MAX(COALESCE(renewed_at, acquired_at)) AS last_activity FROM habitat_ax_workforce_leases WHERE state = 'active' GROUP BY worker_id"
+      );
       const activeByWorker = {};
-      for (const row of rowsOf(leasing)) activeByWorker[row.worker_id] = Number(row.total);
-      return { byState, activeByWorker, total: Object.values(byState).reduce((sum, value) => sum + value, 0) };
+      const lastActivityByWorker = {};
+      for (const row of rowsOf(leasing)) {
+        activeByWorker[row.worker_id] = Number(row.total);
+        lastActivityByWorker[row.worker_id] = row.last_activity || null;
+      }
+      return { byState, activeByWorker, lastActivityByWorker, total: Object.values(byState).reduce((sum, value) => sum + value, 0) };
     },
 
     async leaseCounts() {
