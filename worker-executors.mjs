@@ -88,7 +88,9 @@ function runTestFile(file, { rootDir, timeoutMs = EXECUTOR_LIMITS.testTimeoutMs 
     for (const key of Object.keys(env)) {
       if (key === "NODE_OPTIONS" || key === "NODE_V8_COVERAGE" || key.startsWith("NODE_TEST")) delete env[key];
     }
-    const child = spawn(process.execPath, ["--test", file], {
+    // Force the spec reporter: Node defaults to TAP when stdout is not a TTY (CI), and the summary
+    // format must not depend on the host.
+    const child = spawn(process.execPath, ["--test", "--test-reporter=spec", file], {
       cwd: rootDir,
       env,
       stdio: ["ignore", "pipe", "pipe"]
@@ -102,8 +104,13 @@ function runTestFile(file, { rootDir, timeoutMs = EXECUTOR_LIMITS.testTimeoutMs 
     child.on("close", (code, signal) => {
       clearTimeout(timer);
       const durationMs = Date.now() - started;
-      const pass = Number((/^ℹ pass (\d+)$/m.exec(stdout) || [])[1] ?? 0);
-      const fail = Number((/^ℹ fail (\d+)$/m.exec(stdout) || [])[1] ?? 0);
+      // Accept both reporter shapes, so an unexpected fallback cannot look like "ran nothing".
+      const count = (label) => {
+        const match = new RegExp("^(?:\u2139|#) " + label + " (\\d+)$", "m").exec(stdout);
+        return Number(match ? match[1] : 0);
+      };
+      const pass = count("pass");
+      const fail = count("fail");
       resolve({
         code, signal, durationMs, stdout, stderr,
         ran: pass + fail,
