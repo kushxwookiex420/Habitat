@@ -43,7 +43,12 @@ async function d1Query(targetInfo, sql) {
   });
   const body = await response.json().catch(() => null);
   if (!response.ok || body?.success === false) {
-    throw new Error("d1 query failed: HTTP " + response.status);
+    // Cloudflare's own error codes make a revoked or under-scoped token actionable. They contain no
+    // credential, so they are safe to report.
+    const detail = Array.isArray(body?.errors)
+      ? body.errors.map((entry) => (entry?.code ?? "?") + ":" + String(entry?.message || "").slice(0, 120)).join("; ")
+      : "";
+    throw new Error("d1 query failed: HTTP " + response.status + (detail ? " (" + detail + ")" : ""));
   }
   return Array.isArray(body?.result) ? body.result.flatMap((item) => item?.results || []) : [];
 }
@@ -211,6 +216,11 @@ async function main() {
   report.checks.heartbeatEventCounts = Array.isArray(heartbeatEvents) ? heartbeatEvents : null;
 
   // A device row plus a completed command is the only durable proof that the phone round-tripped.
+  // A report that could not read the database is not a passing audit. The job must go red so a
+  // revoked or rotated credential is visible instead of looking like "no devices paired".
+  const unauthorized = report.errors.some((entry) => /HTTP 401|HTTP 403/.test(entry.error));
+  if (unauthorized) report.blocked = "cloudflare_rejected_d1_token";
+
   report.summary = {
     pairedDeviceRows: report.checks.pairedDevices?.length,
     activePairedDevices: report.checks.activePairedDevices,
@@ -220,6 +230,7 @@ async function main() {
     heartbeatIntegrations: Array.isArray(report.checks.heartbeatState) ? report.checks.heartbeatState.length : null
   };
   report.ok = report.errors.length === 0;
+  if (!report.ok) process.exitCode = 1;
 
   console.log(JSON.stringify(report, null, 2));
 }
