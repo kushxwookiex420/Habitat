@@ -98,6 +98,42 @@ function commandSummary(recordJson) {
   }
 }
 
+async function inspectCredential(targetInfo) {
+  const out = { present: Boolean(targetInfo.token) };
+  try {
+    const response = await fetch("https://api.cloudflare.com/client/v4/user/tokens/verify", {
+      headers: { authorization: "Bearer " + targetInfo.token, "content-type": "application/json" }
+    });
+    const body = await response.json().catch(() => null);
+    out.verifyStatus = response.status;
+    out.active = body?.success === true && body?.result?.status === "active";
+    out.resultStatus = body?.result?.status || null;
+    out.expiresOn = body?.result?.expires_on || null;
+    out.notBefore = body?.result?.not_before || null;
+    out.verifyError = Array.isArray(body?.errors) && body.errors.length
+      ? body.errors.map((entry) => (entry?.code ?? "?") + ":" + String(entry?.message || "").slice(0, 80)).join("; ")
+      : null;
+  } catch (error) {
+    out.verifyStatus = 0;
+    out.verifyError = String(error?.message || error).slice(0, 120);
+  }
+  try {
+    const metadata = await fetch(
+      "https://api.cloudflare.com/client/v4/accounts/" + targetInfo.accountId + "/d1/database/" + targetInfo.databaseId,
+      { headers: { authorization: "Bearer " + targetInfo.token, "content-type": "application/json" } }
+    );
+    const body = await metadata.json().catch(() => null);
+    out.databaseMetadataStatus = metadata.status;
+    out.databaseMetadataError = Array.isArray(body?.errors) && body.errors.length
+      ? body.errors.map((entry) => (entry?.code ?? "?") + ":" + String(entry?.message || "").slice(0, 80)).join("; ")
+      : null;
+  } catch (error) {
+    out.databaseMetadataStatus = 0;
+    out.databaseMetadataError = String(error?.message || error).slice(0, 120);
+  }
+  return out;
+}
+
 async function safeQuery(targetInfo, sql, report, label) {
   try {
     return await d1Query(targetInfo, sql);
@@ -125,6 +161,11 @@ async function main() {
     process.exitCode = 1;
     return;
   }
+
+  // Cloudflare reports two very different failures as code 10000 (a rejected credential and a missing
+  // route/scope). The token verify endpoint and a metadata read separate them without exposing the
+  // token: verify says whether it is active and when it expires; metadata tests the D1 route itself.
+  report.credential = await inspectCredential(targetInfo);
 
   const tables = await safeQuery(
     targetInfo,
@@ -222,6 +263,9 @@ async function main() {
   if (unauthorized) report.blocked = "cloudflare_rejected_d1_token";
 
   report.summary = {
+    credentialActive: report.credential?.active === true,
+    credentialExpiresOn: report.credential?.expiresOn || null,
+    databaseMetadataStatus: report.credential?.databaseMetadataStatus ?? null,
     pairedDeviceRows: report.checks.pairedDevices?.length,
     activePairedDevices: report.checks.activePairedDevices,
     devicesSeenInLastHour: report.checks.devicesSeenInLastHour,

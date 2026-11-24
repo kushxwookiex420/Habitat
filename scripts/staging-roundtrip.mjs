@@ -106,11 +106,29 @@ async function main() {
     return;
   }
 
-  // 2. Authenticated device list: proves the credential works before anything is queued.
+  // 2. Which Ax surface accepts this credential? The two surfaces read different variables:
+  //    /ax/command/* accepts HABITAT_AX_BRIDGE_TOKEN or HABITAT_AX_COMMAND_TOKEN, while
+  //    /ax/device/* accepts only HABITAT_AX_BRIDGE_TOKEN. Probing both turns "401" into a precise
+  //    answer about which deployment variable is missing.
+  const diagnostics = await call(base.origin, "/ax/command/diagnostics", { token });
+  const taskList = await call(base.origin, "/ax/command/tasks?limit=1", { token });
+  report.steps.authSurfaces = {
+    diagnostics: diagnostics.status,
+    commandTasks: taskList.status,
+    note: "200 means the credential authenticates that surface; 401 means it does not."
+  };
+  if (diagnostics.status === 200 || taskList.status === 200) {
+    report.credentialSurface = "ax_command";
+  }
+
+  // 3. Authenticated device list: the device surface needs the bridge token specifically.
   const devices = await call(base.origin, "/ax/device/devices", { token });
   report.steps.devices = { status: devices.status, count: Array.isArray(devices.json?.devices) ? devices.json.devices.length : null };
   if (devices.status === 401) {
-    report.blocked = "ax_credential_rejected";
+    // Distinguish "wrong credential" from "right credential, wrong surface".
+    report.blocked = report.credentialSurface === "ax_command"
+      ? "device_surface_needs_bridge_token"
+      : "ax_credential_rejected";
     console.log(JSON.stringify(report, null, 2));
     process.exitCode = 1;
     return;
@@ -145,7 +163,7 @@ async function main() {
     appVersion: chosen.deviceInfo?.appVersion || null
   };
 
-  // 3. Queue the harmless read-only command.
+  // 4. Queue the harmless read-only command.
   const queued = await call(base.origin, "/ax/device/commands", {
     method: "POST",
     token,
@@ -168,7 +186,7 @@ async function main() {
     queuedAt: new Date().toISOString()
   };
 
-  // 4. Wait for the phone to claim and report. A closed app falls back to a periodic job, so the
+  // 5. Wait for the phone to claim and report. A closed app falls back to a periodic job, so the
   // window is generous; the report states exactly how long it waited.
   const timeoutSeconds = Number(envValue("ROUNDTRIP_TIMEOUT_SECONDS")) || DEFAULT_TIMEOUT_SECONDS;
   const deadline = Date.now() + timeoutSeconds * 1000;
