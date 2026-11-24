@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { criterionStatements } from "./ax-mission-plan.mjs";
-import { approvalBinding, executionGate } from "./ax-mission-policy.mjs";
+import { approvalBinding, approvalSigningFields, classifyAction, executionGate } from "./ax-mission-policy.mjs";
 
 /**
  * Mission Execution Engine.
@@ -99,7 +99,12 @@ export function buildMissionPlan({ objective, acceptanceCriteria, tasks = null }
         requires: requires.length ? requires : ["coding"],
         dependsOn: list(raw.dependsOn).map(item => clean(item, 60)).filter(Boolean),
         criteria: list(raw.criteria).map(Number).filter(value => Number.isInteger(value) && value >= 0 && value < criteria.length),
-        approvalRequired: raw.approvalRequired === true
+        approvalRequired: raw.approvalRequired === true,
+        // The authorization an owner signs must survive planning: dropping these would silently bind every
+        // approval to a null target and a null parameter set.
+        action: clean(raw.action, 200) || null,
+        target: raw.target === undefined || raw.target === null ? null : clean(raw.target, 300) || null,
+        params: raw.params && typeof raw.params === "object" ? raw.params : null
       });
     }
     for (const task of normalized) {
@@ -227,7 +232,9 @@ export function createMissionEngine({
           scope: "mission",
           fingerprint: approvalBinding({ missionId: id, taskId: "mission", action: "mission:" + objective, target: null, params: null }),
           status: "pending",
-          decision: null
+          decision: null,
+          requestedAt: at,
+          expiresAt: new Date(Date.parse(at) + 30 * 60_000).toISOString()
         }));
     for (const task of plan.tasks) {
       if (task.approvalRequired !== true) continue;
@@ -337,6 +344,30 @@ export function createMissionEngine({
       return;
     }
     if (task.approvalRequired === true) {
+      // The stored signature is re-verified against the record as it is now, without spending its nonce.
+      const approval = (mission.approvals || []).find((item) => item.taskId === task.id && item.status === "approved");
+      let signature = { ok: false, code: approval?.signed ? "approval_signature_invalid" : "approval_signature_missing" };
+      if (approval?.signed && ownerVerifier && typeof ownerVerifier.verify === "function") {
+        const signing = approvalSigningFields({
+          mission,
+          approval,
+          // The stored decision is "approved"/"rejected"; the signed decision is "approve"/"reject".
+          decision: approval.decision === "rejected" ? "reject" : "approve",
+          owner: approval.decidedBy || "owner"
+        });
+        signature = ownerVerifier.verify(signing, approval.signed, { consumeReplay: false });
+      } else if (approval?.signed) {
+        signature = { ok: false, code: "owner_attestation_not_configured" };
+      }
+      if (!signature.ok) {
+        task.status = "blocked";
+        task.error = signature.code;
+        task.evidence = [...(task.evidence || []), "signature:" + signature.code + "@" + (gate.fingerprint || "unbound")];
+        await emit(mission.id, "task.signature_refused", {
+          taskId: task.id, code: signature.code, fingerprint: gate.fingerprint, approvalId: approval?.id || null
+        });
+        return;
+      }
       task.approval = { code: gate.code, fingerprint: gate.fingerprint, decidedBy: gate.decidedBy, grantedAt: gate.grantedAt };
       await emit(mission.id, "task.approval_cleared", { taskId: task.id, fingerprint: gate.fingerprint });
     }
@@ -550,28 +581,22 @@ export function createMissionEngine({
     const loaded = await store.get(missionId);
     if (!loaded) return { ok: false, code: "mission_not_found" };
     const mission = loaded.record;
-    if (mission.status !== "approval_required") return { ok: false, code: "approval_not_required", status: mission.status };
-    if (!ownerVerifier) return { ok: false, code: "owner_attestation_not_configured" };
-    const verified = ownerVerifier.verify({
-      operation: "mission.approve",
-      project: mission.project,
-      key: mission.id,
-      kind: decision,
-      statement: clean(reason, 300),
-      tags: [],
-      confidence: null
-    }, attestation);
-    if (!verified.ok) return { ok: false, ...verified };
+    // Decisions may be taken one at a time: mission-scope first, then each named task. A running mission with
+    // pending approvals can still take the next decision, but nothing else can.
+    const hasPending = (mission.approvals || []).some((item) => item.status === "pending");
+    if (mission.status !== "approval_required" && !(mission.status === "running" && hasPending)) {
+      return { ok: false, code: "approval_not_required", status: mission.status };
+    }
 
-    // A decision always answers the mission-scope signal, and may name exactly one task or approval. It never
-    // sweeps up unrelated task approvals: one signature must not authorise work the owner did not see.
+    // A decision names exactly one authorization. It never sweeps up unrelated task approvals: one signature
+    // must not authorise work the owner did not see.
     const selected = mission.approvals.filter((item) => {
-      const missionScope = !item.taskId;
-      if (approvalId) return item.id === approvalId || (missionScope && item.status === "pending");
-      if (taskId) return item.taskId === taskId || (missionScope && item.status === "pending");
-      return missionScope && item.status === "pending";
+      if (approvalId) return item.id === approvalId;
+      if (taskId) return item.taskId === taskId;
+      return !item.taskId && item.status === "pending";
     });
     if (selected.length === 0) return { ok: false, code: "approval_not_found" };
+    if (selected.length > 1) return { ok: false, code: "approval_ambiguous" };
     for (const approval of selected) {
       // Bind the decision to the task as persisted right now, so an approval for an old plan cannot authorise
       // the changed one. Missing bindings are recomputed rather than trusted.
@@ -583,13 +608,42 @@ export function createMissionEngine({
         approval.params = task.params === undefined ? null : task.params;
         approval.fingerprint = approvalBinding({ missionId: mission.id, taskId: task.id, action, target: approval.target, params: approval.params });
       }
+      // Cryptographic binding. The signature must cover the persisted authorization exactly: mission,
+      // approval, decision, action class, target, canonical parameters, expiry and owner. Missing signer
+      // configuration fails closed; there is no unsigned path for a consequential decision.
+      if (!ownerVerifier || typeof ownerVerifier.verify !== "function") {
+        return { ok: false, code: "owner_attestation_not_configured" };
+      }
+      const signing = approvalSigningFields({
+        mission,
+        approval,
+        decision: decision === "approve" ? "approve" : "reject",
+        owner: clean(by, 64) || "owner"
+      });
+      const verified = ownerVerifier.verify(signing, attestation);
+      if (!verified.ok) return { ok: false, code: verified.code || "owner_attestation_invalid" };
+      if (decision === "approve") {
+        const expiresAt = Date.parse(String(approval.expiresAt || ""));
+        if (!Number.isFinite(expiresAt) || expiresAt <= Date.parse(now())) {
+          return { ok: false, code: "approval_expired" };
+        }
+      }
+      approval.signed = {
+        v: attestation?.v ?? null,
+        keyId: verified.keyId || attestation?.keyId || null,
+        issuedAt: attestation?.issuedAt || null,
+        nonce: attestation?.nonce || null,
+        mac: attestation?.mac || null,
+        statement: signing.statement
+      };
       approval.status = decision === "approve" ? "approved" : "rejected";
       approval.decision = decision === "approve" ? "approved" : "rejected";
       approval.decidedAt = now();
       approval.decidedBy = clean(by, 64) || "owner";
       if (decision === "approve") {
+        // The expiry is the one that was signed. Extending it here would silently invalidate the signature
+        // (and silently extend the owner's grant); a stale approval needs a fresh request and signature.
         approval.grantedAt = now();
-        approval.expiresAt = new Date(Date.parse(now()) + 30 * 60_000).toISOString();
       }
     }
     // An approved mission becomes runnable; it is never marked completed by a signature alone.

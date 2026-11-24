@@ -6,6 +6,8 @@ import path from "node:path";
 import { mkdtemp, rm } from "node:fs/promises";
 import { registerUniversalCommandRoutes } from "../command-routes.mjs";
 import { buildMissionEnvironment } from "../mission-harness.mjs";
+import { createOwnerAttestation } from "../ax-owner-attestation.mjs";
+import { approvalSigningFields } from "../ax-mission-policy.mjs";
 
 /**
  * These are HTTP tests: a real node:http server, real sockets, real `fetch`, the real route handlers and the
@@ -343,6 +345,8 @@ test("HTTP: an approval authorises one action, and the API refuses a changed one
     const pending = await call(server.base, "GET", "/ax/missions/" + missionId);
     assert.equal(pending.json.mission.tasks[0].status, "pending", "the action did not run before approval");
 
+    const signal = await call(server.base, "POST", "/ax/missions/" + missionId + "/approve", { body: { decision: "approve", reason: "mission reviewed" } });
+    assert.equal(signal.status, 200, JSON.stringify(signal.json));
     const decided = await call(server.base, "POST", "/ax/missions/" + missionId + "/approve", { body: { decision: "approve", taskId: "d1", reason: "release window agreed" } });
     assert.equal(decided.status, 200, JSON.stringify(decided.json));
     assert.equal(decided.json.mission.status, "running", "a signature releases the gate; it does not complete work");
@@ -359,6 +363,7 @@ test("HTTP: an approval authorises one action, and the API refuses a changed one
     } });
     const secondId = second.json.mission.missionId;
     await call(server.base, "POST", "/ax/missions/" + secondId + "/run", { body: {} });
+    await call(server.base, "POST", "/ax/missions/" + secondId + "/approve", { body: { decision: "approve" } });
     await call(server.base, "POST", "/ax/missions/" + secondId + "/approve", { body: { decision: "approve", taskId: "d1" } });
     const loaded = await env.missionStore.get(secondId);
     const record = loaded.record;
@@ -411,6 +416,9 @@ test("HTTP: expired, rejected, revoked, wrong-task and wrong-mission approvals a
     const id = created.json.mission.missionId;
     const parked = await call(server.base, "POST", "/ax/missions/" + id + "/run", { body: {} });
     assert.equal(parked.json.run.status, "approval_required", JSON.stringify(parked.json));
+    // The objective-level signal is its own authorization; answering it does not approve the task.
+    const signal = await call(server.base, "POST", "/ax/missions/" + id + "/approve", { body: { decision: "approve" } });
+    assert.equal(signal.status, 200, JSON.stringify(signal.json));
     return id;
   };
   const decide = (id, body) => call(server.base, "POST", "/ax/missions/" + id + "/approve", { body });
@@ -472,6 +480,91 @@ test("HTTP: expired, rejected, revoked, wrong-task and wrong-mission approvals a
     const wrongMissionResult = await runAndRead(wrongMission);
     assert.equal(wrongMissionResult.mission.tasks[0].error, "approval_missing");
     assert.ok(wrongMissionResult.events.some((event) => event.type === "task.approval_refused"));
+  } finally {
+    await server.close();
+    await env.close();
+    await rm(base, { recursive: true, force: true });
+  }
+});
+
+test("HTTP: the standard approval route requires a signature bound to the exact task", async () => {
+  const base = await workspace();
+  const SECRET = "http-approval-crypto-secret-" + "h".repeat(16);
+  const owner = createOwnerAttestation({ secret: SECRET });
+  const calls = { byTask: {} };
+  const env = await buildMissionEnvironment({
+    rootDir: ROOT,
+    artifactsDir: path.join(base, "artifacts"),
+    dbPath: path.join(base, "db.sqlite"),
+    ownerVerifier: owner,
+    executorOverrides: {
+      "eng.repo": async ({ task }) => {
+        calls.byTask[task.id] = (calls.byTask[task.id] || 0) + 1;
+        return { result: { status: "completed", evidence: ["spy:" + task.id], changedFiles: [], tests: { ran: 1, passed: 1, failed: 0 } } };
+      },
+      "verifier.recompute": async () => ({ ok: true, evidence: ["verifier:ok"], tests: { ran: 1, passed: 1, failed: 0 } })
+    }
+  });
+  const provider = {
+    submit: (spec) => env.pipeline.submit(spec),
+    run: (id, options) => env.pipeline.run(id, options),
+    approve: (spec) => env.missions.approve(spec),
+    get: async (id) => { const loaded = await env.missions.get(id); return loaded ? loaded.record : null; },
+    events: (id) => env.missions.events(id)
+  };
+  const server = await startServer({ provider });
+  const DEPLOY = {
+    id: "t2", title: "Deploy to production", requires: ["engineering"], criteria: [1],
+    approvalRequired: true, action: "deploy release 6.0.0", target: "staging", params: { replicas: 2 }
+  };
+  const sign = async (missionId, taskId, decision = "approve") => {
+    const loaded = await env.missions.get(missionId);
+    const mission = loaded.record;
+    const approval = mission.approvals.find((item) => (taskId ? item.taskId === taskId : !item.taskId));
+    return owner.sign(approvalSigningFields({ mission, approval, decision, owner: "owner" }));
+  };
+  try {
+    const created = await call(server.base, "POST", "/ax/missions", { body: {
+      objective: "Deploy release 6.0.0 to production",
+      acceptanceCriteria: ["Repository analysed", "Release prepared"],
+      tasks: [
+        { id: "t1", title: "Analyse the repository", requires: ["engineering"], criteria: [0] },
+        { ...DEPLOY, dependsOn: ["t1"] }
+      ],
+      idempotencyKey: "crypto-http-1"
+    } });
+    assert.equal(created.status, 201, JSON.stringify(created.json));
+    const missionId = created.json.mission.missionId;
+    await call(server.base, "POST", "/ax/missions/" + missionId + "/run", { body: {} });
+
+    const unsigned = await call(server.base, "POST", "/ax/missions/" + missionId + "/approve", { body: { decision: "approve" } });
+    assert.equal(unsigned.status, 409);
+    assert.equal(unsigned.json.code, "owner_attestation_required");
+
+    const signal = await sign(missionId, null);
+    assert.equal((await call(server.base, "POST", "/ax/missions/" + missionId + "/approve", { body: { decision: "approve", attestation: signal.attestation } })).status, 200);
+
+    const signed = await sign(missionId, "t2");
+    const tampered = { ...signed.attestation, mac: signed.attestation.mac.replace(/^./, (c) => (c === "a" ? "b" : "a")) };
+    const refused = await call(server.base, "POST", "/ax/missions/" + missionId + "/approve", { body: { decision: "approve", taskId: "t2", attestation: tampered } });
+    assert.equal(refused.status, 409);
+    assert.equal(refused.json.code, "owner_attestation_invalid");
+
+    const accepted = await call(server.base, "POST", "/ax/missions/" + missionId + "/approve", { body: { decision: "approve", taskId: "t2", attestation: signed.attestation } });
+    assert.equal(accepted.status, 200, JSON.stringify(accepted.json));
+    const run = await call(server.base, "POST", "/ax/missions/" + missionId + "/run", { body: { maxRounds: 2 } });
+    assert.equal(run.json.run.status, "completed", JSON.stringify(run.json.run));
+    assert.equal(calls.byTask.t2, 1);
+
+    const fetched = await call(server.base, "GET", "/ax/missions/" + missionId);
+    assert.equal(fetched.status, 200);
+    assert.ok(fetched.json.mission.approvals.every((item) => item.status === "approved"),
+      "the API reports both authorizations as approved");
+    const record = (await env.missions.get(missionId)).record;
+    const approval = record.approvals.find((item) => item.taskId === "t2");
+    assert.equal(approval.decision, "approved");
+    assert.ok(approval.signed?.mac, "the record keeps the signature reference, never a key");
+    assert.equal(JSON.stringify(record).includes(SECRET), false, "no signing secret is stored");
   } finally {
     await server.close();
     await env.close();

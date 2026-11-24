@@ -9,6 +9,7 @@ import { runGatewaySmoke } from "../scripts/ax-gateway-smoke.mjs";
 import { createDurableWorkforce } from "../ax-durable-workforce.mjs";
 import { createMissionRuntime } from "../ax-mission-runtime.mjs";
 import { createOwnerAttestation } from "../ax-owner-attestation.mjs";
+import { approvalSigningFields } from "../ax-mission-policy.mjs";
 import { issueClientToken, registerAxGateway } from "../ax-gateway.mjs";
 import { createHeartbeatRepository } from "../d1-heartbeat-repository.mjs";
 import { createHeartbeatMonitor } from "../ax-heartbeat.mjs";
@@ -330,10 +331,11 @@ test("approval requires a signed owner attestation and cannot be self-issued by 
   });
   assert.equal(unsigned.status, 403);
 
-  const signed = h.ownerVerifier.sign({
-    operation: "mission.approve", project: "habitat", key: submitted.missionId,
-    kind: "approve", statement: "Checked the evidence.", tags: [], confidence: null
-  });
+  // Sign what the engine will verify: the persisted record, not a presentation projection.
+  const pendingRecord = (await h.missionStore.get(submitted.missionId)).record;
+  const signed = h.ownerVerifier.sign(approvalSigningFields({
+    mission: pendingRecord, approval: pendingRecord.approvals[0], decision: "approve", owner: "owner"
+  }));
   const approved = await fetch(h.base + "/ax/v1/missions/" + submitted.missionId + "/decision", {
     method: "POST",
     headers: { ...headers, ...nonce() },
@@ -483,15 +485,16 @@ test("gateway: an approval releases only the action it was signed for, and tampe
     assert.equal(calls.byTask.d1 || 0, 0, "the consequential task did not run before approval");
 
     // A bare decision answers the mission signal only; it must not approve the task too.
-    const sign = (kind) => h.ownerVerifier.sign({
-      operation: "mission.approve", project: "habitat", key: submitted.missionId,
-      kind, statement: "Checked the evidence.", tags: [], confidence: null
-    });
+    const signFor = async (taskId, decision = "approve") => {
+      const mission = (await h.missionStore.get(submitted.missionId)).record;
+      const approval = mission.approvals.find((item) => (taskId ? item.taskId === taskId : !item.taskId));
+      return h.ownerVerifier.sign(approvalSigningFields({ mission, approval, decision, owner: "owner" }));
+    };
     const bare = await (await fetch(h.base + "/ax/v1/missions/" + submitted.missionId + "/decision", {
       method: "POST", headers: { ...headers, ...nonce() },
-      body: JSON.stringify({ decision: "approve", attestation: sign("approve").attestation, reason: "Checked the evidence." })
+      body: JSON.stringify({ decision: "approve", attestation: (await signFor(null)).attestation, reason: "Checked the evidence." })
     })).json();
-    assert.equal(bare.status, "running");
+    assert.equal(bare.status, "running", JSON.stringify(bare));
     const afterBare = await (await fetch(h.base + "/ax/v1/missions/" + submitted.missionId, { headers })).json();
     assert.equal(afterBare.mission.approvals.find((item) => item.taskId === "d1").status, "pending",
       "one signature did not authorise the task");
@@ -501,7 +504,7 @@ test("gateway: an approval releases only the action it was signed for, and tampe
     // Approve the task explicitly, then tamper with the persisted parameters.
     const signed = await (await fetch(h.base + "/ax/v1/missions/" + submitted.missionId + "/decision", {
       method: "POST", headers: { ...headers, ...nonce() },
-      body: JSON.stringify({ decision: "approve", taskId: "d1", attestation: sign("approve").attestation, reason: "Checked the evidence." })
+      body: JSON.stringify({ decision: "approve", taskId: "d1", attestation: (await signFor("d1")).attestation, reason: "Checked the evidence." })
     })).json();
     assert.equal(signed.status, "running", JSON.stringify(signed));
     const loaded = await h.missionStore.get(submitted.missionId);

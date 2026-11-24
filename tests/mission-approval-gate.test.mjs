@@ -90,9 +90,17 @@ async function mutate(env, missionId, change) {
   return saved.record;
 }
 
+async function approveSignal(env, missionId) {
+  // Mission-scope and task-scope are separate authorizations, so each needs its own decision.
+  const signal = await env.missions.approve({ missionId, decision: "approve", reason: "mission reviewed" });
+  assert.equal(signal.ok, true, JSON.stringify(signal));
+  return signal;
+}
+
 async function parkAndApprove({ env, missionId, taskId = "t2" }) {
   const first = await env.pipeline.run(missionId, { maxRounds: 1 });
   assert.equal(first.status, "approval_required", JSON.stringify(first));
+  await approveSignal(env, missionId);
   const approved = await env.missions.approve({ missionId, taskId, decision: "approve", reason: "release window agreed" });
   assert.equal(approved.ok, true, JSON.stringify(approved));
   return approved;
@@ -287,6 +295,7 @@ test("gate: one task signature does not authorise an unrelated consequential tas
     assert.equal(parked.status, "approval_required");
     assert.equal(calls.compute, 0, "neither consequential task ran before a decision");
 
+    await approveSignal(env, missionId);
     const approved = await env.missions.approve({ missionId, taskId: "d1", decision: "approve" });
     assert.equal(approved.ok, true, JSON.stringify(approved));
     const after = await env.pipeline.run(missionId, { maxRounds: 1 });
@@ -342,6 +351,8 @@ test("gate: an approval expires across a database restart", async () => {
     assert.equal(outcome.ok, true, JSON.stringify(outcome));
     missionId = outcome.missionId;
     assert.equal((await first.pipeline.run(missionId, { maxRounds: 1 })).status, "approval_required");
+    const signal = await first.missions.approve({ missionId, decision: "approve" });
+    assert.equal(signal.ok, true, JSON.stringify(signal));
     const approved = await first.missions.approve({ missionId, taskId: "t2", decision: "approve" });
     assert.equal(approved.ok, true, JSON.stringify(approved));
     assert.equal(calls.byTask.t2 || 0, 0);
@@ -382,6 +393,7 @@ test("gate: prohibited work stays blocked even with a valid approval", async () 
     assert.equal(intake.ok, true, JSON.stringify(intake));
     const missionId = intake.missionId;
     await env.pipeline.run(missionId, { maxRounds: 1 });
+    await approveSignal(env, missionId);
     const approved = await env.missions.approve({ missionId, taskId: "p1", decision: "approve" });
     assert.equal(approved.ok, true, JSON.stringify(approved));
     await env.pipeline.run(missionId, { maxRounds: 1 });
@@ -403,6 +415,7 @@ test("gate: execute, recover and the pipeline all converge on the same refusal",
       assert.equal(outcome.ok, true, JSON.stringify(outcome));
       const missionId = outcome.missionId;
       await env.pipeline.run(missionId, { maxRounds: 1 });
+      await approveSignal(env, missionId);
       await env.missions.approve({ missionId, taskId: "t2", decision: "approve" });
       await mutate(env, missionId, (mission) => {
         mission.tasks.find((task) => task.id === "t2").params = { region: "iad", replicas: 9 };

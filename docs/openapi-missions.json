@@ -233,7 +233,8 @@
               "schema": {
                 "type": "object",
                 "required": [
-                  "decision"
+                  "decision",
+                  "attestation"
                 ],
                 "properties": {
                   "decision": {
@@ -244,10 +245,40 @@
                     ]
                   },
                   "taskId": {
-                    "type": "string"
+                    "type": "string",
+                    "description": "The task approval this signature authorises."
                   },
                   "approvalId": {
                     "type": "string"
+                  },
+                  "attestation": {
+                    "type": "object",
+                    "required": [
+                      "v",
+                      "keyId",
+                      "issuedAt",
+                      "nonce",
+                      "mac"
+                    ],
+                    "description": "HMAC-SHA256 attestation over the canonical authorization statement: mission, approval, decision, class, target, parameter fingerprint, expiry and owner.",
+                    "properties": {
+                      "v": {
+                        "type": "integer"
+                      },
+                      "keyId": {
+                        "type": "string"
+                      },
+                      "issuedAt": {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      "nonce": {
+                        "type": "string"
+                      },
+                      "mac": {
+                        "type": "string"
+                      }
+                    }
                   },
                   "reason": {
                     "type": "string",

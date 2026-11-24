@@ -186,3 +186,59 @@ export function executionGate({ mission, task, now = new Date().toISOString(), m
   const verdict = approvalValid({ ...approval, decision: approval.decision || approval.status }, { fingerprint, now, maxAgeMs });
   return { ok: verdict.ok, code: verdict.code === "approval_valid" ? "approval_valid" : verdict.code, ...base, fingerprint, grantedAt: approval.grantedAt || null, decidedBy: approval.decidedBy || null };
 }
+
+/** A stable fingerprint of canonical parameters: key order cannot change it. */
+export function paramsFingerprint(params) {
+  return "pf:" + createHash("sha256").update(JSON.stringify(sortKeys(params ?? null))).digest("hex").slice(0, 32);
+}
+
+/**
+ * The exact authorization an owner signature covers. Every field is significant: changing the mission,
+ * approval, decision, action class, target, parameters, expiry or signer produces a different statement.
+ */
+export function approvalStatement({
+  missionId, approvalId, taskId, decision, actionClass, action, target = null, parameters = null, expiresAt = null, owner = "owner"
+} = {}) {
+  return JSON.stringify({
+    v: 1,
+    missionId: clean(missionId, 120),
+    approvalId: clean(approvalId, 200),
+    taskId: clean(taskId, 120) || "mission",
+    decision: clean(decision, 20),
+    actionClass: clean(actionClass, 40),
+    action: clean(action, 200),
+    target: target === null || target === undefined ? null : clean(target, 300),
+    parameters: parameters === null || parameters === undefined ? null : clean(parameters, 80),
+    expiresAt: expiresAt === null || expiresAt === undefined ? null : clean(expiresAt, 40),
+    owner: clean(owner, 64)
+  });
+}
+
+/**
+ * Build the fields an owner signs for one persisted approval. Approval time and execution time both call
+ * this, so a record that was altered after signing no longer verifies.
+ */
+export function approvalSigningFields({ mission, approval, decision = "approve", owner = "owner" } = {}) {
+  const task = approval?.taskId ? (mission?.tasks || []).find((item) => item.id === approval.taskId) || null : null;
+  const policy = task ? classifyAction(task) : { class: "mission" };
+  return {
+    operation: "mission.approve",
+    project: mission?.project || "",
+    key: mission?.id || "",
+    kind: decision,
+    statement: approvalStatement({
+      missionId: mission?.id || "",
+      approvalId: approval?.id || "",
+      taskId: approval?.taskId || "mission",
+      decision,
+      actionClass: policy.class,
+      action: task ? clean(task.action || task.title, 200) : clean(approval?.action, 200),
+      target: task ? (task.target ?? null) : null,
+      parameters: task ? paramsFingerprint(task.params ?? null) : null,
+      expiresAt: approval?.expiresAt || null,
+      owner
+    }),
+    tags: [],
+    confidence: null
+  };
+}

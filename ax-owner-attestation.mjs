@@ -100,7 +100,7 @@ export function createOwnerAttestation({
     return { ok: true, attestation: { v: OWNER_ATTESTATION_VERSION, keyId: signingKeyId, issuedAt, nonce, mac } };
   }
 
-  function verify(fields = {}, attestation = null, { ttl = ttlMs, trace = false } = {}) {
+  function verify(fields = {}, attestation = null, { ttl = ttlMs, trace = false, consumeReplay = true } = {}) {
     if (!configured) return { ok: false, code: "owner_attestation_not_configured" };
     if (!attestation || typeof attestation !== "object") return { ok: false, code: "owner_attestation_required" };
     if (Number(attestation.v) !== OWNER_ATTESTATION_VERSION) return { ok: false, code: "owner_attestation_version_unsupported" };
@@ -120,8 +120,11 @@ export function createOwnerAttestation({
     });
     if (!safeEqual(expected, attestation.mac)) return { ok: false, code: "owner_attestation_invalid" };
     const replayId = String(attestation.keyId) + ":" + String(attestation.nonce);
-    if (replayStore.seen(replayId) > now()) return { ok: false, code: "owner_attestation_replayed" };
-    replayStore.remember(replayId, issuedMs + ttl);
+    // Execution re-checks a stored signature without spending its nonce; only the decision consumes it.
+    if (consumeReplay) {
+      if (replayStore.seen(replayId) > now()) return { ok: false, code: "owner_attestation_replayed" };
+      replayStore.remember(replayId, issuedMs + ttl);
+    }
     return { ok: true, keyId: entry.keyId, issuedAt: attestation.issuedAt, ...(trace ? { replayId } : {}) };
   }
 

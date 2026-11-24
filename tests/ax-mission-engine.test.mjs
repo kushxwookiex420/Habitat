@@ -9,6 +9,7 @@ import { createSchedulerService } from "../ax-scheduler.mjs";
 import { createMemorySchedulerRepository } from "../ax-scheduler-repository.mjs";
 import { createDurableWorkforce } from "../ax-durable-workforce.mjs";
 import { createOwnerAttestation } from "../ax-owner-attestation.mjs";
+import { approvalSigningFields } from "../ax-mission-policy.mjs";
 
 const quiet = { log() {}, warn() {}, error() {} };
 const NOW = "2026-11-24T15:00:00.000Z";
@@ -231,10 +232,9 @@ test("an approval-required mission stops before completion and only a signed own
   const unsigned = await engine2.approve({ missionId: intake.missionId, decision: "approve" });
   assert.equal(unsigned.code, "owner_attestation_required");
 
-  const signed = ownerVerifier.sign({
-    operation: "mission.approve", project: "habitat", key: intake.missionId,
-    kind: "approve", statement: "Reviewed the evidence.", tags: [], confidence: null
-  });
+  const persisted = (await missionStore.get(intake.missionId)).record;
+  const signing = approvalSigningFields({ mission: persisted, approval: persisted.approvals[0], decision: "approve", owner: "owner" });
+  const signed = ownerVerifier.sign(signing);
   const approved = await engine2.approve({ missionId: intake.missionId, decision: "approve", attestation: signed.attestation, reason: "Reviewed the evidence." });
   assert.equal(approved.ok, true);
   // An approval releases the gate; it does not complete work that never ran.

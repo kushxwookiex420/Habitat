@@ -513,6 +513,7 @@ export function registerUniversalCommandRoutes(app, {
       decision,
       taskId: req.body?.taskId ? String(req.body.taskId) : null,
       approvalId: req.body?.approvalId ? String(req.body.approvalId) : null,
+      attestation: req.body?.attestation && typeof req.body.attestation === "object" ? req.body.attestation : null,
       reason: req.body?.reason ? String(req.body.reason).slice(0, 300) : null
     });
     if (!outcome.ok) return res.status(409).json({ ok: false, code: outcome.code });
