@@ -12,6 +12,22 @@ android {
         versionCode = 86
         versionName = "0.8.6"
     }
+    buildFeatures {
+        buildConfig = true
+    }
+    flavorDimensions += "environment"
+    productFlavors {
+        create("production") {
+            dimension = "environment"
+            buildConfigField("String", "HABITAT_API_BASE_URL", "\"https://habitat-1-szzd.onrender.com\"")
+        }
+        create("staging") {
+            dimension = "environment"
+            applicationIdSuffix = ".staging"
+            versionNameSuffix = "-staging"
+            buildConfigField("String", "HABITAT_API_BASE_URL", "\"https://habitat-staging-e3ie.onrender.com\"")
+        }
+    }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17

@@ -34,7 +34,7 @@ class AndroidDeviceBridge(
     companion object {
         private const val PREFS = "habitat_ax_device_bridge"
         private const val KEY_ALIAS = "habitat_ax_device_bridge_v1"
-        private const val BASE_URL = "https://habitat-1-szzd.onrender.com"
+        private val BASE_URL = BuildConfig.HABITAT_API_BASE_URL
     }
 
     private val appContext = context.applicationContext

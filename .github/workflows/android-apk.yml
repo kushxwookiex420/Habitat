@@ -44,8 +44,8 @@ jobs:
         with:
           # The repository intentionally has no wrapper jar; pin the same Gradle line as the docs.
           gradle-version: "8.10.2"
-      - name: Build debug APK
-        run: gradle :app:assembleDebug --no-daemon --console=plain
+      - name: Build production and staging debug APKs
+        run: gradle :app:assembleProductionDebug :app:assembleStagingDebug --no-daemon --console=plain
 
       # A cache of the runner's generated keystore did not survive between jobs, so three builds
       # produced three certificates. The identity now comes from the repository keystore, and this
@@ -54,9 +54,11 @@ jobs:
         run: |
           set -euo pipefail
           EXPECTED=$(tr -d '[:space:]' < EXPECTED_DEBUG_CERT_SHA256)
-          ACTUAL=$(node scripts/apk-cert-fingerprint.mjs app/build/outputs/apk/debug/app-debug.apk | sed -n 's/^certificate-sha256=//p')
+          ACTUAL=$(node scripts/apk-cert-fingerprint.mjs app/build/outputs/apk/production/debug/app-production-debug.apk | sed -n 's/^certificate-sha256=//p')
+          STAGING=$(node scripts/apk-cert-fingerprint.mjs app/build/outputs/apk/staging/debug/app-staging-debug.apk | sed -n 's/^certificate-sha256=//p')
           echo "expected=$EXPECTED"
           echo "actual  =$ACTUAL"
+          echo "staging =$STAGING"
           if [ -z "${ACTUAL}" ]; then
             echo "::error::Could not read the APK certificate."
             exit 1
@@ -65,7 +67,11 @@ jobs:
             echo "::error::The debug APK is not signed by the repository keystore; an upgrade over an installed debug build would fail with INSTALL_FAILED_UPDATE_INCOMPATIBLE."
             exit 1
           fi
-          echo "::notice::Signed by the repository debug identity $ACTUAL"
+          if [ "$EXPECTED" != "$STAGING" ]; then
+            echo "::error::The staging APK is not signed by the repository debug identity."
+            exit 1
+          fi
+          echo "::notice::Both production and staging APKs are signed by the repository debug identity $ACTUAL"
       - name: Build signed release when the owner has configured signing
         env:
           HABITAT_KEYSTORE_BASE64: ${{ secrets.HABITAT_KEYSTORE_BASE64 }}
@@ -81,7 +87,7 @@ jobs:
           KS="$RUNNER_TEMP/owner.jks"
           printf '%s' "$HABITAT_KEYSTORE_BASE64" | base64 -d > "$KS"
           export HABITAT_KEYSTORE_FILE="$KS"
-          gradle :app:assembleRelease --no-daemon --console=plain
+          gradle :app:assembleProductionRelease :app:assembleStagingRelease --no-daemon --console=plain
           rm -f "$KS"
       - name: Checksums
         run: |
