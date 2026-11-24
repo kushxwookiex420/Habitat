@@ -508,3 +508,28 @@ test("the task route carries owner priority into the queue and refuses an out-of
   assert.equal(rejected.body.code, "invalid_priority");
   assert.equal(repository.rows.size, 1, "the refused task was never stored");
 });
+
+test("the task route accepts planner signals and derives a suggested priority", async () => {
+  const app = makeApp();
+  const repository = memoryRepository();
+  mountTestApp(app, repository);
+
+  const derived = await invoke(app, "POST /ax/command/tasks", {
+    headers: auth,
+    body: {
+      objective: "Repair the staging command path",
+      idempotencyKey: "signals-route-1",
+      signals: { urgency: "critical", impact: "critical" }
+    }
+  });
+  assert.equal(derived.statusCode, 201);
+  assert.equal(derived.body.task.priority, 60, "40 urgency + 20 impact, with no deadline");
+  assert.equal(derived.body.task.prioritySource, "derived");
+
+  const explicit = await invoke(app, "POST /ax/command/tasks", {
+    headers: auth,
+    body: { objective: "Repair the staging command path", idempotencyKey: "signals-route-2", priority: 3, signals: { urgency: "critical" } }
+  });
+  assert.equal(explicit.body.task.priority, 3, "an explicit priority wins over signals");
+  assert.equal(explicit.body.task.prioritySource, "owner");
+});

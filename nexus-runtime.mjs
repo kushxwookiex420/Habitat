@@ -313,6 +313,9 @@ export function createNexusWorker({
   retentionDays = 7,
   pruneIntervalMs = 60 * 60 * 1000,
   renewLease = true,
+  // Called once when a task reaches a terminal failure. Best effort by contract: the task outcome is
+  // already recorded, so a broken sink is logged and never re-thrown into execution.
+  escalate = null,
   now = () => new Date().toISOString(),
   log = console
 } = {}) {
@@ -507,6 +510,25 @@ export function createNexusWorker({
       return { ok: false, reason: "stale_claim", outcome };
     }
     if (outcome?.ok === false) counters.failed -= 1;
+    if (outcome?.ok !== false && typeof escalate === "function") {
+      try {
+        const delivered = await escalate({
+          taskId: task.id,
+          objective: typeof current.objective === "string" ? current.objective : null,
+          error: String(error).slice(0, 1000),
+          attempts: Number(current.attempts || 0),
+          at: now(),
+          status: "failed"
+        });
+        if (delivered?.ok === false) {
+          log.warn?.("NEXUS_WORKER: failure escalation not delivered (" + String(delivered?.code || "unknown") + ")");
+        }
+      } catch (escalationError) {
+        // Escalation is reporting, not execution. It can never turn a recorded failure into an
+        // unrecorded one.
+        log.warn?.("NEXUS_WORKER: failure escalation threw: " + String(escalationError?.message || escalationError));
+      }
+    }
     return { ok: false, reason: "failed", outcome };
   }
 
@@ -754,6 +776,8 @@ export function registerNexusRuntime(app, {
   ownerDeviceId = null,
   ownerDeviceIds = null,
   audit = null,
+  // Supplied by the server so a terminal failure reaches Ax's durable message channel.
+  escalate = null,
   // Refuse to mount an adapter that is not in the read-only set. Side-effecting adapters stay off
   // until idempotency protection exists; an embedder may only lower this after that work lands.
   enforceReadOnlyAdapters = true,
@@ -788,7 +812,8 @@ export function registerNexusRuntime(app, {
   const runtime = worker || (store && d1Query ? createNexusWorker({
     repository: store, engine, query: d1Query, log,
     ...config,
-    ...(adapters ? { adapters } : {})
+    ...(adapters ? { adapters } : {}),
+    ...(typeof escalate === "function" ? { escalate } : {})
   }) : null);
 
   const verify = resolveDeviceVerifier({ verifyDevice, deviceRepository });

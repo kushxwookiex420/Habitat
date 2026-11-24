@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { getRole } from "./agent-roles.mjs";
+import { derivePriority } from "./ax-priority-policy.mjs";
 
 /**
  * The universal command engine.
@@ -174,10 +175,14 @@ function validateObjective(objective) {
     return { ok: true, priority: numeric };
   }
 
-  async function submit({ objective, requestedBy = "owner", role = "ax", idempotencyKey = null, adapter = null, priority = 0 } = {}) {
+  async function submit({ objective, requestedBy = "owner", role = "ax", idempotencyKey = null, adapter = null, priority, signals = null } = {}) {
     const checked = validateObjective(objective);
     if (!checked.ok) return failure("invalid_objective", checked.error);
-    const priorityCheck = validatePriority(priority);
+    // An explicit owner priority always wins. Without one, the planner's signals produce a suggested
+    // priority; with neither, the suggestion is 0 and the task simply queues last.
+    const explicitPriority = priority === undefined || priority === null || priority === "" ? null : priority;
+    const derived = explicitPriority === null ? derivePriority(signals || {}) : null;
+    const priorityCheck = validatePriority(derived ? derived.priority : explicitPriority);
     if (!priorityCheck.ok) return failure("invalid_priority", priorityCheck.error);
     // Only an explicit, exact, allowlisted read-only adapter may be bound at submission time.
     const adapterCheck = validateAdapter(adapter);
@@ -212,6 +217,8 @@ function validateObjective(objective) {
       // 0 is the default, so every queued task has an explicit sort key and the executor's
       // ORDER BY never depends on an absent field.
       priority: priorityCheck.priority,
+      prioritySource: derived ? "derived" : "owner",
+      ...(derived ? { priorityReasons: derived.reasons.slice(0, 6) } : {}),
       idempotencyKey: key || null
     };
     if (adapterCheck.adapter) task.adapter = adapterCheck.adapter;

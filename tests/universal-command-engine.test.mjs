@@ -279,3 +279,50 @@ test("a high priority is an ordering hint only, not an authorization bypass", as
   assert.equal(planned.ok, true);
   assert.equal(planned.task.status !== "completed", true);
 });
+
+test("planner signals derive a suggested priority when the owner sets none", async () => {
+  const { engine } = setup();
+  const outcome = await engine.submit({
+    objective: "Restore the staging command path",
+    signals: {
+      urgency: "critical",
+      impact: "critical",
+      deadlineAt: "2026-11-21T00:00:00.000Z" // already past the test clock
+    }
+  });
+  assert.equal(outcome.ok, true);
+  assert.equal(outcome.task.priority, 90);
+  assert.equal(outcome.task.prioritySource, "derived");
+  assert.ok(Array.isArray(outcome.task.priorityReasons));
+  assert.ok(outcome.task.priorityReasons.length > 0);
+});
+
+test("an explicit owner priority beats the suggestion, and the source says so", async () => {
+  const { engine } = setup();
+  const outcome = await engine.submit({
+    objective: "Restore the staging command path",
+    priority: 5,
+    signals: { urgency: "critical", impact: "critical" }
+  });
+  assert.equal(outcome.task.priority, 5);
+  assert.equal(outcome.task.prioritySource, "owner");
+  assert.equal(outcome.task.priorityReasons, undefined);
+});
+
+test("a task with neither priority nor signals queues at zero", async () => {
+  const { engine } = setup();
+  const outcome = await engine.submit({ objective: "Routine sweep of the queue" });
+  assert.equal(outcome.task.priority, 0);
+  assert.equal(outcome.task.prioritySource, "derived");
+  assert.deepEqual(outcome.task.priorityReasons, ["no signals supplied"]);
+});
+
+test("derived priority never escapes the queue's range, even from hostile signals", async () => {
+  const { engine } = setup();
+  for (const signals of [{ urgency: 999, impact: 999, blockedCount: 999 }, { urgency: "bogus", deadlineAt: "x" }]) {
+    const outcome = await engine.submit({ objective: "Hostile signal probe", signals });
+    assert.equal(outcome.ok, true);
+    assert.equal(Number.isInteger(outcome.task.priority), true);
+    assert.ok(outcome.task.priority >= 0 && outcome.task.priority <= 100);
+  }
+});

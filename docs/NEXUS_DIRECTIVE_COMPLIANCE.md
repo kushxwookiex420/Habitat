@@ -57,13 +57,42 @@ high-priority items.
 - Financial, publishing and destructive operations sit behind the approval gate; nothing in this change
   weakens it.
 
+## Failure escalation (§5 report, §7 notify Ax) — implemented this cycle
+
+A terminal failure used to be recorded on the task row and nothing else. Ax could find it only by
+polling. `ax-failure-escalation.mjs` now turns each terminal failure into one durable message on Ax's
+own channel (`GET /ax/command/messages`), carrying the task id, objective, reason, retry count and
+timestamp.
+
+- **Duplicate prevention** is the channel's own idempotency: the key is `nexus-failure:<taskId>:<attempts>`,
+  so a replayed escalation, a restarted process or a double call collapses onto one message. A task the
+  owner retries and that fails again is a *new* attempt and is correctly reported again.
+- **Retries** are bounded and only for transient codes (`message_store_unavailable`, `message_conflict`,
+  `rate_limited`, a throwing sink). A permanent refusal such as `invalid_kind` is not repeated.
+- **Sink failure cannot change execution.** `failTask` records the failure first; escalation is wrapped so
+  a throw is logged and the task outcome is untouched. Tests cover a refusing sink, a throwing sink and a
+  dead sink.
+- **Wiring**: `registerNexusRuntime` accepts `escalate` and hands it to the worker; the device bridge
+  passes an escalator bound to the process's single message channel.
+
+Evidence: `tests/ax-failure-escalation.test.mjs` (10 cases) and `tests/nexus-failure-escalation.test.mjs`
+(6 worker-level cases, including "no escalation when the failure transition was refused").
+
+## Derived priority (§7 prioritized queue) — implemented this cycle
+
+`ax-priority-policy.mjs` derives a suggested 0–100 priority from urgency, deadline, impact, dependent
+work and blocked work. Weights: urgency 40, deadline 30, impact 20, fan-out 10, plus up to 15 for work
+blocked behind the task, clamped to 100. An explicit owner priority always wins; the task records
+`prioritySource` (`owner` | `derived`) and the reasons behind a derived value. A derived priority is a
+hint only — it is tested not to change status or approvals.
+
+Evidence: `tests/ax-priority-policy.test.mjs` (7 cases incl. hostile signals), engine and route cases in
+`tests/universal-command-engine.test.mjs` and `tests/command-routes.test.mjs`.
+
 ## Gaps (honest list)
 
-1. **No push on execution failure.** `nexus-runtime.mjs` records the error on the task and increments its
-   failure counter, but it does not emit a notification. Ax can discover a failure by reading
-   `/ax/command/events` or `/system/status`; it is not told. Closing this needs a notification sink wired
-   into `registerNexusRuntime` (a `notifyTerminalFailure` hook), which changes server wiring and should
-   not be added untested.
+1. **Escalation is tested, not live.** The hook is wired and covered by tests, but staging runs
+   `efcf65c`, which predates it. It becomes observable only after the next deployment and a real failure.
 2. **Nothing is executing.** Staging runs with `NEXUS_RUNTIME_ENABLED`, `HABITAT_MISSIONS_ENABLED` and
    `HABITAT_WORKFORCE_ENABLED` all off, and no model provider is configured, so every model-backed worker
    reports `unavailable`. The engine is proven, not running.
@@ -73,5 +102,5 @@ high-priority items.
    `10000:Authentication error`, so database-backed acceptance cannot be re-run until it is rotated.
 5. **No revenue, business or worker-discovery operation has ever run.** Nothing in this document claims
    otherwise; the directive's business clauses are unimplemented capability, not completed work.
-6. **Priority is not yet set by any planner.** Ax can pass it; nothing derives it automatically from
-   deadlines or impact. That is a policy decision, not a missing mechanism.
+6. **No planner supplies signals yet.** Derivation exists and is tested, but nothing in the current
+   planners fills `signals`, so in practice tasks still arrive at priority 0 until Ax sends them.

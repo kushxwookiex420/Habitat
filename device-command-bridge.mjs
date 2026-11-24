@@ -4,6 +4,7 @@ import { registerHomeBridgeConsole } from "./home-bridge-console.mjs";
 import { registerDeviceHabitat } from "./device-habitat.mjs";
 import { registerUniversalCommandRoutes } from "./command-routes.mjs";
 import { createD1Query, registerNexusRuntime } from "./nexus-runtime.mjs";
+import { createFailureEscalator } from "./ax-failure-escalation.mjs";
 import { buildReadOnlyNexusAdapters, READ_ONLY_ADAPTER_NAMES, READ_ONLY_ADAPTER_PREFIXES } from "./nexus-adapter-registration.mjs";
 import { createAxOrchestrator, resolveAxOrchestratorConfig } from "./ax-orchestrator.mjs";
 import { createImprovementMonitor } from "./ax-improvement.mjs";
@@ -987,6 +988,9 @@ export function registerDeviceCommandBridge(app, {
         deviceRepository: store,
         ownerDeviceId: env.HABITAT_OWNER_DEVICE_ID,
         ownerDeviceIds: env.HABITAT_OWNER_DEVICE_IDS,
+        // A terminal failure is pushed to Ax as one durable message, so triage does not depend on
+        // somebody polling the task list. Delivery failure is logged and never affects the task.
+        escalate: createFailureEscalator({ channel: messages, log }),
         handleSignals,
         exitOnSignal,
         log
