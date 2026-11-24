@@ -29,9 +29,10 @@ export async function buildMissionEnvironment({
   maxTaskAttempts = 1,
   maxRepairs = 1,
   verifierOverride = null,
+  dbPath = ":memory:",
   env = {}
 } = {}) {
-  const db = new DatabaseSync(":memory:");
+  const db = new DatabaseSync(dbPath);
   // The command-task table is created by the service's migrations; this table matches the columns the
   // repository reads and writes, so the same repository code runs unchanged.
   db.exec("CREATE TABLE IF NOT EXISTS habitat_command_tasks (id TEXT PRIMARY KEY NOT NULL, record_json TEXT NOT NULL, status TEXT NOT NULL, updated_at TEXT NOT NULL)");
@@ -61,7 +62,7 @@ export async function buildMissionEnvironment({
   }
   const registeredAgents = registerMissionWorkforce({ workforce, specs: WORKER_SPECS });
 
-  const kit = createWorkerExecutors({ rootDir, artifactsDir, health, log });
+  const kit = createWorkerExecutors({ rootDir, artifactsDir, health, log, allowExternalArtifacts: true });
   const executors = {
     ...createMissionExecutors({ kit }),
     ...(verifierOverride ? { "verifier.recompute": verifierOverride } : {})
@@ -111,7 +112,7 @@ export async function buildMissionEnvironment({
   });
 
   return {
-    db, query, fetchImpl,
+    db, query, fetchImpl, close: () => db.close(),
     missionStore, workforceRepo, workforce,
     kit, executors, missions, commandTasks, commandEngine, pipeline,
     registeredAdapters, registeredAgents, escalations

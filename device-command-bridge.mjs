@@ -102,6 +102,8 @@ export function registerDeviceCommandBridge(app, {
   // so passing them here never activates the workforce by itself.
   workforceIntake = null,
   workforceRunner = null,
+  // Mission pipeline provider: () => { submit, run, get } or null. Absent, the mission routes answer 503.
+  missions = null,
   // Mission coordination, also invoked under the scheduler lease. The runtime refuses when its flag
   // is off, so passing it is attachment, not activation.
   missionTick = null,
@@ -246,6 +248,7 @@ export function registerDeviceCommandBridge(app, {
       improvement: improvementSignals ? createImprovementMonitor({ readSignals: improvementSignals }).check : null,
       workforceIntake,
       workforceRunner,
+      missionProvider: () => (typeof missions === "function" ? missions() : missions),
       mission: missionTick,
       // Approval-expiry monitoring rides this same tick and lease. It never decides an approval and
       // never starts work: it sweeps due expiries in the approval ledger and reports them.

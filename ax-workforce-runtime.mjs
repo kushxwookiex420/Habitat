@@ -3,6 +3,7 @@ import { createD1RowQuery } from "./nexus-runtime.mjs";
 import { createDurableWorkforce } from "./ax-durable-workforce.mjs";
 import { createWorkforceIntake } from "./ax-workforce-intake.mjs";
 import { createWorkforceRunner } from "./ax-workforce-runner.mjs";
+import { createMissionService } from "./mission-runtime.mjs";
 
 /**
  * Workforce runtime attachment.
@@ -140,6 +141,10 @@ export function createWorkforceRuntime({
   adapters = null,
   executors = null,
   verifierAgentId = null,
+  // Mission pipeline: a prebuilt provider, or built from this runtime's durable workforce when the flag is on.
+  missions = null,
+  rootDir = null,
+  artifactsDir = null,
   now = () => new Date().toISOString(),
   log = console,
   budgetCents = null,
@@ -154,12 +159,15 @@ export function createWorkforceRuntime({
     schemaReady: null,
     schemaMissing: [],
     recoveredAssignments: 0,
+    missionReady: false,
+    missionError: null,
     steps: 0,
     lastError: null,
     lastStepAt: null,
     schemaCheckedAt: null
   };
   let durable = null;
+  let missionProvider = missions;
   let intake = null;
   let runner = null;
   let initializing = null;
@@ -219,6 +227,27 @@ export function createWorkforceRuntime({
           now,
           log
         });
+        // The mission pipeline is mounted on the workforce that was just hydrated. A mission failure must
+        // not take the workforce down with it, so it is reported separately and its routes answer 503.
+        try {
+          if (!missionProvider) {
+            missionProvider = await createMissionService({
+              workforce: durable,
+              query: resolveQuery(),
+              env,
+              ...(rootDir ? { rootDir } : {}),
+              ...(artifactsDir ? { artifactsDir } : {}),
+              now,
+              log
+            });
+          }
+          state.missionReady = true;
+          log.log?.("MISSION_RUNTIME_READY", JSON.stringify(missionProvider.status?.() || {}));
+        } catch (missionError) {
+          state.missionReady = false;
+          state.missionError = safeMessage(missionError);
+          log.warn?.("MISSION_RUNTIME_FAILED", state.missionError);
+        }
         state.initialized = true;
         state.status = "initialized";
         log.log?.("WORKFORCE_INITIALIZED", JSON.stringify({
@@ -350,7 +379,13 @@ export function createWorkforceRuntime({
     run: runPending,
     configuration: () => ({ ...configuration }),
     hasIntake: () => typeof intake === "function",
-    hasRunner: () => typeof runner === "function"
+    hasRunner: () => typeof runner === "function",
+    missions: () => missionProvider,
+    missionStatus: () => ({
+      ready: state.missionReady,
+      error: state.missionError,
+      detail: missionProvider && typeof missionProvider.status === "function" ? missionProvider.status() : null
+    })
   });
 }
 

@@ -201,6 +201,7 @@ const deviceCommandBridge = registerDeviceCommandBridge(app, {
   improvementSignals: async () => ({ systemStatus: await collectSystemStatus() }),
   workforceIntake: workforceRuntime.intake,
   workforceRunner: workforceRuntime.run,
+  missions: workforceRuntime.missions,
   missionTick: missionRuntime.tick
 });
 const chatCommandAuthorizer = createChatCommandAuthorizer({ env: process.env, deviceBridge: deviceCommandBridge });

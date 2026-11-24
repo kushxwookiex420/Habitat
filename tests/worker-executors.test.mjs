@@ -84,7 +84,9 @@ test("the content worker writes a real artifact and the verifier checks its hash
   const out = await executors["content.brief"](ctx(taskId));
   assert.equal(out.result.status, "completed");
   const written = out.result.changedFiles[0];
-  assert.match(written, /^\.scratch\/worker-test-artifacts\/brief-1\.md$/);
+  assert.equal(written, "brief-1.md", "the artifact is named relative to its own store");
+  const onDisk = await import("node:fs/promises").then((fs) => fs.readFile(path.join(ROOT, ARTIFACTS, written), "utf8"));
+  assert.match(onDisk, /# Worker brief/);
 
   const verdict = await verify({ taskId, implementation: out });
   assert.equal(verdict.ok, true, JSON.stringify(verdict.evidence));

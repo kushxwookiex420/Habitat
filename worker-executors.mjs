@@ -312,12 +312,15 @@ async function contentBrief(job, { artifactsDir, rootDir }) {
   const target = path.join(artifactsDir, name + ".md");
   await mkdir(artifactsDir, { recursive: true });
   await writeFile(target, body, "utf8");
+  // The artifact is named relative to its own store, so the evidence does not change when the repository
+  // lives somewhere else.
+  const relative = path.relative(artifactsDir, target);
   return {
     status: "completed",
-    evidence: ["content.file=" + path.relative(rootDir, target), "content.bytes=" + Buffer.byteLength(body), "content.sha256=" + sha(body).slice(0, 16)],
-    changedFiles: [path.relative(rootDir, target)],
+    evidence: ["content.file=" + relative, "content.bytes=" + Buffer.byteLength(body), "content.sha256=" + sha(body).slice(0, 16)],
+    changedFiles: [relative],
     tests: { ran: 0, passed: 0, failed: 0 },
-    data: { path: path.relative(rootDir, target) }
+    data: { path: relative, store: "artifacts" }
   };
 }
 
@@ -384,10 +387,14 @@ export const EXECUTOR_ADAPTERS = Object.freeze([
  * @param {object} [options.jobs]         taskId -> job description
  * @param {Function} [options.health]     () => { status, checks } for the operations worker
  */
-export function createWorkerExecutors({ rootDir, artifactsDir, jobs = {}, health = null, log = console } = {}) {
+export function createWorkerExecutors({ rootDir, artifactsDir, jobs = {}, health = null, log = console, allowExternalArtifacts = false } = {}) {
   if (typeof rootDir !== "string" || !rootDir.trim()) throw new Error("createWorkerExecutors needs rootDir.");
   const artifacts = path.resolve(rootDir, artifactsDir || "artifacts");
-  if (!artifacts.startsWith(path.resolve(rootDir) + path.sep)) throw new Error("artifactsDir must be inside rootDir.");
+  // A deployed checkout is read-only, so a deployment must be able to point artifacts at durable storage
+  // outside it. That has to be asked for explicitly; the default stays inside the repository.
+  if (!allowExternalArtifacts && !artifacts.startsWith(path.resolve(rootDir) + path.sep)) {
+    throw new Error("artifactsDir must be inside rootDir (set allowExternalArtifacts to use durable storage outside it).");
+  }
   const testsDir = path.resolve(rootDir, "tests");
   const context = { rootDir: path.resolve(rootDir), artifactsDir: artifacts, testsDir, health };
 
@@ -444,8 +451,9 @@ export function createWorkerExecutors({ rootDir, artifactsDir, jobs = {}, health
     const actual = Array.isArray(again.evidence) ? again.evidence : [];
     const stable = expected.length > 0 && actual.length > 0 && expected.join("\n") === actual.join("\n");
     const filesOk = await Promise.all((claimed.changedFiles || []).map(async (file) => {
-      const resolved = await contained(context.rootDir, file);
-      if (!resolved.ok) return "uncontained:" + file;
+      const target = path.resolve(context.artifactsDir, file);
+      if (!target.startsWith(context.artifactsDir + path.sep)) return "uncontained:" + file;
+      const resolved = { ok: true, target };
       try {
         const content = await readFile(resolved.target, "utf8");
         const digest = "content.sha256=" + sha(content).slice(0, 16);
