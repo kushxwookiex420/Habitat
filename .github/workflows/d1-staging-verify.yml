@@ -4,7 +4,17 @@ name: D1 staging verification
 # operator's shell, a log or a file. Read-only by default; `migrate` is explicit and still refuses
 # the production database id.
 
+# `workflow_dispatch` is only offered for workflows on the default branch, and this one is not
+there yet, so the integration branch also verifies on push. A push can only ever run `verify`:
+migrations stay a manual, confirmed action.
 on:
+  push:
+    branches: [staging/integration]
+    paths:
+      - "scripts/d1-staging-verify.mjs"
+      - "scripts/staging-preflight.mjs"
+      - "migrations/**"
+      - ".github/workflows/d1-staging-verify.yml"
   workflow_dispatch:
     inputs:
       database_id:
@@ -37,9 +47,21 @@ jobs:
           node-version: "22"
 
       - name: Confirm intent
+        env:
+          CONFIRM: ${{ inputs.confirm }}
+          MODE: ${{ inputs.mode }}
+          EVENT: ${{ github.event_name }}
         run: |
           set -euo pipefail
-          if [ "${{ inputs.confirm }}" != "nonprod" ]; then
+          if [ "${EVENT}" = "push" ]; then
+            if [ "${MODE:-}" = "migrate" ]; then
+              echo "::error::a push may not migrate; migrations are manual and confirmed"
+              exit 1
+            fi
+            echo "confirmed: push-triggered read-only verification"
+            exit 0
+          fi
+          if [ "${CONFIRM:-}" != "nonprod" ]; then
             echo "::error::confirm must be exactly 'nonprod'; refusing to touch a database"
             exit 1
           fi
@@ -47,7 +69,7 @@ jobs:
 
       - name: Isolation guard (never production)
         env:
-          TARGET: ${{ inputs.database_id }}
+          TARGET: ${{ inputs.database_id || vars.HABITAT_STAGING_D1_DATABASE_ID }}
           PRODUCTION: ${{ vars.HABITAT_D1_DATABASE_ID }}
         run: |
           set -euo pipefail
@@ -69,7 +91,7 @@ jobs:
         env:
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.HABITAT_D1_API_TOKEN }}
-          STAGING_D1_DATABASE_ID: ${{ inputs.database_id }}
+          STAGING_D1_DATABASE_ID: ${{ inputs.database_id || vars.HABITAT_STAGING_D1_DATABASE_ID }}
           PRODUCTION_D1_DATABASE_ID: ${{ vars.HABITAT_D1_DATABASE_ID }}
           STAGING_D1_CONFIRM: provision
           NEXUS_RUNTIME_ENABLED: ""
@@ -79,9 +101,9 @@ jobs:
         env:
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
           HABITAT_D1_API_TOKEN: ${{ secrets.HABITAT_D1_API_TOKEN }}
-          STAGING_D1_DATABASE_ID: ${{ inputs.database_id }}
+          STAGING_D1_DATABASE_ID: ${{ inputs.database_id || vars.HABITAT_STAGING_D1_DATABASE_ID }}
           PRODUCTION_D1_DATABASE_ID: ${{ vars.HABITAT_D1_DATABASE_ID }}
-        run: node scripts/d1-staging-verify.mjs --mode "${{ inputs.mode }}" | tee d1-staging-evidence.json
+        run: node scripts/d1-staging-verify.mjs --mode "${{ inputs.mode || 'verify' }}" | tee d1-staging-evidence.json
 
       - name: Upload evidence
         if: always()
