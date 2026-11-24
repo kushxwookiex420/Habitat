@@ -40,11 +40,12 @@ Workflow **Staging migration 0010-0016**, run `45316742674`, conclusion **succes
 
 ## Real-D1 acceptance
 
-Workflow **Staging acceptance (real D1)**, run `45317678889`, conclusion **success**. Start
-`2026-11-24T03:11:47.217Z`, end `03:11:54.381Z`. Ephemeral encryption keys were generated in the job and
-never stored. Rows created by the test were cleaned up.
+Workflow **Staging acceptance (real D1)**, latest run `45319317670`, conclusion **success**. Start
+`2026-11-24T03:25:41.249Z`, end `03:25:52.047Z`. Ephemeral encryption keys were generated in the job and
+never stored. Rows created by the test were cleaned up. The earlier run `45317678889` passed 16 checks;
+the latest run adds live-D1 concurrency and lease checks.
 
-All 16 checks passed:
+All **18** checks passed:
 
 1. gateway token issued
 2. valid token resolves
@@ -58,10 +59,12 @@ All 16 checks passed:
 10. Standard Webhooks signature verified
 11. duplicate event not requeued
 12. restart recovers queued delivery
-13. unreadable encrypted secret fails closed (`dead`, no unsigned send)
-14. private callback address rejected
-15. redirect rejected
-16. gateway authentication uses only stored hashes
+13. two workers dispatching concurrently against live D1 produce exactly one callback and one delivery
+14. a live lease blocks a second claimant; after expiry a new claimant recovers it
+15. unreadable encrypted secret fails closed (`dead`, no unsigned send)
+16. private callback address rejected
+17. redirect rejected
+18. gateway authentication uses only stored hashes
 
 Artifact: `staging-acceptance-evidence` (retention 30 days).
 
@@ -71,7 +74,8 @@ The D1 HTTP adapter returns `result: [{ results: [...] }]`. Gateway, MCP, heartb
 repositories were reading `rows[0]` as a row, so against real D1 a freshly minted token resolved as
 invalid and schema checks saw no tables. Commit `6bde9bf` adds `createD1RowQuery`, switches those four
 repositories to it, and adds `tests/d1-row-query.test.mjs`. Task/scheduler repositories intentionally
-keep the raw D1 shape.
+keep the raw D1 shape. The same mismatch existed in mission/workforce runtime schema checks and the D1
+workforce repository; commit `99dde39` fixes those too, so missions can start against real D1.
 
 ## Mission-level idempotency
 

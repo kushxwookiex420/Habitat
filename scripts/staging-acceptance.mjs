@@ -18,6 +18,8 @@ import { issueClientToken, resolveClientToken } from "../ax-gateway.mjs";
 import { createMcpEventsServer, verifyWebhookSignature, validateCallbackUrl } from "../ax-mcp-events.mjs";
 import { createPinnedCallbackFetch } from "../ax-callback-fetch.mjs";
 import { secretBoxFromEnv } from "../ax-secret-box.mjs";
+import { createMissionEngine } from "../ax-mission-engine.mjs";
+import { createD1MissionRepository } from "../d1-mission-repository.mjs";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const ACCOUNT = /^[0-9a-f]{32}$/i;
@@ -91,6 +93,7 @@ export async function runStagingAcceptance({ env = process.env, fetchImpl = fetc
   const eventPrefix = "acc_" + randomBytes(4).toString("hex");
   const createdSubscriptions = [];
   let createdClientId = null;
+  let createdMissionId = null;
 
   try {
     const issued = await issueClientToken({ repository: gateway, label: "staging acceptance", scopes: ["mcp:events", "status:read"] });
@@ -163,6 +166,27 @@ export async function runStagingAcceptance({ env = process.env, fetchImpl = fetc
       claimA: claimA.claimed, claimB: claimB.claimed, reclaimedAfterExpiry: reclaim.claimed
     });
 
+    // Real-D1 mission idempotency: the same idempotency key must return the original mission and create
+    // no second record, so a retried ChatGPT request cannot duplicate work.
+    const missionStore = createD1MissionRepository({ accountId: targetInfo.accountId, databaseId: targetInfo.databaseId, apiToken: targetInfo.token, fetchImpl });
+    if (typeof missionStore.initialize === "function") await missionStore.initialize();
+    const missionEngine = createMissionEngine({
+      store: missionStore,
+      workforce: { assign: async () => ({ ok: true, assignment: null }) },
+      executors: {},
+      now: () => new Date().toISOString(),
+      log: { log() {}, warn() {} }
+    });
+    const missionSpec = { project: "habitat-acceptance", objective: "Prove mission idempotency on staging D1", acceptanceCriteria: ["one mission only"] };
+    const missionKey = eventPrefix + "-mission";
+    const missionFirst = await missionEngine.intake(missionSpec, { idempotencyKey: missionKey, submittedBy: "staging-acceptance" });
+    const missionSecond = await missionEngine.intake({ ...missionSpec, objective: "Different objective with the same key" }, { idempotencyKey: missionKey, submittedBy: "staging-acceptance" });
+    createdMissionId = missionFirst.missionId || missionFirst.mission?.id || null;
+    const missionCount = await d1Query(targetInfo, "SELECT COUNT(*) AS count FROM habitat_ax_missions WHERE id = '" + createdMissionId + "'");
+    record("live_d1_mission_idempotency", missionFirst.ok === true && missionSecond.replay === true && missionSecond.missionId === missionFirst.missionId && Number(missionCount[0]?.count) === 1, {
+      duplicate: missionSecond.replay === true, records: Number(missionCount[0]?.count)
+    });
+
     // The subscription was encrypted with key A; a worker holding only key B must mark its delivery dead
     // instead of sending anything unsigned.
     const badServer = createMcpEventsServer({ repository: d1(altEncryption.box), allowInsecureCallbacks: true, log: { log() {}, warn() {} } });
@@ -208,6 +232,10 @@ export async function runStagingAcceptance({ env = process.env, fetchImpl = fetc
       await d1Query(targetInfo, "DELETE FROM habitat_ax_mcp_deliveries WHERE event_id LIKE '" + eventPrefix + "%'");
       await d1Query(targetInfo, "DELETE FROM habitat_ax_mcp_events WHERE event_id LIKE '" + eventPrefix + "%'");
       if (createdClientId) await d1Query(targetInfo, "DELETE FROM habitat_ax_gateway_clients WHERE id = '" + createdClientId + "'");
+      if (createdMissionId) {
+        await d1Query(targetInfo, "DELETE FROM habitat_ax_mission_events WHERE mission_id = '" + createdMissionId + "'");
+        await d1Query(targetInfo, "DELETE FROM habitat_ax_missions WHERE id = '" + createdMissionId + "'");
+      }
     } catch { /* staging test rows are harmless if cleanup is refused */ }
   }
 }
