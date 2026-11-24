@@ -16,6 +16,7 @@
  */
 
 import { createHash } from "node:crypto";
+import { backoffFor, budgetState, classifyAction, classifyFailure } from "./ax-mission-policy.mjs";
 
 const clean = (value, max = 200) => String(value ?? "").replace(/\s+/g, " ").trim().slice(0, max);
 
@@ -205,7 +206,9 @@ export function createMissionPipeline({
     const planTasks = Array.isArray(tasks) ? tasks : null;
     if (planTasks) {
       for (const task of planTasks) {
-        if (CONSEQUENTIAL.test([task.title, ...(task.requires || [])].join(" ")) && task.approvalRequired !== true) {
+        const policy = classifyAction(task);
+        if (policy.class === "prohibited") return { ok: false, code: "prohibited_action", taskId: task.id };
+        if (policy.requiresApproval && task.approvalRequired !== true) {
           return { ok: false, code: "approval_required_for_task", taskId: task.id };
         }
       }
@@ -240,12 +243,21 @@ export function createMissionPipeline({
    * Drive a mission to a terminal state: execute, repair within the healer's budget, execute again.
    * Never returns a completed mission that the mission engine did not derive from verified tasks.
    */
-  async function run(missionId, { maxRounds = 3 } = {}) {
+  async function run(missionId, { maxRounds = 3, maxDurationMs = 10 * 60_000 } = {}) {
     const rounds = [];
     const escalations = [];
+    const startedAt = Date.now();
     let last = null;
     let repairs = 0;
+    let stopReason = null;
     for (let round = 1; round <= Math.max(1, maxRounds); round += 1) {
+      // Owner control and budget are checked before any work starts, never after it has already run.
+      const current = await missions.get(missionId);
+      const status = (current?.record || current)?.status || null;
+      if (status === "paused") { stopReason = "paused"; break; }
+      if (status === "cancelled") { stopReason = "cancelled"; break; }
+      const budget = budgetState({ startedAt, maxRounds: Math.max(1, maxRounds), roundsUsed: round - 1, maxRepairs, repairsUsed: repairs, maxDurationMs });
+      if (budget.exhausted) { stopReason = budget.reason; break; }
       last = await missions.execute(missionId);
       rounds.push({ round, status: last.status, processed: last.processed, tasks: last.tasks });
       if (!last.ok || ["completed", "rejected", "approval_required"].includes(last.status)) break;
@@ -256,10 +268,10 @@ export function createMissionPipeline({
       const loaded = await missions.get(missionId);
       const mission = loaded?.record || null;
       if (!mission) break;
-      const retryable = mission.tasks.filter((task) => task.status === "failed" &&
-        !["no_independent_verifier", "verification_unavailable", "unroutable_task", "approval_required"].includes(task.error));
-      if (retryable.length === 0) break;
+      const retryable = mission.tasks.filter((task) => task.status === "failed" && classifyFailure(task).retryable);
+      if (retryable.length === 0) { stopReason = stopReason || "permanent_failure"; break; }
       repairs += 1;
+      const retryDelayMs = backoffFor(repairs - 1);
       for (const task of retryable) {
         task.status = "pending";
         task.error = null;
@@ -268,7 +280,7 @@ export function createMissionPipeline({
       }
       mission.status = "running";
       await store.save(mission, mission.version);
-      rounds[rounds.length - 1].repair = { requeued: retryable.map((task) => task.id), attempt: repairs };
+      rounds[rounds.length - 1].repair = { requeued: retryable.map((task) => task.id), attempt: repairs, retryDelayMs };
     }
     const final = await missions.get(missionId);
     const mission = final?.record || final || null;
@@ -278,6 +290,8 @@ export function createMissionPipeline({
       status: mission?.status || last?.status || null,
       rounds,
       repairs,
+      stopReason: stopReason || (mission?.status === "completed" ? "completed" : mission?.status === "approval_required" ? "approval_required" : null),
+      budget: { maxRounds: Math.max(1, maxRounds), maxDurationMs, elapsedMs: Math.max(0, Date.now() - startedAt), repairs },
       escalations,
       tasks: (mission?.tasks || []).map((task) => ({
         id: task.id,
