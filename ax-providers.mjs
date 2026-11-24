@@ -56,6 +56,20 @@ export const PROVIDERS = Object.freeze({
     jsonMode: "object",
     reasoning: false,
     headers: { "HTTP-Referer": "https://github.com/kushxwookiex420/Habitat", "X-Title": "Habitat Ax" }
+  }),
+  // Self-hosted OpenAI-compatible endpoint (for example Ollama). No API key is required by default;
+  // operators can set OLLAMA_API_KEY when the endpoint is protected by a bearer token.
+  ollama: Object.freeze({
+    label: "Self-hosted (Ollama-compatible)",
+    baseUrl: "http://127.0.0.1:11434/v1",
+    keyEnv: "OLLAMA_API_KEY",
+    modelEnv: "AX_OLLAMA_MODEL",
+    defaultModel: "gpt-oss:20b",
+    tokenField: "max_tokens",
+    jsonMode: "object",
+    reasoning: false,
+    requiresApiKey: false,
+    headers: {}
   })
 });
 
@@ -78,7 +92,7 @@ function buildProvider(name, env) {
     baseUrl: trimBaseUrl(env[`AX_${name.toUpperCase()}_BASE_URL`], spec.baseUrl),
     model: String(env[spec.modelEnv] || spec.defaultModel).trim(),
     apiKey: String(env[spec.keyEnv] || "").trim(),
-    configured: Boolean(String(env[spec.keyEnv] || "").trim())
+    configured: spec.requiresApiKey === false || Boolean(String(env[spec.keyEnv] || "").trim())
   });
 }
 
@@ -126,9 +140,7 @@ export function resolveAxProviderConfig(env = process.env) {
   const enabled = gate && configured.length > 0;
   const code = configured.length === 0 ? "provider_unconfigured" : "orchestrator_disabled";
   const error = configured.length === 0
-    ? "Habitat-native Ax is unavailable: set an API key for at least one configured provider (" +
-      providers.map(provider => PROVIDERS[provider.name].keyEnv).join(", ") +
-      ")."
+    ? "Habitat-native Ax is unavailable: configure credentials for a hosted provider or a reachable self-hosted provider endpoint."
     : "Habitat-native Ax is disabled: set AX_ORCHESTRATOR_ENABLED=true to allow it to plan and spend API credits.";
 
   return Object.freeze({
@@ -262,7 +274,7 @@ export function createProviderPlanner(
   if (!spec) throw new Error("Unknown Ax provider: " + name);
 
   async function ask({ system, user, schema }) {
-    if (!provider.apiKey) {
+    if (!provider.apiKey && spec.requiresApiKey !== false) {
       return { ok: false, code: name + "_unconfigured", costUsd: 0, estimated: false, provider: name };
     }
     const controller = new AbortController();
@@ -290,7 +302,7 @@ export function createProviderPlanner(
           headers: {
             "content-type": "application/json",
             ...spec.headers,
-            authorization: "Bearer " + provider.apiKey
+            ...(provider.apiKey ? { authorization: "Bearer " + provider.apiKey } : {})
           },
           body: JSON.stringify(body),
           signal: controller.signal
