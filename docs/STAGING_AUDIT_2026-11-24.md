@@ -33,6 +33,12 @@ The phone's credential survived the app being closed. The paired row's `last_see
 `05:23:38.069Z` to `05:39:24.444Z` while no app screen was open — a 15 m 46 s gap that lines up with the
 15-minute `JobScheduler` fallback, not the 5-second foreground poll.
 
+It did not advance again: sampled at `05:47:26Z`, `05:51:32Z` and `05:55:29Z`, `last_seen_at` was still
+`05:39:24.444Z`, while the service's own heartbeat advanced normally (`05:54:48Z`). So exactly one
+background check-in was observed and the next scheduled window was missed. The most likely cause is
+Samsung's battery optimisation deferring a background job for an app the owner has not exempted. The
+consequence is concrete: on the installed build, a queued command can wait well beyond 15 minutes.
+
 That is direct evidence for three things at once:
 
 1. the encrypted token in Android Keystore decrypts after the process was gone;
@@ -117,9 +123,9 @@ is shared with production and the owner should choose the split.
 
 1. **Command round trip — BLOCKED.** Queueing a command requires the `HABITAT_AX_BRIDGE_TOKEN` that
    authenticates `/ax/device/commands`, and minting a gateway token needs D1 write access. Neither
-   credential is available in this workspace, and no command has ever been queued on staging
-   (`components.device` shows a check-in, not a command). This is the one item of the requested
-   verification that has no evidence yet.
+   credential is available in this workspace, and the status projection exposes a device check-in but
+   never command history, so no round trip can be demonstrated from outside. This is the one item of the
+   requested verification with no evidence.
 2. **CI D1 credential — BLOCKED.** The read-only device audit (`.github/workflows/staging-device-audit.yml`,
    run `45334986154`) failed with `HTTP 401 (10000:Authentication error)` from Cloudflare, although the
    same repository secret succeeded at `2026-11-24T04:08Z` (run `45324211881`, 21/21). The staging
@@ -127,8 +133,13 @@ is shared with production and the owner should choose the split.
    needs regenerating in repository secrets. Until then neither this audit nor the staging acceptance
    suite can produce fresh database evidence.
 3. **APK rollout.** The lifecycle fix only takes effect in a newly installed build. The current APK keeps
-   the 15-minute behaviour.
-4. **Provider keys.** No model provider is configured on staging, so every model-backed worker reports
+   the 15-minute behaviour, and §2 shows the periodic job itself can be deferred.
+4. **Battery optimisation.** The owner should set the Bridge app to *Unrestricted* (Settings → Apps →
+   Habitat AX Bridge → Battery). Without it the foreground service is capped and the periodic job is
+   deferred, which is the difference between a prompt command and a delayed one. A code-side alternative
+   (WorkManager with expedited work, or a battery-optimisation exemption prompt) was not added: both
+   change install-time permission behaviour and need an owner decision.
+5. **Provider keys.** No model provider is configured on staging, so every model-backed worker reports
    `unavailable`. Intentional for a free-only staging run, but it means no inference was exercised.
-5. **`BrainAdapter` endpoints** still hardcode production (§4).
-6. **Nexus, missions and workforce** stay disabled until the command path is proven.
+6. **`BrainAdapter` endpoints** still hardcode production (§4).
+7. **Nexus, missions and workforce** stay disabled until the command path is proven.
