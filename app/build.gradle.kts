@@ -22,6 +22,16 @@ android {
     // With no variables present the release build still compiles, but it is unsigned and must not be
     // installed as an update; the build script refuses that case explicitly.
     signingConfigs {
+        // One debug identity, owned by the repository, so a build from any machine or CI run can
+        // replace another one. `android`/`androiddebugkey` is the public debug credential, not a
+        // secret, and this config is referenced only by the debug build type — never by release.
+        create("repositoryDebug") {
+            storeFile = rootProject.file("debug-key.p12")
+            storeType = "PKCS12"
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
         create("owner") {
             val storePath = System.getenv("HABITAT_KEYSTORE_FILE")
             val storePasswordValue = System.getenv("HABITAT_KEYSTORE_PASSWORD")
@@ -37,6 +47,9 @@ android {
         }
     }
     buildTypes {
+        debug {
+            signingConfig = signingConfigs.getByName("repositoryDebug")
+        }
         release {
             isMinifyEnabled = false
             val signingReady = listOf(

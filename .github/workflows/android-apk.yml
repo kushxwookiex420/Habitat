@@ -44,31 +44,28 @@ jobs:
         with:
           # The repository intentionally has no wrapper jar; pin the same Gradle line as the docs.
           gradle-version: "8.10.2"
-      # The runner otherwise generates a fresh debug keystore per job, so every build carries a
-      # different certificate and `adb install -r` over an earlier build fails with
-      # INSTALL_FAILED_UPDATE_INCOMPATIBLE. Caching one keystore makes consecutive debug builds share
-      # an identity. This does not change release signing, and it cannot retroactively match a build
-      # already installed on a phone — see docs/ANDROID_SIGNING_COMPATIBILITY.md.
-      - name: Stable debug keystore
-        uses: actions/cache@v4
-        with:
-          path: ~/.android/debug.keystore
-          key: android-debug-keystore-v1
-
-      - name: Create the debug keystore when the cache is cold
-        run: |
-          set -euo pipefail
-          mkdir -p "$HOME/.android"
-          if [ ! -f "$HOME/.android/debug.keystore" ]; then
-            keytool -genkeypair -noprompt -keystore "$HOME/.android/debug.keystore" \
-              -storepass android -keypass android -alias androiddebugkey \
-              -keyalg RSA -keysize 2048 -validity 10000 \
-              -dname "CN=Android Debug,O=Android,C=US"
-          fi
-          keytool -list -keystore "$HOME/.android/debug.keystore" -storepass android
-
       - name: Build debug APK
         run: gradle :app:assembleDebug --no-daemon --console=plain
+
+      # A cache of the runner's generated keystore did not survive between jobs, so three builds
+      # produced three certificates. The identity now comes from the repository keystore, and this
+      # step fails the build if the APK's certificate is not the expected one.
+      - name: Verify the signing identity is the repository's
+        run: |
+          set -euo pipefail
+          EXPECTED=$(tr -d '[:space:]' < EXPECTED_DEBUG_CERT_SHA256)
+          ACTUAL=$(node scripts/apk-cert-fingerprint.mjs app/build/outputs/apk/debug/app-debug.apk | sed -n 's/^certificate-sha256=//p')
+          echo "expected=$EXPECTED"
+          echo "actual  =$ACTUAL"
+          if [ -z "${ACTUAL}" ]; then
+            echo "::error::Could not read the APK certificate."
+            exit 1
+          fi
+          if [ "$EXPECTED" != "$ACTUAL" ]; then
+            echo "::error::The debug APK is not signed by the repository keystore; an upgrade over an installed debug build would fail with INSTALL_FAILED_UPDATE_INCOMPATIBLE."
+            exit 1
+          fi
+          echo "::notice::Signed by the repository debug identity $ACTUAL"
       - name: Build signed release when the owner has configured signing
         env:
           HABITAT_KEYSTORE_BASE64: ${{ secrets.HABITAT_KEYSTORE_BASE64 }}
