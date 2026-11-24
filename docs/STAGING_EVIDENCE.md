@@ -40,12 +40,12 @@ Workflow **Staging migration 0010-0016**, run `45316742674`, conclusion **succes
 
 ## Real-D1 acceptance
 
-Workflow **Staging acceptance (real D1)**, latest run `45319317670`, conclusion **success**. Start
-`2026-11-24T03:25:41.249Z`, end `03:25:52.047Z`. Ephemeral encryption keys were generated in the job and
-never stored. Rows created by the test were cleaned up. The earlier run `45317678889` passed 16 checks;
-the latest run adds live-D1 concurrency and lease checks.
+Workflow **Staging acceptance (real D1)**, latest run `45319742256`, conclusion **success**. Start
+`2026-11-24T03:29:20.077Z`, end `03:29:30.663Z`. Ephemeral encryption keys were generated in the job and
+never stored. Rows created by the test were cleaned up. Earlier runs passed 16 and 18 checks; the latest
+adds live-D1 mission idempotency.
 
-All **18** checks passed:
+All **19** checks passed:
 
 1. gateway token issued
 2. valid token resolves
@@ -61,10 +61,11 @@ All **18** checks passed:
 12. restart recovers queued delivery
 13. two workers dispatching concurrently against live D1 produce exactly one callback and one delivery
 14. a live lease blocks a second claimant; after expiry a new claimant recovers it
-15. unreadable encrypted secret fails closed (`dead`, no unsigned send)
-16. private callback address rejected
-17. redirect rejected
-18. gateway authentication uses only stored hashes
+15. duplicate mission idempotency key returns the original mission and creates exactly one D1 record
+16. unreadable encrypted secret fails closed (`dead`, no unsigned send)
+17. private callback address rejected
+18. redirect rejected
+19. gateway authentication uses only stored hashes
 
 Artifact: `staging-acceptance-evidence` (retention 30 days).
 
@@ -79,8 +80,9 @@ workforce repository; commit `99dde39` fixes those too, so missions can start ag
 
 ## Mission-level idempotency
 
-`tests/ax-gateway.test.mjs` now executes a mission, submits the same `Idempotency-Key` again, recovers
-again and asserts one mission, one task set, all tasks still completed. Live D1 lease contention is
+`tests/ax-gateway.test.mjs` executes a mission, submits the same `Idempotency-Key` again, recovers again
+and asserts one mission, one task set, all tasks still completed. The real-D1 acceptance creates the same
+mission key twice and verifies exactly one record (`live_d1_mission_idempotency`). Live D1 lease contention is
 covered by the staging acceptance workflow: two workers dispatch concurrently (one callback), and a live
 lease blocks a second claimant while an expired lease is reclaimed.
 
