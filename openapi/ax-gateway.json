@@ -860,6 +860,13 @@
                   },
                   "reason": {
                     "type": "string"
+                  },
+                  "taskId": {
+                    "type": "string",
+                    "description": "Names the one task approval this decision authorises; omit to answer only the mission-scope signal."
+                  },
+                  "approvalId": {
+                    "type": "string"
                   }
                 }
               }
