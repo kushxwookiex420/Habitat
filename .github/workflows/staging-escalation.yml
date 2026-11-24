@@ -1,8 +1,15 @@
 name: Staging escalation check
 
 # One controlled failure, one durable Ax message, then a retry that must not duplicate it.
-# Dispatch-only: it creates real task rows and a real message on staging.
+# Creates real task rows and a real message on staging, so it never runs on ordinary pushes: it needs
+# the explicit dispatch, or a commit message that says [staging-escalation] (the same convention the round
+# trip uses, which also works before this file reaches the default branch).
 on:
+  push:
+    branches: [staging/integration]
+    paths:
+      - ".github/workflows/staging-escalation.yml"
+      - "scripts/staging-escalation-check.mjs"
   workflow_dispatch:
     inputs:
       timeout_seconds:
@@ -20,6 +27,7 @@ concurrency:
 jobs:
   escalation:
     name: controlled failure escalation
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[staging-escalation]')
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
