@@ -48,7 +48,9 @@ class MainActivity : Activity() {
         window.setFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN, WindowManager.LayoutParams.FLAG_FULLSCREEN)
         window.navigationBarColor = Color.BLACK
         brain = BrainAdapter(this)
-        deviceBridge = AndroidDeviceBridge(this) { status ->
+        // The Activity never owns the background connection: HabitatBridgeService does. This instance
+        // only polls while a screen is visible and may be stopped in onPause without dropping the link.
+        deviceBridge = AndroidDeviceBridge(this, startForegroundService = false) { status ->
             runOnUiThread {
                 deviceBridgeButton?.text = when {
                     !deviceBridge.isConfigured() -> "LINK"
@@ -495,6 +497,7 @@ class MainActivity : Activity() {
         }
         heartbeatHandler.postDelayed(heartbeatRunnable, heartbeatIntervalMs)
         if (deviceBridge.isConfigured()) {
+            HabitatBridgeService.start(this)
             deviceBridge.start()
             DeviceBridgeScheduler.schedule(this)
         }
@@ -738,6 +741,9 @@ class MainActivity : Activity() {
                             try {
                                 if (success) {
                                     deviceBridgeButton?.text = "AX SET"
+                                    // Pairing must survive the owner leaving the app: hand the live
+                                    // connection to the foreground service before polling locally.
+                                    HabitatBridgeService.start(this)
                                     deviceBridge.start()
                                     DeviceBridgeScheduler.schedule(this)
                                     status.text = "Phone credential saved. Starting secure check-in…"
@@ -852,11 +858,15 @@ class MainActivity : Activity() {
     override fun onResume() {
         super.onResume()
         if (::deviceBridge.isInitialized && deviceBridge.isConfigured()) {
+            HabitatBridgeService.start(this)
             deviceBridge.start()
             DeviceBridgeScheduler.schedule(this)
         }
     }
 
+    // Leaving the app must not disconnect the phone. Before this change onPause stopped the
+    // foreground service as well, so check-ins fell back to a 15-minute periodic job and the phone
+    // looked offline. Only this Activity's own poll loop is released here.
     override fun onPause() {
         if (::deviceBridge.isInitialized) deviceBridge.stop()
         super.onPause()

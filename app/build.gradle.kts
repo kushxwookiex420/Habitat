@@ -11,7 +11,16 @@ android {
         targetSdk = 35
         versionCode = 86
         versionName = "0.8.6"
+        // Production is the default so an ordinary build is unchanged. Naming another origin makes a
+        // staging build reproducible instead of a hand-patched copy of the source:
+        //   gradle -PhabitatBaseUrl=https://habitat-staging-e3ie.onrender.com :app:assembleDebug
+        val habitatBaseUrl = (project.findProperty("habitatBaseUrl") as String?)
+            ?.trim()?.trimEnd('/')
+            ?.takeIf { it.startsWith("https://") && it.length > "https://".length }
+            ?: "https://habitat-1-szzd.onrender.com"
+        buildConfigField("String", "HABITAT_BASE_URL", "\"" + habitatBaseUrl + "\"")
     }
+    buildFeatures { buildConfig = true }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
@@ -22,6 +31,16 @@ android {
     // With no variables present the release build still compiles, but it is unsigned and must not be
     // installed as an update; the build script refuses that case explicitly.
     signingConfigs {
+        // One debug identity, owned by the repository, so a build from any machine or CI run can
+        // replace another one. `android`/`androiddebugkey` is the public debug credential, not a
+        // secret, and this config is referenced only by the debug build type — never by release.
+        create("repositoryDebug") {
+            storeFile = rootProject.file("debug-key.p12")
+            storeType = "PKCS12"
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
         create("owner") {
             val storePath = System.getenv("HABITAT_KEYSTORE_FILE")
             val storePasswordValue = System.getenv("HABITAT_KEYSTORE_PASSWORD")
@@ -37,6 +56,9 @@ android {
         }
     }
     buildTypes {
+        debug {
+            signingConfig = signingConfigs.getByName("repositoryDebug")
+        }
         release {
             isMinifyEnabled = false
             val signingReady = listOf(

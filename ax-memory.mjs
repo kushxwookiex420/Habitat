@@ -126,6 +126,18 @@ export function normalizeMemoryEntry(input = {}) {
     return { ok: false, code: "invalid_confidence" };
   }
 
+  // An owner claim is only as good as its attestation. The attestation itself is carried through so
+  // a repository with a verifier can check it; nothing else from the caller is trusted.
+  const attestation = input.attestation && typeof input.attestation === "object"
+    ? {
+      v: Number(input.attestation.v) || null,
+      keyId: cleanText(input.attestation.keyId, 64) || null,
+      issuedAt: cleanText(input.attestation.issuedAt, 40) || null,
+      nonce: cleanText(input.attestation.nonce, 64) || null,
+      mac: cleanText(input.attestation.mac, 128) || null
+    }
+    : null;
+
   return {
     ok: true,
     entry: {
@@ -133,6 +145,7 @@ export function normalizeMemoryEntry(input = {}) {
       key,
       kind,
       statement,
+      attestation,
       provenance: {
         source,
         actor: cleanText(provenanceInput.actor, 64) || null,

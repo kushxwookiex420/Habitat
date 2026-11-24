@@ -250,3 +250,79 @@ test("the role listing does not claim deployed agents", () => {
   assert.deepEqual(listing.deployedAgents, []);
   assert.ok(listing.roles.every(role => role.deployed === false));
 });
+
+test("priority is persisted, defaults to zero, and is bounded", async () => {
+  const { engine } = setup();
+  const normal = await engine.submit({ objective: "Run the nightly health sweep" });
+  assert.equal(normal.task.priority, 0, "an unspecified priority is an explicit 0, not missing");
+
+  const urgent = await engine.submit({ objective: "Restore the staging database", priority: 100 });
+  assert.equal(urgent.task.priority, 100);
+
+  const numericString = await engine.submit({ objective: "Fix the pairing dialog", priority: "25" });
+  assert.equal(numericString.task.priority, 25, "a numeric string from JSON clients is accepted");
+
+  for (const bad of [-1, 101, 2.5, "high", {}]) {
+    const refused = await engine.submit({ objective: "Whatever this is", priority: bad });
+    assert.equal(refused.ok, false, "priority " + JSON.stringify(bad) + " is refused");
+    assert.equal(refused.code, "invalid_priority");
+  }
+});
+
+test("a high priority is an ordering hint only, not an authorization bypass", async () => {
+  const { engine } = setup();
+  const outcome = await engine.submit({ objective: "Publish the store listing", priority: 100 });
+  // Still queued with no plan and no approval: the ordering hint bought nothing executable.
+  assert.equal(outcome.task.status, "queued");
+  assert.deepEqual(outcome.task.approvals, []);
+  const planned = await engine.plan({ taskId: outcome.task.id, steps: [{ step: "Draft the listing copy", role: "ax" }] });
+  assert.equal(planned.ok, true);
+  assert.equal(planned.task.status !== "completed", true);
+});
+
+test("planner signals derive a suggested priority when the owner sets none", async () => {
+  const { engine } = setup();
+  const outcome = await engine.submit({
+    objective: "Restore the staging command path",
+    signals: {
+      urgency: "critical",
+      impact: "critical",
+      deadlineAt: "2026-11-21T00:00:00.000Z" // already past the test clock
+    }
+  });
+  assert.equal(outcome.ok, true);
+  assert.equal(outcome.task.priority, 90);
+  assert.equal(outcome.task.prioritySource, "derived");
+  assert.ok(Array.isArray(outcome.task.priorityReasons));
+  assert.ok(outcome.task.priorityReasons.length > 0);
+});
+
+test("an explicit owner priority beats the suggestion, and the source says so", async () => {
+  const { engine } = setup();
+  const outcome = await engine.submit({
+    objective: "Restore the staging command path",
+    priority: 5,
+    signals: { urgency: "critical", impact: "critical" }
+  });
+  assert.equal(outcome.task.priority, 5);
+  assert.equal(outcome.task.prioritySource, "owner");
+  assert.equal(outcome.task.priorityReasons, undefined);
+});
+
+test("a task with neither priority nor signals queues at zero", async () => {
+  const { engine } = setup();
+  const outcome = await engine.submit({ objective: "Routine sweep of the queue" });
+  assert.equal(outcome.task.priority, 0);
+  assert.equal(outcome.task.prioritySource, "derived");
+  assert.deepEqual(outcome.task.priorityReasons, ["no signals supplied"]);
+});
+
+test("derived priority never escapes the queue's range, even from hostile signals", async () => {
+  const { engine } = setup();
+  for (const signals of [{ urgency: 999, impact: 999, blockedCount: 999 }, { urgency: "bogus", deadlineAt: "x" }]) {
+    const outcome = await engine.submit({ objective: "Hostile signal probe", signals });
+    assert.equal(outcome.ok, true);
+    assert.equal(Number.isInteger(outcome.task.priority), true);
+    assert.ok(outcome.task.priority >= 0 && outcome.task.priority <= 100);
+  }
+});

@@ -8,7 +8,9 @@ Habitat hosts the Home Bridge command center at `/bridge/console`. The relay its
 
 | Secret | Role | What it can do |
 | --- | --- | --- |
-| `HABITAT_AX_BRIDGE_TOKEN` | Habitat operator | Opens the console. Exchanged for an HttpOnly, SameSite=Strict session cookie (8 h, in memory) so no credential is ever stored in browser JavaScript. |
+| `HABITAT_OPERATOR_TOKEN` | Habitat operator | Opens the console. Exchanged for an HttpOnly, SameSite=Strict session cookie (8 h, in memory) so no credential is ever stored in browser JavaScript. |
+| `HABITAT_AX_BRIDGE_TOKEN` | Habitat operator (legacy) | Accepted as the operator token when `HABITAT_OPERATOR_TOKEN` is unset, so an existing deployment keeps working. |
+| paired phone (device id + device token) | owner device | Also opens the console: verified with the same `verifyDeviceToken` call the phone's `/ax/device/*` requests use. Nothing is minted — an existing pairing is the credential. |
 | `HOME_BRIDGE_AX_TOKEN` | relay `ax` | Submit tasks, read task status and replies, list/read shared files, queue allowlisted phone commands, read phone state. |
 | `HOME_BRIDGE_BUFF_TOKEN` | relay `buff` | Read and claim the task queue, post replies with artifacts, upload/update shared files, read files. |
 | `HOME_BRIDGE_URL` | - | Relay base URL. Defaults to the preview deployment. |
@@ -42,9 +44,9 @@ credential the installed launcher APK still uses. It is never needed by Habitat.
 | Route | Purpose |
 | --- | --- |
 | `GET /bridge/console` | The console page (HTML only, no secrets). |
-| `POST /bridge/console/login` | Exchange the operator token for a session cookie. |
+| `POST /bridge/console/login` | Exchange an operator token **or** the paired device's id + token for a session cookie. Returns `mode: "operator" \| "device"`. |
 | `POST /bridge/console/logout` | Drop the session. |
-| `GET /bridge/console/session` | Session state plus which relay roles are configured. |
+| `GET /bridge/console/session` | Session state, which unlock paths exist (`login`, `operatorConfigured`, `deviceLoginAvailable`) and which relay roles are configured. |
 | `GET /bridge/console/dashboard` | Aggregated AX / BUFF / PHONE / CLOUD / FILES payload. |
 | `GET /bridge/console/tasks` | Task list with status. |
 | `POST /bridge/console/tasks` | Submit a task to Buff (`ax` credential). |
@@ -54,8 +56,22 @@ credential the installed launcher APK still uses. It is never needed by Habitat.
 | `GET /bridge/console/file?name=…` | One shared file. |
 | `POST /bridge/console/send` | Queue an allowlisted phone command (`ax` credential). |
 
-Every route except the page itself requires the operator token or a session. Without
-`HABITAT_AX_BRIDGE_TOKEN` the console answers 503 instead of running unauthenticated.
+Every route except the page itself requires the operator token or a session. The console is only
+"disabled" (503) when it has **neither** a token nor a device store that can verify a paired phone.
+
+## Why the console asks for a token on a paired deployment
+
+Staging is paired without the legacy machine token: the phone authenticates per-device against
+`habitat_paired_devices`, and `HABITAT_OPERATOR_TOKEN` / `HABITAT_AX_BRIDGE_TOKEN` are intentionally
+absent (see `docs/STAGING_EVIDENCE.md`). The console used to accept only those two variables, so it
+answered 503 on every route and the page could only show its operator-token gate — while the phone was
+connected the whole time. It now accepts the paired device's own credential, which is the credential the
+owner already has, and reports `login: "device"` instead of pretending nothing is configured.
+
+The Control Center at `/control` is a different surface: it asks for the Ax command token in
+`sessionStorage` and sends it to `/ax/command/*`, which accepts `HABITAT_AX_COMMAND_TOKEN` or
+`HABITAT_AX_BRIDGE_TOKEN`. That token is a browser credential for those routes, not a statement about the
+phone pairing.
 
 ## Rotation and revocation
 

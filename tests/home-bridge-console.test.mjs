@@ -544,3 +544,98 @@ test("an unconfigured operator token disables the console", async () => {
   const res = await invoke(app, "GET /bridge/console/dashboard", operator);
   assert.equal(res.statusCode, 503);
 });
+
+/* ── the existing phone pairing unlocks the console ────────────────────────────────────────
+ *
+ * A staging deployment can run with no HABITAT_OPERATOR_TOKEN and no legacy
+ * HABITAT_AX_BRIDGE_TOKEN: the phone authenticates with its own per-device token in D1. The console
+ * must accept that already-proven credential instead of asking for a machine token that does not
+ * exist. Nothing here mints, rotates or re-pairs anything.
+ */
+
+const DEVICE_TOKEN = "device-token-" + "d".repeat(40);
+
+function pairedDeviceStore({ deviceId = "android-paired", token = DEVICE_TOKEN, verified = [] } = {}) {
+  const pairedAt = "2026-11-20T10:00:00.000Z";
+  return {
+    verified,
+    pairedAt,
+    async verifyDeviceToken(presented, id) {
+      verified.push({ deviceId: id });
+      return id === deviceId && String(presented) === token;
+    },
+    async listDevices() {
+      return [{ deviceId, pairedAt, lastSeenAt: "2026-11-24T09:00:00.000Z", state: "active" }];
+    },
+    async listCommands() { return []; }
+  };
+}
+
+test("a paired device unlocks the console when no operator token exists", async () => {
+  const app = makeApp();
+  const store = pairedDeviceStore();
+  registerHomeBridgeConsole(app, { env: {}, fetchImpl: relayStub([]), deviceRepository: store });
+
+  // Anonymous reads are refused, not reported as a broken deployment.
+  const anonymous = await invoke(app, "GET /bridge/console/dashboard", {});
+  assert.equal(anonymous.statusCode, 401);
+
+  const session = await invoke(app, "GET /bridge/console/session", {});
+  assert.equal(session.statusCode, 200);
+  assert.equal(session.body.login, "device");
+  assert.equal(session.body.operatorConfigured, false);
+  assert.equal(session.body.deviceLoginAvailable, true);
+  assert.equal(session.body.authenticated, false);
+
+  const login = await invoke(app, "POST /bridge/console/login", { body: { deviceId: "android-paired", deviceToken: DEVICE_TOKEN } });
+  assert.equal(login.statusCode, 200, JSON.stringify(login.body));
+  assert.equal(login.body.mode, "device");
+  const cookie = login.headers["set-cookie"];
+  assert.match(cookie, /HttpOnly/);
+  const token = cookie.split(";")[0];
+
+  const dashboard = await invoke(app, "GET /bridge/console/dashboard", { headers: { cookie: token } });
+  assert.equal(dashboard.statusCode, 200);
+  assert.equal(JSON.stringify(dashboard.body).includes(DEVICE_TOKEN), false);
+
+  const unlocked = await invoke(app, "GET /bridge/console/session", { headers: { cookie: token } });
+  assert.equal(unlocked.body.authenticated, true);
+
+  // No secret was created or changed: the only device-store call is a verification.
+  assert.deepEqual(store.verified, [{ deviceId: "android-paired" }]);
+  assert.equal(typeof store.registerDevice, "undefined");
+  assert.equal(typeof store.createPairing, "undefined");
+
+  // A wrong token and an unknown device are refused with no cookie.
+  const wrong = await invoke(app, "POST /bridge/console/login", { body: { deviceId: "android-paired", deviceToken: "wrong" } });
+  assert.equal(wrong.statusCode, 401);
+  assert.equal(wrong.headers["set-cookie"], undefined);
+  const unknown = await invoke(app, "POST /bridge/console/login", { body: { deviceId: "android-other", deviceToken: DEVICE_TOKEN } });
+  assert.equal(unknown.statusCode, 401);
+});
+
+test("an operator token is still accepted, and both paths are advertised", async () => {
+  const app = makeApp();
+  registerHomeBridgeConsole(app, { env: { HABITAT_OPERATOR_TOKEN: OPERATOR }, fetchImpl: relayStub([]), deviceRepository: pairedDeviceStore() });
+  const session = await invoke(app, "GET /bridge/console/session", {});
+  assert.equal(session.body.login, "operator_or_device");
+
+  const viaOperator = await invoke(app, "POST /bridge/console/login", { body: { token: OPERATOR } });
+  assert.equal(viaOperator.statusCode, 200);
+  assert.equal(viaOperator.body.mode, "operator");
+  const viaDevice = await invoke(app, "POST /bridge/console/login", { body: { deviceId: "android-paired", deviceToken: DEVICE_TOKEN } });
+  assert.equal(viaDevice.statusCode, 200);
+  assert.equal(viaDevice.body.mode, "device");
+});
+
+test("the login page offers the paired-device fields and no secret", async () => {
+  const app = makeApp();
+  registerHomeBridgeConsole(app, { env: {}, fetchImpl: relayStub([]), deviceRepository: pairedDeviceStore() });
+  const page = await invoke(app, "GET /bridge/console", {});
+  const html = String(page.html);
+  assert.match(html, /device-id/);
+  assert.match(html, /device-token/);
+  assert.match(html, /already paired/);
+  assert.equal(html.includes(DEVICE_TOKEN), false);
+  assert.equal(html.includes(OPERATOR), false);
+});

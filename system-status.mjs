@@ -14,6 +14,10 @@
 //
 // Nothing here probes the network, writes storage or spends model quota.
 
+import { summarizeWorkforce } from "./ax-workforce-status.mjs";
+import { databaseAllowed, stagingEnvironment, STAGING_ENVIRONMENT_VALUE } from "./staging-guard.mjs";
+import { summarizeIdentity } from "./ax-identity-status.mjs";
+
 const HEALTH_WINDOW_MS = 30 * 60 * 1000;
 const RUNNING_STATES = new Set(["working", "running", "delegated", "in_progress", "dispatched", "claimed"]);
 const VERIFIED_STATES = new Set(["verified", "done", "completed"]);
@@ -82,6 +86,7 @@ export function classifyWorkers({ registry, tasks = [], now = Date.now(), health
       id,
       name: worker?.name || id,
       kind: worker?.kind || "worker",
+      model: worker?.model || null,
       // `status` keeps the registry's availability word for older clients; `state` is what was
       // actually observed.
       status: availability || "unknown",
@@ -89,7 +94,10 @@ export function classifyWorkers({ registry, tasks = [], now = Date.now(), health
       state,
       configured: !unavailable,
       running: observed.running,
-      healthy: state === "healthy"
+      healthy: state === "healthy",
+      lastRunAt: observed.lastRunAt,
+      lastStatus: observed.lastStatus,
+      capabilities: Array.isArray(worker?.capabilities) ? worker.capabilities.slice(0, 20) : []
     };
   });
 }
@@ -163,6 +171,45 @@ function authentication(env, { deviceBridge } = {}) {
   };
 }
 
+/**
+ * Say which environment this process believes it is, and whether the production-database guard was in
+ * force. Without this an operator cannot tell a properly isolated staging service from one that was
+ * labelled staging and quietly pointed at production data.
+ */
+function environmentReport(env) {
+  const markedStaging = stagingEnvironment(env);
+  const guard = databaseAllowed({ env, databaseId: env?.HABITAT_D1_DATABASE_ID || "" });
+  return {
+    name: markedStaging ? STAGING_ENVIRONMENT_VALUE : "production",
+    marked: present(env, "HABITAT_ENVIRONMENT"),
+    databaseGuardActive: markedStaging,
+    productionDatabaseRefused: guard.ok === false,
+    detail: markedStaging
+      ? (guard.ok === false
+        ? "Marked staging while pointed at the production database; this process must refuse to start."
+        : "Marked staging; the production database is refused by this process.")
+      : "Not marked as staging, so the production-database guard is inactive for this process."
+  };
+}
+
+function summarizeMissions(input) {
+  if (!input || typeof input !== "object") {
+    return { state: "not_configured", enabled: false, initialized: false, running: false, verified: false, counts: {}, detail: "No mission runtime is attached to this process." };
+  }
+  return {
+    state: input.state || "not_configured",
+    flag: input.flag || "HABITAT_MISSIONS_ENABLED",
+    enabled: input.enabled === true,
+    configured: input.configured === true,
+    initialized: input.initialized === true,
+    running: input.running === true,
+    verified: input.verified === true,
+    migration: { version: input.migration?.version || "0011_ax_missions", ready: input.migration?.ready ?? null, appliedByRuntime: false },
+    counts: { total: Number(input.counts?.total || 0), byStatus: { ...(input.counts?.byStatus || {}) } },
+    detail: input.detail || "No detail reported."
+  };
+}
+
 export function buildSystemStatus({
   env = process.env,
   now = Date.now(),
@@ -177,7 +224,14 @@ export function buildSystemStatus({
   storage = {},
   providers = {},
   routes = {},
-  execution = null
+  execution = null,
+  workforce = null,
+  identity = null,
+  missions = null,
+  gateway = null,
+  heartbeat = null,
+  ownerAuthentication = null,
+  mcpEvents = null
 } = {}) {
   const items = classifyWorkers({ registry, tasks, now });
   const counts = summarizeWorkerCounts(items);
@@ -194,6 +248,7 @@ export function buildSystemStatus({
     nexusRuntime: executionReport.configured
   };
   const paired = Number(devicePresence.paired || devicePresence.deviceCount || 0) || 0;
+  const lastSeenAt = devicePresence.lastSeenAt || null;
   const recentlySeen = devicePresence.recentlySeen === true;
   const unavailableKeys = REQUIRED_CONFIGURATION
     .filter(entry => !present(env, entry.key))
@@ -219,6 +274,9 @@ export function buildSystemStatus({
         detail: "Routes are reported from this process's mount facts; a missing route is reported, never assumed."
       },
       authentication: auth,
+      // Which environment this process was labelled as, and whether the production-database guard
+      // was actually in force. Names and booleans only: the database id is never reported.
+      environment: environmentReport(env),
       storage: {
         state: storageDurable ? "ready" : "degraded",
         taskRepositoryReady: storageDurable,
@@ -244,6 +302,7 @@ export function buildSystemStatus({
         state: recentlySeen ? "online" : paired > 0 ? "paired_offline" : "unpaired",
         paired,
         recentlySeen,
+        lastSeenAt,
         detail: recentlySeen
           ? "A paired phone checked in recently."
           : paired > 0
@@ -254,18 +313,92 @@ export function buildSystemStatus({
         state: Object.values(providers).some(Boolean) ? "configured" : "unconfigured",
         configured: { ...providers },
         detail: "Provider booleans only; configuration is not proof of a successful inference."
+      },
+      // Five words that are routinely conflated are reported as five separate facts: configured
+      // (binding present), initialized (hydrated from the store), enabled (the operator's flag),
+      // running (the scheduler used it since boot) and verified (a result was independently verified).
+      workforce: summarizeWorkforce(workforce),
+      // Identity and intelligence are reported separately: a provider is not who Ax is.
+      identity: summarizeIdentity(identity),
+      missions: summarizeMissions(missions),
+      gateway: {
+        state: gateway?.enabled ? (gateway.repository ? "enabled" : "enabled_unconfigured") : "disabled",
+        enabled: gateway?.enabled === true,
+        repository: gateway?.repository === true,
+        flag: gateway?.flag || "HABITAT_GATEWAY_ENABLED",
+        detail: gateway?.enabled
+          ? gateway.repository
+            ? "Integration gateway is enabled and its storage is available."
+            : "Gateway is enabled but its schema or binding is unavailable; requests are refused."
+          : "Integration gateway is disabled; every /ax/v1 route answers 503."
+      },
+      heartbeat: {
+        state: heartbeat && heartbeat.enabled !== false
+          ? heartbeat.connection || "unknown"
+          : heartbeat?.unavailableReason ? "enabled_unavailable" : "disabled",
+        enabled: Boolean(heartbeat) && heartbeat.enabled !== false,
+        unavailableReason: heartbeat && heartbeat.enabled === false ? heartbeat.unavailableReason || null : null,
+        lastBeatAt: heartbeat?.lastBeatAt || null,
+        lastSeenAt: heartbeat?.lastSeenAt || null,
+        missedBeats: heartbeat?.missedBeats ?? null,
+        queue: heartbeat?.queue || null,
+        detail: heartbeat && heartbeat.enabled !== false
+          ? "Habitat heartbeat is running; the integration has been seen " + (heartbeat.lastSeenAt || "never") + "."
+          : heartbeat?.unavailableReason === "d1_binding_incomplete"
+            ? "Connection monitor is enabled but its D1 binding is incomplete (CLOUDFLARE_ACCOUNT_ID, HABITAT_D1_DATABASE_ID or HABITAT_D1_API_TOKEN is missing); no beats are recorded."
+            : heartbeat?.unavailableReason === "schema_missing"
+              ? "Connection monitor is enabled but its migration is missing; no beats are recorded."
+              : heartbeat?.unavailableReason === "storage_unavailable"
+                ? "Connection monitor is enabled but D1 storage is unreachable; no beats are recorded."
+                : "Connection monitor is disabled (HABITAT_HEARTBEAT_ENABLED is not \"true\")."
+      },
+      mcpEvents: {
+        state: mcpEvents?.enabled ? (mcpEvents.configured ? "enabled" : "enabled_unconfigured") : "disabled",
+        enabled: mcpEvents?.enabled === true,
+        configured: mcpEvents?.configured === true,
+        flag: mcpEvents?.flag || "HABITAT_MCP_EVENTS_ENABLED",
+        scope: mcpEvents?.scope || "mcp:events",
+        secretEncryption: mcpEvents?.secretEncryption || { configured: false, activeKeyId: null },
+        detail: mcpEvents?.enabled
+          ? mcpEvents.configured
+            ? "MCP Events endpoint is enabled; subscriptions and deliveries require a scoped integration token."
+            : "MCP Events is enabled but its schema or identity store is unavailable; /mcp refuses requests."
+          : "MCP Events endpoint is disabled (HABITAT_MCP_EVENTS_ENABLED is not \"true\")."
+      },
+      ownerAuthentication: {
+        state: ownerAuthentication?.verifierConfigured ? (ownerAuthentication.enforce ? "enforced" : "configured_optional") : "not_configured",
+        verifierConfigured: ownerAuthentication?.verifierConfigured === true,
+        enforce: ownerAuthentication?.enforce === true,
+        policy: ownerAuthentication?.policy || "optional",
+        activeKeyId: ownerAuthentication?.activeKeyId || null,
+        detail: ownerAuthentication?.verifierConfigured
+          ? ownerAuthentication.enforce
+            ? "Owner attestation is required for owner writes, directives and approvals."
+            : "A verifier is configured, supplied attestations are verified, but unsigned route-authenticated owner writes remain allowed."
+          : "No owner attestation key is configured; protected owner actions that need it are refused."
       }
     },
     requiredConfiguration: {
       allPresent: unavailableKeys.length === 0,
-      missing: unavailableKeys
+      missing: unavailableKeys,
+      keys: REQUIRED_CONFIGURATION.map(entry => ({
+        key: entry.key,
+        purpose: entry.purpose,
+        configured: present(env, entry.key)
+      }))
     },
     // Public payload. Key names are documented configuration names, never values. Task text,
     // device identifiers and per-worker internals are excluded at the source.
+    //
+    // Policy v2 (reconciliation of the status branches): capability names, the provider model and
+    // last-run outcome are published because they are what makes a capability claim checkable, and
+    // a check-in timestamp is published because "paired but silent since" is the operational fact.
+    // What stays private is content and identity, not the ability to verify a claim.
     redaction: {
       applied: true,
-      policyVersion: 1,
-      excluded: ["secret values", "task content", "device identifiers", "worker internals"]
+      policyVersion: 2,
+      included: ["configuration key names", "worker capability names", "provider model names", "last-run outcome", "device last check-in timestamp"],
+      excluded: ["secret values", "task content", "objective and result text", "device identifiers", "device names"]
     },
     limits: [
       "This report does not spend model quota, so it cannot prove inference works.",
@@ -279,6 +412,14 @@ export function buildSystemStatus({
 
 const LABEL = {
   healthy: "HEALTHY",
+  disabled: "DISABLED",
+  initialized: "INITIALIZED",
+  persistent: "PERSISTENT",
+  committed_only: "COMMITTED ONLY",
+  not_yet_persisted: "NOT YET PERSISTED",
+  schema_missing: "SCHEMA MISSING",
+  initialization_failed: "INITIALIZATION FAILED",
+  not_configured: "NOT CONFIGURED",
   operational: "OPERATIONAL",
   idle: "IDLE",
   degraded: "DEGRADED",
@@ -329,6 +470,35 @@ export function formatSystemStatus(status) {
     "Storage: " + state(storage.state) + " — " + (storage.adapter || "unknown") +
     (storage.durable ? " (durable)" : " (not durable)")
   );
+  const identity = components.identity;
+  if (identity && identity.name) {
+    lines.push(
+      "Identity: " + identity.name + " " + state(identity.state) +
+      " — providerIndependent=" + (identity.providerIndependent ? "yes" : "no") +
+      ", persisted=" + (identity.persisted ? "yes" : "no") +
+      ", directives=" + (identity.directives?.total ?? 0)
+    );
+  }
+  const missions = components.missions;
+  if (missions && missions.flag) {
+    lines.push(
+      "Missions: " + state(missions.state) +
+      " — enabled=" + (missions.enabled ? "yes" : "no") +
+      ", initialized=" + (missions.initialized ? "yes" : "no") +
+      ", total=" + (missions.counts?.total ?? 0)
+    );
+  }
+  const workforce = components.workforce;
+  if (workforce && workforce.flag) {
+    lines.push(
+      "Workforce: " + state(workforce.state) +
+      " — configured=" + (workforce.configured ? "yes" : "no") +
+      ", initialized=" + (workforce.initialized ? "yes" : "no") +
+      ", enabled=" + (workforce.enabled ? "yes" : "no") +
+      ", running=" + (workforce.running ? "yes" : "no") +
+      ", verified=" + (workforce.verified ? "yes" : "no")
+    );
+  }
   lines.push(
     "Workers: " + (counts.registered || 0) + " registered / " +
     (counts.running || 0) + " running / " +
@@ -338,15 +508,22 @@ export function formatSystemStatus(status) {
     (counts.unverified || 0) + " unverified"
   );
   for (const item of (workers.items || []).slice(0, 8)) {
-    lines.push("  • " + item.id + " — " + state(item.state));
+    lines.push("  • " + item.id + " — " + state(item.state) + (item.lastRunAt ? " (last " + item.lastStatus + " at " + item.lastRunAt + ")" : " (no run recorded)"));
   }
   lines.push(
     "Execution: " + state(execution.state) + " — " + (execution.detail || "no executor report") +
     (execution.liveWorkers != null ? " liveWorkers=" + execution.liveWorkers : "")
   );
+  const environment = components.environment || {};
+  lines.push(
+    "Environment: " + state(environment.name) + " — guard=" +
+    (environment.databaseGuardActive ? "active" : "inactive") +
+    ", productionDatabaseRefused=" + (environment.productionDatabaseRefused ? "yes" : "no")
+  );
   const device = components.device || {};
   lines.push(
-    "Device: " + state(device.state) + " — " + (device.paired || 0) + " paired"
+    "Device: " + state(device.state) + " — " + (device.paired || 0) + " paired" +
+    (device.lastSeenAt ? ", last check-in " + device.lastSeenAt : ", no check-in recorded")
   );
   const providers = components.providers?.configured || {};
   lines.push(

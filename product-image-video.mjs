@@ -72,6 +72,59 @@ function sendError(res, status, error) {
   return res.status(status).json({ ok: false, error: String(error?.message || error).slice(0, 300) });
 }
 
+/**
+ * Text capability detection. `ffmpeg -version` succeeding does not mean the build can draw text: a
+ * build without libfreetype has no `drawtext`, and reporting "ready" on such a build produced a 502
+ * only after a render was requested. One probe answers what is actually possible.
+ */
+let textCapability = null;
+async function detectTextCapability() {
+  if (textCapability) return textCapability;
+  const listing = await execFileAsync(ffmpegPath, ["-hide_banner", "-filters"], { timeout: 10000 })
+    .then(result => String(result.stdout || ""))
+    .catch(() => "");
+  const has = name => new RegExp("(^|[\\s.])" + name + "([\\s]|$)", "m").test(listing);
+  const drawtext = has("drawtext");
+  const subtitles = has("subtitles");
+  textCapability = { drawtext, subtitles, method: drawtext ? "drawtext" : subtitles ? "ass" : null };
+  return textCapability;
+}
+
+/** ASS payload for the same four overlays, used when the build has libass but no drawtext. */
+function buildAssOverlay({ productName, callToAction, price, durationSeconds }) {
+  const esc = value => String(value || "")
+    .replace(/\\/g, "\\\\")
+    .replace(/\{/g, "\\{")
+    .replace(/\}/g, "\\}")
+    .replace(/\n/g, "\\N");
+  const start = "0:00:00.00";
+  const end = "0:" + String(Math.floor(durationSeconds / 60)).padStart(2, "0") + ":" + String(Math.round(durationSeconds % 60)).padStart(2, "0") + ".00";
+  const lines = [
+    "[Script Info]",
+    "ScriptType: v4.00+",
+    "PlayResX: 1080",
+    "PlayResY: 1920",
+    "WrapStyle: 0",
+    "ScaledBorderAndShadow: yes",
+    "",
+    "[V4+ Styles]",
+    "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
+    "Style: Brand,DejaVu Sans,34,&H00E7F562,&H000000FF,&H00000000,&H00000000,-1,0,0,0,100,100,0,0,1,3,0,8,40,40,78,1",
+    "Style: Title,DejaVu Sans,48,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,-1,0,0,0,100,100,0,0,1,3,0,8,60,60,140,1",
+    "Style: Price,DejaVu Sans,54,&H00E7F562,&H000000FF,&H00000000,&H00000000,-1,0,0,0,100,100,0,0,1,3,0,2,40,40,330,1",
+    "Style: CTA,DejaVu Sans,34,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,3,0,2,60,60,220,1",
+    "",
+    "[Events]",
+    "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
+    "Dialogue: 0," + start + "," + end + ",Brand,,0,0,0,,DROPPILOT",
+    "Dialogue: 0," + start + "," + end + ",Title,,0,0,0,," + esc(wrapOverlayText(productName, 24)),
+    ...(price ? ["Dialogue: 0," + start + "," + end + ",Price,,0,0,0,," + esc(price)] : []),
+    "Dialogue: 0," + start + "," + end + ",CTA,,0,0,0,," + esc(wrapOverlayText(callToAction, 32)),
+    ""
+  ];
+  return lines.join("\n");
+}
+
 export function registerProductImageVideo(app) {
   app.get("/product-image-video/status", async (_req, res) => {
     const checks = {};
@@ -81,6 +134,13 @@ export function registerProductImageVideo(app) {
     }
     try { await execFileAsync(ffmpegPath, ["-version"], { timeout: 5000 }); checks.ffmpegExecutable = { ok: true }; }
     catch (error) { checks.ffmpegExecutable = { ok: false, detail: String(error?.message || error).slice(0, 160) }; }
+    let text = { method: null };
+    try {
+      text = await detectTextCapability();
+      checks.textOverlay = { ok: Boolean(text.method), method: text.method, detail: text.method ? null : "this build has neither drawtext nor subtitles" };
+    } catch (error) {
+      checks.textOverlay = { ok: false, detail: String(error?.message || error).slice(0, 160) };
+    }
     const ready = Object.values(checks).every(check => check.ok);
     return res.status(ready ? 200 : 503).json({
       ok: ready, ready, feature: "product-image-video", format: "MP4", width: WIDTH, height: HEIGHT,
@@ -88,6 +148,7 @@ export function registerProductImageVideo(app) {
       usesCatalogImagesOnly: true, animatedImageMotion: "slow zoom with safe-area text overlays",
       includesRealProductOperationFootage: false, autoPublish: false,
       outputPersistence: "temporary instance storage; render again after an instance restart",
+      textOverlayMethod: text.method,
       approvalRequired: true, checks
     });
   });
@@ -144,23 +205,43 @@ export function registerProductImageVideo(app) {
         fs.writeFile(brandPath, "DROPPILOT", "utf8")
       ]);
       const outputPath = path.join(dir, "droppilot-product-picture-video.mp4");
+      const text = await detectTextCapability();
+      let overlayFilters;
+      if (text.method === "drawtext") {
+        overlayFilters = [
+          "drawtext=fontfile=" + DEJAVU_BOLD + ":textfile=" + brandPath + ":fontcolor=#62f5e7:fontsize=34:x=(w-text_w)/2:y=80",
+          "drawtext=fontfile=" + DEJAVU_BOLD + ":textfile=" + titlePath + ":fontcolor=white:fontsize=48:line_spacing=8:box=1:boxcolor=black@0.0:boxborderw=10:x=(w-text_w)/2:y=145",
+          ...(price ? ["drawtext=fontfile=" + DEJAVU_BOLD + ":textfile=" + pricePath + ":fontcolor=#62f5e7:fontsize=54:x=(w-text_w)/2:y=h-330"] : []),
+          "drawtext=fontfile=" + DEJAVU_REGULAR + ":textfile=" + ctaPath + ":fontcolor=white:fontsize=34:line_spacing=6:x=(w-text_w)/2:y=h-220"
+        ];
+      } else if (text.method === "ass") {
+        // A build with libass but no libfreetype can still render the same overlays. The subtitle file
+        // is addressed relatively because the filter argument cannot contain a path separator it
+        // would have to escape.
+        await fs.writeFile(path.join(dir, "overlay.ass"), buildAssOverlay({
+          productName,
+          callToAction,
+          price,
+          durationSeconds: DURATION_SECONDS
+        }), "utf8");
+        overlayFilters = ["subtitles=f=overlay.ass:fontsdir=" + path.dirname(DEJAVU_BOLD)];
+      } else {
+        throw new Error("This ffmpeg build has neither drawtext nor subtitles support, so the overlay text cannot be rendered.");
+      }
       const filter = [
         "scale=920:1120:force_original_aspect_ratio=decrease",
         "pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=0x0b1026",
         "zoompan=z='min(zoom+0.00022,1.08)':d=1:s=1080x1920:fps=30",
         "drawbox=x=0:y=0:w=iw:h=310:color=0x07101f@0.78:t=fill",
         "drawbox=x=0:y=ih-390:w=iw:h=390:color=0x07101f@0.82:t=fill",
-        "drawtext=fontfile=" + DEJAVU_BOLD + ":textfile=" + brandPath + ":fontcolor=#62f5e7:fontsize=34:x=(w-text_w)/2:y=80",
-        "drawtext=fontfile=" + DEJAVU_BOLD + ":textfile=" + titlePath + ":fontcolor=white:fontsize=48:line_spacing=8:box=1:boxcolor=black@0.0:boxborderw=10:x=(w-text_w)/2:y=145",
-        ...(price ? ["drawtext=fontfile=" + DEJAVU_BOLD + ":textfile=" + pricePath + ":fontcolor=#62f5e7:fontsize=54:x=(w-text_w)/2:y=h-330"] : []),
-        "drawtext=fontfile=" + DEJAVU_REGULAR + ":textfile=" + ctaPath + ":fontcolor=white:fontsize=34:line_spacing=6:x=(w-text_w)/2:y=h-220",
+        ...overlayFilters,
         "format=yuv420p"
       ].join(",");
       await execFileAsync(ffmpegPath, [
         "-hide_banner", "-loglevel", "error", "-y", "-loop", "1", "-framerate", "30", "-i", imagePath,
         "-vf", filter, "-t", String(DURATION_SECONDS), "-an",
         "-c:v", "libx264", "-preset", "ultrafast", "-crf", "24", "-movflags", "+faststart", outputPath
-      ], { timeout: 120000 });
+      ], { timeout: 120000, cwd: dir });
       const stat = await fs.stat(outputPath);
       if (!stat.size) throw new Error("FFmpeg produced an empty video.");
       const probe = await execFileAsync(ffprobePath, ["-v", "error", "-show_entries", "format=duration,size:stream=codec_type,width,height", "-of", "json", outputPath]);

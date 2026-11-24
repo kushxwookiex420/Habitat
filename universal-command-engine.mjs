@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { getRole } from "./agent-roles.mjs";
+import { derivePriority } from "./ax-priority-policy.mjs";
 
 /**
  * The universal command engine.
@@ -162,9 +163,27 @@ function validateObjective(objective) {
     return { ok: true, text };
   }
 
-  async function submit({ objective, requestedBy = "owner", role = "ax", idempotencyKey = null, adapter = null } = {}) {
+  // Priority is an ordering hint for the execution queue, never an authorization: a high-priority
+  // task still goes through the same approval gates. Bounded so a caller cannot sort itself above
+  // everything forever with an absurd value.
+  function validatePriority(value) {
+    if (value === undefined || value === null || value === "") return { ok: true, priority: 0 };
+    const numeric = Number(value);
+    if (!Number.isInteger(numeric) || numeric < 0 || numeric > 100) {
+      return { ok: false, error: "priority must be an integer from 0 to 100." };
+    }
+    return { ok: true, priority: numeric };
+  }
+
+  async function submit({ objective, requestedBy = "owner", role = "ax", idempotencyKey = null, adapter = null, priority, signals = null } = {}) {
     const checked = validateObjective(objective);
     if (!checked.ok) return failure("invalid_objective", checked.error);
+    // An explicit owner priority always wins. Without one, the planner's signals produce a suggested
+    // priority; with neither, the suggestion is 0 and the task simply queues last.
+    const explicitPriority = priority === undefined || priority === null || priority === "" ? null : priority;
+    const derived = explicitPriority === null ? derivePriority(signals || {}) : null;
+    const priorityCheck = validatePriority(derived ? derived.priority : explicitPriority);
+    if (!priorityCheck.ok) return failure("invalid_priority", priorityCheck.error);
     // Only an explicit, exact, allowlisted read-only adapter may be bound at submission time.
     const adapterCheck = validateAdapter(adapter);
     if (!adapterCheck.ok) return failure("adapter_not_allowed", adapterCheck.error);
@@ -195,6 +214,11 @@ function validateObjective(objective) {
       statusHistory: [{ from: null, to: "queued", at, by: String(requestedBy || "owner").slice(0, 120), reason: null }],
       result: null,
       error: null,
+      // 0 is the default, so every queued task has an explicit sort key and the executor's
+      // ORDER BY never depends on an absent field.
+      priority: priorityCheck.priority,
+      prioritySource: derived ? "derived" : "owner",
+      ...(derived ? { priorityReasons: derived.reasons.slice(0, 6) } : {}),
       idempotencyKey: key || null
     };
     if (adapterCheck.adapter) task.adapter = adapterCheck.adapter;

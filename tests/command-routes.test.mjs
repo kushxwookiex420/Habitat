@@ -88,7 +88,7 @@ test("registers the complete command route surface without duplicate paths", () 
   const app = makeApp();
   mountTestApp(app, memoryRepository());
   const paths = [...app.routes.keys()];
-  assert.equal(paths.length, 105, "84 through Mission 16, 3 mission-work routes from Mission 17, agents/restore from Mission 19, and the 17 P1 capability-network routes");
+  assert.equal(paths.length, 111, "the previous 105 plus six mission-pipeline routes (submit, read, run, approve, authorizations, revoke)");
   assert.equal(new Set(paths).size, paths.length);
   assert.ok(paths.includes("GET /ax/command/roles"));
   assert.ok(paths.includes("GET /ax/command/tools"));
@@ -485,4 +485,51 @@ test("Ax routes cannot plan, checkpoint or request approval on a worker-owned ta
     assert.equal(stored.checkpoints, undefined);
     assert.equal(stored.approvals.length, 0);
   }
+});
+
+test("the task route carries owner priority into the queue and refuses an out-of-range value", async () => {
+  const app = makeApp();
+  const repository = memoryRepository();
+  mountTestApp(app, repository);
+
+  const submitted = await invoke(app, "POST /ax/command/tasks", {
+    headers: auth,
+    body: { objective: "Repair the staging bridge", priority: 40, idempotencyKey: "priority-route-1" }
+  });
+  assert.equal(submitted.statusCode, 201);
+  assert.equal(submitted.body.task.priority, 40, "priority survives the route, not just the engine");
+  assert.equal(repository.rows.get(submitted.body.task.id).priority, 40, "and is what was persisted");
+
+  const rejected = await invoke(app, "POST /ax/command/tasks", {
+    headers: auth,
+    body: { objective: "Repair the staging bridge", priority: 500, idempotencyKey: "priority-route-2" }
+  });
+  assert.equal(rejected.statusCode, 400);
+  assert.equal(rejected.body.code, "invalid_priority");
+  assert.equal(repository.rows.size, 1, "the refused task was never stored");
+});
+
+test("the task route accepts planner signals and derives a suggested priority", async () => {
+  const app = makeApp();
+  const repository = memoryRepository();
+  mountTestApp(app, repository);
+
+  const derived = await invoke(app, "POST /ax/command/tasks", {
+    headers: auth,
+    body: {
+      objective: "Repair the staging command path",
+      idempotencyKey: "signals-route-1",
+      signals: { urgency: "critical", impact: "critical" }
+    }
+  });
+  assert.equal(derived.statusCode, 201);
+  assert.equal(derived.body.task.priority, 60, "40 urgency + 20 impact, with no deadline");
+  assert.equal(derived.body.task.prioritySource, "derived");
+
+  const explicit = await invoke(app, "POST /ax/command/tasks", {
+    headers: auth,
+    body: { objective: "Repair the staging command path", idempotencyKey: "signals-route-2", priority: 3, signals: { urgency: "critical" } }
+  });
+  assert.equal(explicit.body.task.priority, 3, "an explicit priority wins over signals");
+  assert.equal(explicit.body.task.prioritySource, "owner");
 });

@@ -21,14 +21,192 @@ import { createHash } from "node:crypto";
 import { buildSystemStatus, classifyWorkers, inferReadOnlyAdapter, isSystemStatusRequest, parseAxCommand, summarizeWorkerCounts } from "./system-status.mjs";
 import { buildWorkerList, buildWorkerDetail, resolveWorkerId, describeVerification, normalizeError } from "./worker-catalog.mjs";
 import { createChatCommandAuthorizer } from "./command-auth.mjs";
+import { createWorkforceRuntime } from "./ax-workforce-runtime.mjs";
+import { createMissionRuntime } from "./ax-mission-runtime.mjs";
+import { registerAxGateway, gatewayEnabled, GATEWAY_FLAG, resolveClientToken } from "./ax-gateway.mjs";
+import { createMcpEventsServer, registerMcpEvents, mcpEnabled, MCP_FLAG, MCP_SCOPE } from "./ax-mcp-events.mjs";
+import { createD1McpRepository, MCP_MIGRATION } from "./d1-mcp-repository.mjs";
+import { secretBoxFromEnv } from "./ax-secret-box.mjs";
+import { createD1GatewayRepository } from "./d1-gateway-repository.mjs";
+import { createHeartbeatMonitor, heartbeatEnabled, createWebhookNotifier, HEARTBEAT_FLAG, HEARTBEAT_INTERVAL_MS } from "./ax-heartbeat.mjs";
+import { createD1HeartbeatRepository, HEARTBEAT_MIGRATION } from "./d1-heartbeat-repository.mjs";
+import { ownerVerifierFromEnv } from "./ax-owner-attestation.mjs";
+import { databaseAllowed } from "./staging-guard.mjs";
 
 import express from "express";
+
+// Fail closed before serving anything: a process marked as staging must never open the production
+// database. This is opt-in (HABITAT_ENVIRONMENT=staging) so production behavior is unchanged, and the
+// message names the reason only, never the id or any credential.
+const databaseCheck = databaseAllowed({ env: process.env, databaseId: process.env.HABITAT_D1_DATABASE_ID });
+if (!databaseCheck.ok) {
+  console.error("STAGING_GUARD_REFUSED_START", JSON.stringify({ reason: databaseCheck.reason }));
+  process.exit(1);
+}
 
 const app = express();
 
 app.use(express.json({ limit: "1mb" }));
 
-const deviceCommandBridge = registerDeviceCommandBridge(app);
+// Workforce coordination is attached, not activated: the runtime does nothing unless
+// HABITAT_WORKFORCE_ENABLED is "true" and migration 0010 exists, and its flag is independent of
+// NEXUS_RUNTIME_ENABLED. Attaching the callbacks changes no route and no behavior while it is off.
+const workforceRuntime = createWorkforceRuntime({ env: process.env });
+// Missions are attached with their own flag, also off by default. No mission store is created while
+// HABITAT_MISSIONS_ENABLED is unset.
+const missionRuntime = createMissionRuntime({ env: process.env });
+const ownerVerifier = ownerVerifierFromEnv({ env: process.env });
+// Integration gateway storage. Built only when the gateway flag is on and the D1 binding is complete;
+// a missing 0012 schema leaves the repository null, so routes answer 503 instead of half-working.
+let gatewayRepository = null;
+if (gatewayEnabled()) {
+  const gatewayD1 = ["CLOUDFLARE_ACCOUNT_ID", "HABITAT_D1_DATABASE_ID", "HABITAT_D1_API_TOKEN"].every(key => String(process.env[key] || "").trim());
+  if (!gatewayD1) {
+    console.warn("AX_GATEWAY: enabled but the D1 binding is incomplete; every request will be refused");
+  } else {
+    try {
+      const candidate = createD1GatewayRepository({
+        accountId: process.env.CLOUDFLARE_ACCOUNT_ID,
+        databaseId: process.env.HABITAT_D1_DATABASE_ID,
+        apiToken: process.env.HABITAT_D1_API_TOKEN
+      });
+      const schema = await candidate.verifySchema();
+      if (schema.ok) {
+        const rateSchema = await candidate.verifyRateLimitSchema();
+        if (!rateSchema.ok) console.warn("AX_GATEWAY_RATE_LIMIT_SCHEMA_MISSING", JSON.stringify({ migration: "0014_ax_gateway_rate_limits", fallback: "process-local limiter" }));
+        gatewayRepository = candidate;
+      }
+      else console.warn("AX_GATEWAY_SCHEMA_MISSING", JSON.stringify({ migration: "0012_ax_gateway", missing: schema.missing }));
+    } catch (error) {
+      console.warn("AX_GATEWAY_STORAGE_UNAVAILABLE", String(error?.message || error));
+    }
+  }
+}
+// Habitat's own heartbeat and connection monitor. Independent of the gateway: it runs while the
+// integration is absent, queues meaningful changes once each, and only attempts an outbound webhook
+// when one is configured. Nothing here claims it can wake an inactive ChatGPT conversation.
+let heartbeatMonitor = null;
+// Why the monitor is absent, when the operator asked for it. Reported by /system/status so a missing
+// D1 binding is never described as "the flag is off".
+let heartbeatUnavailable = null;
+if (heartbeatEnabled()) {
+  const heartbeatD1 = ["CLOUDFLARE_ACCOUNT_ID", "HABITAT_D1_DATABASE_ID", "HABITAT_D1_API_TOKEN"].every(key => String(process.env[key] || "").trim());
+  if (!heartbeatD1) {
+    heartbeatUnavailable = "d1_binding_incomplete";
+    console.warn("AX_HEARTBEAT: enabled but the D1 binding is incomplete; no beats are recorded");
+  } else {
+    try {
+      const candidate = createD1HeartbeatRepository({
+        accountId: process.env.CLOUDFLARE_ACCOUNT_ID,
+        databaseId: process.env.HABITAT_D1_DATABASE_ID,
+        apiToken: process.env.HABITAT_D1_API_TOKEN
+      });
+      const schema = await candidate.verifySchema();
+      if (schema.ok) {
+        heartbeatMonitor = createHeartbeatMonitor({
+          repository: candidate,
+          missionRuntime,
+          statusProvider: collectSystemStatus,
+          notifier: createWebhookNotifier({ url: process.env.AX_NOTIFY_WEBHOOK_URL, secret: process.env.AX_NOTIFY_WEBHOOK_SECRET }),
+          log: console
+        });
+        const timer = setInterval(async () => {
+          try {
+            const beat = await heartbeatMonitor.beat();
+            if (mcpEvents && beat?.events?.length) await mcpEvents.ingestHeartbeatEvents(beat.events);
+            // Dispatch on every beat, not only when this beat emitted something: a queued delivery from
+            // before a restart must still be attempted.
+            if (mcpEvents) await mcpEvents.dispatch();
+            await heartbeatMonitor.deliver();
+          } catch (error) {
+            console.warn("AX_HEARTBEAT_BEAT_FAILED", String(error?.message || error).slice(0, 160));
+          }
+        }, Number(process.env.AX_HEARTBEAT_INTERVAL_MS) > 0 ? Math.max(10_000, Number(process.env.AX_HEARTBEAT_INTERVAL_MS)) : HEARTBEAT_INTERVAL_MS);
+        timer.unref?.();
+      } else {
+        heartbeatUnavailable = "schema_missing";
+        console.warn("AX_HEARTBEAT_SCHEMA_MISSING", JSON.stringify({ migration: HEARTBEAT_MIGRATION, missing: schema.missing }));
+      }
+    } catch (error) {
+      heartbeatUnavailable = "storage_unavailable";
+      console.warn("AX_HEARTBEAT_STORAGE_UNAVAILABLE", String(error?.message || error));
+    }
+  }
+}
+// OpenAI MCP Events adapter. It shares the gateway's integration identities and scopes, so a plugin
+// token is the same revocable credential. Disabled unless HABITAT_MCP_EVENTS_ENABLED=true and the
+// 0015 schema exists; no subscription or delivery is attempted while it is off.
+let mcpEvents = null;
+let mcpEncryption = { ok: false, reason: "disabled" };
+if (mcpEnabled()) {
+  mcpEncryption = secretBoxFromEnv({ env: process.env });
+  if (!mcpEncryption.ok) {
+    console.warn("AX_MCP_SECRET_ENCRYPTION_INVALID", JSON.stringify({ reason: mcpEncryption.reason }));
+  }
+  const mcpD1 = ["CLOUDFLARE_ACCOUNT_ID", "HABITAT_D1_DATABASE_ID", "HABITAT_D1_API_TOKEN"].every(key => String(process.env[key] || "").trim());
+  if (!mcpD1 || !gatewayRepository || !mcpEncryption.ok) {
+    console.warn("AX_MCP_EVENTS: enabled but D1, the gateway identity store or secret encryption is unavailable; /mcp will refuse");
+  } else {
+    try {
+      const candidate = createD1McpRepository({
+        accountId: process.env.CLOUDFLARE_ACCOUNT_ID,
+        databaseId: process.env.HABITAT_D1_DATABASE_ID,
+        apiToken: process.env.HABITAT_D1_API_TOKEN,
+        secretBox: mcpEncryption.box
+      });
+      const schema = await candidate.verifySchema();
+      if (schema.ok) mcpEvents = createMcpEventsServer({ repository: candidate, owner: process.env.AX_MCP_DELIVERY_OWNER || "habitat-" + process.pid, log: console });
+      else console.warn("AX_MCP_SCHEMA_MISSING", JSON.stringify({ migration: MCP_MIGRATION, missing: schema.missing }));
+    } catch (error) {
+      console.warn("AX_MCP_STORAGE_UNAVAILABLE", String(error?.message || error));
+    }
+  }
+}
+if (mcpEvents) {
+  // Independent retry loop: MCP deliveries must make progress even when heartbeat is disabled or no new
+  // mission event was produced this beat. Leases keep this safe across replicas.
+  const mcpDispatchTimer = setInterval(async () => {
+    try { await mcpEvents.dispatch(); }
+    catch (error) { console.warn("AX_MCP_DISPATCH_FAILED", String(error?.message || error).slice(0, 160)); }
+  }, Number(process.env.AX_MCP_DISPATCH_INTERVAL_MS) > 0 ? Math.max(10_000, Number(process.env.AX_MCP_DISPATCH_INTERVAL_MS)) : 30_000);
+  mcpDispatchTimer.unref?.();
+}
+registerMcpEvents(app, {
+  enabled: mcpEnabled(),
+  server: mcpEvents,
+  authenticate: async req => {
+    const resolved = await resolveClientToken({ repository: gatewayRepository, authorization: req.headers.authorization, scope: MCP_SCOPE });
+    if (!resolved.ok) return resolved;
+    if (gatewayRepository && typeof gatewayRepository.consumeRateLimit === "function") {
+      const limited = await gatewayRepository.consumeRateLimit({ clientId: resolved.client.id, windowMs: 60_000, max: 120 }).catch(() => ({ shared: false, ok: true }));
+      if (limited.shared && !limited.ok) return { ok: false, status: 429, code: "gateway_rate_limited" };
+    }
+    return resolved;
+  }
+});
+registerAxGateway(app, {
+  enabled: gatewayEnabled(),
+  repository: gatewayRepository,
+  missionRuntime,
+  heartbeat: heartbeatMonitor,
+  // Resolved per request: the workforce runtime attaches the lease layer during its own initialisation,
+  // which happens after this registration.
+  workforceV1: () => workforceRuntime.workforceV1(),
+  ownerVerifier,
+  statusProvider: collectSystemStatus,
+  log: console
+});
+const deviceCommandBridge = registerDeviceCommandBridge(app, {
+  ownerVerifier,
+  ownerAttestationEnforce: String(process.env.HABITAT_OWNER_ATTESTATION_ENFORCE || "").toLowerCase() === "true",
+  // The improvement engine reads the real status report this process assembles, so its findings are
+  // about observed state rather than a guess. It runs inside the existing scheduler tick.
+  improvementSignals: async () => ({ systemStatus: await collectSystemStatus() }),
+  workforceIntake: workforceRuntime.intake,
+  workforceRunner: workforceRuntime.run,
+  missions: workforceRuntime.missions,
+  missionTick: missionRuntime.tick
+});
 const chatCommandAuthorizer = createChatCommandAuthorizer({ env: process.env, deviceBridge: deviceCommandBridge });
 
 registerPublicPages(app);
@@ -1502,6 +1680,12 @@ async function collectSystemStatus() {
   }
 
   const bridgeStatus = deviceCommandBridge.status();
+  let identity = null;
+  try {
+    identity = typeof deviceCommandBridge.identityStatus === "function" ? await deviceCommandBridge.identityStatus() : null;
+  } catch (error) {
+    console.warn("STATUS_IDENTITY_FAILED", String(error?.message || error));
+  }
   let execution = bridgeStatus.nexus || null;
   const runtime = typeof deviceCommandBridge.nexus === "function" ? deviceCommandBridge.nexus() : null;
   if (runtime && typeof runtime.presence === "function") {
@@ -1538,6 +1722,29 @@ async function collectSystemStatus() {
       secretVaultReady: Boolean(secretVault)
     },
     providers: configuredProviders(),
+    // Read-only snapshot: configured, initialized, enabled, running and verified are separate facts.
+    workforce: workforceRuntime.status(),
+    // Durable leases: attached, schema ready, and whether execution is actually enforced. A deployment
+    // with 0010 but not 0018 reports enforced:false rather than implying the guarantee exists.
+    workforceV1: workforceRuntime.status().leases,
+    // Identity is reported apart from whichever provider supplies intelligence.
+    identity,
+    missions: await missionRuntime.status(),
+    // Mount facts only; the gateway refuses every request unless its own flag is on.
+    gateway: { enabled: gatewayEnabled(), repository: gatewayRepository !== null, flag: GATEWAY_FLAG },
+    ownerAuthentication: ownerVerifier ? {
+      verifierConfigured: true,
+      activeKeyId: ownerVerifier.rotation?.().activeKeyId || null,
+      enforce: String(process.env.HABITAT_OWNER_ATTESTATION_ENFORCE || "").toLowerCase() === "true",
+      policy: String(process.env.HABITAT_OWNER_ATTESTATION_ENFORCE || "").toLowerCase() === "true" ? "required" : "optional"
+    } : { verifierConfigured: false, enforce: false, policy: "optional", detail: "No owner attestation key is configured." },
+    heartbeat: heartbeatMonitor
+      ? await heartbeatMonitor.status()
+      : { enabled: false, flag: HEARTBEAT_FLAG, connection: "disabled", unavailableReason: heartbeatUnavailable },
+    mcpEvents: {
+      enabled: mcpEnabled(), configured: mcpEvents !== null, flag: MCP_FLAG, scope: MCP_SCOPE,
+      secretEncryption: { configured: mcpEncryption.ok === true, activeKeyId: mcpEncryption.ok ? mcpEncryption.activeKeyId : null }
+    },
     routes: {
       chat: true,
       // These routes are registered by registerDeviceCommandBridge regardless of credentials or
@@ -2237,6 +2444,15 @@ if (secretVault) {
   console.log("TIKTOK_TOKEN_VAULT: D1 AES-256-GCM ready; token values are not logged");
 } else {
   console.warn("TIKTOK_TOKEN_VAULT: unavailable — OAuth cannot be marked connected until D1 and HABITAT_TOKEN_ENCRYPTION_KEY are configured");
+}
+// Refuses safely when disabled, unconfigured, or when migration 0010 is absent. Never applies DDL.
+const missionInit = await missionRuntime.initialize();
+if (missionInit.state !== "disabled") {
+  console.log("MISSIONS_STATUS", JSON.stringify(missionInit));
+}
+const workforceInit = await workforceRuntime.initialize();
+if (workforceInit.state !== "disabled") {
+  console.log("WORKFORCE_STATUS", JSON.stringify(workforceInit));
 }
 const contentStorageInit = await contentEngine.initialize();
 const deviceCommandBridgeInit = await deviceCommandBridge.initialize();

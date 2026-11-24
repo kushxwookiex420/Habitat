@@ -1,0 +1,6 @@
+#!/opt/freestyle/python/bin/python3
+import sys
+from androguard.cli.cli import entry_point
+if __name__ == '__main__':
+    sys.argv[0] = sys.argv[0].removesuffix('.exe')
+    sys.exit(entry_point())

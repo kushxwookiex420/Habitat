@@ -1,0 +1,59 @@
+name: Staging escalation check
+
+# One controlled failure, one durable Ax message, then a retry that must not duplicate it.
+# Creates real task rows and a real message on staging, so it never runs on ordinary pushes: it needs
+# the explicit dispatch, or a commit message that says [staging-escalation] (the same convention the round
+# trip uses, which also works before this file reaches the default branch).
+on:
+  push:
+    branches: [staging/integration]
+    paths:
+      - ".github/workflows/staging-escalation.yml"
+      - "scripts/staging-escalation-check.mjs"
+  workflow_dispatch:
+    inputs:
+      timeout_seconds:
+        description: "How long to wait for the probe task to reach a terminal state"
+        required: false
+        default: "300"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: staging-escalation
+  cancel-in-progress: false
+
+jobs:
+  escalation:
+    name: controlled failure escalation
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[staging-escalation]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Controlled failure escalation
+        env:
+          HABITAT_AX_COMMAND_TOKEN: ${{ secrets.HABITAT_AX_COMMAND_TOKEN }}
+          # Hard-coded staging origin: the repository variable rightly points at production, and this
+          # probe must never be able to inherit it.
+          STAGING_BASE_URL: https://habitat-staging-e3ie.onrender.com
+          ESCALATION_TIMEOUT_SECONDS: ${{ inputs.timeout_seconds }}
+        # pipefail: without it, tee's exit status would hide a blocked or failed probe behind a green run.
+        run: |
+          set -o pipefail
+          node scripts/staging-escalation-check.mjs | tee staging-escalation.json
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: staging-escalation
+          path: staging-escalation.json
+          if-no-files-found: warn
+          retention-days: 14

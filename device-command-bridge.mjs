@@ -4,8 +4,10 @@ import { registerHomeBridgeConsole } from "./home-bridge-console.mjs";
 import { registerDeviceHabitat } from "./device-habitat.mjs";
 import { registerUniversalCommandRoutes } from "./command-routes.mjs";
 import { createD1Query, registerNexusRuntime } from "./nexus-runtime.mjs";
+import { createFailureEscalator } from "./ax-failure-escalation.mjs";
 import { buildReadOnlyNexusAdapters, READ_ONLY_ADAPTER_NAMES, READ_ONLY_ADAPTER_PREFIXES } from "./nexus-adapter-registration.mjs";
 import { createAxOrchestrator, resolveAxOrchestratorConfig } from "./ax-orchestrator.mjs";
+import { createImprovementMonitor } from "./ax-improvement.mjs";
 import {
   createAxPlannerFromProviderConfig,
   createProviderCircuitBreaker,
@@ -15,6 +17,7 @@ import {
 import { createD1AxRunRepository } from "./d1-ax-run-repository.mjs";
 import { createD1AxMemoryRepository } from "./d1-ax-memory-repository.mjs";
 import { createAxMemoryContext } from "./ax-memory-context.mjs";
+import { createAxIdentity } from "./ax-identity.mjs";
 import { createD1AxNotificationRepository } from "./d1-ax-notification-repository.mjs";
 import { createNotificationService } from "./ax-notifications.mjs";
 import { createAxDiagnostics } from "./ax-diagnostics.mjs";
@@ -90,6 +93,25 @@ export function registerDeviceCommandBridge(app, {
   env = process.env,
   fetchImpl = fetch,
   repository = null,
+  // Optional: a function returning the same signals `improvementPass` accepts. When present, the
+  // improvement engine runs inside the existing scheduler tick. When absent, the scheduler behaves
+  // exactly as before and no improvement is claimed.
+  improvementSignals = null,
+  // Workforce coordination, also inside the existing scheduler tick and lease. Both callbacks come
+  // from the runtime, which refuses to do anything unless its own flag is on and its schema exists,
+  // so passing them here never activates the workforce by itself.
+  workforceIntake = null,
+  workforceRunner = null,
+  // Mission pipeline provider: () => { submit, run, get } or null. Absent, the mission routes answer 503.
+  missions = null,
+  // Mission coordination, also invoked under the scheduler lease. The runtime refuses when its flag
+  // is off, so passing it is attachment, not activation.
+  missionTick = null,
+  // Owner attestation for memory writes. Verification happens here when a key is configured;
+  // enforcement is a separate switch so an existing route-authenticated owner write is not silently
+  // broken by installing a key. Attestations that are supplied are always verified.
+  ownerVerifier = null,
+  ownerAttestationEnforce = false,
   // Optional injection points for tests and embedded use. In a deployment every one of these is
   // derived from the same env object, so /ax/command and the Nexus worker can only ever address
   // one database: the D1 id named by HABITAT_D1_DATABASE_ID.
@@ -133,7 +155,9 @@ export function registerDeviceCommandBridge(app, {
     accountId: env.CLOUDFLARE_ACCOUNT_ID,
     databaseId: env.HABITAT_D1_DATABASE_ID,
     apiToken: env.HABITAT_D1_API_TOKEN,
-    fetchImpl
+    fetchImpl,
+    ownerVerifier,
+    ownerPolicy: ownerVerifier && ownerAttestationEnforce ? "required" : "optional"
   }) : null);
   const notificationStore = notificationRepository || (hasD1 ? createD1AxNotificationRepository({
     accountId: env.CLOUDFLARE_ACCOUNT_ID,
@@ -143,6 +167,8 @@ export function registerDeviceCommandBridge(app, {
   }) : null);
   const notifications = notificationStore ? createNotificationService({ repository: notificationStore, project: memoryProject, log }) : null;
   const memoryContext = memoryStore ? createAxMemoryContext({ repository: memoryStore, project: memoryProject, log }) : null;
+  // Identity lives beside memory, not inside a provider. Without a store it still exists from code.
+  const identity = createAxIdentity({ repository: memoryStore, project: "ax", log });
 
   // Mission 10 additive stores: durable objective lifecycles and incident history. Both live on the
   // same D1 database as everything else and neither replaces a task table.
@@ -216,6 +242,14 @@ export function registerDeviceCommandBridge(app, {
       notifications,
       // One bounded autonomy pass per tick, under the same lease as recovery.
       autonomy: () => runAutonomy(),
+      // Continuous improvement rides the same tick and the same lease, and can only read what the
+      // caller can observe. Nothing here notifies directly: the scheduler's existing bounded
+      // notification step carries it, so there is still one alerting path.
+      improvement: improvementSignals ? createImprovementMonitor({ readSignals: improvementSignals }).check : null,
+      workforceIntake,
+      workforceRunner,
+      missionProvider: () => (typeof missions === "function" ? missions() : missions),
+      mission: missionTick,
       // Approval-expiry monitoring rides this same tick and lease. It never decides an approval and
       // never starts work: it sweeps due expiries in the approval ledger and reports them.
       approvalExpiry: ({ withinMs } = {}) => (
@@ -374,6 +408,11 @@ export function registerDeviceCommandBridge(app, {
     const token = bearer(req);
     try {
       if (!validDeviceId(deviceId) || !token || !await store.verifyDeviceToken(token, deviceId)) {
+        // A rejected device credential used to leave no trace at all, which made "the phone stopped
+        // talking" indistinguishable from "the phone is being refused". Log the reason only: never the
+        // device id, the token or anything derived from them.
+        const reason = !validDeviceId(deviceId) ? "invalid_device_id" : !token ? "missing_token" : "token_mismatch";
+        console.warn("DEVICE_COMMAND_AUTH_REJECTED", JSON.stringify({ reason }));
         return res.status(401).json({ ok: false, error: "Paired device authentication required." });
       }
       await store.touchDevice(deviceId, new Date().toISOString());
@@ -957,6 +996,9 @@ export function registerDeviceCommandBridge(app, {
         deviceRepository: store,
         ownerDeviceId: env.HABITAT_OWNER_DEVICE_ID,
         ownerDeviceIds: env.HABITAT_OWNER_DEVICE_IDS,
+        // A terminal failure is pushed to Ax as one durable message, so triage does not depend on
+        // somebody polling the task list. Delivery failure is logged and never affects the task.
+        escalate: createFailureEscalator({ channel: messages, log }),
         handleSignals,
         exitOnSignal,
         log
@@ -1179,6 +1221,8 @@ export function registerDeviceCommandBridge(app, {
     // Read-only accessor for embedders and tests; the channel itself is only reachable through the
     // authenticated routes.
     messageChannel: () => messages,
+    // Read-only identity facts for /system/status: name, digest and persistence, never a provider.
+    identityStatus: () => identity.status(),
     async initialize({ startWorker = true } = {}) {
       if (initialized) {
         // A deferred or failed Nexus startup is retryable without restarting the process.
@@ -1211,6 +1255,14 @@ export function registerDeviceCommandBridge(app, {
         } catch (error) {
           console.error(label + "_INIT_FAILED", String(error?.message || error));
         }
+      }
+      // Persist the identity record once memory exists. A failure here is reported and does not
+      // stop device commands: identity is readable from code even when it cannot be stored.
+      try {
+        const identityEnsured = await identity.ensure();
+        console.log("AX_IDENTITY", JSON.stringify({ ok: identityEnsured.ok, state: identityEnsured.ok ? "persistent" : identityEnsured.code, digest: identity.digest.slice(0, 16) }));
+      } catch (error) {
+        console.error("AX_IDENTITY_INIT_FAILED", String(error?.message || error));
       }
       const bootstrapHash = String(env.HABITAT_DEVICE_PAIRING_BOOTSTRAP_CODE_HASH || "").trim().toLowerCase();
       const bootstrapExpiresAt = String(env.HABITAT_DEVICE_PAIRING_BOOTSTRAP_EXPIRES_AT || "").trim();
@@ -1338,7 +1390,12 @@ export function registerDeviceCommandBridge(app, {
         perDeviceTokens: true,
         // Read-only: whether the worker is mounted, initialized and started. Never part of the
         // HTTP success condition, so a Render health check stays up while an optional worker is off.
-        nexus: nexusRuntime ? { configured: true, ...nexusRuntime.status() } : nexusMount
+        nexus: nexusRuntime ? { configured: true, ...nexusRuntime.status() } : nexusMount,
+        // Mount facts only: whether the scheduler has workforce callbacks, not whether they will run.
+        workforce: { intakeAttached: typeof workforceIntake === "function", runnerAttached: typeof workforceRunner === "function" },
+        identity: { name: identity.core.name, repository: Boolean(memoryStore) },
+        ownerAuthentication: Boolean(memoryStore?.ownerAuthentication) ? memoryStore.ownerAuthentication() : { verifierConfigured: Boolean(ownerVerifier), policy: ownerAttestationEnforce ? "required" : "optional" },
+        missions: { tickAttached: typeof missionTick === "function" }
       };
     },
     nexus() {

@@ -32,7 +32,9 @@ function estimateTextWidth(text, fontSize, bold = false) {
   // Conservative proportional estimate for DejaVu Sans used by the renderer.
   // It intentionally overestimates so overflow becomes a block rather than a miss.
   const factor = bold ? 0.64 : 0.58;
-  const longestLine = String(text ?? "").split(/\\r?\\n/).reduce((longest,line) => Math.max(longest,line.length),0);
+  // Split on real newlines. The previous pattern matched a literal backslash, so a wrapped title was
+  // measured as one long line and every multi-line overlay was reported as overflow.
+  const longestLine = String(text ?? "").split(/\r?\n/).reduce((longest,line) => Math.max(longest,line.length),0);
   return longestLine * Number(fontSize || 16) * factor;
 }
 
@@ -99,7 +101,10 @@ export async function runVisualQA({ artifactPath, renderPlan = {}, expectedScene
     const videoDuration = Number(video.duration || 0);
     const audioDuration = Number(audio?.duration || 0);
     const streamDelta = Math.abs(videoDuration - audioDuration);
-    const streamSyncPass = videoDuration > 0 && audioDuration > 0 && streamDelta <= 0.12;
+    // A video with no audio stream has nothing to align. The audioTrack check below is the one that
+    // decides whether a missing track is acceptable; treating 0s versus Ns as a mismatch blocked
+    // every deliberately silent render with a defect the artifact did not have.
+    const streamSyncPass = videoDuration > 0 && (audio === null ? !requireAudio : audioDuration > 0 && streamDelta <= 0.12);
     checks.streamSync = {
       status: streamSyncPass ? "PASS" : "FAIL",
       videoDurationSeconds: videoDuration,

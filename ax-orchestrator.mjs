@@ -1,6 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import { evidenceDigest, taskIdForKey } from "./universal-command-engine.mjs";
 import { notificationEventsForRun } from "./ax-notifications.mjs";
+import { signalsForPlanStep } from "./ax-priority-policy.mjs";
 
 /**
  * Habitat-native Ax.
@@ -47,7 +48,15 @@ const PLAN_SCHEMA = {
         properties: {
           objective: { type: "string", maxLength: 500 },
           adapter: { type: ["string", "null"] },
-          needsApproval: { type: "boolean" }
+          needsApproval: { type: "boolean" },
+          // Optional priority inputs. An explicit priority is authoritative; the rest feed the
+          // derived suggestion so the queue orders itself when no human sets a number.
+          priority: { type: "integer", minimum: 0, maximum: 100 },
+          riskLevel: { type: "string", enum: ["low", "medium", "high", "critical"] },
+          deadlineAt: { type: "string" },
+          valueCents: { type: "number", minimum: 0 },
+          confidence: { type: "number", minimum: 0, maximum: 1 },
+          blockedCount: { type: "integer", minimum: 0 }
         }
       }
     }
@@ -656,12 +665,28 @@ export function createAxOrchestrator({
       await persist(run);
       return step;
     }
+    // Real plan data becomes queue signals: risk level, deadline, expected value and the step's
+    // own position (every later step depends on it). The engine derives a suggestion from these
+    // unless the plan set an explicit priority, which always wins.
+    const planSignals = signalsForPlanStep({
+      riskLevel: spec.riskLevel,
+      deadlineAt: spec.deadlineAt,
+      valueCents: spec.valueCents,
+      confidence: spec.confidence,
+      blockedCount: spec.blockedCount,
+      index,
+      totalSteps: Array.isArray(run.plan) ? run.plan.length : null
+    });
+    step.planSignals = planSignals;
+
     const outcome = await engine.submit({
       objective: spec.objective,
       requestedBy: "ax",
       role: "ax",
       adapter: spec.adapter,
-      idempotencyKey: key
+      idempotencyKey: key,
+      priority: spec.priority,
+      signals: planSignals
     });
     if (outcome?.ok === false) {
       step.status = "failed";

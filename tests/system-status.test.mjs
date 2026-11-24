@@ -116,8 +116,13 @@ test("status never contains environment values", () => {
     assert.equal(serialized.includes(value), false, "secret value leaked into status");
   }
   assert.equal(status.secretsExposed, false);
-  // Public payload: missing key *names* only. No per-key configured map and never a value.
-  assert.equal(status.requiredConfiguration.keys, undefined);
+  // Public payload: key *names* and booleans only, never a value. A key name is documented
+  // configuration, not a credential, and it is what makes a missing-config report actionable.
+  for (const entry of status.requiredConfiguration.keys) {
+    assert.deepEqual(Object.keys(entry).sort(), ["configured", "key", "purpose"]);
+    assert.equal(typeof entry.configured, "boolean");
+  }
+  assert.ok(status.requiredConfiguration.keys.length > 0, "the key inventory must not be empty");
   assert.equal(status.requiredConfiguration.allPresent, false);
   assert.equal(status.requiredConfiguration.missing.includes("NEXUS_RUNTIME_ENABLED"), true);
   assert.equal(status.requiredConfiguration.missing.includes("HABITAT_AX_BRIDGE_TOKEN"), false);
@@ -192,6 +197,34 @@ test("Ax command intent is explicit and bounded", () => {
   assert.equal(parseAxCommand("ax: " + "x".repeat(2001)), null);
 });
 
+test("a heartbeat monitor that could not start is not reported as a disabled flag", () => {
+  const base = { env: {}, now: NOW, registry: new Map(), tasks: [], startedAtMs: NOW, latencyMs: 1 };
+  const off = buildSystemStatus({
+    ...base,
+    heartbeat: { enabled: false, flag: "HABITAT_HEARTBEAT_ENABLED", connection: "disabled", unavailableReason: null }
+  });
+  assert.equal(off.components.heartbeat.state, "disabled");
+  assert.equal(off.components.heartbeat.unavailableReason, null);
+  assert.match(off.components.heartbeat.detail, /HABITAT_HEARTBEAT_ENABLED/);
+
+  const missing = buildSystemStatus({
+    ...base,
+    heartbeat: { enabled: false, flag: "HABITAT_HEARTBEAT_ENABLED", connection: "disabled", unavailableReason: "d1_binding_incomplete" }
+  });
+  assert.equal(missing.components.heartbeat.state, "enabled_unavailable");
+  assert.equal(missing.components.heartbeat.unavailableReason, "d1_binding_incomplete");
+  assert.match(missing.components.heartbeat.detail, /D1 binding is incomplete/);
+  assert.equal(missing.components.heartbeat.detail.includes("is not \"true\""), false, "a missing binding is not a disabled flag");
+
+  const running = buildSystemStatus({
+    ...base,
+    heartbeat: { enabled: true, connection: "connected", lastSeenAt: "2026-11-23T19:59:00.000Z" }
+  });
+  assert.equal(running.components.heartbeat.state, "connected");
+  assert.equal(running.components.heartbeat.enabled, true);
+  assert.equal(running.components.heartbeat.unavailableReason, null);
+});
+
 test("only allowlisted read-only adapters are inferred", () => {
   assert.equal(inferReadOnlyAdapter("inspect the repository state"), "repo.inspect");
   assert.equal(inferReadOnlyAdapter("list the task queue"), "task.inspect");
@@ -244,15 +277,52 @@ test("status exposes no task content, device identifiers or worker internals", (
     assert.equal(serialized.includes(privateValue), false, privateValue + " leaked into status");
   }
 
-  // Coarse presence is public; exact check-in time and identifiers are not.
-  assert.equal(status.components.device.lastSeenAt, undefined);
+  // Coarse presence and the last check-in time are public; identity is not.
+  assert.equal(status.components.device.lastSeenAt, "2026-11-23T19:59:00.000Z");
   assert.equal(status.components.device.deviceId, undefined);
   assert.equal(status.components.device.paired, 1);
 
+  // A capability claim must be checkable: names, model and last-run outcome are public. None of
+  // them carries task content or an identity.
   const worker = status.components.workers.items[0];
   for (const field of ["capabilities", "model", "lastRunAt", "lastStatus"]) {
-    assert.equal(field in worker, false, field + " must not be public");
+    assert.equal(field in worker, true, field + " must be public so the claim can be checked");
   }
+  assert.deepEqual(worker.capabilities, ["backend-health"], "the registry's capability names are the checkable claim");
   assert.equal(status.redaction.applied, true);
+  assert.equal(status.redaction.policyVersion, 2);
   assert.equal(status.secretsExposed, false);
+});
+
+test("environment reports whether the production-database guard is actually in force", () => {
+  const PRODUCTION = "3a906029-bc64-4e2a-b648-163e34a2d502";
+  const STAGING = "0fdf1ac9-65a3-4e83-8042-f3fa52282068";
+
+  const stagingRefused = buildSystemStatus({
+    env: { HABITAT_ENVIRONMENT: "staging", HABITAT_D1_DATABASE_ID: PRODUCTION }, now: NOW
+  }).components.environment;
+  assert.equal(stagingRefused.name, "staging");
+  assert.equal(stagingRefused.marked, true);
+  assert.equal(stagingRefused.databaseGuardActive, true);
+  assert.equal(stagingRefused.productionDatabaseRefused, true);
+
+  const stagingIsolated = buildSystemStatus({
+    env: { HABITAT_ENVIRONMENT: "staging", HABITAT_D1_DATABASE_ID: STAGING }, now: NOW
+  }).components.environment;
+  assert.equal(stagingIsolated.name, "staging");
+  assert.equal(stagingIsolated.productionDatabaseRefused, false);
+
+  const unmarked = buildSystemStatus({
+    env: { HABITAT_D1_DATABASE_ID: PRODUCTION }, now: NOW
+  }).components.environment;
+  assert.equal(unmarked.name, "production");
+  assert.equal(unmarked.marked, false);
+  assert.equal(unmarked.databaseGuardActive, false);
+
+  // The report may say which environment it is; it must never echo a database id.
+  const serialized = JSON.stringify(buildSystemStatus({
+    env: { HABITAT_ENVIRONMENT: "staging", HABITAT_D1_DATABASE_ID: STAGING }, now: NOW
+  }));
+  assert.equal(serialized.includes(STAGING), false);
+  assert.equal(serialized.includes(PRODUCTION), false);
 });

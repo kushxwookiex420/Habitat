@@ -159,7 +159,9 @@ export const NEXUS_CLAIM_SQL =
   "OR (status = 'working' AND json_extract(record_json, '$.fence') IS NULL)) " +
   "AND json_extract(record_json, '$.adapter') IS NOT NULL " +
   "AND json_extract(record_json, '$.adapter') <> '' " +
-  "ORDER BY updated_at ASC LIMIT 1) " +
+  // Owner-assigned priority decides order first; equal priorities keep FIFO by updated_at. A task
+  // without a priority field sorts as 0, so old rows are unaffected.
+  "ORDER BY COALESCE(json_extract(record_json, '$.priority'), 0) DESC, updated_at ASC LIMIT 1) " +
   "AND (status = 'queued' OR (status = 'working' AND json_extract(record_json, '$.fence') IS NULL)) " +
   "AND json_extract(record_json, '$.adapter') IS NOT NULL " +
   "AND json_extract(record_json, '$.adapter') <> '' " +
@@ -213,6 +215,23 @@ export function createD1Query({ accountId, databaseId, apiToken, fetchImpl = fet
       throw new Error("D1 runtime query failed with HTTP " + response.status + "; verify D1 configuration.");
     }
     return payload.result || [];
+  };
+}
+
+/**
+ * Row-shaped D1 query for repositories written against plain rows.
+ *
+ * `createD1Query` returns the raw HTTP `result` array (`[{ results: [...] }]`). Task and scheduler
+ * repositories intentionally consume that shape, but gateway/MCP/heartbeat/mission repositories expect
+ * `rows[0]` to be a row. Flattening here keeps both contracts correct; a failed statement still throws in
+ * `createD1Query` before this wrapper sees it.
+ */
+export function createD1RowQuery({ accountId, databaseId, apiToken, fetchImpl = fetch } = {}) {
+  const query = createD1Query({ accountId, databaseId, apiToken, fetchImpl });
+  return async function rowQuery(sql, params = []) {
+    const result = await query(sql, params);
+    if (!Array.isArray(result)) return [];
+    return result.flatMap(item => Array.isArray(item?.results) ? item.results : []);
   };
 }
 
@@ -294,6 +313,9 @@ export function createNexusWorker({
   retentionDays = 7,
   pruneIntervalMs = 60 * 60 * 1000,
   renewLease = true,
+  // Called once when a task reaches a terminal failure. Best effort by contract: the task outcome is
+  // already recorded, so a broken sink is logged and never re-thrown into execution.
+  escalate = null,
   now = () => new Date().toISOString(),
   log = console
 } = {}) {
@@ -488,6 +510,25 @@ export function createNexusWorker({
       return { ok: false, reason: "stale_claim", outcome };
     }
     if (outcome?.ok === false) counters.failed -= 1;
+    if (outcome?.ok !== false && typeof escalate === "function") {
+      try {
+        const delivered = await escalate({
+          taskId: task.id,
+          objective: typeof current.objective === "string" ? current.objective : null,
+          error: String(error).slice(0, 1000),
+          attempts: Number(current.attempts || 0),
+          at: now(),
+          status: "failed"
+        });
+        if (delivered?.ok === false) {
+          log.warn?.("NEXUS_WORKER: failure escalation not delivered (" + String(delivered?.code || "unknown") + ")");
+        }
+      } catch (escalationError) {
+        // Escalation is reporting, not execution. It can never turn a recorded failure into an
+        // unrecorded one.
+        log.warn?.("NEXUS_WORKER: failure escalation threw: " + String(escalationError?.message || escalationError));
+      }
+    }
     return { ok: false, reason: "failed", outcome };
   }
 
@@ -735,6 +776,8 @@ export function registerNexusRuntime(app, {
   ownerDeviceId = null,
   ownerDeviceIds = null,
   audit = null,
+  // Supplied by the server so a terminal failure reaches Ax's durable message channel.
+  escalate = null,
   // Refuse to mount an adapter that is not in the read-only set. Side-effecting adapters stay off
   // until idempotency protection exists; an embedder may only lower this after that work lands.
   enforceReadOnlyAdapters = true,
@@ -769,7 +812,8 @@ export function registerNexusRuntime(app, {
   const runtime = worker || (store && d1Query ? createNexusWorker({
     repository: store, engine, query: d1Query, log,
     ...config,
-    ...(adapters ? { adapters } : {})
+    ...(adapters ? { adapters } : {}),
+    ...(typeof escalate === "function" ? { escalate } : {})
   }) : null);
 
   const verify = resolveDeviceVerifier({ verifyDevice, deviceRepository });

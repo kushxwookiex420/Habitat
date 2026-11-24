@@ -34,12 +34,22 @@ class AndroidDeviceBridge(
     companion object {
         private const val PREFS = "habitat_ax_device_bridge"
         private const val KEY_ALIAS = "habitat_ax_device_bridge_v1"
-        private const val BASE_URL = "https://habitat-1-szzd.onrender.com"
+        // Build-time origin (default production, overridable with -PhabitatBaseUrl) so a staging
+        // build can be produced without editing source.
+        private val BASE_URL: String = BuildConfig.HABITAT_BASE_URL
+        // A rejected credential is reported, never destroyed. The pairing lives in D1 and only the
+        // owner should decide to replace it, so consecutive rejections back the poll off to the
+        // 15-minute scheduled job instead of hammering the server.
+        private const val MAX_AUTH_REJECTIONS = 3
+        private const val AUTH_BACKOFF_MS = 15L * 60L * 1000L
     }
 
     private val appContext = context.applicationContext
     private val prefs = appContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
     private var executor: ScheduledExecutorService? = null
+    private var authRejections = 0
+    private var authBackoffUntil = 0L
+    private var tokenProblemReported = false
 
     val deviceId: String
         get() {
@@ -109,6 +119,10 @@ class AndroidDeviceBridge(
     fun clearCredentials() {
         stop()
         DeviceBridgeScheduler.cancel(appContext)
+        // Disconnecting must stop the connection owner too, whichever instance asked for it: the
+        // foreground service holds its own poll loop and would otherwise stay connected after the
+        // credential was destroyed.
+        HabitatBridgeService.stop(appContext)
         prefs.edit().remove("encrypted_token").apply()
     }
 
@@ -116,6 +130,9 @@ class AndroidDeviceBridge(
     fun start() {
         if (!isConfigured() || executor != null) return
         if (startForegroundService) HabitatBridgeService.start(appContext)
+        // The scheduled job is the fallback when Android kills the foreground service, so make sure it
+        // exists even if only the Activity path ever runs.
+        DeviceBridgeScheduler.ensureScheduled(appContext)
         executor = Executors.newSingleThreadScheduledExecutor()
         executor?.scheduleWithFixedDelay({ pollOnce() }, 0, 5, TimeUnit.SECONDS)
         onStatus("AX device bridge polling started")
@@ -159,7 +176,21 @@ class AndroidDeviceBridge(
     }
 
     private fun pollOnce() {
-        val token = readToken() ?: return
+        if (System.currentTimeMillis() < authBackoffUntil) return
+        val token = readToken()
+        if (token.isNullOrBlank()) {
+            if (!tokenProblemReported) {
+                tokenProblemReported = true
+                onStatus(
+                    if (prefs.getString("encrypted_token", null) == null)
+                        "AX bridge has no stored phone credential - pair this phone from the console"
+                    else
+                        "AX bridge cannot read its stored credential; the server pairing is untouched"
+                )
+            }
+            return
+        }
+        tokenProblemReported = false
         try {
             val next = request("GET", "/device/commands/next?deviceId=" + java.net.URLEncoder.encode(deviceId, "UTF-8"), token)
             if (next.optBoolean("ok") != true) {
@@ -169,6 +200,8 @@ class AndroidDeviceBridge(
             // A successful authenticated poll proves this phone can reach the
             // durable command queue with its paired device credential.
             onStatus("AX LINK LIVE")
+            authRejections = 0
+            authBackoffUntil = 0L
             sendHeartbeat(token)
             val command = next.optJSONObject("command") ?: return
             val id = command.optString("id")
@@ -228,9 +261,14 @@ class AndroidDeviceBridge(
             onStatus("AX device bridge: command completed")
         } catch (e: Exception) {
             val message = e.message.orEmpty()
-            if (message.contains("401")) {
-                clearCredentials()
-                onStatus("AX phone link revoked; credentials cleared")
+            if (message.contains("401") || message.contains("403")) {
+                authRejections += 1
+                if (authRejections >= MAX_AUTH_REJECTIONS) {
+                    authBackoffUntil = System.currentTimeMillis() + AUTH_BACKOFF_MS
+                    onStatus("AX bridge keeps rejecting this phone's credential; the pairing is kept and retries back off to the 15-minute job. Re-pair from the console only if you intend to replace it.")
+                } else {
+                    onStatus("AX bridge rejected the poll (attempt " + authRejections + "); retrying without touching the pairing")
+                }
             } else {
                 onStatus("AX bridge temporarily unavailable: " + message.take(100))
             }
@@ -280,8 +318,10 @@ class AndroidDeviceBridge(
         val connection = HabitatNetwork.openConnection(BASE_URL + path)
         try {
             connection.requestMethod = method
-            connection.connectTimeout = 12000
-            connection.readTimeout = 12000
+            // A free Render instance cold-starts in tens of seconds; a 12s timeout made every poll
+            // that woke it fail even though the request had reached the server.
+            connection.connectTimeout = 45000
+            connection.readTimeout = 45000
             if (!token.isNullOrBlank()) connection.setRequestProperty("Authorization", "Bearer $token")
             connection.setRequestProperty("Accept", "application/json")
             if (body != null) {

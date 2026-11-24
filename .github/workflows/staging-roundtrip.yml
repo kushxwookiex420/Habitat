@@ -1,0 +1,59 @@
+name: Staging round trip (authenticated)
+
+# Proves the phone command path end to end against the staging service only: authenticated enqueue,
+# phone claim, execution result. The Ax credential comes from the repository secret and is never
+# printed; only its presence is reported. Refuses a production origin in the script itself.
+
+on:
+  push:
+    branches: [staging/integration]
+    paths:
+      - ".github/workflows/staging-roundtrip.yml"
+      - "scripts/staging-roundtrip.mjs"
+  workflow_dispatch:
+    inputs:
+      timeout_seconds:
+        description: "How long to wait for the phone to claim the command"
+        required: false
+        default: "720"
+      device_id:
+        description: "Optional paired device id (blank = most recently seen)"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: habitat-staging-roundtrip
+  cancel-in-progress: false
+
+jobs:
+  roundtrip:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[staging-roundtrip]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Authenticated round trip
+        env:
+          HABITAT_AX_COMMAND_TOKEN: ${{ secrets.HABITAT_AX_COMMAND_TOKEN }}
+          STAGING_BASE_URL: https://habitat-staging-e3ie.onrender.com
+          ROUNDTRIP_TIMEOUT_SECONDS: ${{ inputs.timeout_seconds || '720' }}
+          DEVICE_ID: ${{ inputs.device_id || '' }}
+        run: |
+          set -o pipefail
+          node scripts/staging-roundtrip.mjs | tee staging-roundtrip.json
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: staging-roundtrip
+          path: staging-roundtrip.json
+          if-no-files-found: warn
+          retention-days: 30

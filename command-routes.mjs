@@ -138,6 +138,9 @@ export function registerUniversalCommandRoutes(app, {
   // Mission 17: the agent work cycle that turns an objective into specialist work and verifies it.
   workProvider = null,
   plannerProvider = null,
+  // Mission 2: the objective → durable mission → real workers pipeline. Absent or disabled, the mission
+  // routes answer 503 and name the flag, rather than pretending a pipeline is mounted.
+  missionProvider = null,
   // P1 capability network: capabilities, supplier catalog, channel eligibility, approvals and
   // treasury reporting. Absent, its routes answer 503 rather than pretending the surface exists.
   networkProvider = null
@@ -432,6 +435,129 @@ export function registerUniversalCommandRoutes(app, {
     res.json(buildAxOpenApiSpec({ origin: publicOrigin(req, env) }));
   });
 
+  // ------------------------------------------------------------------- missions
+  const missionUnavailable = (res) => res.status(503).json({
+    ok: false,
+    code: "mission_pipeline_unavailable",
+    error: "The mission pipeline is not mounted in this process: set HABITAT_WORKFORCE_ENABLED=true with a complete D1 binding (CLOUDFLARE_ACCOUNT_ID, HABITAT_D1_DATABASE_ID, HABITAT_D1_API_TOKEN) and apply migration 0010_ax_workforce."
+  });
+
+  const missionView = (mission) => mission && ({
+    missionId: mission.id,
+    project: mission.project,
+    objective: mission.objective,
+    status: mission.status,
+    acceptanceCriteria: mission.acceptanceCriteria,
+    approvals: (mission.approvals || []).map((item) => ({ id: item.id, kind: item.kind, status: item.status, reason: item.reason })),
+    commandTaskId: (mission.constraints || []).find((item) => String(item).startsWith("command-task:"))?.slice("command-task:".length) || null,
+    milestones: mission.milestones,
+    createdAt: mission.createdAt,
+    updatedAt: mission.updatedAt,
+    tasks: (mission.tasks || []).map((task) => ({
+      id: task.id,
+      title: task.title,
+      requires: task.requires,
+      dependsOn: task.dependsOn,
+      status: task.status,
+      agentId: task.agentId,
+      verifierAgentId: task.verifierAgentId,
+      evidence: task.evidence,
+      verificationEvidence: task.verificationEvidence,
+      tests: task.tests,
+      error: task.error
+    }))
+  });
+
+  route.post("/ax/missions", requireAx, serviceGuard(async (req, res) => {
+    const missions = resolveService(missionProvider);
+    if (!missions || typeof missions.submit !== "function") return missionUnavailable(res);
+    const objective = String(req.body?.objective || "").trim();
+    if (!objective) return res.status(400).json({ ok: false, code: "objective_required", error: "An objective is required." });
+    const outcome = await missions.submit({
+      objective,
+      acceptanceCriteria: req.body?.acceptanceCriteria,
+      tasks: Array.isArray(req.body?.tasks) ? req.body.tasks : null,
+      project: req.body?.project,
+      constraints: Array.isArray(req.body?.constraints) ? req.body.constraints : [],
+      priority: Number.isInteger(req.body?.priority) ? req.body.priority : null,
+      signals: req.body?.signals ?? null,
+      idempotencyKey: String(req.body?.idempotencyKey || req.headers?.["idempotency-key"] || "").trim() || null,
+      submittedBy: "owner"
+    });
+    if (!outcome.ok) {
+      const status = outcome.code === "approval_required_for_task" ? 409 : 400;
+      return res.status(status).json({ ok: false, code: outcome.code, error: outcome.detail || outcome.code, taskId: outcome.taskId || null });
+    }
+    const mission = await missions.get(outcome.missionId);
+    return res.status(outcome.replay ? 200 : 201).json({ ok: true, replay: outcome.replay === true, commandTaskId: outcome.commandTaskId || null, mission: missionView(mission) });
+  }));
+
+  route.get("/ax/missions/:missionId", requireAx, serviceGuard(async (req, res) => {
+    const missions = resolveService(missionProvider);
+    if (!missions) return missionUnavailable(res);
+    const mission = await missions.get(String(req.params?.missionId || ""));
+    if (!mission) return res.status(404).json({ ok: false, code: "mission_not_found" });
+    const events = typeof missions.events === "function" ? await missions.events(mission.id) : [];
+    return res.json({ ok: true, mission: missionView(mission), events: events.slice(-50) });
+  }));
+
+  route.post("/ax/missions/:missionId/approve", requireAx, serviceGuard(async (req, res) => {
+    const missions = resolveService(missionProvider);
+    if (!missions || typeof missions.approve !== "function") return missionUnavailable(res);
+    const missionId = String(req.params?.missionId || "");
+    const existing = await missions.get(missionId);
+    if (!existing) return res.status(404).json({ ok: false, code: "mission_not_found" });
+    const decision = req.body?.decision === "reject" ? "reject" : "approve";
+    const outcome = await missions.approve({
+      missionId,
+      decision,
+      taskId: req.body?.taskId ? String(req.body.taskId) : null,
+      approvalId: req.body?.approvalId ? String(req.body.approvalId) : null,
+      attestation: req.body?.attestation && typeof req.body.attestation === "object" ? req.body.attestation : null,
+      reason: req.body?.reason ? String(req.body.reason).slice(0, 300) : null
+    });
+    if (!outcome.ok) return res.status(409).json({ ok: false, code: outcome.code });
+    res.json({ ok: true, decision, mission: outcome.mission });
+  }));
+
+  route.get("/ax/missions/:missionId/authorizations", requireAx, serviceGuard(async (req, res) => {
+    const missions = resolveService(missionProvider);
+    if (!missions || typeof missions.authorizations !== "function") return missionUnavailable(res);
+    const view = await missions.authorizations({ missionId: String(req.params?.missionId || "") });
+    if (!view.ok) return res.status(404).json({ ok: false, code: view.code });
+    return res.json(view);
+  }));
+
+  route.post("/ax/missions/:missionId/revoke", requireAx, serviceGuard(async (req, res) => {
+    const missions = resolveService(missionProvider);
+    if (!missions || typeof missions.revoke !== "function") return missionUnavailable(res);
+    const missionId = String(req.params?.missionId || "");
+    const taskId = req.body?.taskId ? String(req.body.taskId) : null;
+    const approvalId = req.body?.approvalId ? String(req.body.approvalId) : null;
+    if (!taskId && !approvalId) return res.status(400).json({ ok: false, code: "approval_target_required" });
+    const existing = await missions.get(missionId);
+    if (!existing) return res.status(404).json({ ok: false, code: "mission_not_found" });
+    const outcome = await missions.revoke({
+      missionId, taskId, approvalId,
+      reason: req.body?.reason ? String(req.body.reason).slice(0, 200) : null,
+      by: "owner"
+    });
+    if (!outcome.ok) return res.status(409).json({ ok: false, code: outcome.code });
+    return res.json({ ok: true, revoked: outcome.revoked, mission: missionView(outcome.mission) });
+  }));
+
+  route.post("/ax/missions/:missionId/run", requireAx, serviceGuard(async (req, res) => {
+    const missions = resolveService(missionProvider);
+    if (!missions || typeof missions.run !== "function") return missionUnavailable(res);
+    const missionId = String(req.params?.missionId || "");
+    const existing = await missions.get(missionId);
+    if (!existing) return res.status(404).json({ ok: false, code: "mission_not_found" });
+    const maxRounds = Math.max(1, Math.min(5, Number(req.body?.maxRounds) || 3));
+    const run = await missions.run(missionId, { maxRounds });
+    const mission = await missions.get(missionId);
+    return res.json({ ok: true, run, mission: missionView(mission) });
+  }));
+
   route.get("/ax/command/presence", requireAx, async (req, res) => {
     let report = null;
     try {
@@ -565,7 +691,10 @@ export function registerUniversalCommandRoutes(app, {
       requestedBy: "ax",
       role: req.body?.role || "ax",
       idempotencyKey: req.body?.idempotencyKey || null,
-      adapter: req.body?.adapter ?? null
+      adapter: req.body?.adapter ?? null,
+      // Left undefined when absent so the engine can derive a suggestion from the signals.
+      priority: req.body?.priority,
+      signals: req.body?.signals ?? null
     });
     if (outcome.ok && !outcome.replayed) {
       res.status(201).json(outcome);
