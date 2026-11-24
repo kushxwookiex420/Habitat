@@ -74,6 +74,55 @@ function countOf(value) {
   return Math.min(10, Math.floor(number));
 }
 
+/** The plan vocabulary Ax already uses maps onto urgency without inventing a second scale. */
+export const RISK_TO_URGENCY = Object.freeze({ low: "low", medium: "normal", high: "high", critical: "critical" });
+/** Expected value is normalised against this ceiling so "impact" stays a 0..1 fraction. */
+export const VALUE_CEILING_CENTS = 100_000;
+
+/**
+ * Turn real plan data into policy signals.
+ *
+ * Everything here already exists in an Ax plan or work item: the risk level, an optional deadline, the
+ * expected value and confidence, and the step's position. Plan position is the dependency signal a plan
+ * actually carries — every later step depends on this one finishing — so a first step of five is ranked
+ * above the last step of five without anyone typing a number.
+ */
+export function signalsForPlanStep(input = {}) {
+  const source = input && typeof input === "object" ? input : {};
+  const {
+    riskLevel = null,
+    deadlineAt = null,
+    valueCents = null,
+    confidence = null,
+    blockedCount = null,
+    index = null,
+    totalSteps = null
+  } = source;
+  const signals = {};
+  const urgency = RISK_TO_URGENCY[String(riskLevel || "").trim().toLowerCase()];
+  if (urgency) signals.urgency = urgency;
+  if (deadlineAt) signals.deadlineAt = deadlineAt;
+
+  const value = Number(valueCents);
+  if (Number.isFinite(value) && value > 0) {
+    const confidenceFactor = Number.isFinite(Number(confidence))
+      ? Math.min(1, Math.max(0, Number(confidence)))
+      : 1;
+    signals.impact = Math.min(1, value / VALUE_CEILING_CENTS) * confidenceFactor;
+  }
+
+  const total = Number(totalSteps);
+  const position = Number(index);
+  // A real step has a non-negative position inside the plan; anything else is malformed input and
+  // must not manufacture dependents.
+  if (Number.isFinite(total) && Number.isFinite(position) && position >= 0 && total > position) {
+    const dependents = Math.max(0, total - position - 1);
+    if (dependents > 0) signals.dependencyCount = dependents;
+  }
+  if (Number(blockedCount) > 0) signals.blockedCount = Number(blockedCount);
+  return signals;
+}
+
 /**
  * @returns {{ priority: number, factors: object, reasons: string[] }}
  */

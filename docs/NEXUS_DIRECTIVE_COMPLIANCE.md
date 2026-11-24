@@ -86,8 +86,16 @@ blocked behind the task, clamped to 100. An explicit owner priority always wins;
 `prioritySource` (`owner` | `derived`) and the reasons behind a derived value. A derived priority is a
 hint only — it is tested not to change status or approvals.
 
-Evidence: `tests/ax-priority-policy.test.mjs` (7 cases incl. hostile signals), engine and route cases in
-`tests/universal-command-engine.test.mjs` and `tests/command-routes.test.mjs`.
+**Wired to real plan data.** `signalsForPlanStep` maps what an Ax plan already carries onto policy
+signals: `riskLevel` → urgency (same four levels, no second scale), `deadlineAt` → deadline pressure,
+`valueCents` × `confidence` normalised against a $1,000 ceiling → impact, and plan position → dependents
+(every later step depends on this one, so step 1 of 5 outranks step 5 of 5). The orchestrator schema now
+accepts `priority`, `riskLevel`, `deadlineAt`, `valueCents`, `confidence` and `blockedCount` per step and
+passes the derived signals to the engine, recording them on the step.
+
+Evidence: `tests/ax-priority-policy.test.mjs` (10 cases incl. hostile signals and a representative-task
+demo that runs the derived priorities through the real claim SQL and asserts the claimed order), engine
+and route cases in `tests/universal-command-engine.test.mjs` and `tests/command-routes.test.mjs`.
 
 ## Gaps (honest list)
 
@@ -102,5 +110,6 @@ Evidence: `tests/ax-priority-policy.test.mjs` (7 cases incl. hostile signals), e
    `10000:Authentication error`, so database-backed acceptance cannot be re-run until it is rotated.
 5. **No revenue, business or worker-discovery operation has ever run.** Nothing in this document claims
    otherwise; the directive's business clauses are unimplemented capability, not completed work.
-6. **No planner supplies signals yet.** Derivation exists and is tested, but nothing in the current
-   planners fills `signals`, so in practice tasks still arrive at priority 0 until Ax sends them.
+6. **Model planners do not fill the new plan fields yet.** The orchestrator accepts and forwards them,
+   but the model prompt is not yet instructed to emit `riskLevel`/`deadlineAt`/`valueCents`, so a plan
+   from the model still derives priority 0 until the prompt or the calling surface supplies them.

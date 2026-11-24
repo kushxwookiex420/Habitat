@@ -51,6 +51,29 @@ Path 2 (Ax objective → Nexus execution)
 4. **Battery optimisation.** Observed earlier: one background check-in at `05:39:24Z`, then none through
    `05:55:29Z`. The owner should set the Bridge app to *Unrestricted*.
 
+## Authenticated probe results (2026-11-24T06:35Z)
+
+Run from CI with the repository credential, so the value was never seen or printed. The script reports
+only HTTP statuses.
+
+| Surface | Credential variable it reads | Status |
+| --- | --- | --- |
+| `GET /ax/command/diagnostics` | `HABITAT_AX_BRIDGE_TOKEN` **or** `HABITAT_AX_COMMAND_TOKEN` | `401` |
+| `GET /ax/command/tasks` | same | `401` |
+| `GET /ax/device/devices` | `HABITAT_AX_BRIDGE_TOKEN` only | `401` |
+| `GET /health` (unauthenticated) | — | `200` |
+
+`HABITAT_AX_COMMAND_TOKEN` (repository secret) therefore authenticates **nothing** on staging: not the
+command surface, which would also accept it, and not the device surface. Two consistent explanations
+remain, and both are the owner's to settle: the stored value is production's, or staging's bridge token
+was set to a different value. The code is not the variable: `device-command-bridge.mjs` reads exactly
+`HABITAT_AX_BRIDGE_TOKEN`, and `command-auth.mjs` accepts that or `HABITAT_AX_COMMAND_TOKEN`.
+
+**Minimum owner action, no secret in chat:** choose one value in Render → `habitat-staging-e3ie` →
+Environment → `HABITAT_AX_BRIDGE_TOKEN`, then set GitHub → Settings → Secrets and variables → Actions →
+`HABITAT_AX_COMMAND_TOKEN` to the same value. Restart the service and run the `Staging round trip`
+workflow. Nothing else is required: the probe then queues `device.status` and reports the result.
+
 ## D1 credential reconciliation
 
 Two different credentials share one name, which is why "D1 is broken" and "D1 works" were both reported:
@@ -60,8 +83,24 @@ Two different credentials share one name, which is why "D1 is broken" and "D1 wo
 | Staging service (`/system/status`, device rows) | `HABITAT_D1_API_TOKEN` in Render env | working: `storage.state: ready`, durable, device check-ins persisted |
 | CI audit / acceptance workflows | `HABITAT_D1_API_TOKEN` repository secret | rejected: `HTTP 401 (10000:Authentication error)` at `05:40Z`, though it worked at `04:08Z` |
 
-The token is never printed in either place; only Cloudflare's own error code is. The fix is to
-regenerate the repository secret — not to change the service.
+The token is never printed in either place; only Cloudflare's own error code is.
+
+**Diagnosed, not guessed (2026-11-24T06:35Z).** Cloudflare uses code `10000` for both a rejected
+credential and a healthy token, so the audit now asks two questions instead of one:
+
+| Probe | Result | Reading |
+| --- | --- | --- |
+| `GET /user/tokens/verify` | `401`, `1000:Invalid API Token` | the credential is invalid, not under-scoped |
+| `GET /accounts/{id}/d1/database/{db}` | `401`, `10000:Authentication error` | the D1 route refuses the same credential |
+
+The verify endpoint is decisive: an under-scoped token still verifies as `active`. This one does not
+verify at all, so it was revoked or expired. The secret's last update was `2026-11-21T07:06Z`, before the
+successful `04:08Z` run, so nothing in the repository changed it — the change happened on Cloudflare's
+side.
+
+**Minimum owner action:** Cloudflare dashboard → My Profile → API Tokens → create or rotate a token with
+Account → D1 → Edit, scoped to the staging account; then GitHub → Settings → Secrets and variables →
+Actions → `HABITAT_D1_API_TOKEN` → Update. The Render staging credential does not need to change.
 
 ## Credential presence (booleans only, from the live status payload)
 
