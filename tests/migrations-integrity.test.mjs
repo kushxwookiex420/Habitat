@@ -24,7 +24,7 @@ test("migration order is numeric, unique and includes every readiness migration"
   const prefixes = names.map(name => Number(name.slice(0, 4)));
   assert.deepEqual(prefixes, [...new Set(prefixes)], "duplicate migration prefixes");
   assert.deepEqual(prefixes, [...prefixes].sort((a, b) => a - b), "migrations are not in order");
-  for (const prefix of ["0010", "0011", "0012", "0013", "0014", "0015", "0016", "0017"]) {
+  for (const prefix of ["0010", "0011", "0012", "0013", "0014", "0015", "0016", "0017", "0018"]) {
     assert.ok(names.some(name => name.startsWith(prefix + "_")), "missing migration " + prefix);
   }
 });
@@ -39,10 +39,20 @@ test("a fresh database installs every migration with the expected tables and lea
     "habitat_ax_gateway_audit", "habitat_ax_gateway_rate_limits", "habitat_ax_heartbeat_state",
     "habitat_ax_heartbeat_events", "habitat_ax_heartbeat_deliveries", "habitat_ax_mcp_subscriptions",
     "habitat_ax_mcp_verifications", "habitat_ax_mcp_events", "habitat_ax_mcp_deliveries",
-    "habitat_ax_mcp_delivery_leases", "habitat_ax_approval_nonces"
+    "habitat_ax_mcp_delivery_leases", "habitat_ax_approval_nonces",
+    "habitat_ax_workforce_workers", "habitat_ax_workforce_leases",
+    "habitat_ax_workforce_executions", "habitat_ax_workforce_recovery"
   ]) {
     assert.ok(present.includes(table), "missing table " + table);
   }
+  // One live lease per task is the structural guarantee behind "two workers cannot own one task".
+  const leaseIndexes = db.prepare("SELECT name, sql FROM sqlite_master WHERE type = 'index' AND tbl_name = 'habitat_ax_workforce_leases'").all();
+  const activeTask = leaseIndexes.find((row) => row.name === "habitat_ax_workforce_leases_active_task");
+  assert.ok(activeTask, "missing one-active-lease-per-task index");
+  assert.match(String(activeTask.sql), /UNIQUE/i);
+  assert.match(String(activeTask.sql), /WHERE state = 'active'/i);
+  const executionColumns = db.prepare("PRAGMA table_info(habitat_ax_workforce_executions)").all().map((row) => row.name);
+  assert.ok(executionColumns.includes("idempotency_key"), "execution ledger is keyed by idempotency key");
   const nonceIndexes = db.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'habitat_ax_approval_nonces'").all().map(row => row.name);
   for (const name of ["habitat_ax_approval_nonces_mission", "habitat_ax_approval_nonces_approval", "habitat_ax_approval_nonces_expiry"]) {
     assert.ok(nonceIndexes.includes(name), "missing approval nonce index " + name);

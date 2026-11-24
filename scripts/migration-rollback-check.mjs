@@ -57,6 +57,32 @@ export const WORKFORCE_INDEXES = Object.freeze([
   "habitat_ax_workers_specialty"
 ]);
 
+export const WORKFORCE_V1_TABLES = Object.freeze([
+  "habitat_ax_workforce_recovery",
+  "habitat_ax_workforce_executions",
+  "habitat_ax_workforce_leases",
+  "habitat_ax_workforce_workers"
+]);
+
+export const WORKFORCE_V1_INDEXES = Object.freeze([
+  "habitat_ax_workforce_recovery_kind",
+  "habitat_ax_workforce_recovery_mission",
+  "habitat_ax_workforce_executions_state",
+  "habitat_ax_workforce_executions_task",
+  "habitat_ax_workforce_leases_mission",
+  "habitat_ax_workforce_leases_expiry",
+  "habitat_ax_workforce_leases_worker",
+  "habitat_ax_workforce_leases_active_task",
+  "habitat_ax_workforce_workers_state"
+]);
+
+export function workforceV1RollbackStatements() {
+  return [
+    ...WORKFORCE_V1_INDEXES.map(name => "DROP INDEX IF EXISTS " + name),
+    ...WORKFORCE_V1_TABLES.map(name => "DROP TABLE IF EXISTS " + name)
+  ];
+}
+
 export const APPROVAL_NONCE_TABLES = Object.freeze(["habitat_ax_approval_nonces"]);
 
 export const APPROVAL_NONCE_INDEXES = Object.freeze([
@@ -184,6 +210,7 @@ export async function runRollbackChecks() {
     check("0014 creates the shared rate-limit table", RATE_LIMIT_TABLES.every(name => tables(db).includes(name)));
     check("0015 creates every MCP events table", MCP_TABLES.every(name => tables(db).includes(name)));
     check("0017 creates the approval nonce registry", APPROVAL_NONCE_TABLES.every(name => tables(db).includes(name)));
+    check("0018 creates every workforce v1 table", WORKFORCE_V1_TABLES.every(name => tables(db).includes(name)));
 
     db.prepare("INSERT INTO habitat_ax_capabilities (id, kind, state, requires_approval, record_json, updated_at) VALUES (?, ?, ?, ?, ?, ?)")
       .run("cap_1", "fulfillment", "policy_only", 1, JSON.stringify({ id: "cap_1" }), stamp);
@@ -193,6 +220,10 @@ export async function runRollbackChecks() {
       .run("rev_1", "settled", "USD", 4500, stamp, JSON.stringify({ id: "rev_1" }), stamp);
 
     // Rollback: later groups first, then P1.
+    for (const statement of workforceV1RollbackStatements()) db.exec(statement);
+    check("0018 rollback removes every workforce v1 table and index",
+      WORKFORCE_V1_TABLES.every(name => !tables(db).includes(name)) &&
+      WORKFORCE_V1_INDEXES.every(name => objects(db).every(item => item !== "index:" + name)));
     for (const statement of approvalNonceRollbackStatements()) db.exec(statement);
     check("0017 rollback removes the approval nonce registry",
       APPROVAL_NONCE_TABLES.every(name => !tables(db).includes(name)) &&

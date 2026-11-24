@@ -65,7 +65,11 @@ export async function runMigrationChecks() {
       "habitat_ax_revenue_events",
       "habitat_ax_payouts",
       "habitat_ax_treasury_accounts",
-      "habitat_ax_approval_nonces"
+      "habitat_ax_approval_nonces",
+      "habitat_ax_workforce_workers",
+      "habitat_ax_workforce_leases",
+      "habitat_ax_workforce_executions",
+      "habitat_ax_workforce_recovery"
     ]) {
       check("fresh table " + name, freshTables.includes(name));
     }
@@ -80,6 +84,15 @@ export async function runMigrationChecks() {
       "habitat_ax_approval_nonces_mission",
       "habitat_ax_approval_nonces_approval",
       "habitat_ax_approval_nonces_expiry",
+      "habitat_ax_workforce_leases_active_task",
+      "habitat_ax_workforce_leases_worker",
+      "habitat_ax_workforce_leases_expiry",
+      "habitat_ax_workforce_leases_mission",
+      "habitat_ax_workforce_executions_task",
+      "habitat_ax_workforce_executions_state",
+      "habitat_ax_workforce_workers_state",
+      "habitat_ax_workforce_recovery_mission",
+      "habitat_ax_workforce_recovery_kind",
       "habitat_ax_capabilities_kind",
       "habitat_ax_capabilities_state",
       "habitat_ax_access_requests_status",

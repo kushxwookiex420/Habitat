@@ -42,7 +42,10 @@ export async function createMissionService({
   now = () => new Date().toISOString(),
   log = console,
   health = null,
-  artifactsDir = null
+  artifactsDir = null,
+  // Optional durable lease layer (workforce v1). The mission engine refuses to execute without it when it
+  // is attached, and behaves as before when it is not.
+  leases = null
 } = {}) {
   if (!workforce || typeof workforce.assign !== "function") throw new Error("createMissionService needs the durable workforce.");
   if (typeof query !== "function") throw new Error("createMissionService needs the D1 query function.");
@@ -103,6 +106,7 @@ export async function createMissionService({
     executors: createMissionExecutors({ kit }),
     maxAttempts: MISSION_LIMITS.maxTaskAttempts,
     maxTasksPerRun: MISSION_LIMITS.maxTasksPerRun,
+    leases,
     now,
     log
   });
@@ -139,6 +143,7 @@ export async function createMissionService({
     status: () => ({
       agents: registered.agents.filter((entry) => entry.ok).length,
       adapters: registered.adapters.filter((entry) => entry.ok).length,
+      leases: Boolean(leases),
       artifactsDir: directory,
       artifactsConfigured,
       artifactsWritable,

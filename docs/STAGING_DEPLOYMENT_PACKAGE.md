@@ -90,13 +90,19 @@ key-manager change and keep at least one retired key while old subscriptions exi
 | 0015 | MCP subscriptions, verifications, events, deliveries | MCP Events |
 | 0016 | MCP delivery leases | multi-instance delivery |
 | 0017 | durable approval nonce registry (indexed replay boundary) | owner-authorized mission execution |
+| 0018 | worker leases, execution ledger, recovery journal | autonomous workforce v1 (attached, not enforced without it) |
 
 Before applying: confirm the staging database id, run `npm run staging:preflight` (read-only), record a
 Time Travel bookmark or export, then apply in order with `wrangler d1 execute --remote --file=...`.
 After each: check `sqlite_master`, run `npm run migrations:check` locally against a copy if available, and
-restart the isolated service to confirm schema detection. 0016 must follow 0015, and 0017 must follow 0016.
-0017 is **prepared, not applied** to staging: applying it needs explicit owner authorization. Do not apply
-any of these to production.
+restart the isolated service to confirm schema detection. 0016 must follow 0015, 0017 must follow 0016, and
+0018 must follow 0017. 0017 and 0018 are **prepared, not applied** to staging: applying either needs
+explicit owner authorization. Do not apply any of these to production.
+
+Without 0018 the workforce still runs, but `/ax/v1/workforce*` answers
+`503 workforce_leases_not_attached` and `/system/status` reports `workforceV1.enforced: false`. That is a
+safe degraded state, not an error to work around: the lease and execution guarantees simply do not exist
+until the migration is applied.
 
 ## 5. Gateway and MCP credentials
 

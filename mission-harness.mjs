@@ -32,6 +32,7 @@ export async function buildMissionEnvironment({
   executorOverrides = {},
   ownerVerifier = null,
   dbPath = ":memory:",
+  leases = null,
   env = {}
 } = {}) {
   const db = new DatabaseSync(dbPath);
@@ -41,6 +42,9 @@ export async function buildMissionEnvironment({
   const query = async (sql, params = []) => {
     const statement = db.prepare(sql);
     if (/^\s*select/i.test(sql)) return statement.all(...params);
+    // `... RETURNING` statements both write and answer; `all()` reports the returned rows and performs the
+    // write in one call, which is what the lease and nonce repositories rely on.
+    if (/\breturning\b/i.test(sql)) return statement.all(...params);
     const info = statement.run(...params);
     return [{ changes: Number(info.changes || 0) }];
   };
@@ -71,6 +75,10 @@ export async function buildMissionEnvironment({
     ...executorOverrides
   };
 
+  // `leases` is either a ready lease layer or a factory given this database's query function, so a test can
+  // build workforce v1 on exactly the store the mission engine uses.
+  const leaseLayer = typeof leases === "function" ? await leases({ query, db, now }) : leases;
+
   const missions = createMissionEngine({
     store: missionStore,
     workforce,
@@ -78,6 +86,7 @@ export async function buildMissionEnvironment({
     maxAttempts: maxTaskAttempts,
     maxTasksPerRun: 5,
     ownerVerifier,
+    leases: leaseLayer,
     now,
     log
   });
@@ -117,7 +126,7 @@ export async function buildMissionEnvironment({
 
   return {
     db, query, fetchImpl, close: () => db.close(),
-    missionStore, workforceRepo, workforce,
+    missionStore, workforceRepo, workforce, leases: leaseLayer,
     kit, executors, missions, commandTasks, commandEngine, pipeline,
     registeredAdapters, registeredAgents, escalations
   };

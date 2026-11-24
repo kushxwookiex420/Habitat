@@ -20,7 +20,21 @@ connection has been exercised.** `HABITAT_GATEWAY_ENABLED` is unset, so every ro
 | GET | `/ax/v1/audit` | `status:read` | recent gateway requests |
 | GET | `/ax/v1/heartbeat` | `status:read` | reconnect trigger + current context + queued events |
 | POST | `/ax/v1/heartbeat/ack` | `events:write` | acknowledge delivered events (idempotent) |
+| GET | `/ax/v1/workforce` | `workforce:read` | workforce status: health, assignments, expirations, retries, stalled missions, durations |
+| GET | `/ax/v1/workforce/workers` | `workforce:read` | worker identities with derived health (`capability`, `state`, `healthy`) |
+| GET | `/ax/v1/workforce/workers/:id` | `workforce:read` | worker detail: assignments, leases, executions |
+| GET | `/ax/v1/workforce/assignments` | `workforce:read` | active leases and their expiry |
+| GET | `/ax/v1/workforce/health` | `workforce:read` | health summary and heartbeat ages |
+| GET | `/ax/v1/workforce/recovery` | `workforce:read` | recovery history (`missionId`, `kind`, `limit`) |
+| GET | `/ax/v1/workforce/missions/:id` | `workforce:read` | mission-to-worker relationships and attempts |
+| POST | `/ax/v1/workforce/workers` | `workforce:write` | register or update a worker identity |
+| POST | `/ax/v1/workforce/workers/:id/heartbeat` | `workforce:write` | record a heartbeat |
+| POST | `/ax/v1/workforce/workers/:id/deregister` | `workforce:write` | deregister (409 while leases are live unless `force`) |
 | GET | `/ax/v1/openapi.json` | none | OpenAPI 3.1 document for ChatGPT Actions |
+
+The workforce routes require migration 0018; without it they answer
+`503 workforce_leases_not_attached` rather than returning an empty but healthy-looking workforce. The
+dashboard contract is in `docs/AUTONOMOUS_WORKFORCE_V1.md`.
 
 Every response carries `requestId` and, where relevant, `delivery: {received, executed, verified}` so a
 caller cannot mistake acceptance for completion.

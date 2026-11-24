@@ -96,3 +96,24 @@ approval — setting `HABITAT_WORKFORCE_ENABLED=true` in staging and observing `
 `recoveredAssignments` after a restart, and a scheduler-driven cycle that reaches `verified` with
 approval still pending. None of that has happened yet: the runtime is attached, not activated. The
 adapter contract is unchanged and provider-free: intake and the runner only ever name an `adapterId`.
+
+## Autonomous workforce v1 (0018, prepared not applied)
+
+Execution ownership is now durable on top of the same mission engine:
+
+- every task attempt acquires a **lease** for exactly one worker; a partial unique index makes "two
+  workers own one task" impossible rather than unlikely;
+- a lease that expires cannot be renewed, and a worker whose heartbeat is stale receives no new work;
+- the attempt is claimed in an **execution ledger** before the executor runs. A success is recorded before
+  verification, so a verification failure cannot re-release the external operation; a crashed attempt
+  becomes `uncertain` and is never retried automatically;
+- `recover()` sweeps expired leases, converts orphaned attempts to `uncertain`, then resumes missions with
+  a `mission.resumed` event;
+- `reconcile()` requeues a task only when its lease died **before** any attempt started; otherwise it fails
+  the task as `outcome_uncertain`.
+
+The approval gate is unchanged and always runs before a lease is acquired. Contract, metrics and the
+dashboard API are in `docs/AUTONOMOUS_WORKFORCE_V1.md`; the schema is in `docs/D1_TASK_SCHEMA.md`.
+
+Still blocked on the same environmental work: 0018 has not been applied to any D1 database, so lease
+enforcement is attached but not exercised on a deployed origin. `/ax/v1/workforce*` answers 503 until it is.

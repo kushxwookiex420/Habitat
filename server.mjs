@@ -189,6 +189,9 @@ registerAxGateway(app, {
   repository: gatewayRepository,
   missionRuntime,
   heartbeat: heartbeatMonitor,
+  // Resolved per request: the workforce runtime attaches the lease layer during its own initialisation,
+  // which happens after this registration.
+  workforceV1: () => workforceRuntime.workforceV1(),
   ownerVerifier,
   statusProvider: collectSystemStatus,
   log: console
@@ -1721,6 +1724,9 @@ async function collectSystemStatus() {
     providers: configuredProviders(),
     // Read-only snapshot: configured, initialized, enabled, running and verified are separate facts.
     workforce: workforceRuntime.status(),
+    // Durable leases: attached, schema ready, and whether execution is actually enforced. A deployment
+    // with 0010 but not 0018 reports enforced:false rather than implying the guarantee exists.
+    workforceV1: workforceRuntime.status().leases,
     // Identity is reported apart from whichever provider supplies intelligence.
     identity,
     missions: await missionRuntime.status(),

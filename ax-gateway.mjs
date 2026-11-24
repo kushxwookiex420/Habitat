@@ -28,6 +28,8 @@ export const GATEWAY_SCOPES = Object.freeze([
   "missions:read",
   "missions:write",
   "missions:approve",
+  "workforce:read",
+  "workforce:write",
   "recovery:write",
   "events:write",
   "mcp:events"
@@ -38,6 +40,8 @@ export const SCOPE_DESCRIPTIONS = Object.freeze({
   "missions:read": "Read mission detail, tasks, evidence and approvals.",
   "missions:write": "Submit missions; cannot approve or recover.",
   "missions:approve": "Decide a pending approval; still requires a valid owner attestation.",
+  "workforce:read": "Read workforce status, workers, leases, health, recovery history and mission-to-worker links.",
+  "workforce:write": "Register a worker, send a heartbeat, or deregister a worker.",
   "recovery:write": "Run bounded mission recovery (never approves or deploys).",
   "events:write": "Acknowledge delivered heartbeat events; cannot submit or approve work.",
   "mcp:events": "Use the MCP Events endpoint: list events, subscribe and unsubscribe."
@@ -117,6 +121,9 @@ export function registerAxGateway(app, {
   repository = null,
   missionRuntime = null,
   heartbeat = null,
+  // Workforce v1 lease layer: an object, or a provider called per request so a lazily-initialised runtime
+  // does not leave the routes permanently detached.
+  workforceV1 = null,
   statusProvider = null,
   ownerVerifier = null,
   rateLimit = { windowMs: 60_000, max: 60 },
@@ -125,6 +132,7 @@ export function registerAxGateway(app, {
 } = {}) {
   const windows = new Map();
   const requestId = () => "gw_" + now().toString(36) + "_" + randomBytes(4).toString("hex");
+  const leases = () => (typeof workforceV1 === "function" ? workforceV1() : workforceV1);
 
   async function audit(req, { clientId = null, status = 0, outcome = "unknown", detail = {} } = {}) {
     if (!repository || typeof repository.appendAudit !== "function") return;
@@ -312,6 +320,125 @@ export function registerAxGateway(app, {
     return ok(res, req, { recovered: recovered.recovered || 0, results: recovered.results || [], delivery: { received: true, executed: true, verified: false } });
   });
 
+  /* ── workforce v1 ───────────────────────────────────────────────────────────────────────────── */
+
+  async function missionList() {
+    if (!missionRuntime) return [];
+    try {
+      const listed = await missionRuntime.missions({ limit: 50 });
+      return listed?.ok ? listed.missions || [] : [];
+    } catch { return []; }
+  }
+
+  route("get", "/ax/v1/workforce", "workforce:read", async (req, res) => {
+    const layer = leases();
+    if (!layer) return fail(res, req, 503, "workforce_leases_not_attached");
+    const status = await layer.status({ missions: await missionList() });
+    return ok(res, req, { workforce: status });
+  });
+
+  route("get", "/ax/v1/workforce/workers", "workforce:read", async (req, res) => {
+    const layer = leases();
+    if (!layer) return fail(res, req, 503, "workforce_leases_not_attached");
+    const workers = await layer.workers({
+      capability: req.query.capability || null,
+      state: req.query.state || null,
+      healthyOnly: String(req.query.healthy || "") === "true"
+    });
+    return ok(res, req, { workers, count: workers.length, generatedAt: new Date(now()).toISOString() });
+  });
+
+  route("get", "/ax/v1/workforce/workers/:id", "workforce:read", async (req, res) => {
+    const layer = leases();
+    if (!layer) return fail(res, req, 503, "workforce_leases_not_attached");
+    const detail = await layer.worker(req.params.id);
+    if (!detail.ok) return fail(res, req, detail.code === "worker_unknown" ? 404 : 400, detail.code || "worker_unavailable");
+    return ok(res, req, detail);
+  });
+
+  route("post", "/ax/v1/workforce/workers", "workforce:write", async (req, res) => {
+    const layer = leases();
+    if (!layer) return fail(res, req, 503, "workforce_leases_not_attached");
+    const body = req.body || {};
+    const registered = await layer.registerWorker({
+      id: body.id,
+      label: body.label,
+      specialty: body.specialty,
+      adapterId: body.adapterId,
+      capabilities: body.capabilities,
+      maxConcurrent: body.maxConcurrent,
+      accepting: body.accepting
+    });
+    if (!registered.ok) return fail(res, req, 400, registered.code || "worker_not_registered", { details: registered });
+    return ok(res, req, { worker: registered.worker, created: registered.created === true });
+  });
+
+  route("post", "/ax/v1/workforce/workers/:id/deregister", "workforce:write", async (req, res) => {
+    const layer = leases();
+    if (!layer) return fail(res, req, 503, "workforce_leases_not_attached");
+    const body = req.body || {};
+    const outcome = await layer.deregisterWorker({ id: req.params.id, reason: body.reason || null, force: body.force === true });
+    if (!outcome.ok) {
+      const status = outcome.code === "worker_unknown" ? 404 : outcome.code === "worker_has_active_leases" ? 409 : 400;
+      return fail(res, req, status, outcome.code || "worker_not_deregistered", { activeLeases: outcome.activeLeases || null });
+    }
+    return ok(res, req, { worker: outcome.worker, abandoned: outcome.abandoned || [] });
+  });
+
+  route("post", "/ax/v1/workforce/workers/:id/heartbeat", "workforce:write", async (req, res) => {
+    const layer = leases();
+    if (!layer) return fail(res, req, 503, "workforce_leases_not_attached");
+    const body = req.body || {};
+    const beat = await layer.heartbeat({ id: req.params.id, state: body.state || null, detail: body.detail || null });
+    if (!beat.ok) {
+      const status = beat.code === "worker_unknown" ? 404 : beat.code === "worker_deregistered" ? 409 : 400;
+      return fail(res, req, status, beat.code || "heartbeat_refused");
+    }
+    return ok(res, req, { worker: beat.worker, health: beat.health });
+  });
+
+  route("get", "/ax/v1/workforce/assignments", "workforce:read", async (req, res) => {
+    const layer = leases();
+    if (!layer) return fail(res, req, 503, "workforce_leases_not_attached");
+    const status = await layer.status({ missions: await missionList() });
+    return ok(res, req, { assignments: status.activeAssignments.items, count: status.activeAssignments.count });
+  });
+
+  route("get", "/ax/v1/workforce/health", "workforce:read", async (req, res) => {
+    const layer = leases();
+    if (!layer) return fail(res, req, 503, "workforce_leases_not_attached");
+    const status = await layer.status({ missions: await missionList() });
+    return ok(res, req, {
+      health: status.health,
+      workers: { byHealth: status.workers.byHealth, stalled: status.workers.stalled, accepting: status.workers.accepting },
+      heartbeat: status.workers.health.map((entry) => ({
+        workerId: entry.workerId,
+        status: entry.health.status,
+        heartbeatAgeMs: entry.health.heartbeatAgeMs,
+        lastHeartbeatAt: entry.health.heartbeatAgeMs === null ? null : new Date(now() - entry.health.heartbeatAgeMs).toISOString()
+      }))
+    });
+  });
+
+  route("get", "/ax/v1/workforce/recovery", "workforce:read", async (req, res) => {
+    const layer = leases();
+    if (!layer) return fail(res, req, 503, "workforce_leases_not_attached");
+    const events = await layer.recoveryHistory({
+      missionId: req.query.missionId || null,
+      kind: req.query.kind || null,
+      limit: Math.min(200, Number(req.query.limit) || 50)
+    });
+    return ok(res, req, { events, count: events.length });
+  });
+
+  route("get", "/ax/v1/workforce/missions/:id", "workforce:read", async (req, res) => {
+    const layer = leases();
+    if (!layer) return fail(res, req, 503, "workforce_leases_not_attached");
+    const linked = await layer.missionWorkers({ missionId: req.params.id });
+    if (!linked.ok) return fail(res, req, 400, linked.code || "mission_id_invalid");
+    return ok(res, req, linked);
+  });
+
   route("get", "/ax/v1/audit", "status:read", async (req, res) => {
     const entries = await repository.listAudit({ limit: Math.min(200, Number(req.query.limit) || 50) });
     return ok(res, req, { entries, count: entries.length });
@@ -354,7 +481,7 @@ export const OPENAPI = Object.freeze({
     description: "Read status, mission results and heartbeat events; submit missions, decide approvals with an owner attestation, and run bounded recovery. Disabled unless HABITAT_GATEWAY_ENABLED=true. Every POST requires x-ax-timestamp and x-ax-nonce. A 202 means received, not executed; a completed mission is verified only when its detail reports verification evidence."
   },
   servers: [{ url: "/", description: "Set this to the public HTTPS origin of the Habitat gateway before importing into ChatGPT." }],
-  tags: [{ name: "status" }, { name: "missions" }, { name: "heartbeat" }, { name: "audit" }],
+  tags: [{ name: "status" }, { name: "missions" }, { name: "workforce" }, { name: "heartbeat" }, { name: "audit" }],
   components: {
     securitySchemes: { bearerAuth: { type: "http", scheme: "bearer", bearerFormat: "axg_<client>_<secret>", description: "Dedicated integration token, shown once, stored hashed, revocable." } },
     parameters: {
@@ -389,6 +516,18 @@ export const OPENAPI = Object.freeze({
     "/ax/v1/heartbeat": { get: { tags: ["heartbeat"], operationId: "getHeartbeat", summary: "Reconnect trigger with current status, missions, pending work and queued events", responses: { 200: jsonResponse("Reconnect payload", { ...OK_ENVELOPE, properties: { ...OK_ENVELOPE.properties, trigger: { type: "string" }, generatedAt: { type: "string" }, connection: { type: "string" }, missions: { type: "object" }, queued: { type: "array", items: { type: "object" } }, delivery: { type: "object" } } }), ...errorResponses({ 401: 1, 429: 1, 503: 1 }) } } },
     "/ax/v1/heartbeat/ack": { post: { tags: ["heartbeat"], operationId: "acknowledgeHeartbeatEvents", summary: "Acknowledge delivered events", parameters: [{ $ref: "#/components/parameters/nonce" }, { $ref: "#/components/parameters/timestamp" }], requestBody: { required: true, content: { "application/json": { schema: { type: "object", required: ["eventIds"], properties: { eventIds: { type: "array", minItems: 1, maxItems: 100, items: { type: "string" } } } } } } }, responses: { 200: jsonResponse("Acknowledged", { ...OK_ENVELOPE, properties: { ...OK_ENVELOPE.properties, acknowledged: { type: "integer" }, duplicate: { type: "boolean" } } }), ...errorResponses({ 400: 1, 401: 1, 403: 1, 429: 1, 503: 1 }) } } },
     "/ax/v1/recover": { post: { tags: ["missions"], operationId: "recoverMissions", summary: "Bounded mission recovery (never approves or deploys)", parameters: [{ $ref: "#/components/parameters/nonce" }, { $ref: "#/components/parameters/timestamp" }], responses: { 200: jsonResponse("Recovered", { ...OK_ENVELOPE, additionalProperties: true }), ...errorResponses({ 400: 1, 401: 1, 403: 1, 429: 1, 503: 1 }) } } },
+    "/ax/v1/workforce": { get: { tags: ["workforce"], operationId: "getWorkforce", summary: "Workforce status: workers, health, assignments, lease expirations, retries, failed tasks, stalled missions and durations", responses: { 200: jsonResponse("Workforce status", { ...OK_ENVELOPE, properties: { ...OK_ENVELOPE.properties, workforce: { type: "object" } } }), ...errorResponses({ 401: 1, 429: 1, 503: 1 }) } } },
+    "/ax/v1/workforce/workers": {
+      get: { tags: ["workforce"], operationId: "listWorkforceWorkers", summary: "List worker identities with derived health", parameters: [{ name: "capability", in: "query", required: false, schema: { type: "string" } }, { name: "state", in: "query", required: false, schema: { type: "string" } }, { name: "healthy", in: "query", required: false, schema: { type: "boolean" } }], responses: { 200: jsonResponse("Workers", { ...OK_ENVELOPE, properties: { ...OK_ENVELOPE.properties, workers: { type: "array", items: { type: "object" } }, count: { type: "integer" } } }), ...errorResponses({ 401: 1, 429: 1, 503: 1 }) } },
+      post: { tags: ["workforce"], operationId: "registerWorkforceWorker", summary: "Register or update a worker identity and its capability declaration", parameters: [{ $ref: "#/components/parameters/nonce" }, { $ref: "#/components/parameters/timestamp" }], requestBody: { required: true, content: { "application/json": { schema: { type: "object", required: ["id", "capabilities"], properties: { id: { type: "string" }, label: { type: "string" }, specialty: { type: "string" }, adapterId: { type: "string" }, capabilities: { type: "array", minItems: 1, items: { type: "string" } }, maxConcurrent: { type: "integer", minimum: 1, maximum: 32 }, accepting: { type: "boolean" } } } } } }, responses: { 200: jsonResponse("Registered", { ...OK_ENVELOPE, additionalProperties: true }), ...errorResponses({ 400: 1, 401: 1, 403: 1, 429: 1, 503: 1 }) } }
+    },
+    "/ax/v1/workforce/workers/{id}": { get: { tags: ["workforce"], operationId: "getWorkforceWorker", summary: "Worker detail with health, active assignments and lease history", parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }], responses: { 200: jsonResponse("Worker", { ...OK_ENVELOPE, additionalProperties: true }), ...errorResponses({ 401: 1, 404: 1, 429: 1, 503: 1 }) } } },
+    "/ax/v1/workforce/workers/{id}/deregister": { post: { tags: ["workforce"], operationId: "deregisterWorkforceWorker", summary: "Deregister a worker; refused while it holds a live lease unless force is set", parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }, { $ref: "#/components/parameters/nonce" }, { $ref: "#/components/parameters/timestamp" }], requestBody: { required: false, content: { "application/json": { schema: { type: "object", properties: { reason: { type: "string" }, force: { type: "boolean" } } } } } }, responses: { 200: jsonResponse("Deregistered", { ...OK_ENVELOPE, additionalProperties: true }), ...errorResponses({ 400: 1, 401: 1, 403: 1, 404: 1, 409: 1, 429: 1, 503: 1 }) } } },
+    "/ax/v1/workforce/workers/{id}/heartbeat": { post: { tags: ["workforce"], operationId: "workforceHeartbeat", summary: "Record a worker heartbeat and observe the derived health", parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }, { $ref: "#/components/parameters/nonce" }, { $ref: "#/components/parameters/timestamp" }], requestBody: { required: false, content: { "application/json": { schema: { type: "object", properties: { state: { type: "string" }, detail: { type: "string" } } } } } }, responses: { 200: jsonResponse("Heartbeat recorded", { ...OK_ENVELOPE, additionalProperties: true }), ...errorResponses({ 400: 1, 401: 1, 403: 1, 404: 1, 409: 1, 429: 1, 503: 1 }) } } },
+    "/ax/v1/workforce/assignments": { get: { tags: ["workforce"], operationId: "listWorkforceAssignments", summary: "Active leases: which worker owns which mission task, and until when", responses: { 200: jsonResponse("Assignments", { ...OK_ENVELOPE, properties: { ...OK_ENVELOPE.properties, assignments: { type: "array", items: { type: "object" } }, count: { type: "integer" } } }), ...errorResponses({ 401: 1, 429: 1, 503: 1 }) } } },
+    "/ax/v1/workforce/health": { get: { tags: ["workforce"], operationId: "getWorkforceHealth", summary: "Worker health and heartbeat ages", responses: { 200: jsonResponse("Health", { ...OK_ENVELOPE, additionalProperties: true }), ...errorResponses({ 401: 1, 429: 1, 503: 1 }) } } },
+    "/ax/v1/workforce/recovery": { get: { tags: ["workforce"], operationId: "listWorkforceRecovery", summary: "Recovery history: expiries, reassignments, resumes, uncertain outcomes", parameters: [{ name: "missionId", in: "query", required: false, schema: { type: "string" } }, { name: "kind", in: "query", required: false, schema: { type: "string" } }, { name: "limit", in: "query", required: false, schema: { type: "integer", minimum: 1, maximum: 200 } }], responses: { 200: jsonResponse("Recovery events", { ...OK_ENVELOPE, properties: { ...OK_ENVELOPE.properties, events: { type: "array", items: { type: "object" } }, count: { type: "integer" } } }), ...errorResponses({ 401: 1, 429: 1, 503: 1 }) } } },
+    "/ax/v1/workforce/missions/{id}": { get: { tags: ["workforce"], operationId: "getMissionWorkforce", summary: "Mission-to-worker relationships, attempts and lease history", parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }], responses: { 200: jsonResponse("Mission workforce", { ...OK_ENVELOPE, additionalProperties: true }), ...errorResponses({ 400: 1, 401: 1, 429: 1, 503: 1 }) } } },
     "/ax/v1/audit": { get: { tags: ["audit"], operationId: "gatewayAudit", summary: "Recent gateway requests", responses: { 200: jsonResponse("Audit", { ...OK_ENVELOPE, properties: { ...OK_ENVELOPE.properties, entries: { type: "array", items: { type: "object" } } } }), ...errorResponses({ 401: 1, 429: 1, 503: 1 }) } } }
   }
 });

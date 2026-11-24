@@ -41,6 +41,8 @@ export function createMissionRuntime({
   executors = null,
   verifierAgentId = null,
   ownerVerifier = null,
+  // Durable leases (workforce v1), attached by the workforce runtime. Null keeps the previous behaviour.
+  leases = null,
   query = null,
   now = () => new Date().toISOString(),
   log = console,
@@ -94,7 +96,7 @@ export function createMissionRuntime({
           state.lastError = "no workforce attached";
           return;
         }
-        engine = createMissionEngine({ store, workforce, executors: executors || undefined, verifierAgentId, ownerVerifier, now, log, maxTasksPerRun });
+        engine = createMissionEngine({ store, workforce, executors: executors || undefined, verifierAgentId, ownerVerifier, leases, now, log, maxTasksPerRun });
         state.initialized = true;
         state.status = "initialized";
         log.log?.("MISSIONS_INITIALIZED", JSON.stringify({ migration: MISSION_MIGRATION, counts: await engine.status() }));
@@ -164,6 +166,7 @@ export function createMissionRuntime({
       running: state.running,
       verified: Number(counts.byStatus?.completed || 0) > 0,
       migration: { version: MISSION_MIGRATION, ready: state.schemaReady, expectedTables: MISSION_TABLE_NAMES.length, appliedByRuntime: false },
+      leases: Boolean(leases),
       workforceEnabled: configuration.workforceEnabled,
       nexusRuntimeEnabled: configuration.nexusRuntimeEnabled,
       counts: { total: counts.total || 0, byStatus: counts.byStatus || {} },

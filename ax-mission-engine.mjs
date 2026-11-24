@@ -183,6 +183,9 @@ export function createMissionEngine({
   executors = {},
   verifierAgentId = null,
   ownerVerifier = null,
+  // Optional durable lease layer (workforce v1). When attached, no task executes without an exclusive,\n  // non-expired lease and a fresh entry in the at-most-once execution ledger. When absent the engine
+  // behaves exactly as before: an in-memory assignment with no durable ownership claim.
+  leases = null,
   maxAttempts = 2,
   maxTasksPerRun = 2,
   now = () => new Date().toISOString(),
@@ -306,6 +309,44 @@ export function createMissionEngine({
       if (task.status !== "running" || !task.assignmentId) continue;
       const assignment = assignments.find(item => item.id === task.assignmentId);
       const taskKey = missionTaskKey(mission.id, task.id);
+      // A durable lease outlives the process that took it. If its owner crashed, the outcome of the work
+      // is unknown: the task is never silently re-run, it is failed as uncertain. An expired or abandoned
+      // lease is recoverable, because the worker provably stopped owning the work before it produced a
+      // result. Either way the record says which worker held it and for how long.
+      if (leases && task.leaseId) {
+        const lease = await leases.lease(task.leaseId);
+        if (lease && ["uncertain", "expired", "abandoned"].includes(lease.state)) {
+          // The lease is gone. Whether the task can be re-run depends on the ledger, not on the lease: an
+          // attempt that started and never reported is an unknown external outcome, and repeating it is
+          // exactly the duplicate a crash must not cause. A lease that expired before any attempt started
+          // is genuinely recoverable.
+          const executions = typeof leases.executionsFor === "function"
+            ? await leases.executionsFor({ missionId: mission.id, taskId: taskKey })
+            : [];
+          const started = executions.some((item) => item.state === "succeeded");
+          const unknown = lease.state === "uncertain" || executions.some((item) => item.state === "uncertain") || started;
+          if (unknown) {
+            task.status = "failed";
+            task.error = "outcome_uncertain";
+            task.assignmentId = null;
+            await emit(mission.id, "task.outcome_uncertain", {
+              taskId: task.id, leaseId: lease.leaseId, workerId: lease.workerId,
+              reason: started ? "operation_completed_without_result" : "lease_lost_without_outcome"
+            });
+            continue;
+          }
+          task.attempts += 1;
+          task.assignmentId = null;
+          task.leaseId = null;
+          task.status = task.attempts > maxAttempts ? "failed" : "pending";
+          task.error = task.status === "failed" ? (lease.state === "expired" ? "lease_expired" : "lease_abandoned") : null;
+          await emit(mission.id, task.status === "failed" ? "task.failed" : "task.reassigned", {
+            taskId: task.id, code: lease.state === "expired" ? "lease_expired" : "lease_abandoned",
+            attempts: task.attempts, previousWorkerId: lease.workerId, leaseId: lease.leaseId
+          });
+          continue;
+        }
+      }
       const result = results.find(item => item.taskId === taskKey);
       if (result) {
         task.status = result.status === "verified" ? "completed" : "failed";
@@ -414,24 +455,126 @@ export function createMissionEngine({
       task.error = "executor_unavailable";
       return;
     }
+
+    // Durable lease: the right to execute belongs to exactly one worker, and a worker that cannot prove it
+    // is alive is refused. The approval gate above has already run, so a lease is never granted for work the
+    // owner has not authorised.
+    let lease = null;
+    if (leases && typeof leases.acquire === "function") {
+      const taskKey = missionTaskKey(mission.id, task.id);
+      let claimed;
+      try {
+        claimed = await leases.acquire({
+          taskId: taskKey,
+          missionId: mission.id,
+          workerId: agent.id,
+          requires: task.requires,
+          attempt: Math.max(1, task.attempts)
+        });
+      } catch (error) {
+        claimed = { ok: false, code: "lease_registry_unavailable" };
+      }
+      if (!claimed.ok) {
+        task.status = "blocked";
+        task.error = claimed.code;
+        task.evidence = [...(task.evidence || []), "lease:" + claimed.code];
+        await emit(mission.id, "task.lease_refused", {
+          taskId: task.id, code: claimed.code, holder: claimed.holder || null, missing: claimed.missing || null
+        });
+        return;
+      }
+      lease = claimed.lease;
+      task.leaseId = claimed.leaseId;
+      task.workerId = agent.id;
+      await emit(mission.id, "task.lease_acquired", {
+        taskId: task.id, leaseId: claimed.leaseId, workerId: agent.id,
+        expiresAt: lease.expiresAt, renewed: claimed.renewed === true
+      });
+    }
+
+    // At-most-once: an attempt that already ran, is still running under another owner, or lost its outcome
+    // is refused here. This is what stops a retry from repeating a consequential external operation.
+    let execution = null;
+    if (leases && typeof leases.executionBegin === "function") {
+      const begun = await leases.executionBegin({
+        missionId: mission.id,
+        taskId: missionTaskKey(mission.id, task.id),
+        workerId: agent.id,
+        attempt: Math.max(1, task.attempts),
+        leaseId: lease?.leaseId || null
+      });
+      if (!begun.ok) {
+        const terminal = ["outcome_uncertain", "execution_already_succeeded"].includes(begun.code);
+        task.status = terminal ? "failed" : "blocked";
+        task.error = begun.code;
+        await emit(mission.id, terminal ? "task.execution_refused_terminal" : "task.execution_refused", {
+          taskId: task.id, code: begun.code
+        });
+        if (lease) {
+          await leases.release({
+            leaseId: lease.leaseId, workerId: agent.id,
+            state: begun.code === "outcome_uncertain" ? "uncertain" : "released",
+            reason: begun.code
+          });
+        }
+        return;
+      }
+      execution = begun.execution;
+      // Hand the executor the key it must forward to any external provider, so the provider can deduplicate
+      // the same way Habitat's ledger does.
+      task.executionKey = begun.idempotencyKey;
+    }
+
     let implementation;
     try {
       implementation = await execute({ mission, task, agent });
     } catch (error) {
+      // An executor that cannot say whether the outside world acted must never be retried automatically.
+      const uncertain = error?.uncertain === true || error?.code === "outcome_uncertain";
+      if (execution) {
+        await leases.executionComplete({
+          idempotencyKey: execution.idempotencyKey,
+          state: uncertain ? "uncertain" : "failed",
+          result: { code: clean(error?.code, 80) || null, message: clean(error?.message, 200) || null }
+        });
+      }
+      if (uncertain) {
+        task.status = "failed";
+        task.error = "outcome_uncertain";
+        task.assignmentId = null;
+        if (lease) await leases.release({ leaseId: lease.leaseId, workerId: agent.id, state: "uncertain", reason: "outcome_uncertain" });
+        await emit(mission.id, "task.outcome_uncertain", { taskId: task.id, code: "outcome_uncertain" });
+        return;
+      }
       const retried = await workforce.retry({ assignmentId, maxAttempts, reason: clean(error?.message, 120) || "executor_failed" });
       if (retried.ok) {
         task.attempts += 1;
         task.assignmentId = retried.assignment?.id || assignmentId;
         task.status = "running";
         task.error = "retrying";
+        if (lease) await leases.release({ leaseId: lease.leaseId, workerId: agent.id, state: "released", reason: "retry" });
         await emit(mission.id, "task.retry", { taskId: task.id, attempts: task.attempts });
         return;
       }
       task.status = "failed";
       task.error = "attempts_exhausted";
       task.assignmentId = null;
+      if (lease) await leases.release({ leaseId: lease.leaseId, workerId: agent.id, state: "released", reason: "attempts_exhausted" });
       await emit(mission.id, "task.failed", { taskId: task.id, code: task.error });
       return;
+    }
+
+    // The external operation has completed. Record the outcome before verification, so a verification
+    // failure cannot make the engine believe the operation never happened and repeat it.
+    if (execution) {
+      await leases.executionComplete({
+        idempotencyKey: execution.idempotencyKey,
+        state: "succeeded",
+        result: {
+          status: implementation?.result?.status || "completed",
+          evidence: (implementation?.result?.evidence || implementation?.evidence || []).slice(0, 5)
+        }
+      });
     }
 
     const verifier = pickVerifier(agent.id);
@@ -482,10 +625,14 @@ export function createMissionEngine({
     if (finalized.ok && record?.status === "verified") {
       task.status = "completed";
       task.error = null;
+      if (lease) await leases.release({ leaseId: lease.leaseId, workerId: agent.id, state: "completed", reason: "verified" });
       await emit(mission.id, "task.verified", { taskId: task.id, verifier, tests: task.tests });
     } else {
       task.status = "failed";
       task.error = finalized.code || record?.code || "verification_failed";
+      // The operation ran; only its proof was refused. The lease closes, but the execution ledger keeps the
+      // success so a repair attempt cannot silently repeat the external call.
+      if (lease) await leases.release({ leaseId: lease.leaseId, workerId: agent.id, state: "released", reason: task.error });
       await emit(mission.id, "task.failed", { taskId: task.id, code: task.error });
     }
   }
@@ -517,9 +664,17 @@ export function createMissionEngine({
     if (mission.status === "approval_required") return { ok: true, skipped: true, code: "approval_pending", mission };
 
     await reconcile(mission);
-    // A worker that was unavailable is retryable once it returns; the task itself is not at fault.
+    // Refusals that only mean "not this worker, not this moment" are retryable on the next tick. Refusals
+    // that mean "the operation may already have run" (`outcome_uncertain`, `execution_already_succeeded`)
+    // are not in this list and never become runnable again without a new attempt by the owner.
+    const retryable = [
+      "no_eligible_agent", "agent_unavailable", "executor_unavailable",
+      "lease_held", "lease_expired", "lease_abandoned", "lease_registry_unavailable",
+      "worker_at_capacity", "worker_stalled", "worker_draining", "worker_not_accepting",
+      "workforce_storage_unavailable", "execution_in_flight"
+    ];
     for (const task of mission.tasks) {
-      if (task.status === "blocked" && ["no_eligible_agent", "agent_unavailable", "executor_unavailable"].includes(task.error)) {
+      if (task.status === "blocked" && retryable.includes(task.error)) {
         task.status = "pending";
         task.error = null;
       }
@@ -568,13 +723,32 @@ export function createMissionEngine({
     };
   }
 
+  /**
+   * Process restart path. Durable leases are swept first: an expired lease frees its task, and an attempt
+   * whose owner died without an outcome is marked uncertain instead of being replayed. Then every mission
+   * that was mid-flight is resumed through the same gate every other run uses.
+   */
   async function recover({ limit = 10 } = {}) {
+    let leaseRecovery = null;
+    if (leases && typeof leases.recover === "function") {
+      try {
+        leaseRecovery = await leases.recover();
+      } catch (error) {
+        log.warn?.("MISSION_LEASE_RECOVERY_FAILED", String(error?.message || error).slice(0, 160));
+        leaseRecovery = { ok: false, code: "lease_recovery_failed" };
+      }
+    }
     const active = (await Promise.all(["running", "planned", "blocked", "failed"].map(status => store.list({ status, limit })))).flat();
     const results = [];
     for (const mission of active.slice(0, limit)) {
+      await emit(mission.id, "mission.resumed", {
+        status: mission.status,
+        inFlight: (mission.tasks || []).filter(task => task.status === "running").length,
+        leaseRecovery: leaseRecovery ? { expired: leaseRecovery.expired || 0, uncertain: leaseRecovery.uncertain || 0 } : null
+      });
       results.push(await execute(mission.id));
     }
-    return { ok: true, recovered: results.length, results };
+    return { ok: true, recovered: results.length, leaseRecovery, results };
   }
 
   async function approve({ missionId, decision = "approve", by = "owner", attestation = null, reason = null, taskId = null, approvalId = null } = {}) {

@@ -1,4 +1,6 @@
 import { createWorkforceRepository, createD1WorkforceRepository, WORKFORCE_DDL } from "./d1-workforce-repository.mjs";
+import { createWorkforceV1Repository, createD1WorkforceV1Repository, WORKFORCE_V1_MIGRATION, WORKFORCE_V1_TABLE_NAMES } from "./d1-workforce-v1-repository.mjs";
+import { createWorkforceV1 } from "./ax-workforce-v1.mjs";
 import { createD1RowQuery } from "./nexus-runtime.mjs";
 import { createDurableWorkforce } from "./ax-durable-workforce.mjs";
 import { createWorkforceIntake } from "./ax-workforce-intake.mjs";
@@ -134,10 +136,24 @@ function safeMessage(error, limit = 180) {
   return String(error?.message || error || "unknown error").replace(/\s+/g, " ").trim().slice(0, limit);
 }
 
+export async function inspectWorkforceV1Schema({ query } = {}) {
+  if (typeof query !== "function") throw new Error("inspectWorkforceV1Schema needs a query function.");
+  const rows = await query(
+    "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN (" + WORKFORCE_V1_TABLE_NAMES.map(() => "?").join(", ") + ")",
+    WORKFORCE_V1_TABLE_NAMES
+  );
+  const present = new Set((rows || []).map(row => row.name));
+  const missing = WORKFORCE_V1_TABLE_NAMES.filter(name => !present.has(name));
+  return { migration: WORKFORCE_V1_MIGRATION, ok: missing.length === 0, missing, expectedTables: WORKFORCE_V1_TABLE_NAMES.length };
+}
+
 export function createWorkforceRuntime({
   env = process.env,
   query = null,
   repository = null,
+  // Durable lease store (0018). Separate from the agent store so a deployment can run the workforce with
+  // leases absent; it then reports the gap instead of pretending the guarantee exists.
+  leasesRepository = null,
   adapters = null,
   executors = null,
   verifierAgentId = null,
@@ -158,6 +174,9 @@ export function createWorkforceRuntime({
     initialized: false,
     schemaReady: null,
     schemaMissing: [],
+    leasesReady: null,
+    leasesMissing: [],
+    leasesError: null,
     recoveredAssignments: 0,
     missionReady: false,
     missionError: null,
@@ -167,6 +186,7 @@ export function createWorkforceRuntime({
     schemaCheckedAt: null
   };
   let durable = null;
+  let workforceV1 = null;
   let missionProvider = missions;
   let intake = null;
   let runner = null;
@@ -210,12 +230,42 @@ export function createWorkforceRuntime({
           return;
         }
 
+        // Durable leases are their own migration: a database that has 0010 but not 0018 still runs the
+        // workforce, and reports that execution safety is not yet enforced rather than failing startup.
+        try {
+          const leaseSchema = await inspectWorkforceV1Schema({ query: resolveQuery() });
+          state.leasesReady = leaseSchema.ok;
+          state.leasesMissing = leaseSchema.missing;
+          if (leaseSchema.ok) {
+            const leaseStore = leasesRepository || (typeof query === "function"
+              ? createWorkforceV1Repository({ query, now })
+              : createD1WorkforceV1Repository({
+                  accountId: env.CLOUDFLARE_ACCOUNT_ID,
+                  databaseId: env.HABITAT_D1_DATABASE_ID,
+                  apiToken: env.HABITAT_D1_API_TOKEN
+                }));
+            workforceV1 = createWorkforceV1({
+              repository: leaseStore,
+              // The engine measures lease age in milliseconds; this runtime's clock is ISO for the store.
+              now: () => { const parsed = Date.parse(now()); return Number.isFinite(parsed) ? parsed : Date.now(); },
+              log
+            });
+          } else {
+            log.warn?.("WORKFORCE_LEASE_SCHEMA_MISSING", JSON.stringify({ migration: WORKFORCE_V1_MIGRATION, missing: leaseSchema.missing }));
+          }
+        } catch (leaseError) {
+          state.leasesReady = false;
+          state.leasesError = safeMessage(leaseError);
+          log.warn?.("WORKFORCE_LEASE_SCHEMA_CHECK_FAILED", state.leasesError);
+        }
+
         durable = createDurableWorkforce({ repository: store, adapters: adapters || defaultAdapters(), now, log });
         // Hydrate before registering defaults: a stored worker's health and revision are observed
         // state, and re-registering it on every boot would reset a known-unavailable worker to
         // "unknown" and make the runner try a provider that was already marked down.
         const hydrated = await durable.hydrate({ force: true });
         await registerDefaultAgents(durable);
+        if (workforceV1) await registerWorkers(workforceV1, durable);
         const recovered = durable.assignments().filter(item => item.state === "active");
         state.recoveredAssignments = recovered.length;
         intake = createWorkforceIntake({ workforce: durable, now, budgetCents, costPerTaskCents });
@@ -233,6 +283,7 @@ export function createWorkforceRuntime({
           if (!missionProvider) {
             missionProvider = await createMissionService({
               workforce: durable,
+              leases: workforceV1,
               query: resolveQuery(),
               env,
               ...(rootDir ? { rootDir } : {}),
@@ -242,7 +293,7 @@ export function createWorkforceRuntime({
             });
           }
           state.missionReady = true;
-          log.log?.("MISSION_RUNTIME_READY", JSON.stringify(missionProvider.status?.() || {}));
+          log.log?.("MISSION_RUNTIME_READY", JSON.stringify({ ...(missionProvider.status?.() || {}), leases: workforceV1 !== null }));
         } catch (missionError) {
           state.missionReady = false;
           state.missionError = safeMessage(missionError);
@@ -254,7 +305,8 @@ export function createWorkforceRuntime({
           agents: hydrated.agents,
           assignments: hydrated.assignments,
           recovered: recovered.length,
-          results: hydrated.results
+          results: hydrated.results,
+          leases: workforceV1 !== null
         }));
       } catch (error) {
         state.status = "initialization_failed";
@@ -288,6 +340,31 @@ export function createWorkforceRuntime({
       permissions: { allowed: ["verification"], denied: ["coding", "approve"] },
       availability: { maxConcurrent: 1 }
     });
+  }
+
+  /**
+   * Mirror the registered agents into the lease layer. A worker is only revived on boot if it was not
+   * explicitly deregistered: starting a process is not owner consent to undo a deregistration.
+   */
+  async function registerWorkers(leases, workforce) {
+    for (const agent of workforce.agents()) {
+      try {
+        const existing = await leases.worker(agent.id);
+        if (existing.ok && existing.worker.state === "deregistered") continue;
+        const registered = await leases.registerWorker({
+          id: agent.id,
+          label: agent.name,
+          specialty: agent.specialty,
+          adapterId: agent.adapterId,
+          capabilities: agent.capabilities,
+          maxConcurrent: agent.availability?.maxConcurrent || 1,
+          accepting: agent.availability?.accepting !== false
+        });
+        if (!registered.ok) log.warn?.("WORKFORCE_V1_REGISTRATION_FAILED", JSON.stringify({ workerId: agent.id, code: registered.code }));
+      } catch (error) {
+        log.warn?.("WORKFORCE_V1_REGISTRATION_FAILED", JSON.stringify({ workerId: agent.id, error: safeMessage(error) }));
+      }
+    }
   }
 
   function availability() {
@@ -356,6 +433,14 @@ export function createWorkforceRuntime({
         ddlStatements: WORKFORCE_DDL.length
       },
       recoveredAssignments: state.recoveredAssignments,
+      leases: {
+        attached: workforceV1 !== null,
+        ready: state.leasesReady,
+        migration: WORKFORCE_V1_MIGRATION,
+        missing: state.leasesMissing,
+        error: state.leasesError,
+        enforced: workforceV1 !== null
+      },
       counts: {
         agents: durable ? durable.agents().length : 0,
         assignments: assignments.length,
@@ -381,6 +466,7 @@ export function createWorkforceRuntime({
     hasIntake: () => typeof intake === "function",
     hasRunner: () => typeof runner === "function",
     missions: () => missionProvider,
+    workforceV1: () => workforceV1,
     missionStatus: () => ({
       ready: state.missionReady,
       error: state.missionError,
