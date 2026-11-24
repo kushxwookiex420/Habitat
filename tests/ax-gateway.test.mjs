@@ -109,6 +109,7 @@ test("the gateway is disabled by default and returns 503 without checking a toke
   const h = await harness({ gatewayEnabled: false });
   const response = await fetch(h.base + "/ax/v1/status");
   assert.equal(response.status, 503);
+  assert.equal((await fetch(h.base + "/ax/v1/openapi.json")).status, 503);
   const body = await response.json();
   assert.equal(body.code, "gateway_disabled");
   h.server.close();
