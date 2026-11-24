@@ -21,6 +21,7 @@ import { createHash } from "node:crypto";
 import { buildSystemStatus, classifyWorkers, inferReadOnlyAdapter, isSystemStatusRequest, parseAxCommand, summarizeWorkerCounts } from "./system-status.mjs";
 import { buildWorkerList, buildWorkerDetail, resolveWorkerId, describeVerification, normalizeError } from "./worker-catalog.mjs";
 import { createChatCommandAuthorizer } from "./command-auth.mjs";
+import { createWorkforceRuntime } from "./ax-workforce-runtime.mjs";
 
 import express from "express";
 
@@ -28,10 +29,16 @@ const app = express();
 
 app.use(express.json({ limit: "1mb" }));
 
+// Workforce coordination is attached, not activated: the runtime does nothing unless
+// HABITAT_WORKFORCE_ENABLED is "true" and migration 0010 exists, and its flag is independent of
+// NEXUS_RUNTIME_ENABLED. Attaching the callbacks changes no route and no behavior while it is off.
+const workforceRuntime = createWorkforceRuntime({ env: process.env });
 const deviceCommandBridge = registerDeviceCommandBridge(app, {
   // The improvement engine reads the real status report this process assembles, so its findings are
   // about observed state rather than a guess. It runs inside the existing scheduler tick.
-  improvementSignals: async () => ({ systemStatus: await collectSystemStatus() })
+  improvementSignals: async () => ({ systemStatus: await collectSystemStatus() }),
+  workforceIntake: workforceRuntime.intake,
+  workforceRunner: workforceRuntime.run
 });
 const chatCommandAuthorizer = createChatCommandAuthorizer({ env: process.env, deviceBridge: deviceCommandBridge });
 
@@ -1542,6 +1549,8 @@ async function collectSystemStatus() {
       secretVaultReady: Boolean(secretVault)
     },
     providers: configuredProviders(),
+    // Read-only snapshot: configured, initialized, enabled, running and verified are separate facts.
+    workforce: workforceRuntime.status(),
     routes: {
       chat: true,
       // These routes are registered by registerDeviceCommandBridge regardless of credentials or
@@ -2241,6 +2250,11 @@ if (secretVault) {
   console.log("TIKTOK_TOKEN_VAULT: D1 AES-256-GCM ready; token values are not logged");
 } else {
   console.warn("TIKTOK_TOKEN_VAULT: unavailable — OAuth cannot be marked connected until D1 and HABITAT_TOKEN_ENCRYPTION_KEY are configured");
+}
+// Refuses safely when disabled, unconfigured, or when migration 0010 is absent. Never applies DDL.
+const workforceInit = await workforceRuntime.initialize();
+if (workforceInit.state !== "disabled") {
+  console.log("WORKFORCE_STATUS", JSON.stringify(workforceInit));
 }
 const contentStorageInit = await contentEngine.initialize();
 const deviceCommandBridgeInit = await deviceCommandBridge.initialize();

@@ -55,6 +55,17 @@ export function createWorkforceRepository({ query, now = () => new Date().toISOS
       return initializing;
     },
 
+    /** Read-only check that the canonical migration has been applied. Never creates anything. */
+    async verifySchema() {
+      const names = ["habitat_ax_worker_adapters", "habitat_ax_workers", "habitat_ax_worker_assignments", "habitat_ax_worker_results", "habitat_ax_worker_audit"];
+      const rows = await query(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN (?, ?, ?, ?, ?)",
+        names
+      );
+      const present = new Set((rows || []).map(row => row.name));
+      return { ok: names.every(name => present.has(name)), missing: names.filter(name => !present.has(name)), expected: names.length };
+    },
+
     async saveAdapter(adapter) {
       await query(
         "INSERT INTO habitat_ax_worker_adapters (id, kind, description, replaceable, registered_at) VALUES (?, ?, ?, ?, ?) " +

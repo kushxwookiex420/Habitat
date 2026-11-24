@@ -14,6 +14,8 @@
 //
 // Nothing here probes the network, writes storage or spends model quota.
 
+import { summarizeWorkforce } from "./ax-workforce-status.mjs";
+
 const HEALTH_WINDOW_MS = 30 * 60 * 1000;
 const RUNNING_STATES = new Set(["working", "running", "delegated", "in_progress", "dispatched", "claimed"]);
 const VERIFIED_STATES = new Set(["verified", "done", "completed"]);
@@ -181,7 +183,8 @@ export function buildSystemStatus({
   storage = {},
   providers = {},
   routes = {},
-  execution = null
+  execution = null,
+  workforce = null
 } = {}) {
   const items = classifyWorkers({ registry, tasks, now });
   const counts = summarizeWorkerCounts(items);
@@ -260,7 +263,11 @@ export function buildSystemStatus({
         state: Object.values(providers).some(Boolean) ? "configured" : "unconfigured",
         configured: { ...providers },
         detail: "Provider booleans only; configuration is not proof of a successful inference."
-      }
+      },
+      // Five words that are routinely conflated are reported as five separate facts: configured
+      // (binding present), initialized (hydrated from the store), enabled (the operator's flag),
+      // running (the scheduler used it since boot) and verified (a result was independently verified).
+      workforce: summarizeWorkforce(workforce)
     },
     requiredConfiguration: {
       allPresent: unavailableKeys.length === 0,
@@ -296,6 +303,11 @@ export function buildSystemStatus({
 
 const LABEL = {
   healthy: "HEALTHY",
+  disabled: "DISABLED",
+  initialized: "INITIALIZED",
+  schema_missing: "SCHEMA MISSING",
+  initialization_failed: "INITIALIZATION FAILED",
+  not_configured: "NOT CONFIGURED",
   operational: "OPERATIONAL",
   idle: "IDLE",
   degraded: "DEGRADED",
@@ -346,6 +358,17 @@ export function formatSystemStatus(status) {
     "Storage: " + state(storage.state) + " — " + (storage.adapter || "unknown") +
     (storage.durable ? " (durable)" : " (not durable)")
   );
+  const workforce = components.workforce;
+  if (workforce && workforce.flag) {
+    lines.push(
+      "Workforce: " + state(workforce.state) +
+      " — configured=" + (workforce.configured ? "yes" : "no") +
+      ", initialized=" + (workforce.initialized ? "yes" : "no") +
+      ", enabled=" + (workforce.enabled ? "yes" : "no") +
+      ", running=" + (workforce.running ? "yes" : "no") +
+      ", verified=" + (workforce.verified ? "yes" : "no")
+    );
+  }
   lines.push(
     "Workers: " + (counts.registered || 0) + " registered / " +
     (counts.running || 0) + " running / " +

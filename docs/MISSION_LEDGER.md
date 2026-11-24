@@ -20,6 +20,11 @@ deployed staging service exercised it; **production** = the live service; **phon
 | Finding → task → verified without a script | 15 tests (`ax-workforce-pipeline`, `ax-scheduler-workforce`): one scheduler tick converts a real `execution_blocked` finding into an assigned task, executes it, obtains independent verification and stops at approval-required; the tick's second run does not duplicate it |
 | Workforce write-through store | `d1-workforce-repository.mjs` + `migrations/0010_ax_workforce.sql`; idempotent upserts, append-only audit, partial unique index allowing one active assignment per task; `migrations:rollback` 14/14 |
 | Restart demonstrated end to end | `npm run workforce:demo`: closed the first instance at `countsBefore {agents:2, assignments:1, results:0, audit:5}`, hydrated the second to the same counts with `activeRecovered: 1`, then verified 20/20 real tests, `approvalState: "required"`, `costMeasured: false` |
+| Workforce runtime attached, independently flagged | `ax-workforce-runtime.mjs`; `HABITAT_WORKFORCE_ENABLED` is separate from `NEXUS_RUNTIME_ENABLED`. Disabled mode issues no query and creates no store (12 runtime tests) |
+| Fail-safe startup | Tested: disabled, unconfigured (no memory fallback), `schema_missing` (runtime creates nothing), `initialization_failed` (D1 read timeout), unavailable worker skipped, provider failure bounded to `exhausted`, plan-only default never claims `verified` |
+| Scheduler runs the attached runtime | Scheduler tick over the runtime reaches `verified` with `verified: true`, `counts.approvalRequired: 1`; `/system/status` reports `running` only after a step actually happens |
+| Disabled mode leaves existing behavior intact | Real server start (`tests/server-workforce-disabled.test.mjs`): `/health`, `/workers`, `/capabilities`, `/system/status`, `/continuity/status` all 200; workforce `disabled`; log shows memory-only storage and no `WORKFORCE_STATUS` |
+| Staging migration procedure prepared, not applied | `docs/WORKFORCE_D1_STAGING_MIGRATION.md`; read-only `npm run workforce:preflight` (SELECT only, exits non-zero when 0010 is absent) |
 | End-to-end self-improvement cycle | `scripts/self-improvement-demo.mjs`: detected an unused export, implemented on `demo/self-improvement-*`, self-verification **refused**, independent verification passed 2/2, status `verified`, `approvalRequired: true` |
 
 ## Implemented, not deployed
@@ -58,11 +63,9 @@ compatible. The installed certificate has not been read.
 
 ## Next highest-value task
 
-The registry is now durable and the scheduler delegates on its own, so the remaining gap between this
-branch and a continuously improving system is **runtime attachment**: `server.mjs` does not yet build
-the durable workforce from its D1 binding, register real adapters, or pass `workforceIntake` and
-`workforceRunner` into the scheduler. Until that is done the delegation path is proven by tests and by
-`npm run workforce:demo`, not by a running deployment — and runtime activation is withheld pending
-owner approval (`NEXUS_RUNTIME_ENABLED=false`). The second gap is a staging service, which is what would
-turn this evidence into deployed evidence. Adapters must stay replaceable while that happens: the intake
-and runner never name a provider, only the agent's `adapterId`.
+Runtime attachment is complete and disabled by default. What remains is **staging execution**: applying
+0010 to the staging database using `docs/WORKFORCE_D1_STAGING_MIGRATION.md`, then — on separate owner
+approval — setting `HABITAT_WORKFORCE_ENABLED=true` in staging and observing `initialized`,
+`recoveredAssignments` after a restart, and a scheduler-driven cycle that reaches `verified` with
+approval still pending. None of that has happened yet: the runtime is attached, not activated. The
+adapter contract is unchanged and provider-free: intake and the runner only ever name an `adapterId`.

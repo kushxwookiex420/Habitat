@@ -95,6 +95,11 @@ export function registerDeviceCommandBridge(app, {
   // improvement engine runs inside the existing scheduler tick. When absent, the scheduler behaves
   // exactly as before and no improvement is claimed.
   improvementSignals = null,
+  // Workforce coordination, also inside the existing scheduler tick and lease. Both callbacks come
+  // from the runtime, which refuses to do anything unless its own flag is on and its schema exists,
+  // so passing them here never activates the workforce by itself.
+  workforceIntake = null,
+  workforceRunner = null,
   // Optional injection points for tests and embedded use. In a deployment every one of these is
   // derived from the same env object, so /ax/command and the Nexus worker can only ever address
   // one database: the D1 id named by HABITAT_D1_DATABASE_ID.
@@ -225,6 +230,8 @@ export function registerDeviceCommandBridge(app, {
       // caller can observe. Nothing here notifies directly: the scheduler's existing bounded
       // notification step carries it, so there is still one alerting path.
       improvement: improvementSignals ? createImprovementMonitor({ readSignals: improvementSignals }).check : null,
+      workforceIntake,
+      workforceRunner,
       // Approval-expiry monitoring rides this same tick and lease. It never decides an approval and
       // never starts work: it sweeps due expiries in the approval ledger and reports them.
       approvalExpiry: ({ withinMs } = {}) => (
@@ -1347,7 +1354,9 @@ export function registerDeviceCommandBridge(app, {
         perDeviceTokens: true,
         // Read-only: whether the worker is mounted, initialized and started. Never part of the
         // HTTP success condition, so a Render health check stays up while an optional worker is off.
-        nexus: nexusRuntime ? { configured: true, ...nexusRuntime.status() } : nexusMount
+        nexus: nexusRuntime ? { configured: true, ...nexusRuntime.status() } : nexusMount,
+        // Mount facts only: whether the scheduler has workforce callbacks, not whether they will run.
+        workforce: { intakeAttached: typeof workforceIntake === "function", runnerAttached: typeof workforceRunner === "function" }
       };
     },
     nexus() {
