@@ -57,6 +57,21 @@ export const WORKFORCE_INDEXES = Object.freeze([
   "habitat_ax_workers_specialty"
 ]);
 
+export const APPROVAL_NONCE_TABLES = Object.freeze(["habitat_ax_approval_nonces"]);
+
+export const APPROVAL_NONCE_INDEXES = Object.freeze([
+  "habitat_ax_approval_nonces_mission",
+  "habitat_ax_approval_nonces_approval",
+  "habitat_ax_approval_nonces_expiry"
+]);
+
+export function approvalNonceRollbackStatements() {
+  return [
+    ...APPROVAL_NONCE_INDEXES.map(name => "DROP INDEX IF EXISTS " + name),
+    ...APPROVAL_NONCE_TABLES.map(name => "DROP TABLE IF EXISTS " + name)
+  ];
+}
+
 export const MCP_TABLES = Object.freeze(["habitat_ax_mcp_delivery_leases", "habitat_ax_mcp_deliveries", "habitat_ax_mcp_events", "habitat_ax_mcp_verifications", "habitat_ax_mcp_subscriptions"]);
 
 export const MCP_INDEXES = Object.freeze(["habitat_ax_mcp_delivery_leases_expiry", "habitat_ax_mcp_deliveries_due", "habitat_ax_mcp_deliveries_identity", "habitat_ax_mcp_events_name_seq", "habitat_ax_mcp_events_event_id", "habitat_ax_mcp_subscriptions_identity"]);
@@ -168,6 +183,7 @@ export async function runRollbackChecks() {
     check("0013 creates every heartbeat table", HEARTBEAT_TABLES.every(name => tables(db).includes(name)));
     check("0014 creates the shared rate-limit table", RATE_LIMIT_TABLES.every(name => tables(db).includes(name)));
     check("0015 creates every MCP events table", MCP_TABLES.every(name => tables(db).includes(name)));
+    check("0017 creates the approval nonce registry", APPROVAL_NONCE_TABLES.every(name => tables(db).includes(name)));
 
     db.prepare("INSERT INTO habitat_ax_capabilities (id, kind, state, requires_approval, record_json, updated_at) VALUES (?, ?, ?, ?, ?, ?)")
       .run("cap_1", "fulfillment", "policy_only", 1, JSON.stringify({ id: "cap_1" }), stamp);
@@ -177,6 +193,10 @@ export async function runRollbackChecks() {
       .run("rev_1", "settled", "USD", 4500, stamp, JSON.stringify({ id: "rev_1" }), stamp);
 
     // Rollback: later groups first, then P1.
+    for (const statement of approvalNonceRollbackStatements()) db.exec(statement);
+    check("0017 rollback removes the approval nonce registry",
+      APPROVAL_NONCE_TABLES.every(name => !tables(db).includes(name)) &&
+      APPROVAL_NONCE_INDEXES.every(name => objects(db).every(item => item !== "index:" + name)));
     for (const statement of mcpRollbackStatements()) db.exec(statement);
     check("0015 rollback removes every MCP events table and index",
       MCP_TABLES.every(name => !tables(db).includes(name)) &&

@@ -77,10 +77,10 @@ Returns `{ ok, revoked: [approvalId], mission }`. The record stays in history as
 | `owner_attestation_required` | Decision sent without an attestation |
 | `owner_attestation_invalid` | Signature/statement mismatch |
 | `owner_attestation_expired` | Attestation older than 5 minutes |
-| `owner_attestation_replayed` | Nonce already used (shared across instances) |
+| `owner_attestation_replayed` | Nonce already used; the registry primary key is the boundary (survives restarts and spans instances) |
 | `owner_attestation_key_revoked` / `owner_attestation_unknown_key` | Key rotation/revocation state |
 | `owner_attestation_not_configured` | No signer configured: consequential work fails closed |
-| `owner_attestation_replay_unavailable` | Shared replay store unreachable: decision refused |
+| `owner_attestation_replay_unavailable` | Nonce registry unreachable: decision refused, nothing written |
 | `policy_denied` | Prohibited action, regardless of approval |
 
 ## Countdown and history
@@ -93,6 +93,8 @@ returns pending and decided authorizations in record order with `status`, `decid
 ## What Habitat does not get
 
 - No signing key, no MAC values, no database records.
+- No plaintext or hashed nonce history either: replay state lives in the server-side registry, and the only
+  nonce a client sees is the one in its own signed attestation.
 - No implicit "approve all" operation.
 - No access without the Ax credential; the v1 deployment has a single owner identity (`owner`), so per-user
   tenancy is not implemented.

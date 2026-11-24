@@ -89,12 +89,14 @@ key-manager change and keep at least one retired key while old subscriptions exi
 | 0014 | shared gateway rate limits | multi-instance |
 | 0015 | MCP subscriptions, verifications, events, deliveries | MCP Events |
 | 0016 | MCP delivery leases | multi-instance delivery |
+| 0017 | durable approval nonce registry (indexed replay boundary) | owner-authorized mission execution |
 
 Before applying: confirm the staging database id, run `npm run staging:preflight` (read-only), record a
 Time Travel bookmark or export, then apply in order with `wrangler d1 execute --remote --file=...`.
 After each: check `sqlite_master`, run `npm run migrations:check` locally against a copy if available, and
-restart the isolated service to confirm schema detection. 0016 must follow 0015. Do not apply any of
-these to production.
+restart the isolated service to confirm schema detection. 0016 must follow 0015, and 0017 must follow 0016.
+0017 is **prepared, not applied** to staging: applying it needs explicit owner authorization. Do not apply
+any of these to production.
 
 ## 5. Gateway and MCP credentials
 

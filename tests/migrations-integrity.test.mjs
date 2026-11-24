@@ -24,7 +24,7 @@ test("migration order is numeric, unique and includes every readiness migration"
   const prefixes = names.map(name => Number(name.slice(0, 4)));
   assert.deepEqual(prefixes, [...new Set(prefixes)], "duplicate migration prefixes");
   assert.deepEqual(prefixes, [...prefixes].sort((a, b) => a - b), "migrations are not in order");
-  for (const prefix of ["0010", "0011", "0012", "0013", "0014", "0015", "0016"]) {
+  for (const prefix of ["0010", "0011", "0012", "0013", "0014", "0015", "0016", "0017"]) {
     assert.ok(names.some(name => name.startsWith(prefix + "_")), "missing migration " + prefix);
   }
 });
@@ -39,9 +39,13 @@ test("a fresh database installs every migration with the expected tables and lea
     "habitat_ax_gateway_audit", "habitat_ax_gateway_rate_limits", "habitat_ax_heartbeat_state",
     "habitat_ax_heartbeat_events", "habitat_ax_heartbeat_deliveries", "habitat_ax_mcp_subscriptions",
     "habitat_ax_mcp_verifications", "habitat_ax_mcp_events", "habitat_ax_mcp_deliveries",
-    "habitat_ax_mcp_delivery_leases"
+    "habitat_ax_mcp_delivery_leases", "habitat_ax_approval_nonces"
   ]) {
     assert.ok(present.includes(table), "missing table " + table);
+  }
+  const nonceIndexes = db.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'habitat_ax_approval_nonces'").all().map(row => row.name);
+  for (const name of ["habitat_ax_approval_nonces_mission", "habitat_ax_approval_nonces_approval", "habitat_ax_approval_nonces_expiry"]) {
+    assert.ok(nonceIndexes.includes(name), "missing approval nonce index " + name);
   }
   const leaseColumns = db.prepare("PRAGMA table_info(habitat_ax_mcp_delivery_leases)").all().map(row => row.name);
   assert.deepEqual(leaseColumns.sort(), ["delivery_id", "expires_at", "owner"]);
@@ -55,6 +59,10 @@ test("uniqueness constraints protect identities, nonces, dedupe keys and deliver
   const insertClient = db.prepare("INSERT INTO habitat_ax_gateway_clients (id, label, token_hash, scopes, created_at) VALUES (?, ?, ?, ?, ?)");
   insertClient.run("gw-a", "A", "hash-1", "status:read", "2026-01-01T00:00:00Z");
   assert.throws(() => insertClient.run("gw-b", "B", "hash-1", "status:read", "2026-01-01T00:00:00Z"), /UNIQUE/);
+
+  const approvalNonce = db.prepare("INSERT INTO habitat_ax_approval_nonces (nonce, key_id, mission_id, approval_id, decision, consumed_at) VALUES (?, 'k1', ?, ?, 'approve', ?)");
+  approvalNonce.run("n-approval-1", "msn_a", "apr_a", "2026-01-01T00:00:00Z");
+  assert.throws(() => approvalNonce.run("n-approval-1", "msn_b", "apr_b", "2026-01-01T00:00:00Z"), /UNIQUE|PRIMARY/);
 
   const nonce = db.prepare("INSERT INTO habitat_ax_gateway_nonces (client_id, nonce, expires_at) VALUES (?, ?, ?)");
   nonce.run("gw-a", "n1", "2026-01-01T00:00:00Z");

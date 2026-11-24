@@ -588,17 +588,6 @@ export function createMissionEngine({
     if (mission.status !== "approval_required" && !(mission.status === "running" && hasPending)) {
       return { ok: false, code: "approval_not_required", status: mission.status };
     }
-    // Shared replay protection. Missions persist the nonce each approval was signed with, so a second
-    // instance refuses reuse. If the shared store cannot answer, the decision fails closed.
-    if (attestation && typeof attestation.nonce === "string") {
-      if (typeof store.nonceUsed !== "function") return { ok: false, code: "owner_attestation_replay_unavailable" };
-      try {
-        if (await store.nonceUsed(attestation.nonce)) return { ok: false, code: "owner_attestation_replayed" };
-      } catch {
-        return { ok: false, code: "owner_attestation_replay_unavailable" };
-      }
-    }
-
     // A decision names exactly one authorization. It never sweeps up unrelated task approvals: one signature
     // must not authorise work the owner did not see.
     const selected = mission.approvals.filter((item) => {
@@ -608,6 +597,7 @@ export function createMissionEngine({
     });
     if (selected.length === 0) return { ok: false, code: "approval_not_found" };
     if (selected.length > 1) return { ok: false, code: "approval_ambiguous" };
+    let consumedNonce = null;
     for (const approval of selected) {
       // Bind the decision to the task as persisted right now, so an approval for an old plan cannot authorise
       // the changed one. Missing bindings are recomputed rather than trusted.
@@ -639,6 +629,31 @@ export function createMissionEngine({
           return { ok: false, code: "approval_expired" };
         }
       }
+      // Consume the nonce only after the signature and expiry are known good, so an invalid attempt cannot
+      // burn a valid owner's nonce. The registry's primary key decides races; no application-level check
+      // can be interleaved between this INSERT and a second instance's INSERT.
+      if (attestation && typeof attestation.nonce === "string" && attestation.nonce) {
+        if (typeof store.consumeNonce !== "function") return { ok: false, code: "owner_attestation_replay_unavailable" };
+        let consumed = null;
+        try {
+          consumed = await store.consumeNonce({
+            nonce: attestation.nonce,
+            keyId: verified.keyId || attestation.keyId || null,
+            missionId: mission.id,
+            approvalId: approval.id || null,
+            taskId: approval.taskId || null,
+            decision: decision === "approve" ? "approve" : "reject",
+            issuedAt: attestation.issuedAt || null,
+            expiresAt: approval.expiresAt || null
+          });
+        } catch {
+          return { ok: false, code: "owner_attestation_replay_unavailable" };
+        }
+        if (!consumed?.ok) {
+          return { ok: false, code: consumed?.code === "owner_attestation_replayed" ? "owner_attestation_replayed" : "owner_attestation_replay_unavailable" };
+        }
+        consumedNonce = attestation.nonce;
+      }
       approval.signed = {
         v: attestation?.v ?? null,
         keyId: verified.keyId || attestation?.keyId || null,
@@ -660,7 +675,15 @@ export function createMissionEngine({
     // An approved mission becomes runnable; it is never marked completed by a signature alone.
     mission.status = decision === "approve" ? "running" : "rejected";
     const saved = await persist(mission);
-    if (!saved.ok) return { ok: false, code: saved.code };
+    if (!saved.ok) {
+      // The nonce row was written first so uniqueness, not a check-then-act race, decided the winner. If the
+      // mission write then fails, release that row so the owner can retry with the same signed decision. A
+      // failed release stays consumed, which fails closed rather than reopening a replay window.
+      if (consumedNonce && typeof store.releaseNonce === "function") {
+        try { await store.releaseNonce(consumedNonce); } catch { /* fail closed: the nonce stays spent */ }
+      }
+      return { ok: false, code: saved.code };
+    }
     await emit(mission.id, decision === "approve" ? "mission.approved" : "mission.rejected", { by: clean(by, 64) || "owner" });
     return { ok: true, status: mission.status, mission };
   }
@@ -685,6 +708,13 @@ export function createMissionEngine({
     }
     const saved = await persist(mission);
     if (!saved.ok) return { ok: false, code: saved.code };
+    // Registry status is audit metadata; the mission record is authoritative for the execution gate, so a
+    // registry hiccup must not make a successful revocation look failed. Retried marks stay `consumed`.
+    if (typeof store.revokeNonce === "function") {
+      try {
+        await store.revokeNonce({ missionId: mission.id, approvalId, taskId, reason });
+      } catch { /* mission state already refuses the grant */ }
+    }
     await emit(mission.id, "mission.approval_revoked", {
       taskId, approvalId, by: clean(by, 64) || "owner", reason: clean(reason, 200) || null
     });

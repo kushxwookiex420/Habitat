@@ -299,18 +299,30 @@ test("auth routes: duplicate and concurrent decisions cannot double-release work
   } finally { await h.close(); }
 });
 
-test("auth routes: a spent nonce is refused before the statement is even checked", async () => {
+test("auth routes: the registry records the decision and refuses the same nonce again", async () => {
   const h = await setup();
   try {
     const missionId = await deployMission(h, "nonce");
     const view = await call(h.base, "GET", "/ax/missions/" + missionId + "/authorizations");
     const signal = view.json.pending.find((item) => !item.taskId);
-    const taskEntry = view.json.pending.find((item) => item.taskId === "t2");
     const signalAttestation = h.owner.sign({ operation: "mission.approve", project: "habitat", key: missionId, kind: "approve", statement: signal.statement, tags: [], confidence: null });
     assert.equal((await call(h.base, "POST", "/ax/missions/" + missionId + "/approve", { body: { decision: "approve", approvalId: signal.approvalId, attestation: signalAttestation.attestation } })).status, 200);
-    const reused = await call(h.base, "POST", "/ax/missions/" + missionId + "/approve", { body: { decision: "approve", taskId: "t2", attestation: signalAttestation.attestation } });
-    assert.equal(reused.status, 409);
-    assert.equal(reused.json.code, "owner_attestation_replayed");
+
+    const record = await h.env.missionStore.nonceRecord(signalAttestation.attestation.nonce);
+    assert.equal(record.status, "consumed");
+    assert.equal(record.mission_id, missionId);
+    assert.equal(record.approval_id, signal.approvalId);
+    assert.equal(record.decision, "approve");
+    assert.equal(record.key_id, signalAttestation.attestation.keyId);
+    assert.ok(record.consumed_at);
+    assert.equal(await h.env.missionStore.nonceUsed(signalAttestation.attestation.nonce), true);
+
+    const again = await h.env.missionStore.consumeNonce({
+      nonce: signalAttestation.attestation.nonce, missionId, approvalId: signal.approvalId, decision: "approve"
+    });
+    assert.equal(again.ok, false);
+    assert.equal(again.code, "owner_attestation_replayed");
+
     await call(h.base, "POST", "/ax/missions/" + missionId + "/run", { body: {} });
     assert.equal(h.calls.byTask.t2 || 0, 0);
   } finally { await h.close(); }
@@ -323,7 +335,10 @@ test("auth routes: an unavailable shared replay store fails closed", async () =>
     const view = await call(h.base, "GET", "/ax/missions/" + missionId + "/authorizations");
     await decide(h, missionId, view.json.pending.find((item) => !item.taskId));
     const entry = view.json.pending.find((item) => item.taskId === "t2");
-    const failingStore = { ...h.env.missionStore, nonceUsed: async () => { throw new Error("replay store unavailable"); } };
+    const failingStore = {
+      ...h.env.missionStore,
+      consumeNonce: async () => { throw new Error("nonce registry unavailable"); }
+    };
     const engine = createMissionEngine({
       store: failingStore,
       workforce: h.env.workforce,

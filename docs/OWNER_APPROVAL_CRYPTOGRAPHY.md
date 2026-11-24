@@ -56,11 +56,24 @@ its id to `HABITAT_OWNER_ATTESTATION_REVOKED`; new and old signatures from it ar
 
 ## Replay protection
 
-- Each attestation carries a random 96-bit nonce and an `issuedAt`; it is valid for 5 minutes
-  (`ttlMs`), and a nonce can be spent once.
-- The in-process replay store is bounded (5000 ids) and pruned by expiry. Multi-instance deployments need a
-  shared store for hard cross-instance replay prevention; the gateway's nonce/timestamp headers cover its own
-  request replay separately.
+- Each attestation carries a random 96-bit nonce and an `issuedAt`; it is valid for 5 minutes (`ttlMs`), and a
+  nonce can be spent once.
+- The durable boundary is `habitat_ax_approval_nonces` (migration 0017). `nonce` is the primary key, so two
+  instances racing one attestation both reach `INSERT` and exactly one succeeds — no check-then-act window.
+  The row records key id, mission, approval, task, decision, issue/expiry/consumption timestamps and an audit
+  status (`consumed`, `revoked`, `expired`, `released`).
+- Ordering is deliberate: signature and expiry are verified first, then the nonce is consumed, then the
+  mission approval is written. An invalid signature cannot burn a valid nonce; a duplicate insert is reported
+  as `owner_attestation_replayed`; any other registry failure is `owner_attestation_replay_unavailable`
+  (fail closed). If the mission write fails afterwards, the freshly consumed row is deleted (`released`) so a
+  fresh signed retry is possible; if that cleanup fails the nonce stays spent, which is the safe direction.
+- `nonceUsed()` is an indexed equality lookup (`SEARCH ... USING COVERING INDEX`), not a JSON scan. At 2,000
+  missions the old scan measured ~6–7 ms per lookup versus ~0.002 ms indexed (~2,800–3,350×); see
+  `docs/APPROVAL_NONCE_BENCHMARK.md`.
+- Expiry cleanup marks rows `expired`; it never deletes them, so an old nonce still refuses replay.
+- The verifier also keeps a bounded in-process replay store (5000 ids). It is defence in depth, not the
+  shared boundary: after a rolled-back mission write the verifier has still spent its local nonce, so retry
+  requires a fresh signature even though the registry row was released.
 - A decision names exactly one authorization: `approvalId`, or `taskId`, or — when omitted — the single
   mission-scope signal. One signature can never approve an unrelated task.
 

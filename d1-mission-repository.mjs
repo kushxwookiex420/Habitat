@@ -8,16 +8,30 @@ import { createD1RowQuery } from "./nexus-runtime.mjs";
  * append-only and ordered by sequence, not timestamp.
  *
  * `initialize()` is for tests and local development. The runtime calls `verifySchema()` instead and
- * refuses to start when migration 0011 is absent, because a web process must not migrate a database.
+ * refuses to start when the mission or nonce tables are absent, because a web process must not migrate.
+ *
+ * Approval nonces live in their own table (0017) with the nonce as primary key. That primary key, not an
+ * application check, is the final replay boundary: concurrent instances racing one attestation reach the
+ * same INSERT and exactly one succeeds. `nonceUsed()` is an indexed equality lookup, no JSON scanning.
  */
 
-export const MISSION_TABLE_NAMES = Object.freeze(["habitat_ax_missions", "habitat_ax_mission_events"]);
+export const MISSION_TABLE_NAMES = Object.freeze([
+  "habitat_ax_missions",
+  "habitat_ax_mission_events",
+  "habitat_ax_approval_nonces"
+]);
+
+export const NONCE_TABLE = "habitat_ax_approval_nonces";
 
 export const MISSION_DDL = Object.freeze([
   "CREATE TABLE IF NOT EXISTS habitat_ax_missions (id TEXT PRIMARY KEY NOT NULL, project TEXT NOT NULL, status TEXT NOT NULL, version INTEGER NOT NULL, record_json TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)",
   "CREATE INDEX IF NOT EXISTS habitat_ax_missions_status ON habitat_ax_missions(status, updated_at DESC)",
   "CREATE TABLE IF NOT EXISTS habitat_ax_mission_events (seq INTEGER PRIMARY KEY AUTOINCREMENT, mission_id TEXT NOT NULL, at TEXT NOT NULL, type TEXT NOT NULL, payload_json TEXT NOT NULL)",
-  "CREATE INDEX IF NOT EXISTS habitat_ax_mission_events_mission ON habitat_ax_mission_events(mission_id, seq)"
+  "CREATE INDEX IF NOT EXISTS habitat_ax_mission_events_mission ON habitat_ax_mission_events(mission_id, seq)",
+  "CREATE TABLE IF NOT EXISTS habitat_ax_approval_nonces (nonce TEXT PRIMARY KEY NOT NULL, key_id TEXT, mission_id TEXT NOT NULL, approval_id TEXT, task_id TEXT, decision TEXT NOT NULL CHECK (decision IN ('approve', 'reject')), issued_at TEXT, expires_at TEXT, consumed_at TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'consumed' CHECK (status IN ('consumed', 'revoked', 'expired', 'released')), revoked_at TEXT, revoke_reason TEXT)",
+  "CREATE INDEX IF NOT EXISTS habitat_ax_approval_nonces_mission ON habitat_ax_approval_nonces(mission_id, consumed_at DESC)",
+  "CREATE INDEX IF NOT EXISTS habitat_ax_approval_nonces_approval ON habitat_ax_approval_nonces(approval_id)",
+  "CREATE INDEX IF NOT EXISTS habitat_ax_approval_nonces_expiry ON habitat_ax_approval_nonces(status, expires_at)"
 ]);
 
 function parse(json) {
@@ -51,7 +65,7 @@ export function createMissionRepository({ query, now = () => new Date().toISOStr
 
     async verifySchema() {
       const rows = await query(
-        "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN (?, ?)",
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN (" + MISSION_TABLE_NAMES.map(() => "?").join(", ") + ")",
         MISSION_TABLE_NAMES
       );
       const present = new Set((rows || []).map(row => row.name));
@@ -105,22 +119,90 @@ export function createMissionRepository({ query, now = () => new Date().toISOStr
       return { ok: false, code: current ? "mission_conflict" : "mission_missing", current };
     },
 
-    /**
-     * Shared replay protection: every stored approval carries the nonce it was signed with, so any instance
-     * can answer "has this attestation already been used?" from the database rather than local memory.
-     */
+    /** Indexed replay lookup. The registry is authoritative; a nonce is spent once its row exists. */
     async nonceUsed(nonce) {
-      const needle = '%"nonce":"' + String(nonce).replace(/[\\%_]/g, "") + '"%';
-      const rows = await query("SELECT record_json FROM habitat_ax_missions WHERE record_json LIKE ? LIMIT 5", [needle]);
-      for (const row of rows || []) {
+      const rows = await query("SELECT 1 AS used FROM " + NONCE_TABLE + " WHERE nonce = ? LIMIT 1", [String(nonce)]);
+      return (rows || []).length > 0;
+    },
+
+    /**
+     * Consume an approval nonce. The primary key is the replay boundary: a duplicate INSERT raises on both
+     * SQLite and D1, and no second decision can pass. Returns `replayed` without throwing for duplicates;
+     * any other failure propagates so the caller can fail closed.
+     */
+    async consumeNonce(entry = {}) {
+      const nonce = String(entry.nonce || "");
+      if (!nonce) return { ok: false, code: "owner_attestation_invalid" };
+      const at = now();
+      try {
+        await query(
+          "INSERT INTO " + NONCE_TABLE + " (nonce, key_id, mission_id, approval_id, task_id, decision, issued_at, expires_at, consumed_at, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'consumed')",
+          [
+            nonce,
+            entry.keyId ? String(entry.keyId).slice(0, 64) : null,
+            String(entry.missionId || ""),
+            entry.approvalId ? String(entry.approvalId).slice(0, 200) : null,
+            entry.taskId ? String(entry.taskId).slice(0, 120) : null,
+            entry.decision === "reject" ? "reject" : "approve",
+            entry.issuedAt ? String(entry.issuedAt) : null,
+            entry.expiresAt ? String(entry.expiresAt) : null,
+            at
+          ]
+        );
+        return { ok: true, nonce, consumedAt: at };
+      } catch (error) {
+        // A unique violation is the replay answer. Anything else (binding lost, storage failure) must be
+        // told apart from it, because "storage unavailable" is not "already used".
+        let existing = null;
         try {
-          const record = JSON.parse(row.record_json);
-          if ((record.approvals || []).some((item) => item?.signed?.nonce === nonce)) return true;
+          const rows = await query("SELECT nonce FROM " + NONCE_TABLE + " WHERE nonce = ? LIMIT 1", [nonce]);
+          existing = (rows || []).length > 0;
         } catch {
-          // A malformed historical row cannot prove nonce reuse either way; ignore it here.
+          throw error;
         }
+        if (existing) return { ok: false, code: "owner_attestation_replayed" };
+        throw error;
       }
-      return false;
+    },
+
+    /**
+     * Compensating rollback: the registry row is written before the mission approval so uniqueness decides
+     * races. If the mission write then fails, the freshly consumed row is deleted so a retry is possible.
+     * Only a still-`consumed` row is released; a revocation or expiry state is not undone.
+     */
+    async releaseNonce(nonce) {
+      const rows = await query(
+        "DELETE FROM " + NONCE_TABLE + " WHERE nonce = ? AND status = 'consumed' RETURNING nonce",
+        [String(nonce)]
+      );
+      return { ok: true, released: (rows || []).length > 0 };
+    },
+
+    /** Mark the registry row behind one approval as revoked. The mission record remains authoritative. */
+    async revokeNonce({ missionId, approvalId = null, taskId = null, reason = null } = {}) {
+      const at = now();
+      const rows = await query(
+        "UPDATE " + NONCE_TABLE + " SET status = 'revoked', revoked_at = ?, revoke_reason = ? WHERE mission_id = ? AND status = 'consumed' AND " +
+          (approvalId ? "approval_id = ?" : "task_id = ?") + " RETURNING nonce",
+        approvalId
+          ? [at, reason ? String(reason).slice(0, 200) : null, String(missionId), String(approvalId)]
+          : [at, reason ? String(reason).slice(0, 200) : null, String(missionId), String(taskId)]
+      );
+      return { ok: true, revoked: (rows || []).map((row) => row.nonce) };
+    },
+
+    /** Expiry cleanup: mark, never delete, so an expired attestation still cannot be replayed. */
+    async expireNonces(before) {
+      const rows = await query(
+        "UPDATE " + NONCE_TABLE + " SET status = 'expired' WHERE status = 'consumed' AND expires_at IS NOT NULL AND expires_at <= ? RETURNING nonce",
+        [String(before)]
+      );
+      return { ok: true, expired: (rows || []).length };
+    },
+
+    async nonceRecord(nonce) {
+      const rows = await query("SELECT * FROM " + NONCE_TABLE + " WHERE nonce = ?", [String(nonce)]);
+      return rows?.[0] || null;
     },
 
     async list({ status = null, limit = 50 } = {}) {

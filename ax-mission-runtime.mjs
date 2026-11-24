@@ -76,7 +76,10 @@ export function createMissionRuntime({
     initializing = (async () => {
       try {
         const store = buildStore();
-        const rows = await resolveQuery()("SELECT name FROM sqlite_master WHERE type = 'table' AND name IN (?, ?)", MISSION_TABLE_NAMES);
+        const rows = await resolveQuery()(
+          "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN (" + MISSION_TABLE_NAMES.map(() => "?").join(", ") + ")",
+          MISSION_TABLE_NAMES
+        );
         const present = new Set((rows || []).map(row => row.name));
         const missing = MISSION_TABLE_NAMES.filter(name => !present.has(name));
         state.schemaReady = missing.length === 0;

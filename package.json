@@ -37,7 +37,8 @@
     "gateway:smoke": "node scripts/ax-gateway-smoke.mjs",
     "workforce:run": "node scripts/autonomous-workforce-demo.mjs",
     "mission:e2e": "node scripts/mission-e2e-demo.mjs",
-    "mission:acceptance": "node scripts/staging-acceptance.mjs"
+    "mission:acceptance": "node scripts/staging-acceptance.mjs",
+    "nonce:benchmark": "node scripts/benchmark-approval-nonces.mjs"
   },
   "dependencies": {
     "express": "^5.1.0",

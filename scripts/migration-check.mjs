@@ -64,7 +64,8 @@ export async function runMigrationChecks() {
       "habitat_ax_channel_rules",
       "habitat_ax_revenue_events",
       "habitat_ax_payouts",
-      "habitat_ax_treasury_accounts"
+      "habitat_ax_treasury_accounts",
+      "habitat_ax_approval_nonces"
     ]) {
       check("fresh table " + name, freshTables.includes(name));
     }
@@ -76,6 +77,9 @@ export async function runMigrationChecks() {
       "habitat_ax_messages_correlation",
       "habitat_ax_messages_status_updated",
       "habitat_ax_cost_ledger_updated_at",
+      "habitat_ax_approval_nonces_mission",
+      "habitat_ax_approval_nonces_approval",
+      "habitat_ax_approval_nonces_expiry",
       "habitat_ax_capabilities_kind",
       "habitat_ax_capabilities_state",
       "habitat_ax_access_requests_status",
