@@ -354,6 +354,17 @@ export const WORKER_SPECS = Object.freeze([
   Object.freeze({ agentId: "worker-verifier", adapterId: "verifier.recompute", specialty: "verification", capabilities: ["verification"] })
 ]);
 
+/** Adapter kinds the workforce registry accepts, per adapter. */
+export const WORKER_ADAPTER_KINDS = Object.freeze({
+  "eng.repo": "coding",
+  "qa.tests": "analysis",
+  "research.corpus": "research",
+  "biz.economics": "analysis",
+  "content.brief": "content",
+  "ops.snapshot": "analysis",
+  "verifier.recompute": "verification"
+});
+
 export const EXECUTOR_ADAPTERS = Object.freeze([
   Object.freeze({ id: "eng.repo", kind: "in_process" }),
   Object.freeze({ id: "qa.tests", kind: "in_process" }),
@@ -412,8 +423,7 @@ export function createWorkerExecutors({ rootDir, artifactsDir, jobs = {}, health
    * real test run; for deterministic jobs it is a second computation whose evidence must match. The check
    * count is reported as a test, because the workforce registry refuses a verification that ran nothing.
    */
-  async function verify({ taskId, implementation }) {
-    const job = jobFor(taskId);
+  async function verifyJob(job, { taskId, implementation }) {
     if (!job) return { ok: false, evidence: ["verifier:job_not_supplied"], tests: { ran: 0, passed: 0, failed: 0 } };
     const claimed = implementation?.result || {};
     const again = await compute({ ...job, taskId });
@@ -463,6 +473,10 @@ export function createWorkerExecutors({ rootDir, artifactsDir, jobs = {}, health
     };
   }
 
+  async function verify({ taskId, implementation }) {
+    return verifyJob(jobFor(taskId), { taskId, implementation });
+  }
+
   return Object.freeze({
     executors: Object.freeze({
       "eng.repo": run,
@@ -475,6 +489,7 @@ export function createWorkerExecutors({ rootDir, artifactsDir, jobs = {}, health
     }),
     compute,
     verify,
+    verifyJob,
     jobFor
   });
 }

@@ -407,6 +407,11 @@ export function createMissionEngine({
     if (failed.length) {
       return failed.every(task => task.error === "verification_failed") ? "verification_failed" : "failed";
     }
+    // A task the plan marked owner-required has not run, and it must not read as "still running" while an
+    // approval is pending: the mission is waiting on the owner, not on work.
+    const gated = mission.tasks.some(task => task.approvalRequired === true && task.status !== "completed");
+    const awaitingOwner = (mission.approvals || []).some(item => item.status === "pending");
+    if (gated && awaitingOwner) return "approval_required";
     if (mission.tasks.some(task => task.status !== "completed")) return "running";
     const gaps = acceptanceGaps(mission);
     if (gaps.length) return "verification_failed";
@@ -439,6 +444,13 @@ export function createMissionEngine({
       const ready = mission.tasks.find(task => ["pending", "running"].includes(task.status) &&
         task.dependsOn.every(dependency => mission.tasks.find(item => item.id === dependency)?.status === "completed"));
       if (!ready) break;
+      // A task the plan itself marks as owner-required must never start. Work that has not begun cannot be
+      // mistakenly described as done, and the mission parks at approval_required for a signed decision.
+      if (ready.approvalRequired === true && (mission.approvals || []).some(item => item.status === "pending")) {
+        mission.status = "approval_required";
+        await emit(mission.id, "mission.approval_gate", { taskId: ready.id });
+        break;
+      }
       processed += 1;
       await runTask(mission, ready);
       mission.status = deriveStatus(mission);
