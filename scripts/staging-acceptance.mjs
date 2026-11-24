@@ -97,7 +97,8 @@ export async function runStagingAcceptance({ env = process.env, fetchImpl = fetc
     createdClientId = issued.clientId || null;
     if (!record("gateway_token_issued", issued.ok, { clientId: issued.clientId })) throw new Error("token issue failed");
     const valid = await resolveClientToken({ repository: gateway, authorization: "Bearer " + issued.token, scope: "mcp:events" });
-    record("valid_token_resolves", valid.ok === true);
+    record("valid_token_resolves", valid.ok === true, { code: valid.code || null });
+    if (!valid.ok) throw new Error("valid token was rejected: " + String(valid.code || "unknown"));
     const invalid = await resolveClientToken({ repository: gateway, authorization: "Bearer " + issued.token.slice(0, -4) + "xxxx", scope: "mcp:events" });
     record("invalid_token_rejected", invalid.ok === false && invalid.status === 401, { code: invalid.code });
     const missingScope = await resolveClientToken({ repository: gateway, authorization: "Bearer " + issued.token, scope: "missions:approve" });
@@ -165,6 +166,8 @@ export async function runStagingAcceptance({ env = process.env, fetchImpl = fetc
       failed: steps.filter((step) => !step.ok).map((step) => step.name),
       note: "Real D1 writes. No token, key, secret or ChatGPT claim appears here. ChatGPT is NOT connected by this test."
     };
+  } catch (error) {
+    return { ok: false, code: "acceptance_exception", error: String(error?.message || error).slice(0, 200), databaseIdSuffix: targetInfo.databaseId.slice(-6), steps };
   } finally {
     await listener.close().catch(() => {});
     // Best-effort cleanup of this run's staging test rows; a cleanup failure must not hide the result.
