@@ -163,6 +163,28 @@ async function main() {
     appVersion: chosen.deviceInfo?.appVersion || null
   };
 
+  // A sleeping free-tier instance and a deferred phone job both delay the check-in, so a presence
+  // reading taken now may be minutes old. Wait — bounded and recorded — for a fresh one before
+  // queueing, instead of spending the whole round-trip timeout on a device that has not reconnected.
+  const staleAfterSeconds = Number(envValue("DEVICE_STALE_SECONDS") || 1200);
+  const waitSeconds = Number(envValue("DEVICE_WAIT_SECONDS") || 180);
+  const ageOf = (value) => (value ? Math.max(0, Math.round((Date.now() - Date.parse(value)) / 1000)) : null);
+  let ageSeconds = ageOf(chosen.lastSeenAt);
+  const waitStarted = Date.now();
+  while (ageSeconds !== null && ageSeconds > staleAfterSeconds && Date.now() - waitStarted < waitSeconds * 1000) {
+    await new Promise((resolve) => setTimeout(resolve, 10_000));
+    const refreshed = await call(base.origin, "/ax/device/devices", { token });
+    const candidate = (Array.isArray(refreshed.json?.devices) ? refreshed.json.devices : [])
+      .find((device) => device.deviceId === chosen.deviceId);
+    if (candidate) ageSeconds = ageOf(candidate.lastSeenAt);
+  }
+  report.steps.devices.freshness = {
+    ageSeconds,
+    staleAfterSeconds,
+    waitedSeconds: Math.round((Date.now() - waitStarted) / 1000),
+    stale: ageSeconds === null || ageSeconds > staleAfterSeconds
+  };
+
   // 4. Queue the harmless read-only command.
   const queued = await call(base.origin, "/ax/device/commands", {
     method: "POST",
