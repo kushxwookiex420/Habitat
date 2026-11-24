@@ -345,3 +345,42 @@ test("the correction path is bounded to one step", async () => {
   assert.equal(result.ok, false);
   assert.equal(result.detail, "too_many_steps");
 });
+
+
+test("the self-hosted Ollama-compatible provider is selectable without an API key", () => {
+  const config = resolveAxProviderConfig({
+    AX_PROVIDER: "ollama",
+    AX_ORCHESTRATOR_ENABLED: "true"
+  });
+  assert.equal(config.enabled, true);
+  assert.equal(config.primary.name, "ollama");
+  assert.equal(config.primary.configured, true);
+  assert.equal(config.primary.apiKey, "");
+  assert.equal(config.primary.baseUrl, "http://127.0.0.1:11434/v1");
+  assert.equal(config.primary.model, "gpt-oss:20b");
+  assert.ok(PROVIDER_NAMES.includes("ollama"));
+  const status = describeProviderStatus(config);
+  assert.equal(JSON.stringify(status).includes("OLLAMA_API_KEY"), false);
+});
+
+test("the self-hosted provider sends no fabricated bearer credential", async () => {
+  let request;
+  const model = createProviderPlanner({
+    name: "ollama",
+    apiKey: "",
+    model: "local-test-model",
+    baseUrl: "http://127.0.0.1:11434/v1",
+    configured: true
+  }, {
+    prices: PRICES,
+    fetchImpl: async (url, init) => {
+      request = { url, headers: init.headers, body: JSON.parse(init.body) };
+      return planReply([{ objective: "inspect local capability", adapter: null }]);
+    }
+  });
+  const result = await model.plan({ objective: "check local model", adapters: [] });
+  assert.equal(result.ok, true);
+  assert.equal(request.url, "http://127.0.0.1:11434/v1/chat/completions");
+  assert.equal(request.headers.authorization, undefined);
+  assert.equal(request.body.model, "local-test-model");
+});
