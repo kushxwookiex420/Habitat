@@ -1,0 +1,46 @@
+# Render blueprint for the HABITAT STAGING service only.
+#
+# Deliberately NOT at the repository root: Render only auto-discovers `render.yaml` at the repo
+# root, and the production service exists already. Keeping this under `deploy/` means it cannot be
+# applied by accident and cannot redefine production. Create the staging service from the Render
+# dashboard ("New → Blueprint" pointing at this path) or by hand with these values.
+#
+# Never put a credential value in this file. Every `sync: false` variable is filled in the Render
+# dashboard; the two D1 identifiers are public identifiers, not secrets.
+
+services:
+  - type: web
+    name: habitat-staging
+    runtime: node
+    plan: starter            # free instances sleep after idle; see docs/RENDER_STAGING_PLAN.md
+    region: oregon
+    branch: staging/integration
+    autoDeploy: false        # deploy on an explicit action, not on every push to the branch
+    buildCommand: npm ci --omit=dev
+    startCommand: node server.mjs
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: HABITAT_ENV
+        value: staging
+      - key: NEXUS_RUNTIME_ENABLED
+        value: "false"          # autonomy stays off until staging passes, by owner instruction
+      - key: CLOUDFLARE_ACCOUNT_ID
+        sync: false             # same account id as CI; public identifier
+      - key: CLOUDFLARE_API_TOKEN
+        sync: false             # scoped D1 token; set in the dashboard, never in the repo
+      - key: HABITAT_D1_DATABASE_ID
+        value: 0fdf1ac9-65a3-4e83-8042-f3fa52282068
+      - key: HABITAT_AX_BRIDGE_TOKEN
+        sync: false
+      - key: HABITAT_OWNER_DEVICE_ID
+        sync: false             # optional; only if the owner wants one pre-authorised phone
+      - key: GROQ_API_KEY
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: OPENROUTER_API_KEY
+        sync: false
+      - key: CEREBRAS_API_KEY
+        sync: false

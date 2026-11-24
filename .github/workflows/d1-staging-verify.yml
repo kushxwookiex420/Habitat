@@ -5,8 +5,8 @@ name: D1 staging verification
 # the production database id.
 
 # `workflow_dispatch` is only offered for workflows on the default branch, and this one is not
-there yet, so the integration branch also verifies on push. A push can only ever run `verify`:
-migrations stay a manual, confirmed action.
+# there yet, so the integration branch also verifies on push. A push can only ever run `verify`:
+# migrations stay a manual, confirmed action.
 on:
   push:
     branches: [staging/integration]
