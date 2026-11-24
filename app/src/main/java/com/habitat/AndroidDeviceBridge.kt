@@ -34,7 +34,9 @@ class AndroidDeviceBridge(
     companion object {
         private const val PREFS = "habitat_ax_device_bridge"
         private const val KEY_ALIAS = "habitat_ax_device_bridge_v1"
-        private const val BASE_URL = "https://habitat-1-szzd.onrender.com"
+        // Build-time origin (default production, overridable with -PhabitatBaseUrl) so a staging
+        // build can be produced without editing source.
+        private val BASE_URL: String = BuildConfig.HABITAT_BASE_URL
     }
 
     private val appContext = context.applicationContext
@@ -109,6 +111,10 @@ class AndroidDeviceBridge(
     fun clearCredentials() {
         stop()
         DeviceBridgeScheduler.cancel(appContext)
+        // Disconnecting must stop the connection owner too, whichever instance asked for it: the
+        // foreground service holds its own poll loop and would otherwise stay connected after the
+        // credential was destroyed.
+        HabitatBridgeService.stop(appContext)
         prefs.edit().remove("encrypted_token").apply()
     }
 

@@ -11,7 +11,16 @@ android {
         targetSdk = 35
         versionCode = 86
         versionName = "0.8.6"
+        // Production is the default so an ordinary build is unchanged. Naming another origin makes a
+        // staging build reproducible instead of a hand-patched copy of the source:
+        //   gradle -PhabitatBaseUrl=https://habitat-staging-e3ie.onrender.com :app:assembleDebug
+        val habitatBaseUrl = (project.findProperty("habitatBaseUrl") as String?)
+            ?.trim()?.trimEnd('/')
+            ?.takeIf { it.startsWith("https://") && it.length > "https://".length }
+            ?: "https://habitat-1-szzd.onrender.com"
+        buildConfigField("String", "HABITAT_BASE_URL", "\"" + habitatBaseUrl + "\"")
     }
+    buildFeatures { buildConfig = true }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17

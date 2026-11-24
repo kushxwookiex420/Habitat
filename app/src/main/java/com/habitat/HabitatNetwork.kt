@@ -17,7 +17,10 @@ import javax.net.ssl.SSLSession
 import javax.net.ssl.SNIHostName
 
 object HabitatNetwork {
-    private const val HABITAT_HOST = "habitat-1-szzd.onrender.com"
+    // Derived from the build-time origin so the DNS fallback follows the build instead of pinning
+    // production into a staging APK.
+    private val BASE_ORIGIN: String = BuildConfig.HABITAT_BASE_URL
+    private val HABITAT_HOST: String = java.net.URI(BASE_ORIGIN).host
     private const val DNS_PORT = 53
     private val DNS_SERVERS = listOf("1.1.1.1", "8.8.8.8")
 

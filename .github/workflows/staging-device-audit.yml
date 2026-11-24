@@ -1,0 +1,49 @@
+name: Staging device audit (read-only)
+
+# Read-only evidence for the phone bridge: paired devices, pairing exchanges, queued and completed
+# commands, and heartbeat state, straight from the staging database. The D1 token comes from the
+# repository secret and is never printed. Runs only for a push whose commit message contains
+# [staging-audit].
+
+on:
+  push:
+    branches: [staging/integration]
+    paths:
+      - ".github/workflows/staging-device-audit.yml"
+      - "scripts/staging-device-audit.mjs"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: habitat-staging-device-audit
+  cancel-in-progress: false
+
+jobs:
+  audit:
+    if: contains(github.event.head_commit.message, '[staging-audit]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Staging device audit
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          HABITAT_D1_API_TOKEN: ${{ secrets.HABITAT_D1_API_TOKEN }}
+          STAGING_D1_DATABASE_ID: ${{ vars.HABITAT_STAGING_D1_DATABASE_ID }}
+        run: |
+          set -o pipefail
+          node scripts/staging-device-audit.mjs | tee staging-device-audit.json
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: staging-device-audit
+          path: staging-device-audit.json
+          if-no-files-found: warn
+          retention-days: 30
