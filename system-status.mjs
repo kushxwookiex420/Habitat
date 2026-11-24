@@ -306,13 +306,13 @@ export function buildSystemStatus({
           : "Integration gateway is disabled; every /ax/v1 route answers 503."
       },
       heartbeat: {
-        state: heartbeat ? heartbeat.connection || "unknown" : "disabled",
-        enabled: Boolean(heartbeat),
+        state: heartbeat && heartbeat.enabled !== false ? heartbeat.connection || "unknown" : "disabled",
+        enabled: Boolean(heartbeat) && heartbeat.enabled !== false,
         lastBeatAt: heartbeat?.lastBeatAt || null,
         lastSeenAt: heartbeat?.lastSeenAt || null,
         missedBeats: heartbeat?.missedBeats ?? null,
         queue: heartbeat?.queue || null,
-        detail: heartbeat
+        detail: heartbeat && heartbeat.enabled !== false
           ? "Habitat heartbeat is running; the integration has been seen " + (heartbeat.lastSeenAt || "never") + "."
           : "Connection monitor is disabled (HABITAT_HEARTBEAT_ENABLED is not \"true\")."
       }
