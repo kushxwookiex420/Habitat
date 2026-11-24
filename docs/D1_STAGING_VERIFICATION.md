@@ -338,3 +338,50 @@ Nothing was created, renamed, guessed or deleted to work around the difference.
 
 The deployed service is configured with the production id (`3a906029…`), which is a different
 database from the one migrated here, so no production data was touched.
+
+## 15. Option A adopted: `ax-nexus-habitat-nonprod` is the staging database
+
+Owner decision (2026-11-24): the existing non-production database is Habitat's official staging
+target. No new database and no new Cloudflare account was created.
+
+| Field | Value |
+| --- | --- |
+| Staging database | `ax-nexus-habitat-nonprod` — `0fdf1ac9-65a3-4e83-8042-f3fa52282068` |
+| Account suffix | `d607` (masked in every report) |
+| Production id | `3a906029-bc64-4e2a-b648-163e34a2d502` — never targeted, `productionIdDiffers: true` |
+| Repository variable | `HABITAT_STAGING_D1_DATABASE_ID` (identifier only, not a credential) |
+| Credential channel | `HABITAT_D1_API_TOKEN` repository secret, used only inside Actions |
+
+### Verified connection — CI run `45296503185` (push trigger, branch `staging/integration`, `e1ab6ff`)
+
+All eight steps succeeded: confirm intent → isolation guard → preflight (no writes) → verify → upload
+evidence. The uploaded artifact reports:
+
+```json
+{ "ok": true, "mode": "verify", "productionIdDiffers": true,
+  "before": { "objectCount": 48, "p1TableCount": 8 },
+  "after":  { "objectCount": 48, "tableCount": 20, "indexCount": 28, "p1TableCount": 8, "missingP1Tables": [] },
+  "applied": [] }
+```
+
+`applied: []` is the idempotency proof: the schema was already at 0001–0009, so verification changed
+nothing. The 20 tables include the eight P1 capability-network tables (`habitat_ax_revenue_events`,
+`habitat_ax_payouts`, `habitat_ax_treasury_accounts`, `habitat_ax_supplier_offers`,
+`habitat_ax_capabilities`, `habitat_ax_channel_rules`, `habitat_ax_cost_ledger`,
+`habitat_ax_security_events` alongside the earlier runtime tables).
+
+### How the guard is enforced, twice
+
+1. `workflow_dispatch` requires `confirm=nonprod` and compares the target against
+   `vars.HABITAT_D1_DATABASE_ID`; equal ids abort before any request is sent.
+2. On a push, only `verify` is allowed — migrations stay a manual, confirmed action — and the target
+   comes from `HABITAT_STAGING_D1_DATABASE_ID`, which cannot equal production.
+
+### What this does and does not prove
+
+- Proves: the CI credential reaches this database, the schema is complete for the P1 stack, applying
+  migrations again is a no-op, and production was never addressed.
+- Does **not** prove: a Render staging service can reach it, because no staging service exists. That
+  is the remaining deployment step (`docs/RENDER_STAGING_PLAN.md`).
+- Production schema comparison is still impossible with this credential: the production database is
+  not in the account the token can read, so only the id is known. No production write was attempted.
