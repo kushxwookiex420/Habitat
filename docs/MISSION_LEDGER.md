@@ -15,6 +15,8 @@ deployed staging service exercised it; **production** = the live service; **phon
 | Improvement findings ride the scheduler tick | 9 tests in `tests/ax-scheduler-improvement.test.mjs`; suite 1,036 pass |
 | Reconciliation of the two status implementations | One `system-status.mjs`, redaction policy v2, #115 7/7 green |
 | Finance ledger and prioritisation modules | 25 tests; evidence-required rejections, verified-only net worth |
+| Replaceable-agent workforce registry | 20 tests; adapters, agent records, capacity, conflict, retry, handoff, independent verification |
+| End-to-end self-improvement cycle | `scripts/self-improvement-demo.mjs`: detected an unused export, implemented on `demo/self-improvement-*`, self-verification **refused**, independent verification passed 2/2, status `verified`, `approvalRequired: true` |
 
 ## Implemented, not deployed
 
@@ -22,6 +24,9 @@ deployed staging service exercised it; **production** = the live service; **phon
 - `/system/status` with redaction policy v2 and per-key configuration inventory.
 - Product-video renderer with the libass fallback and honest readiness.
 - Finance ledger (`ax-finance.mjs`), prioritisation (`ax-priorities.mjs`), improvement engine.
+- Workforce registry (`ax-workforce.mjs`) — in-memory, with no durable repository yet, so agents do not
+  survive a restart. That is the next layer, not a claim.
+- Phone signing comparison helper (`scripts/verify-phone-signing.sh`) — read-only; needs the phone.
 - Staging Render blueprint (`deploy/render.staging.yaml`) and acceptance run plan.
 
 ## Deployed and staging-tested
@@ -43,7 +48,7 @@ compatible. The installed certificate has not been read.
 | Blocker | Owner action needed |
 | --- | --- |
 | Render staging service | Collaborator access or `RENDER_API_KEY`; approval of the paid `starter` plan; the production branch value from the dashboard |
-| Phone signature comparison | Run the two `adb`/`keytool` reads in `docs/ANDROID_SIGNING_COMPATIBILITY.md` against the installed 0.8.7 |
+| Phone signature comparison | Run `scripts/verify-phone-signing.sh <apk>` with the phone connected — read-only, installs nothing |
 | Production D1 schema comparison | A credential for the account that holds `3a906029…`; this token cannot see it |
 | Live call phases 3–4 | A speech service choice and budget approval; no media server exists |
 
@@ -51,6 +56,9 @@ compatible. The installed certificate has not been read.
 
 The single change that most increases what can be verified is **a staging service**, because it is the
 first environment where the improvement engine, scheduler ticks, notifications and recovery can be
-exercised as a deployed system rather than as a module with tests. Until that access exists, the
-highest-value unblocked work is the **parallel-workforce registry** (agents as replaceable records with
-health, capability and isolation metadata) — it is pure runtime code that needs no paid service.
+exercised as a deployed system rather than as a module with tests. The workforce registry now exists as
+records with adapters, capacity, conflict detection and independent verification, and one real
+self-improvement cycle has run. The next highest-value step is making that registry **durable** (a D1
+repository mirroring the objective store) so agents, assignments and verified results survive a
+restart, followed by wiring `assign()` to the real scheduler so a detected finding becomes an assigned
+task without a human starting the script.
