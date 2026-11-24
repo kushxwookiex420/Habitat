@@ -1,0 +1,43 @@
+# Separate staging web service. This file is NOT the Render blueprint that owns production.
+#
+# Create a NEW Blueprint instance from this file; do not apply it to the existing
+# `habitat-1-szzd` service, which is production/shared (it serves the Android app, content
+# publishing and the live backend). Free plan only; no paid resource is requested here.
+#
+# Secrets are prompted by Render (`sync: false`) and never stored in this repository.
+
+services:
+  - type: web
+    name: habitat-staging
+    runtime: docker
+    plan: free
+    branch: staging/integration
+    autoDeploy: false
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: HABITAT_D1_DATABASE_ID
+        value: 0fdf1ac9-65a3-4e83-8042-f3fa52282068
+      - key: CLOUDFLARE_ACCOUNT_ID
+        sync: false
+      - key: HABITAT_D1_API_TOKEN
+        sync: false
+      - key: HABITAT_GATEWAY_ENABLED
+        value: "true"
+      - key: HABITAT_HEARTBEAT_ENABLED
+        value: "true"
+      - key: HABITAT_MCP_EVENTS_ENABLED
+        value: "true"
+      - key: HABITAT_MCP_SECRET_KEY
+        sync: false
+      - key: HABITAT_OWNER_ATTESTATION_KEY
+        sync: false
+      - key: HABITAT_WORKFORCE_ENABLED
+        value: "false"
+      - key: HABITAT_MISSIONS_ENABLED
+        value: "false"
+      - key: NEXUS_RUNTIME_ENABLED
+        value: "false"

@@ -4,6 +4,14 @@ This records what was actually executed, not what is merely implemented. Product
 contacted. The D1 token, encryption keys and restore bookmark are not reproduced here; they live only in
 the GitHub Actions artifact/secrets.
 
+## Render isolation finding
+
+`habitat-1-szzd.onrender.com` is **production/shared**, not staging: `AX_CONTINUITY.md` labels it the
+live backend, the Android app hard-codes it for chat/tasks/device heartbeat, content workflows publish
+through it, its health reports commit `0d5eb6e` (not this branch), `/system/status` is 404 there, and its
+D1 id is the production id used as CI's isolation guard. It was not deployed to or reconfigured.
+A separate free `habitat-staging` Blueprint is prepared in `render.staging.yaml`.
+
 ## Target
 
 | Item | Value |
@@ -64,6 +72,13 @@ repositories were reading `rows[0]` as a row, so against real D1 a freshly minte
 invalid and schema checks saw no tables. Commit `6bde9bf` adds `createD1RowQuery`, switches those four
 repositories to it, and adds `tests/d1-row-query.test.mjs`. Task/scheduler repositories intentionally
 keep the raw D1 shape.
+
+## Mission-level idempotency
+
+`tests/ax-gateway.test.mjs` now executes a mission, submits the same `Idempotency-Key` again, recovers
+again and asserts one mission, one task set, all tasks still completed. Live D1 lease contention is
+covered by the staging acceptance workflow: two workers dispatch concurrently (one callback), and a live
+lease blocks a second claimant while an expired lease is reclaimed.
 
 ## Still not proven
 

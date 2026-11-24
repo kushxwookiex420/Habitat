@@ -219,6 +219,38 @@ test("a duplicate submission with the same Idempotency-Key returns the same miss
   h.db.close();
 });
 
+test("a duplicate mission submission never re-executes completed work", async () => {
+  const h = await harness();
+  const issued = await client(h);
+  const headers = { authorization: "Bearer " + issued.token, "content-type": "application/json" };
+  const submit = () => fetch(h.base + "/ax/v1/missions", {
+    method: "POST",
+    headers: { ...headers, ...nonce(), "idempotency-key": "mission-execution-once" },
+    body: JSON.stringify({ objective: "Execute once", acceptanceCriteria: ["One execution"] })
+  }).then(response => response.json());
+
+  const first = await submit();
+  await fetch(h.base + "/ax/v1/recover", { method: "POST", headers: { ...headers, ...nonce() } });
+  const completed = await (await fetch(h.base + "/ax/v1/missions/" + first.missionId, { headers })).json();
+  assert.equal(completed.mission.status, "completed");
+  assert.equal(completed.delivery.verified, true);
+  const taskCount = completed.mission.tasks.length;
+  assert.ok(taskCount > 0);
+  assert.ok(completed.mission.tasks.every(task => task.status === "completed"));
+
+  const duplicate = await submit();
+  assert.equal(duplicate.missionId, first.missionId);
+  assert.equal(duplicate.duplicate, true);
+  await fetch(h.base + "/ax/v1/recover", { method: "POST", headers: { ...headers, ...nonce() } });
+  const after = await (await fetch(h.base + "/ax/v1/missions/" + first.missionId, { headers })).json();
+  assert.equal(after.mission.status, "completed");
+  assert.equal(after.mission.tasks.length, taskCount);
+  assert.ok(after.mission.tasks.every(task => task.status === "completed"));
+  assert.equal((await h.missionRuntime.missions({ limit: 10 })).missions.length, 1, "only one mission exists");
+  h.server.close();
+  h.db.close();
+});
+
 test("a replayed nonce is refused even when the body changes", async () => {
   const h = await harness();
   const issued = await client(h);

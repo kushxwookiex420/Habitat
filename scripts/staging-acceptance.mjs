@@ -137,6 +137,32 @@ export async function runStagingAcceptance({ env = process.env, fetchImpl = fetc
     const recovered = await restarted.dispatch();
     record("restart_recovery", recovered.delivered >= 1, { delivered: recovered.delivered });
 
+    // Two workers dispatch the same due delivery concurrently against live D1. The lease must let only
+    // one callback through.
+    await mcp.emit({ name: "mission.completed", data: { project: "habitat", missionId: "msn_race" }, eventId: eventPrefix + "_race" });
+    const raceBefore = listener.received.length;
+    const peer = createMcpEventsServer({ repository: d1(encryption.box), allowInsecureCallbacks: true, log: { log() {}, warn() {} } });
+    const [raceA, raceB] = await Promise.all([mcp.dispatch(), peer.dispatch()]);
+    const raceReceived = listener.received.length - raceBefore;
+    record("live_d1_concurrent_dispatch", raceReceived === 1 && Number(raceA.delivered) + Number(raceB.delivered) === 1, {
+      workerA: raceA.delivered, workerB: raceB.delivered, callbacks: raceReceived
+    });
+
+    // Live lease semantics: one live claim blocks another, and an expired claim is reclaimable.
+    await mcp.emit({ name: "mission.completed", data: { project: "habitat", missionId: "msn_lease" }, eventId: eventPrefix + "_lease" });
+    const leaseRows = await d1Query(targetInfo, "SELECT id FROM habitat_ax_mcp_deliveries WHERE event_id = '" + eventPrefix + "_lease' AND status = 'pending'");
+    const leaseDeliveryId = leaseRows[0]?.id;
+    const repoA = d1(encryption.box);
+    const repoB = d1(encryption.box);
+    const at = new Date().toISOString();
+    const claimA = await repoA.claimDelivery(leaseDeliveryId, { owner: "accept-a", leaseMs: 1000, at });
+    const claimB = await repoB.claimDelivery(leaseDeliveryId, { owner: "accept-b", leaseMs: 1000, at });
+    await new Promise((resolve) => setTimeout(resolve, 1100));
+    const reclaim = await repoB.claimDelivery(leaseDeliveryId, { owner: "accept-b", leaseMs: 1000, at: new Date().toISOString() });
+    record("live_d1_lease_contention", Boolean(leaseDeliveryId) && claimA.claimed === true && claimB.claimed === false && reclaim.claimed === true, {
+      claimA: claimA.claimed, claimB: claimB.claimed, reclaimedAfterExpiry: reclaim.claimed
+    });
+
     // The subscription was encrypted with key A; a worker holding only key B must mark its delivery dead
     // instead of sending anything unsigned.
     const badServer = createMcpEventsServer({ repository: d1(altEncryption.box), allowInsecureCallbacks: true, log: { log() {}, warn() {} } });

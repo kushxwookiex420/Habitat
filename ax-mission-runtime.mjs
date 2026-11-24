@@ -1,6 +1,6 @@
 import { createMissionEngine, MISSION_FLAG, MISSION_MIGRATION } from "./ax-mission-engine.mjs";
 import { createMissionRepository, createD1MissionRepository, MISSION_TABLE_NAMES } from "./d1-mission-repository.mjs";
-import { createD1Query } from "./nexus-runtime.mjs";
+import { createD1RowQuery } from "./nexus-runtime.mjs";
 
 /**
  * Mission runtime attachment, disabled by default.
@@ -53,7 +53,7 @@ export function createMissionRuntime({
 
   function resolveQuery() {
     if (typeof query === "function") return query;
-    return createD1Query({
+    return createD1RowQuery({
       accountId: env.CLOUDFLARE_ACCOUNT_ID,
       databaseId: env.HABITAT_D1_DATABASE_ID,
       apiToken: env.HABITAT_D1_API_TOKEN

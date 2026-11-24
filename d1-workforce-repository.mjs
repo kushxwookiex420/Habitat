@@ -1,4 +1,4 @@
-import { createD1Query } from "./nexus-runtime.mjs";
+import { createD1RowQuery } from "./nexus-runtime.mjs";
 
 /**
  * Durable store for the workforce.
@@ -186,7 +186,7 @@ export function createWorkforceRepository({ query, now = () => new Date().toISOS
 
 /** Cloudflare D1 binding for the same repository. */
 export function createD1WorkforceRepository({ accountId, databaseId, apiToken, fetchImpl = fetch } = {}) {
-  const query = createD1Query({ accountId, databaseId, apiToken, fetchImpl });
+  const query = createD1RowQuery({ accountId, databaseId, apiToken, fetchImpl });
   const repository = createWorkforceRepository({ query });
   return Object.freeze({ ...repository, adapter: "cloudflare-d1" });
 }

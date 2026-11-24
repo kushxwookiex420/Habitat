@@ -1,5 +1,5 @@
 import { createWorkforceRepository, createD1WorkforceRepository, WORKFORCE_DDL } from "./d1-workforce-repository.mjs";
-import { createD1Query } from "./nexus-runtime.mjs";
+import { createD1RowQuery } from "./nexus-runtime.mjs";
 import { createDurableWorkforce } from "./ax-durable-workforce.mjs";
 import { createWorkforceIntake } from "./ax-workforce-intake.mjs";
 import { createWorkforceRunner } from "./ax-workforce-runner.mjs";
@@ -166,7 +166,7 @@ export function createWorkforceRuntime({
 
   function resolveQuery() {
     if (typeof query === "function") return query;
-    return createD1Query({
+    return createD1RowQuery({
       accountId: env.CLOUDFLARE_ACCOUNT_ID,
       databaseId: env.HABITAT_D1_DATABASE_ID,
       apiToken: env.HABITAT_D1_API_TOKEN
