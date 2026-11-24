@@ -39,6 +39,10 @@ deployed staging service exercised it; **production** = the live service; **phon
 | Backup authenticity and recovery | HMAC over project/time/expiry/count/digest; expired, incompatible, forged, unsigned (under `requireSigned`) and revoked-key backups refused with zero writes; restore into a separate database then a fresh repository read reproduces the digest |
 | Ax ↔ Habitat gateway implemented, disabled | `ax-gateway.mjs` + `migrations/0012`: scoped hashed tokens, expiry/revocation, DB-level nonce replay guard, per-client rate limit, audit, status/missions/submit/recover/decision endpoints, OpenAPI at `/ax/v1/openapi.json`. 12 real-HTTP tests |
 | Gateway approvals cannot be self-issued | Approval requires a valid owner attestation; a client with `missions:approve` but no signature gets 403 and the mission stays `approval_required` |
+| Habitat heartbeat exists independently | `ax-heartbeat.mjs` + `0013`: persisted beat, missed-beat detection, deduped event queue and delivery states; runs with no integration present |
+| ChatGPT reconnection trigger | `GET /ax/v1/heartbeat` returns the exact `AX RECONNECT — HABITAT HEARTBEAT.` trigger with active/completed/failed/approval context and queued changes; ack is scoped and idempotent |
+| Event-triggered, not chat spam | Events are derived from mission/approval state with unique dedupe keys; repeated beats and restarts enqueue nothing new; 10 monitor tests + 2 HTTP tests |
+| Delivery is not availability | Webhook 2xx → delivered, owner ack → acknowledged, bounded failures → dead; with no notifier events stay queued. No wake of an inactive ChatGPT is claimed |
 | Gateway default is off | `HABITAT_GATEWAY_ENABLED` unset → every `/ax/v1` route 503, no token checked, no store built; `/system/status` reports it as disabled |
 | End-to-end self-improvement cycle | `scripts/self-improvement-demo.mjs`: detected an unused export, implemented on `demo/self-improvement-*`, self-verification **refused**, independent verification passed 2/2, status `verified`, `approvalRequired: true` |
 

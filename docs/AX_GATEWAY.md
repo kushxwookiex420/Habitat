@@ -18,6 +18,8 @@ connection has been exercised.** `HABITAT_GATEWAY_ENABLED` is unset, so every ro
 | POST | `/ax/v1/missions/:id/decision` | `missions:approve` | approve/reject with owner attestation |
 | POST | `/ax/v1/recover` | `recovery:write` | bounded mission recovery |
 | GET | `/ax/v1/audit` | `status:read` | recent gateway requests |
+| GET | `/ax/v1/heartbeat` | `status:read` | reconnect trigger + current context + queued events |
+| POST | `/ax/v1/heartbeat/ack` | `events:write` | acknowledge delivered events (idempotent) |
 | GET | `/ax/v1/openapi.json` | none | OpenAPI 3.1 document for ChatGPT Actions |
 
 Every response carries `requestId` and, where relevant, `delivery: {received, executed, verified}` so a
@@ -45,6 +47,9 @@ caller cannot mistake acceptance for completion.
 | `missions:write` | | | ✓ | | |
 | `missions:approve` | | | | ✓ (owner attestation still required) | |
 | `recovery:write` | | | | | ✓ |
+
+`events:write` only permits acknowledging heartbeat events; it grants no mission, approval or recovery
+ability. Heartbeat reads use `status:read`.
 
 A typical ChatGPT client gets `status:read`, `missions:read`, `missions:write`. Approval and recovery
 are separate grants and should not be given to the same conversational identity.
@@ -78,9 +83,8 @@ origin for ChatGPT to call it; nothing here should be exposed before that is del
 | stale timestamp or replayed nonce | 400 / 409, no mission created |
 | mission runtime disabled | 503 `missions_disabled` on mission routes; status stays readable |
 | approval without attestation | 403; mission remains `approval_required` |
-| handler throws | 500 `gateway_handler_failed`, audited, no claim of success |
-
-Gateway availability does not gate Habitat: the scheduler, workforce and missions run without any
+| handler throws | 500 `gateway_handler_failed`, audited, no claim of success | Heartbeat not attached | 503 `heartbeat_not_attached` on the heartbeat routes; status is unaffected |
+| Gateway availability does not gate Habitat: the scheduler, workforce and missions run without any
 gateway client. An unavailable gateway means no new instructions arrive, not that operations stop.
 
 ## Evidence

@@ -25,6 +25,8 @@ import { createWorkforceRuntime } from "./ax-workforce-runtime.mjs";
 import { createMissionRuntime } from "./ax-mission-runtime.mjs";
 import { registerAxGateway, gatewayEnabled, GATEWAY_FLAG } from "./ax-gateway.mjs";
 import { createD1GatewayRepository } from "./d1-gateway-repository.mjs";
+import { createHeartbeatMonitor, heartbeatEnabled, createWebhookNotifier, HEARTBEAT_FLAG, HEARTBEAT_INTERVAL_MS } from "./ax-heartbeat.mjs";
+import { createD1HeartbeatRepository, HEARTBEAT_MIGRATION } from "./d1-heartbeat-repository.mjs";
 import { ownerVerifierFromEnv } from "./ax-owner-attestation.mjs";
 
 import express from "express";
@@ -63,10 +65,52 @@ if (gatewayEnabled()) {
     }
   }
 }
+// Habitat's own heartbeat and connection monitor. Independent of the gateway: it runs while the
+// integration is absent, queues meaningful changes once each, and only attempts an outbound webhook
+// when one is configured. Nothing here claims it can wake an inactive ChatGPT conversation.
+let heartbeatMonitor = null;
+if (heartbeatEnabled()) {
+  const heartbeatD1 = ["CLOUDFLARE_ACCOUNT_ID", "HABITAT_D1_DATABASE_ID", "HABITAT_D1_API_TOKEN"].every(key => String(process.env[key] || "").trim());
+  if (!heartbeatD1) {
+    console.warn("AX_HEARTBEAT: enabled but the D1 binding is incomplete; no beats are recorded");
+  } else {
+    try {
+      const candidate = createD1HeartbeatRepository({
+        accountId: process.env.CLOUDFLARE_ACCOUNT_ID,
+        databaseId: process.env.HABITAT_D1_DATABASE_ID,
+        apiToken: process.env.HABITAT_D1_API_TOKEN
+      });
+      const schema = await candidate.verifySchema();
+      if (schema.ok) {
+        heartbeatMonitor = createHeartbeatMonitor({
+          repository: candidate,
+          missionRuntime,
+          statusProvider: collectSystemStatus,
+          notifier: createWebhookNotifier({ url: process.env.AX_NOTIFY_WEBHOOK_URL, secret: process.env.AX_NOTIFY_WEBHOOK_SECRET }),
+          log: console
+        });
+        const timer = setInterval(async () => {
+          try {
+            await heartbeatMonitor.beat();
+            await heartbeatMonitor.deliver();
+          } catch (error) {
+            console.warn("AX_HEARTBEAT_BEAT_FAILED", String(error?.message || error).slice(0, 160));
+          }
+        }, Number(process.env.AX_HEARTBEAT_INTERVAL_MS) > 0 ? Math.max(10_000, Number(process.env.AX_HEARTBEAT_INTERVAL_MS)) : HEARTBEAT_INTERVAL_MS);
+        timer.unref?.();
+      } else {
+        console.warn("AX_HEARTBEAT_SCHEMA_MISSING", JSON.stringify({ migration: HEARTBEAT_MIGRATION, missing: schema.missing }));
+      }
+    } catch (error) {
+      console.warn("AX_HEARTBEAT_STORAGE_UNAVAILABLE", String(error?.message || error));
+    }
+  }
+}
 registerAxGateway(app, {
   enabled: gatewayEnabled(),
   repository: gatewayRepository,
   missionRuntime,
+  heartbeat: heartbeatMonitor,
   ownerVerifier,
   statusProvider: collectSystemStatus,
   log: console
@@ -1603,6 +1647,7 @@ async function collectSystemStatus() {
     missions: await missionRuntime.status(),
     // Mount facts only; the gateway refuses every request unless its own flag is on.
     gateway: { enabled: gatewayEnabled(), repository: gatewayRepository !== null, flag: GATEWAY_FLAG },
+    heartbeat: heartbeatMonitor ? await heartbeatMonitor.status() : { enabled: false, flag: HEARTBEAT_FLAG, connection: "disabled" },
     routes: {
       chat: true,
       // These routes are registered by registerDeviceCommandBridge regardless of credentials or

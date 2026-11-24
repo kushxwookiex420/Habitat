@@ -9,6 +9,8 @@ import { createDurableWorkforce } from "../ax-durable-workforce.mjs";
 import { createMissionRuntime } from "../ax-mission-runtime.mjs";
 import { createOwnerAttestation } from "../ax-owner-attestation.mjs";
 import { issueClientToken, registerAxGateway } from "../ax-gateway.mjs";
+import { createHeartbeatRepository } from "../d1-heartbeat-repository.mjs";
+import { createHeartbeatMonitor } from "../ax-heartbeat.mjs";
 
 const quiet = { log() {}, warn() {}, error() {} };
 const NOW = Date.parse("2026-11-24T18:00:00.000Z");
@@ -50,6 +52,15 @@ async function harness({ gatewayEnabled = true, rateLimit = { windowMs: 60_000, 
   const gatewayRepo = createGatewayRepository({ query, now });
   await gatewayRepo.initialize();
   const ownerVerifier = createOwnerAttestation({ secret: SECRET, now: () => NOW });
+  const heartbeatRepository = createHeartbeatRepository({ query, now });
+  await heartbeatRepository.initialize();
+  const heartbeat = createHeartbeatMonitor({
+    repository: heartbeatRepository,
+    missionRuntime: { missions: async ({ limit } = {}) => missionRuntime.missions({ limit }) },
+    statusProvider: async () => ({ version: "0.8.6", commit: "test", components: { identity: { name: "Ax" } } }),
+    now,
+    log: quiet
+  });
   const missionRuntime = createMissionRuntime({
     env: { HABITAT_MISSIONS_ENABLED: "true", CLOUDFLARE_ACCOUNT_ID: "a", HABITAT_D1_DATABASE_ID: "d", HABITAT_D1_API_TOKEN: "t" },
     query,
@@ -69,6 +80,7 @@ async function harness({ gatewayEnabled = true, rateLimit = { windowMs: 60_000, 
     enabled: gatewayEnabled,
     repository: gatewayRepo,
     missionRuntime,
+    heartbeat,
     ownerVerifier,
     rateLimit,
     now,
@@ -92,10 +104,10 @@ async function harness({ gatewayEnabled = true, rateLimit = { windowMs: 60_000, 
   // A failed assertion must not keep the runner alive waiting for a socket that is never closed.
   server.unref();
   const base = "http://127.0.0.1:" + server.address().port;
-  return { db, query, gatewayRepo, missionRuntime, ownerVerifier, server, base };
+  return { db, query, gatewayRepo, missionRuntime, heartbeat, heartbeatRepository, ownerVerifier, server, base };
 }
 
-async function client(harness, scopes = ["status:read", "missions:read", "missions:write", "missions:approve", "recovery:write"], expiresAt = null) {
+async function client(harness, scopes = ["status:read", "missions:read", "missions:write", "missions:approve", "recovery:write", "events:write"], expiresAt = null) {
   const issued = await issueClientToken({ repository: harness.gatewayRepo, label: "ChatGPT", scopes, expiresAt, now: () => new Date(NOW).toISOString() });
   assert.equal(issued.ok, true);
   return issued;
@@ -296,6 +308,56 @@ test("approval requires a signed owner attestation and cannot be self-issued by 
   });
   assert.equal(approved.status, 200);
   assert.equal((await approved.json()).status, "completed");
+  h.server.close();
+  h.db.close();
+});
+
+test("the heartbeat endpoint returns the reconnect trigger with current context", async () => {
+  const h = await harness();
+  const issued = await client(h, ["status:read"]);
+  const response = await fetch(h.base + "/ax/v1/heartbeat", { headers: { authorization: "Bearer " + issued.token } });
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.equal(body.trigger, "AX RECONNECT — HABITAT HEARTBEAT.");
+  assert.equal(body.delivery.received, true);
+  assert.equal(body.delivery.executed, false);
+  assert.ok(Array.isArray(body.missions.active));
+  assert.ok(Array.isArray(body.queued));
+  h.server.close();
+  h.db.close();
+});
+
+test("heartbeat acknowledgement needs its own scope and is idempotent", async () => {
+  const h = await harness();
+  await h.missionRuntime.intake({ objective: "Heartbeat ack test", acceptanceCriteria: ["Event queued"] }, { idempotencyKey: "heartbeat-ack" });
+  await h.heartbeat.beat();
+  const pending = await h.heartbeatRepository.pendingEvents({});
+  assert.ok(pending.length >= 1);
+  const ids = [pending[0].id];
+
+  const reader = await client(h, ["status:read"]);
+  const denied = await fetch(h.base + "/ax/v1/heartbeat/ack", {
+    method: "POST",
+    headers: { authorization: "Bearer " + reader.token, "content-type": "application/json", ...nonce() },
+    body: JSON.stringify({ eventIds: ids })
+  });
+  assert.equal(denied.status, 403);
+
+  const writer = await client(h, ["events:write"]);
+  const first = await fetch(h.base + "/ax/v1/heartbeat/ack", {
+    method: "POST",
+    headers: { authorization: "Bearer " + writer.token, "content-type": "application/json", ...nonce() },
+    body: JSON.stringify({ eventIds: ids })
+  });
+  assert.equal(first.status, 200);
+  assert.equal((await first.json()).acknowledged, 1);
+  const second = await fetch(h.base + "/ax/v1/heartbeat/ack", {
+    method: "POST",
+    headers: { authorization: "Bearer " + writer.token, "content-type": "application/json", ...nonce() },
+    body: JSON.stringify({ eventIds: ids })
+  });
+  assert.equal(second.status, 200);
+  assert.equal((await second.json()).duplicate, true);
   h.server.close();
   h.db.close();
 });

@@ -206,7 +206,8 @@ export function buildSystemStatus({
   workforce = null,
   identity = null,
   missions = null,
-  gateway = null
+  gateway = null,
+  heartbeat = null
 } = {}) {
   const items = classifyWorkers({ registry, tasks, now });
   const counts = summarizeWorkerCounts(items);
@@ -303,6 +304,17 @@ export function buildSystemStatus({
             ? "Integration gateway is enabled and its storage is available."
             : "Gateway is enabled but its schema or binding is unavailable; requests are refused."
           : "Integration gateway is disabled; every /ax/v1 route answers 503."
+      },
+      heartbeat: {
+        state: heartbeat ? heartbeat.connection || "unknown" : "disabled",
+        enabled: Boolean(heartbeat),
+        lastBeatAt: heartbeat?.lastBeatAt || null,
+        lastSeenAt: heartbeat?.lastSeenAt || null,
+        missedBeats: heartbeat?.missedBeats ?? null,
+        queue: heartbeat?.queue || null,
+        detail: heartbeat
+          ? "Habitat heartbeat is running; the integration has been seen " + (heartbeat.lastSeenAt || "never") + "."
+          : "Connection monitor is disabled (HABITAT_HEARTBEAT_ENABLED is not \"true\")."
       }
     },
     requiredConfiguration: {

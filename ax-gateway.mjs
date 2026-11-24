@@ -28,7 +28,8 @@ export const GATEWAY_SCOPES = Object.freeze([
   "missions:read",
   "missions:write",
   "missions:approve",
-  "recovery:write"
+  "recovery:write",
+  "events:write"
 ]);
 
 export const SCOPE_DESCRIPTIONS = Object.freeze({
@@ -36,7 +37,8 @@ export const SCOPE_DESCRIPTIONS = Object.freeze({
   "missions:read": "Read mission detail, tasks, evidence and approvals.",
   "missions:write": "Submit missions; cannot approve or recover.",
   "missions:approve": "Decide a pending approval; still requires a valid owner attestation.",
-  "recovery:write": "Run bounded mission recovery (never approves or deploys)."
+  "recovery:write": "Run bounded mission recovery (never approves or deploys).",
+  "events:write": "Acknowledge delivered heartbeat events; cannot submit or approve work."
 });
 
 const NONCE_WINDOW_MS = 5 * 60 * 1000;
@@ -96,6 +98,7 @@ export function registerAxGateway(app, {
   enabled = gatewayEnabled(),
   repository = null,
   missionRuntime = null,
+  heartbeat = null,
   statusProvider = null,
   ownerVerifier = null,
   rateLimit = { windowMs: 60_000, max: 60 },
@@ -192,6 +195,20 @@ export function registerAxGateway(app, {
       execution: components.workers?.execution || null,
       delivery: { received: true, executed: true, verified: components.identity?.persisted === true }
     });
+  });
+
+  route("get", "/ax/v1/heartbeat", "status:read", async (req, res) => {
+    if (!heartbeat) return fail(res, req, 503, "heartbeat_not_attached");
+    const reconnected = await heartbeat.reconnect({ clientId: req.axClient.id });
+    return ok(res, req, reconnected);
+  });
+
+  route("post", "/ax/v1/heartbeat/ack", "events:write", async (req, res) => {
+    if (!heartbeat) return fail(res, req, 503, "heartbeat_not_attached");
+    const ids = Array.isArray(req.body?.eventIds) ? req.body.eventIds.map(String).filter(Boolean).slice(0, 100) : [];
+    if (ids.length === 0) return fail(res, req, 400, "event_ids_required");
+    const acknowledged = await heartbeat.acknowledge(ids);
+    return ok(res, req, { acknowledged: acknowledged.acknowledged, duplicate: acknowledged.duplicate, requested: acknowledged.requested });
   });
 
   route("get", "/ax/v1/missions", "status:read", async (req, res) => {
@@ -322,6 +339,8 @@ export const OPENAPI = Object.freeze({
         responses: { 200: { description: "Decided" }, 403: { description: "Attestation rejected" } }
       }
     },
+    "/ax/v1/heartbeat": { get: { operationId: "getHeartbeat", summary: "Reconnect trigger with current status, missions, pending work and queued events", responses: { 200: { description: "Reconnect payload" }, 401: { description: "Unauthorized" }, 503: { description: "Heartbeat not attached" } } } },
+    "/ax/v1/heartbeat/ack": { post: { operationId: "acknowledgeHeartbeatEvents", summary: "Acknowledge delivered events", parameters: [{ $ref: "#/components/parameters/nonce" }, { $ref: "#/components/parameters/timestamp" }], requestBody: { required: true, content: { "application/json": { schema: { type: "object", required: ["eventIds"], properties: { eventIds: { type: "array", items: { type: "string" } } } } } } }, responses: { 200: { description: "Acknowledged" } } } },
     "/ax/v1/recover": { post: { operationId: "recoverMissions", summary: "Bounded mission recovery", parameters: [{ $ref: "#/components/parameters/nonce" }, { $ref: "#/components/parameters/timestamp" }], responses: { 200: { description: "Recovered" } } } },
     "/ax/v1/audit": { get: { operationId: "gatewayAudit", summary: "Recent gateway requests", responses: { 200: { description: "Audit" } } } }
   }
