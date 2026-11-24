@@ -305,3 +305,36 @@ After a real deployment, record the tick outcome from the dashboard's last 100 i
   database with realistic row counts is the only way to size it.
 - That a deployed Cron Trigger fires. Only the dashboard's invocation history shows that.
 - Anything about external suppliers: P1 makes no supplier call, so there is nothing to verify there.
+
+## 14. Verified on real D1 — 2026-11-24
+
+Executed from GitHub Actions with the repository's existing `HABITAT_D1_API_TOKEN` secret. The token
+never reached an operator shell, a log line or a file.
+
+Target: `ax-nexus-habitat-nonprod` (`0fdf1ac9…2068`) in account `e43f2644…`.
+
+| Check | Result |
+| --- | --- |
+| migrations 0001–0009 | **all nine applied**, in filename order, each accepted by the D1 HTTP API |
+| objects before → after | 3 → **48** |
+| P1 tables after | **8/8**, `missingP1Tables: []` |
+| re-apply (idempotency) | `ok: true`, still 48 objects and 8 P1 tables; no duplicate objects |
+| decision CAS, two concurrent owner devices | one `approved`, the other **`approval_conflict`**; final `approved`, `decidedBy: owner:staging-a` |
+| adapter / durability | `cloudflare-d1`, `durable: true` |
+| approval-expiry sweep | `ok: true`, expired 0, expiring 0, failed 0 |
+
+This is the evidence the local SQLite rehearsal could not produce: multi-statement migration files are
+accepted as sent, re-application is idempotent on D1, and the compare-and-swap admits exactly one
+decision when two owner devices decide at once.
+
+### Account finding that changes the plan
+
+The repository token can see **exactly one** database in account `e43f2644…`:
+`ax-nexus-habitat-nonprod` (`0fdf1ac9…`), which is also the repository variable
+`NEXUS_D1_TEST_DATABASE_ID`. The ids supplied for `habitat-nonprod` (`baaa7965…`) and production
+(`3a906029…`) are **not** in that account, so they live in a different Cloudflare account — the one
+created with the operations address. A token for that account is required before either can be used.
+Nothing was created, renamed, guessed or deleted to work around the difference.
+
+The deployed service is configured with the production id (`3a906029…`), which is a different
+database from the one migrated here, so no production data was touched.
