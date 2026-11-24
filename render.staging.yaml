@@ -19,6 +19,11 @@ services:
     envVars:
       - key: NODE_ENV
         value: production
+      # Marks this process as staging. The server refuses to start if this is "staging" and the
+      # configured D1 id is the production database, so a copied environment block cannot read or
+      # write production data. Production never sets this key.
+      - key: HABITAT_ENVIRONMENT
+        value: staging
       - key: HABITAT_D1_DATABASE_ID
         value: 0fdf1ac9-65a3-4e83-8042-f3fa52282068
       - key: CLOUDFLARE_ACCOUNT_ID

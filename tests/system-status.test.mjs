@@ -197,6 +197,34 @@ test("Ax command intent is explicit and bounded", () => {
   assert.equal(parseAxCommand("ax: " + "x".repeat(2001)), null);
 });
 
+test("a heartbeat monitor that could not start is not reported as a disabled flag", () => {
+  const base = { env: {}, now: NOW, registry: new Map(), tasks: [], startedAtMs: NOW, latencyMs: 1 };
+  const off = buildSystemStatus({
+    ...base,
+    heartbeat: { enabled: false, flag: "HABITAT_HEARTBEAT_ENABLED", connection: "disabled", unavailableReason: null }
+  });
+  assert.equal(off.components.heartbeat.state, "disabled");
+  assert.equal(off.components.heartbeat.unavailableReason, null);
+  assert.match(off.components.heartbeat.detail, /HABITAT_HEARTBEAT_ENABLED/);
+
+  const missing = buildSystemStatus({
+    ...base,
+    heartbeat: { enabled: false, flag: "HABITAT_HEARTBEAT_ENABLED", connection: "disabled", unavailableReason: "d1_binding_incomplete" }
+  });
+  assert.equal(missing.components.heartbeat.state, "enabled_unavailable");
+  assert.equal(missing.components.heartbeat.unavailableReason, "d1_binding_incomplete");
+  assert.match(missing.components.heartbeat.detail, /D1 binding is incomplete/);
+  assert.equal(missing.components.heartbeat.detail.includes("is not \"true\""), false, "a missing binding is not a disabled flag");
+
+  const running = buildSystemStatus({
+    ...base,
+    heartbeat: { enabled: true, connection: "connected", lastSeenAt: "2026-11-23T19:59:00.000Z" }
+  });
+  assert.equal(running.components.heartbeat.state, "connected");
+  assert.equal(running.components.heartbeat.enabled, true);
+  assert.equal(running.components.heartbeat.unavailableReason, null);
+});
+
 test("only allowlisted read-only adapters are inferred", () => {
   assert.equal(inferReadOnlyAdapter("inspect the repository state"), "repo.inspect");
   assert.equal(inferReadOnlyAdapter("list the task queue"), "task.inspect");

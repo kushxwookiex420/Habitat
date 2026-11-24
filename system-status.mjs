@@ -308,15 +308,24 @@ export function buildSystemStatus({
           : "Integration gateway is disabled; every /ax/v1 route answers 503."
       },
       heartbeat: {
-        state: heartbeat && heartbeat.enabled !== false ? heartbeat.connection || "unknown" : "disabled",
+        state: heartbeat && heartbeat.enabled !== false
+          ? heartbeat.connection || "unknown"
+          : heartbeat?.unavailableReason ? "enabled_unavailable" : "disabled",
         enabled: Boolean(heartbeat) && heartbeat.enabled !== false,
+        unavailableReason: heartbeat && heartbeat.enabled === false ? heartbeat.unavailableReason || null : null,
         lastBeatAt: heartbeat?.lastBeatAt || null,
         lastSeenAt: heartbeat?.lastSeenAt || null,
         missedBeats: heartbeat?.missedBeats ?? null,
         queue: heartbeat?.queue || null,
         detail: heartbeat && heartbeat.enabled !== false
           ? "Habitat heartbeat is running; the integration has been seen " + (heartbeat.lastSeenAt || "never") + "."
-          : "Connection monitor is disabled (HABITAT_HEARTBEAT_ENABLED is not \"true\")."
+          : heartbeat?.unavailableReason === "d1_binding_incomplete"
+            ? "Connection monitor is enabled but its D1 binding is incomplete (CLOUDFLARE_ACCOUNT_ID, HABITAT_D1_DATABASE_ID or HABITAT_D1_API_TOKEN is missing); no beats are recorded."
+            : heartbeat?.unavailableReason === "schema_missing"
+              ? "Connection monitor is enabled but its migration is missing; no beats are recorded."
+              : heartbeat?.unavailableReason === "storage_unavailable"
+                ? "Connection monitor is enabled but D1 storage is unreachable; no beats are recorded."
+                : "Connection monitor is disabled (HABITAT_HEARTBEAT_ENABLED is not \"true\")."
       },
       mcpEvents: {
         state: mcpEvents?.enabled ? (mcpEvents.configured ? "enabled" : "enabled_unconfigured") : "disabled",

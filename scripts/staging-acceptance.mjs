@@ -20,6 +20,7 @@ import { createPinnedCallbackFetch } from "../ax-callback-fetch.mjs";
 import { secretBoxFromEnv } from "../ax-secret-box.mjs";
 import { createMissionEngine } from "../ax-mission-engine.mjs";
 import { createD1MissionRepository } from "../d1-mission-repository.mjs";
+import { databaseAllowed, PRODUCTION_D1_DATABASE_ID, STAGING_ENVIRONMENT_VALUE } from "../staging-guard.mjs";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const ACCOUNT = /^[0-9a-f]{32}$/i;
@@ -37,7 +38,7 @@ function target() {
   if (!UUID.test(productionId)) return { ok: false, code: "production_id_unavailable" };
   if (databaseId === productionId) return { ok: false, code: "staging_is_production" };
   if (!token) return { ok: false, code: "missing_d1_token" };
-  return { ok: true, accountId, token, databaseId };
+  return { ok: true, accountId, token, databaseId, productionId };
 }
 
 async function d1Query(target, sql) {
@@ -80,6 +81,17 @@ export async function runStagingAcceptance({ env = process.env, fetchImpl = fetc
   const steps = [];
   const record = (name, ok, detail = {}) => { steps.push({ name, ok, at: new Date().toISOString(), ...detail }); return ok; };
   if (!targetInfo.ok) return { ok: false, code: targetInfo.code, steps };
+
+  // The same guard the server runs at startup, exercised against the real ids. A staging process must
+  // refuse the production database, and must accept its own.
+  record("staging_database_guard_accepts_staging", databaseAllowed({
+    env: { HABITAT_ENVIRONMENT: STAGING_ENVIRONMENT_VALUE },
+    databaseId: targetInfo.databaseId
+  }).ok === true);
+  record("staging_database_guard_refuses_production", databaseAllowed({
+    env: { HABITAT_ENVIRONMENT: STAGING_ENVIRONMENT_VALUE },
+    databaseId: PRODUCTION_D1_DATABASE_ID
+  }).ok === false, { productionIdDiffers: targetInfo.databaseId !== targetInfo.productionId });
 
   const encryption = secretBoxFromEnv({ env: { HABITAT_MCP_SECRET_KEY: env.HABITAT_MCP_SECRET_KEY } });
   const altEncryption = secretBoxFromEnv({ env: { HABITAT_MCP_SECRET_KEY: env.HABITAT_MCP_SECRET_KEY_ALT } });

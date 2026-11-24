@@ -31,8 +31,18 @@ import { createD1GatewayRepository } from "./d1-gateway-repository.mjs";
 import { createHeartbeatMonitor, heartbeatEnabled, createWebhookNotifier, HEARTBEAT_FLAG, HEARTBEAT_INTERVAL_MS } from "./ax-heartbeat.mjs";
 import { createD1HeartbeatRepository, HEARTBEAT_MIGRATION } from "./d1-heartbeat-repository.mjs";
 import { ownerVerifierFromEnv } from "./ax-owner-attestation.mjs";
+import { databaseAllowed } from "./staging-guard.mjs";
 
 import express from "express";
+
+// Fail closed before serving anything: a process marked as staging must never open the production
+// database. This is opt-in (HABITAT_ENVIRONMENT=staging) so production behavior is unchanged, and the
+// message names the reason only, never the id or any credential.
+const databaseCheck = databaseAllowed({ env: process.env, databaseId: process.env.HABITAT_D1_DATABASE_ID });
+if (!databaseCheck.ok) {
+  console.error("STAGING_GUARD_REFUSED_START", JSON.stringify({ reason: databaseCheck.reason }));
+  process.exit(1);
+}
 
 const app = express();
 
@@ -76,9 +86,13 @@ if (gatewayEnabled()) {
 // integration is absent, queues meaningful changes once each, and only attempts an outbound webhook
 // when one is configured. Nothing here claims it can wake an inactive ChatGPT conversation.
 let heartbeatMonitor = null;
+// Why the monitor is absent, when the operator asked for it. Reported by /system/status so a missing
+// D1 binding is never described as "the flag is off".
+let heartbeatUnavailable = null;
 if (heartbeatEnabled()) {
   const heartbeatD1 = ["CLOUDFLARE_ACCOUNT_ID", "HABITAT_D1_DATABASE_ID", "HABITAT_D1_API_TOKEN"].every(key => String(process.env[key] || "").trim());
   if (!heartbeatD1) {
+    heartbeatUnavailable = "d1_binding_incomplete";
     console.warn("AX_HEARTBEAT: enabled but the D1 binding is incomplete; no beats are recorded");
   } else {
     try {
@@ -110,9 +124,11 @@ if (heartbeatEnabled()) {
         }, Number(process.env.AX_HEARTBEAT_INTERVAL_MS) > 0 ? Math.max(10_000, Number(process.env.AX_HEARTBEAT_INTERVAL_MS)) : HEARTBEAT_INTERVAL_MS);
         timer.unref?.();
       } else {
+        heartbeatUnavailable = "schema_missing";
         console.warn("AX_HEARTBEAT_SCHEMA_MISSING", JSON.stringify({ migration: HEARTBEAT_MIGRATION, missing: schema.missing }));
       }
     } catch (error) {
+      heartbeatUnavailable = "storage_unavailable";
       console.warn("AX_HEARTBEAT_STORAGE_UNAVAILABLE", String(error?.message || error));
     }
   }
@@ -1715,7 +1731,9 @@ async function collectSystemStatus() {
       enforce: String(process.env.HABITAT_OWNER_ATTESTATION_ENFORCE || "").toLowerCase() === "true",
       policy: String(process.env.HABITAT_OWNER_ATTESTATION_ENFORCE || "").toLowerCase() === "true" ? "required" : "optional"
     } : { verifierConfigured: false, enforce: false, policy: "optional", detail: "No owner attestation key is configured." },
-    heartbeat: heartbeatMonitor ? await heartbeatMonitor.status() : { enabled: false, flag: HEARTBEAT_FLAG, connection: "disabled" },
+    heartbeat: heartbeatMonitor
+      ? await heartbeatMonitor.status()
+      : { enabled: false, flag: HEARTBEAT_FLAG, connection: "disabled", unavailableReason: heartbeatUnavailable },
     mcpEvents: {
       enabled: mcpEnabled(), configured: mcpEvents !== null, flag: MCP_FLAG, scope: MCP_SCOPE,
       secretEncryption: { configured: mcpEncryption.ok === true, activeKeyId: mcpEncryption.ok ? mcpEncryption.activeKeyId : null }
