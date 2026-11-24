@@ -190,7 +190,7 @@ function validateArguments(name, args) {
 }
 
 function eventMatches(event, args) {
-  if (args.project && event.data?.project && event.data.project !== args.project) return false;
+  if (args.project && event.data?.project !== args.project) return false;
   if (args.mission_id && event.data?.missionId !== args.mission_id) return false;
   if (args.system && event.data?.system !== args.system) return false;
   return true;
@@ -288,6 +288,9 @@ export function createMcpEventsServer({
     const bounds = await repository.eventBounds();
     const requestedCursor = params?.cursor !== null && params?.cursor !== undefined && Number.isFinite(Number(params.cursor)) ? Number(params.cursor) : null;
     const cursor = requestedCursor ?? existing?.lastCursor ?? null;
+    // Even a first subscribe returns a resumable cursor at the current head, so a later refresh cannot
+    // silently rewind or skip queued events.
+    const resumeCursor = cursor ?? bounds.maxSeq ?? null;
     const baseline = cursor ?? bounds.maxSeq ?? 0;
     const replay = await repository.listEvents({ afterSeq: baseline });
     let enqueued = 0;
@@ -297,7 +300,7 @@ export function createMcpEventsServer({
       if (queued.created) enqueued += 1;
     }
     const truncated = bounds.minSeq !== null && baseline > 0 && baseline < bounds.minSeq - 1;
-    return { id, refreshBefore, cursor, truncated, replayed: enqueued };
+    return { id, refreshBefore, cursor: resumeCursor, truncated, replayed: enqueued };
   }
 
   async function unsubscribe({ principal, params }) {

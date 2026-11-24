@@ -1,0 +1,65 @@
+name: Staging migration 0010-0016
+
+# One-shot, guarded staging migration. It runs only for a push whose commit message contains
+# [staging-migrate], so a later change to this file cannot silently re-run it.
+#
+# The token stays in the repository secret and is never printed. The script refuses production,
+# takes a D1 Time Travel bookmark before writing, and uploads the bookmark + schema evidence.
+
+on:
+  push:
+    branches: [staging/integration]
+    paths:
+      - ".github/workflows/staging-migrate.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: habitat-staging-migration
+  cancel-in-progress: false
+
+jobs:
+  migrate:
+    if: contains(github.event.head_commit.message, '[staging-migrate]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Confirm target is non-production
+        env:
+          TARGET: ${{ vars.HABITAT_STAGING_D1_DATABASE_ID }}
+          PRODUCTION: ${{ vars.HABITAT_D1_DATABASE_ID }}
+        run: |
+          set -euo pipefail
+          if [ -z "${PRODUCTION:-}" ]; then
+            echo "::error::repository variable HABITAT_D1_DATABASE_ID is not set; production cannot be excluded"
+            exit 1
+          fi
+          if [ "${TARGET}" = "${PRODUCTION}" ]; then
+            echo "::error::staging target equals production; nothing was sent"
+            exit 1
+          fi
+          echo "guard ok: staging differs from production"
+
+      - name: Bookmark, migrate 0010-0016 and verify
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          HABITAT_D1_API_TOKEN: ${{ secrets.HABITAT_D1_API_TOKEN }}
+          STAGING_D1_DATABASE_ID: ${{ vars.HABITAT_STAGING_D1_DATABASE_ID }}
+          PRODUCTION_D1_DATABASE_ID: ${{ vars.HABITAT_D1_DATABASE_ID }}
+        run: node scripts/staging-migrate.mjs | tee staging-migration-evidence.json
+
+      - name: Upload evidence and restore point
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: staging-migration-evidence
+          path: staging-migration-evidence.json
+          if-no-files-found: warn
+          retention-days: 30

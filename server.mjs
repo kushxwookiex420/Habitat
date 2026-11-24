@@ -26,7 +26,7 @@ import { createMissionRuntime } from "./ax-mission-runtime.mjs";
 import { registerAxGateway, gatewayEnabled, GATEWAY_FLAG, resolveClientToken } from "./ax-gateway.mjs";
 import { createMcpEventsServer, registerMcpEvents, mcpEnabled, MCP_FLAG, MCP_SCOPE } from "./ax-mcp-events.mjs";
 import { createD1McpRepository, MCP_MIGRATION } from "./d1-mcp-repository.mjs";
-import { secretBoxFromEnv, mcpSecretConfiguration } from "./ax-secret-box.mjs";
+import { secretBoxFromEnv } from "./ax-secret-box.mjs";
 import { createD1GatewayRepository } from "./d1-gateway-repository.mjs";
 import { createHeartbeatMonitor, heartbeatEnabled, createWebhookNotifier, HEARTBEAT_FLAG, HEARTBEAT_INTERVAL_MS } from "./ax-heartbeat.mjs";
 import { createD1HeartbeatRepository, HEARTBEAT_MIGRATION } from "./d1-heartbeat-repository.mjs";
@@ -99,10 +99,10 @@ if (heartbeatEnabled()) {
         const timer = setInterval(async () => {
           try {
             const beat = await heartbeatMonitor.beat();
-            if (mcpEvents && beat?.events?.length) {
-              await mcpEvents.ingestHeartbeatEvents(beat.events);
-              await mcpEvents.dispatch();
-            }
+            if (mcpEvents && beat?.events?.length) await mcpEvents.ingestHeartbeatEvents(beat.events);
+            // Dispatch on every beat, not only when this beat emitted something: a queued delivery from
+            // before a restart must still be attempted.
+            if (mcpEvents) await mcpEvents.dispatch();
             await heartbeatMonitor.deliver();
           } catch (error) {
             console.warn("AX_HEARTBEAT_BEAT_FAILED", String(error?.message || error).slice(0, 160));
@@ -145,6 +145,15 @@ if (mcpEnabled()) {
       console.warn("AX_MCP_STORAGE_UNAVAILABLE", String(error?.message || error));
     }
   }
+}
+if (mcpEvents) {
+  // Independent retry loop: MCP deliveries must make progress even when heartbeat is disabled or no new
+  // mission event was produced this beat. Leases keep this safe across replicas.
+  const mcpDispatchTimer = setInterval(async () => {
+    try { await mcpEvents.dispatch(); }
+    catch (error) { console.warn("AX_MCP_DISPATCH_FAILED", String(error?.message || error).slice(0, 160)); }
+  }, Number(process.env.AX_MCP_DISPATCH_INTERVAL_MS) > 0 ? Math.max(10_000, Number(process.env.AX_MCP_DISPATCH_INTERVAL_MS)) : 30_000);
+  mcpDispatchTimer.unref?.();
 }
 registerMcpEvents(app, {
   enabled: mcpEnabled(),

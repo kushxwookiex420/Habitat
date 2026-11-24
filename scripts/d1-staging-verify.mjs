@@ -47,6 +47,7 @@ export function migrationFiles(rootDir) {
  * @param {object}  [input.env]
  * @param {string}  [input.rootDir]
  * @param {string}  [input.mode]      verify | migrate
+ * @param {string}  [input.fromMigration] only apply files at or after this numeric prefix
  * @param {Function}[input.fetchImpl]
  * @param {Function}[input.log]       receives human progress lines
  */
@@ -54,6 +55,7 @@ export async function runD1StagingVerification({
   env = process.env,
   rootDir = process.cwd(),
   mode = "verify",
+  fromMigration = null,
   fetchImpl = fetch,
   log = () => {}
 } = {}) {
@@ -125,6 +127,7 @@ export async function runD1StagingVerification({
   const applied = [];
   if (mode === "migrate") {
     for (const name of migrationFiles(rootDir)) {
+      if (fromMigration && Number(name.slice(0, 4)) < Number(fromMigration)) continue;
       const sql = readFileSync(path.join(rootDir, "migrations", name), "utf8");
       const outcome = await query(sql);
       if (!outcome.ok) {
@@ -151,6 +154,7 @@ export async function runD1StagingVerification({
       objectCount: after.objects.length,
       tableCount: after.tables.length,
       indexCount: after.objects.filter((item) => item.type === "index").length,
+      indexes: after.objects.filter((item) => item.type === "index").map((item) => item.name),
       p1TableCount: after.p1TableCount,
       missingP1Tables: after.missingP1Tables,
       tables: after.tables

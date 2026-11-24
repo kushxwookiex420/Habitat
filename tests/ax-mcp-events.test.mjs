@@ -213,6 +213,8 @@ test("delivery signs the exact body, respects filters and never duplicates", asy
 
   await h.server.emit({ name: "mission.completed", data: { project: "other", missionId: "msn_other", status: "completed" } });
   assert.equal((await h.server.dispatch()).delivered, 0, "a non-matching project must not be delivered");
+  const unfilteredEvent = await h.server.emit({ name: "mission.completed", data: { missionId: "msn_no_project", status: "completed" } });
+  assert.equal(unfilteredEvent.queued, 0, "an event without the filtered project must not be delivered");
 
   const emitted = await h.server.emit({ name: "mission.completed", data: { project: "habitat", missionId: "msn_1", status: "completed", summary: "done" } });
   assert.equal(emitted.queued, 1);
@@ -304,6 +306,17 @@ test("subscription state and queued deliveries survive a restart", async () => {
   const dispatched = await restarted.dispatch();
   assert.equal(dispatched.delivered, 1);
   assert.equal(receiver.received.length, 1);
+  h.database.close();
+  await receiver.close();
+});
+
+test("a first subscription returns the current head as its resume cursor", async () => {
+  const receiver = await callbackReceiver();
+  const h = await harness({ receiver });
+  const emitted = await h.server.emit({ name: "mission.completed", data: { project: "habitat", missionId: "msn_head" } });
+  const subscribed = await subscribe(h, receiver);
+  assert.equal(subscribed.result.cursor, emitted.event.seq, "a new subscription resumes at the head, not null");
+  assert.equal(subscribed.result.replayed, 0, "starting at the head does not replay history");
   h.database.close();
   await receiver.close();
 });
