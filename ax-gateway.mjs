@@ -273,6 +273,8 @@ export function registerAxGateway(app, {
   });
 
   app.get("/ax/v1/openapi.json", (_req, res) => {
+    // The schema is not secret, but a disabled gateway does not advertise itself either.
+    if (!enabled) return res.status(503).json({ ok: false, code: "gateway_disabled", requestId: requestId() });
     res.setHeader("cache-control", "public, max-age=300");
     return res.json(OPENAPI);
   });
