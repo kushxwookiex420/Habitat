@@ -8,11 +8,12 @@ from the development workspace: there is no `adb`, no USB device and no owner ke
 | Field | Value |
 | --- | --- |
 | Artifact | `habitat-apk/debug/app-debug.apk` from the **Android APK** workflow |
-| Build run | `45295570521` (`workflow_dispatch`, branch `staging/integration`, commit `50e9c74`) |
+| Build run | `45296639342` (`workflow_dispatch`, branch `staging/integration`, commit `9315bcf`) |
 | Size | 930,401 bytes |
-| SHA-256 | `c39463da90a073e001855bb6ab54e83648bd5afca49ecdf3490f8e84f0135113` |
+| SHA-256 | `87da11d6f4b9fba4640c6ecc9f3138e786af04b6138044de20435a55c158b89d` |
+| Signing | the cached debug keystore (`android-debug-keystore-v1`); compare certificates before installing, see `docs/ANDROID_SIGNING_COMPATIBILITY.md` |
 | Package | `com.habitat.axbridge`, `versionName` 0.8.6, `minSdk` 26, `targetSdk` 35 (S26 Ultra on API 36 is in range) |
-| Earlier run | `45291043269`, same size, SHA-256 `aed01978…ac6ff` — the two builds are **not** byte-identical |
+| Earlier runs | `45291043269` (`aed01978…`), `45295570521` (`c39463da…`) — same size, different digests, because each job used a throwaway keystore and APK archives are not byte-reproducible |
 | Signing | **debug key only** — not the production identity |
 | Contents verified | `AndroidManifest.xml`, `classes.dex`, `classes2.dex`, `classes3.dex`, `res/xml/habitat_accessibility_service.xml` |
 
