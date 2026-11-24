@@ -208,7 +208,8 @@ export function buildSystemStatus({
   missions = null,
   gateway = null,
   heartbeat = null,
-  ownerAuthentication = null
+  ownerAuthentication = null,
+  mcpEvents = null
 } = {}) {
   const items = classifyWorkers({ registry, tasks, now });
   const counts = summarizeWorkerCounts(items);
@@ -316,6 +317,18 @@ export function buildSystemStatus({
         detail: heartbeat && heartbeat.enabled !== false
           ? "Habitat heartbeat is running; the integration has been seen " + (heartbeat.lastSeenAt || "never") + "."
           : "Connection monitor is disabled (HABITAT_HEARTBEAT_ENABLED is not \"true\")."
+      },
+      mcpEvents: {
+        state: mcpEvents?.enabled ? (mcpEvents.configured ? "enabled" : "enabled_unconfigured") : "disabled",
+        enabled: mcpEvents?.enabled === true,
+        configured: mcpEvents?.configured === true,
+        flag: mcpEvents?.flag || "HABITAT_MCP_EVENTS_ENABLED",
+        scope: mcpEvents?.scope || "mcp:events",
+        detail: mcpEvents?.enabled
+          ? mcpEvents.configured
+            ? "MCP Events endpoint is enabled; subscriptions and deliveries require a scoped integration token."
+            : "MCP Events is enabled but its schema or identity store is unavailable; /mcp refuses requests."
+          : "MCP Events endpoint is disabled (HABITAT_MCP_EVENTS_ENABLED is not \"true\")."
       },
       ownerAuthentication: {
         state: ownerAuthentication?.verifierConfigured ? (ownerAuthentication.enforce ? "enforced" : "configured_optional") : "not_configured",

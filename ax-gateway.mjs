@@ -29,7 +29,8 @@ export const GATEWAY_SCOPES = Object.freeze([
   "missions:write",
   "missions:approve",
   "recovery:write",
-  "events:write"
+  "events:write",
+  "mcp:events"
 ]);
 
 export const SCOPE_DESCRIPTIONS = Object.freeze({
@@ -38,7 +39,8 @@ export const SCOPE_DESCRIPTIONS = Object.freeze({
   "missions:write": "Submit missions; cannot approve or recover.",
   "missions:approve": "Decide a pending approval; still requires a valid owner attestation.",
   "recovery:write": "Run bounded mission recovery (never approves or deploys).",
-  "events:write": "Acknowledge delivered heartbeat events; cannot submit or approve work."
+  "events:write": "Acknowledge delivered heartbeat events; cannot submit or approve work.",
+  "mcp:events": "Use the MCP Events endpoint: list events, subscribe and unsubscribe."
 });
 
 const NONCE_WINDOW_MS = 5 * 60 * 1000;
@@ -81,6 +83,22 @@ function summarizeMission(mission) {
  * Create one integration client. The plaintext token is returned once and never stored.
  * Admin action by design: there is no HTTP route that mints credentials.
  */
+export async function resolveClientToken({ repository, authorization, scope = null, now = () => Date.now() } = {}) {
+  if (!repository) return { ok: false, code: "gateway_not_configured", status: 503 };
+  const header = String(authorization || "");
+  if (!header.startsWith("Bearer ")) return { ok: false, code: "gateway_token_required", status: 401 };
+  const match = TOKEN_PATTERN.exec(header.slice(7).trim());
+  if (!match) return { ok: false, code: "gateway_token_invalid", status: 401 };
+  const client = await repository.getClient(match[1]).catch(() => null);
+  if (!client) return { ok: false, code: "gateway_client_unknown", status: 401 };
+  if (!safeEqualHex(client.tokenHash, hashToken(match[2]))) return { ok: false, code: "gateway_token_invalid", status: 401 };
+  if (client.revokedAt) return { ok: false, code: "gateway_client_revoked", status: 401 };
+  if (client.expiresAt && Date.parse(client.expiresAt) <= now()) return { ok: false, code: "gateway_client_expired", status: 401 };
+  if (scope && !client.scopes.includes(scope)) return { ok: false, code: "gateway_scope_required", status: 403, required: scope };
+  try { await repository.touchClient(client.id); } catch { /* best effort */ }
+  return { ok: true, client };
+}
+
 export async function issueClientToken({ repository, label, scopes, expiresAt = null, now = () => new Date().toISOString() } = {}) {
   if (!repository || typeof repository.createClient !== "function") return { ok: false, code: "gateway_repository_required" };
   const wanted = (Array.isArray(scopes) ? scopes : []).map(scope => String(scope).trim());

@@ -50,7 +50,8 @@ caller cannot mistake acceptance for completion.
 | `recovery:write` | | | | | ✓ |
 
 `events:write` only permits acknowledging heartbeat events; it grants no mission, approval or recovery
-ability. Heartbeat reads use `status:read`.
+ability. Heartbeat reads use `status:read`. `mcp:events` permits the `/mcp` MCP Events endpoint
+(catalog, subscribe, unsubscribe) and nothing on the REST gateway.
 
 A typical ChatGPT client gets `status:read`, `missions:read`, `missions:write`. Approval and recovery
 are separate grants and should not be given to the same conversational identity.

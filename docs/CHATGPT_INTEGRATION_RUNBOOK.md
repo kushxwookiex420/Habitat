@@ -178,12 +178,17 @@ Researched 2026-11-24:
   (`events/list`, `events/subscribe`, `events/unsubscribe`) and receives signed webhooks (Standard
   Webhooks, webhook-only, one event per request, ≤256 KiB, 10s timeout, callback challenge). Work chats
   on web/desktop with Cloud.
-- Built today: durable queue + exact trigger + signed webhook notifier (`AX_NOTIFY_WEBHOOK_URL`,
-  `AX_NOTIFY_WEBHOOK_SECRET`) for a relay. **An MCP Events server is not implemented**, so automatic
-  wake of ChatGPT remains unverified. The guaranteed path is `GET /ax/v1/heartbeat` during a turn.
+- Built: the OpenAI MCP Events adapter (`docs/AX_MCP_EVENTS.md`) implements `events/list`,
+  `events/subscribe`, `events/unsubscribe`, callback challenge verification, Standard Webhooks signing,
+  persistent subscriptions, cursor replay and bounded retries. It is default-disabled and has **not**
+  been connected to ChatGPT.
+- The exact trigger remains **AX RECONNECT — HABITAT HEARTBEAT.** and is available by pull
+  (`GET /ax/v1/heartbeat`) and as the `heartbeat.reconnect` catalog event.
+- ChatGPT wake still is not proven: a real plugin, subscription and callback must be exercised. Ordinary
+  inactive conversations cannot be woken; supported surfaces are Work chats (web/desktop Cloud) and dots.
 
-Next engineering step for push: add `events/list|subscribe|unsubscribe` plus callback challenge and
-per-subscription signing on top of `habitat_ax_heartbeat_events`.
+MCP setup: apply 0015, set `HABITAT_MCP_EVENTS_ENABLED=true`, mint a token with `mcp:events`, register
+`https://<origin>/mcp` as the plugin's MCP server with Bearer auth, rescan, then subscribe in a Work chat.
 
 ## 9. Shared rate limiting (Priority 9)
 

@@ -23,7 +23,9 @@ import { buildWorkerList, buildWorkerDetail, resolveWorkerId, describeVerificati
 import { createChatCommandAuthorizer } from "./command-auth.mjs";
 import { createWorkforceRuntime } from "./ax-workforce-runtime.mjs";
 import { createMissionRuntime } from "./ax-mission-runtime.mjs";
-import { registerAxGateway, gatewayEnabled, GATEWAY_FLAG } from "./ax-gateway.mjs";
+import { registerAxGateway, gatewayEnabled, GATEWAY_FLAG, resolveClientToken } from "./ax-gateway.mjs";
+import { createMcpEventsServer, registerMcpEvents, mcpEnabled, MCP_FLAG, MCP_SCOPE } from "./ax-mcp-events.mjs";
+import { createD1McpRepository, MCP_MIGRATION } from "./d1-mcp-repository.mjs";
 import { createD1GatewayRepository } from "./d1-gateway-repository.mjs";
 import { createHeartbeatMonitor, heartbeatEnabled, createWebhookNotifier, HEARTBEAT_FLAG, HEARTBEAT_INTERVAL_MS } from "./ax-heartbeat.mjs";
 import { createD1HeartbeatRepository, HEARTBEAT_MIGRATION } from "./d1-heartbeat-repository.mjs";
@@ -95,7 +97,11 @@ if (heartbeatEnabled()) {
         });
         const timer = setInterval(async () => {
           try {
-            await heartbeatMonitor.beat();
+            const beat = await heartbeatMonitor.beat();
+            if (mcpEvents && beat?.events?.length) {
+              await mcpEvents.ingestHeartbeatEvents(beat.events);
+              await mcpEvents.dispatch();
+            }
             await heartbeatMonitor.deliver();
           } catch (error) {
             console.warn("AX_HEARTBEAT_BEAT_FAILED", String(error?.message || error).slice(0, 160));
@@ -110,6 +116,42 @@ if (heartbeatEnabled()) {
     }
   }
 }
+// OpenAI MCP Events adapter. It shares the gateway's integration identities and scopes, so a plugin
+// token is the same revocable credential. Disabled unless HABITAT_MCP_EVENTS_ENABLED=true and the
+// 0015 schema exists; no subscription or delivery is attempted while it is off.
+let mcpEvents = null;
+if (mcpEnabled()) {
+  const mcpD1 = ["CLOUDFLARE_ACCOUNT_ID", "HABITAT_D1_DATABASE_ID", "HABITAT_D1_API_TOKEN"].every(key => String(process.env[key] || "").trim());
+  if (!mcpD1 || !gatewayRepository) {
+    console.warn("AX_MCP_EVENTS: enabled but D1 or the gateway identity store is unavailable; /mcp will refuse");
+  } else {
+    try {
+      const candidate = createD1McpRepository({
+        accountId: process.env.CLOUDFLARE_ACCOUNT_ID,
+        databaseId: process.env.HABITAT_D1_DATABASE_ID,
+        apiToken: process.env.HABITAT_D1_API_TOKEN
+      });
+      const schema = await candidate.verifySchema();
+      if (schema.ok) mcpEvents = createMcpEventsServer({ repository: candidate, log: console });
+      else console.warn("AX_MCP_SCHEMA_MISSING", JSON.stringify({ migration: MCP_MIGRATION, missing: schema.missing }));
+    } catch (error) {
+      console.warn("AX_MCP_STORAGE_UNAVAILABLE", String(error?.message || error));
+    }
+  }
+}
+registerMcpEvents(app, {
+  enabled: mcpEnabled(),
+  server: mcpEvents,
+  authenticate: async req => {
+    const resolved = await resolveClientToken({ repository: gatewayRepository, authorization: req.headers.authorization, scope: MCP_SCOPE });
+    if (!resolved.ok) return resolved;
+    if (gatewayRepository && typeof gatewayRepository.consumeRateLimit === "function") {
+      const limited = await gatewayRepository.consumeRateLimit({ clientId: resolved.client.id, windowMs: 60_000, max: 120 }).catch(() => ({ shared: false, ok: true }));
+      if (limited.shared && !limited.ok) return { ok: false, status: 429, code: "gateway_rate_limited" };
+    }
+    return resolved;
+  }
+});
 registerAxGateway(app, {
   enabled: gatewayEnabled(),
   repository: gatewayRepository,
@@ -1658,6 +1700,7 @@ async function collectSystemStatus() {
       policy: String(process.env.HABITAT_OWNER_ATTESTATION_ENFORCE || "").toLowerCase() === "true" ? "required" : "optional"
     } : { verifierConfigured: false, enforce: false, policy: "optional", detail: "No owner attestation key is configured." },
     heartbeat: heartbeatMonitor ? await heartbeatMonitor.status() : { enabled: false, flag: HEARTBEAT_FLAG, connection: "disabled" },
+    mcpEvents: { enabled: mcpEnabled(), configured: mcpEvents !== null, flag: MCP_FLAG, scope: MCP_SCOPE },
     routes: {
       chat: true,
       // These routes are registered by registerDeviceCommandBridge regardless of credentials or
