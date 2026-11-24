@@ -50,10 +50,21 @@ Two defects were found and fixed to get there, both of which would have blocked 
    (12s video vs 0s audio) although `requireAudio: false`; a missing audio track is now handled by the
    audio-track check, not the sync check.
 
-Remaining blocker on the real catalog item: its title `Universal Car Seat Gap Organizer with Storage
-Pocket` is rejected by safe-area QA (`text_overflow_risk`, estimated 1597 px against 924 px max). The
-fix is typography (narrower wrap or smaller title), not a QA concession. Until then, the catalog item
-renders only with a shortened product name.
+The catalog-title blocker is now fixed at the source: `estimateTextWidth` split on a literal backslash
+instead of a newline, so a wrapped three-line title was measured as one 52-character line (1597 px
+against 924 px max). With the split corrected, the real catalog item renders and verifies:
+
+| Field | Value |
+| --- | --- |
+| Product | Universal Car Seat Gap Organizer with Storage Pocket |
+| Bytes | 892,530 |
+| Duration | 12.000 s |
+| Picture | 1080×1920 H.264, 360 frames |
+| SHA-256 | `e3891bc0f0e9974600b83fd39c173a0cab5898199135966e081e325fd9ff3ebf` |
+| Pipeline result | `Product-picture videos verified: 1/1` |
+| Published | **no** |
+
+No QA threshold was weakened: the estimate is still a conservative overestimate per line.
 
 ## Next concrete step (no spend, no publishing)
 

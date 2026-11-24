@@ -78,10 +78,9 @@ What this means for installing:
 - The repository declares `versionName` **0.8.6**, while the installed app reports **0.8.7**, so the
   installed build did not come from this tree's current state. Do not assume any APK here matches it.
 
-Next correct step, and it is an owner decision: either a debug keystore committed to the repo (a
-debug key with the public `android` password, referenced only by the `debug` build type), or a
-release keystore in the four `HABITAT_KEYSTORE_*` secrets. The cache approach should be removed rather
-than relied on.
+Still outstanding is the comparison that decides whether an APK can replace the **installed 0.8.7**.
+That is a property of the phone, not of the build, and needs the two reads below on the device. Until
+it matches, no APK here is offered as an upgrade — the installed app stays untouched.
 
 ## Status
 
