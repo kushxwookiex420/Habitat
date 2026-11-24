@@ -14,6 +14,20 @@
 No deployment, environment change or migration was made against it. Staging migrations were applied
 only to `0fdf1ac9-…82068`, which is a different database.
 
+## Live staging service
+
+The isolated service now exists as `habitat-staging-e3ie`
+(`https://habitat-staging-e3ie.onrender.com`), free plan, branch `staging/integration`. On 2026-11-24 it
+reported commit `7a2fab8` from `/health`, answered `/system/status` with `secretsExposed: false`, and
+refused `/mcp`, `/ax/v1/missions` and `/ax/command/*` with 503 rather than serving unauthenticated. Its
+storage was still `degraded` because `CLOUDFLARE_ACCOUNT_ID`, `HABITAT_D1_API_TOKEN`,
+`HABITAT_MCP_SECRET_KEY` and `HABITAT_OWNER_ATTESTATION_KEY` were not set; see
+`docs/STAGING_EVIDENCE.md`.
+
+Commit `0cc002a` adds `HABITAT_ENVIRONMENT=staging` and a startup guard: a staging process refuses to
+start when its D1 id is the production database. The guard is opt-in, so production behavior is
+unchanged.
+
 ## Create the separate staging service
 
 Use `render.staging.yaml` at the repository root as a **new Blueprint** (Render → New → Blueprint).
@@ -24,6 +38,7 @@ Do not apply it to the existing service.
 - Health check: `/health`.
 - Database id is fixed to the staging D1. Production id is never present.
 - Flags: gateway, heartbeat and MCP on; workforce, missions and Nexus off.
+- `HABITAT_ENVIRONMENT=staging`: enables the production-database guard. Production never sets it.
 
 Render prompts for the four secrets (`sync: false`):
 
@@ -65,8 +80,10 @@ curl -sS -o /dev/null -w '%{http_code}\n' -X POST https://<staging-host>/mcp \
   -H 'content-type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"events/list"}'
 ```
 
-Expected: health 200 with the staging commit; `/system/status` 200 with MCP encryption configured and
-gateway enabled; `/mcp` 401 without a token (not 404/503). Then follow
+Expected: health 200 with the staging commit; `/system/status` 200 with `storage.state: ready`, MCP
+encryption configured and the gateway repository present; `/mcp` 401 without a token (not 404/503). If
+`heartbeat.state` is `enabled_unavailable`, read `heartbeat.unavailableReason`; the status reports the
+binding, schema or storage fault instead of claiming the flag is off. Then follow
 `docs/STAGING_OWNER_CHECKLIST.md` for the token, ChatGPT registration and mission test.
 
 Free instances sleep after idle. Wake the service before the first probe; sleeping is not a failure.

@@ -3,8 +3,10 @@
 Everything needed to stand up an isolated staging service for the first real ChatGPT integration.
 Production is untouched, no paid resource is created, and all runtimes remain disabled until explicitly
 enabled. Migrations 0010–0016 **have** been applied to staging and real-D1 acceptance passed; see
-`docs/STAGING_EVIDENCE.md`. The application deployment and real ChatGPT registration are still pending —
-follow `docs/STAGING_OWNER_CHECKLIST.md`.
+`docs/STAGING_EVIDENCE.md`. The isolated service `habitat-staging-e3ie` is deployed and fails closed,
+but it still lacks `CLOUDFLARE_ACCOUNT_ID`, `HABITAT_D1_API_TOKEN`, `HABITAT_MCP_SECRET_KEY` and
+`HABITAT_OWNER_ATTESTATION_KEY`, so `/mcp` and `/ax/v1/missions` answer 503. Real ChatGPT registration
+is still pending — follow `docs/STAGING_OWNER_CHECKLIST.md`.
 
 ## 1. Environment variables
 
@@ -14,6 +16,7 @@ follow `docs/STAGING_OWNER_CHECKLIST.md`.
 | --- | --- | --- |
 | `CLOUDFLARE_ACCOUNT_ID` | config | account that owns the staging D1 database |
 | `HABITAT_D1_DATABASE_ID` | config | **staging** database id; must differ from production |
+| `HABITAT_ENVIRONMENT=staging` | config | refuses to start if the D1 id is the production database; optional but recommended |
 | `HABITAT_D1_API_TOKEN` | secret | D1 edit token, staging only; server-side only |
 | `HABITAT_GATEWAY_ENABLED=true` | flag | off by default |
 | `HABITAT_MCP_EVENTS_ENABLED=true` | flag | off by default; also needs the gateway identity store |
