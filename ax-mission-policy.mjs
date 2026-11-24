@@ -182,6 +182,7 @@ export function executionGate({ mission, task, now = new Date().toISOString(), m
   if (!approval) return { ok: false, code: "approval_action_changed", ...base, fingerprint };
   if (approval.status === "pending") return { ok: false, code: "approval_pending", ...base, fingerprint };
   if (approval.status === "rejected" || approval.decision === "rejected") return { ok: false, code: "approval_rejected", ...base, fingerprint };
+  if (approval.status === "revoked" || approval.decision === "revoked") return { ok: false, code: "approval_revoked", ...base, fingerprint };
   const verdict = approvalValid({ ...approval, decision: approval.decision || approval.status }, { fingerprint, now, maxAgeMs });
   return { ok: verdict.ok, code: verdict.code === "approval_valid" ? "approval_valid" : verdict.code, ...base, fingerprint, grantedAt: approval.grantedAt || null, decidedBy: approval.decidedBy || null };
 }

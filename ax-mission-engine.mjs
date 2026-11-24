@@ -504,7 +504,11 @@ export function createMissionEngine({
       if (!ready) break;
       // A task the plan itself marks as owner-required must never start. Work that has not begun cannot be
       // mistakenly described as done, and the mission parks at approval_required for a signed decision.
-      if (ready.approvalRequired === true && (mission.approvals || []).some(item => item.status === "pending")) {
+      // Only this task's approval, or a mission-scope signal, parks this task. Another task's pending
+      // approval must not block work the owner already authorised.
+      const taskPending = (mission.approvals || []).some(item => item.taskId === ready.id && item.status === "pending");
+      const missionPending = (mission.approvals || []).some(item => !item.taskId && item.status === "pending");
+      if (ready.approvalRequired === true && (taskPending || missionPending)) {
         mission.status = "approval_required";
         await emit(mission.id, "mission.approval_gate", { taskId: ready.id });
         break;
@@ -559,13 +563,13 @@ export function createMissionEngine({
     }, attestation);
     if (!verified.ok) return { ok: false, ...verified };
 
-    // A decision on this mission also answers the mission-scope signal: the owner reviewed this mission.
-    // Mission-scope approvals never authorise a task, so this cannot widen an approval's scope.
+    // A decision always answers the mission-scope signal, and may name exactly one task or approval. It never
+    // sweeps up unrelated task approvals: one signature must not authorise work the owner did not see.
     const selected = mission.approvals.filter((item) => {
       const missionScope = !item.taskId;
       if (approvalId) return item.id === approvalId || (missionScope && item.status === "pending");
       if (taskId) return item.taskId === taskId || (missionScope && item.status === "pending");
-      return item.status === "pending";
+      return missionScope && item.status === "pending";
     });
     if (selected.length === 0) return { ok: false, code: "approval_not_found" };
     for (const approval of selected) {
@@ -596,6 +600,32 @@ export function createMissionEngine({
     return { ok: true, status: mission.status, mission };
   }
 
+  /**
+   * Withdraw a grant before it is used. The approval record is kept (the audit trail matters), marked revoked,
+   * and the execution gate refuses it with `approval_revoked`.
+   */
+  async function revoke({ missionId, taskId = null, approvalId = null, by = "owner", reason = null } = {}) {
+    const loaded = await store.get(missionId);
+    if (!loaded) return { ok: false, code: "mission_not_found" };
+    const mission = loaded.record;
+    const selected = mission.approvals.filter((item) =>
+      (approvalId && item.id === approvalId) || (taskId && item.taskId === taskId));
+    if (selected.length === 0) return { ok: false, code: "approval_not_found" };
+    for (const approval of selected) {
+      approval.status = "revoked";
+      approval.decision = "revoked";
+      approval.revokedAt = now();
+      approval.revokedBy = clean(by, 64) || "owner";
+      approval.revokeReason = clean(reason, 200) || null;
+    }
+    const saved = await persist(mission);
+    if (!saved.ok) return { ok: false, code: saved.code };
+    await emit(mission.id, "mission.approval_revoked", {
+      taskId, approvalId, by: clean(by, 64) || "owner", reason: clean(reason, 200) || null
+    });
+    return { ok: true, revoked: selected.map((item) => item.id), mission };
+  }
+
   async function summary() {
     const counts = typeof store.counts === "function" ? await store.counts() : { total: 0, byStatus: {} };
     return { ok: true, ...counts };
@@ -606,6 +636,7 @@ export function createMissionEngine({
     execute,
     recover,
     approve,
+    revoke,
     list: options => store.list(options),
     get: id => store.get(id),
     status: summary,

@@ -376,3 +376,105 @@ test("HTTP: an approval authorises one action, and the API refuses a changed one
     await rm(base, { recursive: true, force: true });
   }
 });
+
+test("HTTP: expired, rejected, revoked, wrong-task and wrong-mission approvals are refused", async () => {
+  const base = await workspace();
+  const env = await buildMissionEnvironment({
+    rootDir: ROOT,
+    artifactsDir: path.join(base, "artifacts"),
+    dbPath: path.join(base, "db.sqlite"),
+    ownerVerifier: { verify: () => ({ ok: true, code: "test_attestation" }) }
+  });
+  const provider = {
+    submit: (spec) => env.pipeline.submit(spec),
+    run: (id, options) => env.pipeline.run(id, options),
+    approve: (spec) => env.missions.approve(spec),
+    revoke: (spec) => env.missions.revoke(spec),
+    get: async (id) => { const loaded = await env.missions.get(id); return loaded ? loaded.record : null; },
+    events: (id) => env.missions.events(id)
+  };
+  const server = await startServer({ provider });
+  const TASK = {
+    id: "d1", title: "Deploy to production", requires: ["engineering"], criteria: [0],
+    approvalRequired: true, action: "deploy release", target: "staging", params: { replicas: 2 }
+  };
+  let counter = 0;
+  const deployMission = async () => {
+    counter += 1;
+    const created = await call(server.base, "POST", "/ax/missions", { body: {
+      objective: "Deploy release 5." + counter + " to production",
+      acceptanceCriteria: ["Release prepared"],
+      tasks: [TASK],
+      idempotencyKey: "refuse-http-" + counter
+    } });
+    assert.equal(created.status, 201, JSON.stringify(created.json));
+    const id = created.json.mission.missionId;
+    const parked = await call(server.base, "POST", "/ax/missions/" + id + "/run", { body: {} });
+    assert.equal(parked.json.run.status, "approval_required", JSON.stringify(parked.json));
+    return id;
+  };
+  const decide = (id, body) => call(server.base, "POST", "/ax/missions/" + id + "/approve", { body });
+  const tamper = async (id, change) => {
+    const loaded = await env.missionStore.get(id);
+    change(loaded.record);
+    assert.equal((await env.missionStore.save(loaded.record, loaded.version)).ok, true);
+  };
+  const runAndRead = async (id) => {
+    await call(server.base, "POST", "/ax/missions/" + id + "/run", { body: { maxRounds: 1 } });
+    return (await call(server.base, "GET", "/ax/missions/" + id)).json;
+  };
+  const clearMissionScope = (record) => {
+    for (const item of record.approvals) if (!item.taskId) item.status = "approved";
+  };
+  try {
+    // Expired after grant.
+    const expired = await deployMission();
+    assert.equal((await decide(expired, { decision: "approve", taskId: "d1" })).status, 200);
+    await tamper(expired, (record) => {
+      const approval = record.approvals.find((item) => item.taskId === "d1");
+      approval.expiresAt = "2020-01-01T00:00:00.000Z";
+    });
+    const expiredMission = await runAndRead(expired);
+    assert.equal(expiredMission.mission.tasks[0].error, "approval_expired");
+    assert.notEqual(expiredMission.mission.status, "completed");
+
+    // Rejected before execution.
+    const rejected = await deployMission();
+    assert.equal((await decide(rejected, { decision: "reject", taskId: "d1" })).status, 200);
+    const rejectedMission = await runAndRead(rejected);
+    assert.equal(rejectedMission.mission.status, "rejected");
+    assert.notEqual(rejectedMission.mission.tasks[0].status, "completed");
+
+    // Revoked after grant.
+    const revoked = await deployMission();
+    assert.equal((await decide(revoked, { decision: "approve", taskId: "d1" })).status, 200);
+    assert.equal((await env.missions.revoke({ missionId: revoked, taskId: "d1", reason: "withdrawn" })).ok, true);
+    const revokedMission = await runAndRead(revoked);
+    assert.equal(revokedMission.mission.tasks[0].error, "approval_revoked");
+
+    // Bound to a different task.
+    const wrongTask = await deployMission();
+    assert.equal((await decide(wrongTask, { decision: "approve", taskId: "d1" })).status, 200);
+    await tamper(wrongTask, (record) => {
+      record.approvals.find((item) => item.taskId === "d1").taskId = "d0";
+      clearMissionScope(record);
+    });
+    const wrongTaskMission = await runAndRead(wrongTask);
+    assert.equal(wrongTaskMission.mission.tasks[0].error, "approval_missing");
+
+    // Replayed from a different mission.
+    const wrongMission = await deployMission();
+    assert.equal((await decide(wrongMission, { decision: "approve", taskId: "d1" })).status, 200);
+    await tamper(wrongMission, (record) => {
+      record.approvals.find((item) => item.taskId === "d1").missionId = "msn_other_mission";
+      clearMissionScope(record);
+    });
+    const wrongMissionResult = await runAndRead(wrongMission);
+    assert.equal(wrongMissionResult.mission.tasks[0].error, "approval_missing");
+    assert.ok(wrongMissionResult.events.some((event) => event.type === "task.approval_refused"));
+  } finally {
+    await server.close();
+    await env.close();
+    await rm(base, { recursive: true, force: true });
+  }
+});

@@ -40,7 +40,7 @@ function clock(start = "2026-11-24T12:00:00.000Z") {
 
 async function setup({ tick = clock(), verifier = async () => ({ ok: true, evidence: ["verifier:spy_verified"], tests: { ran: 1, passed: 1, failed: 0 } }) } = {}) {
   const base = await mkdtemp(path.join(os.tmpdir(), "habitat-approval-gate-"));
-  const calls = { compute: 0, verify: 0 };
+  const calls = { compute: 0, verify: 0, byTask: {} };
   const env = await buildMissionEnvironment({
     rootDir: ROOT,
     artifactsDir: path.join(base, "artifacts"),
@@ -48,8 +48,9 @@ async function setup({ tick = clock(), verifier = async () => ({ ok: true, evide
     now: tick.now,
     ownerVerifier: { verify: () => ({ ok: true, code: "test_attestation" }) },
     executorOverrides: {
-      "eng.repo": async () => {
+      "eng.repo": async ({ task }) => {
         calls.compute += 1;
+        calls.byTask[task.id] = (calls.byTask[task.id] || 0) + 1;
         return {
           result: {
             status: "completed",
@@ -266,5 +267,162 @@ test("gate: a read-only mission still runs without any approval", async () => {
     const run = await env.pipeline.run(outcome.missionId, { maxRounds: 1 });
     assert.equal(run.status, "completed");
     assert.equal(calls.compute, 1);
+  } finally { await close(); }
+});
+
+test("gate: one task signature does not authorise an unrelated consequential task", async () => {
+  const { env, calls, close } = await setup();
+  try {
+    const outcome = await env.pipeline.submit({
+      objective: "Prepare two separate releases",
+      acceptanceCriteria: ["Release one prepared", "Release two prepared"],
+      tasks: [
+        { ...TASKS[1], id: "d1", title: "Deploy release 4.2.0 to production", criteria: [0], dependsOn: [], action: "deploy 4.2.0", target: "staging", params: { replicas: 2 } },
+        { ...TASKS[1], id: "d2", title: "Deploy release 4.3.0 to production", criteria: [1], dependsOn: [], action: "deploy 4.3.0", target: "staging", params: { replicas: 3 } }
+      ]
+    });
+    assert.equal(outcome.ok, true, JSON.stringify(outcome));
+    const missionId = outcome.missionId;
+    const parked = await env.pipeline.run(missionId, { maxRounds: 1 });
+    assert.equal(parked.status, "approval_required");
+    assert.equal(calls.compute, 0, "neither consequential task ran before a decision");
+
+    const approved = await env.missions.approve({ missionId, taskId: "d1", decision: "approve" });
+    assert.equal(approved.ok, true, JSON.stringify(approved));
+    const after = await env.pipeline.run(missionId, { maxRounds: 1 });
+    const mission = await load(env, missionId);
+    const [d1, d2] = ["d1", "d2"].map((id) => mission.tasks.find((task) => task.id === id));
+    assert.equal(d1.status, "completed", "the approved task ran");
+    assert.equal(d2.status, "pending", "the unrelated task did not run");
+    assert.equal(calls.byTask.d1, 1);
+    assert.equal(calls.byTask.d2 || 0, 0, "the unrelated task never reached an executor");
+    assert.ok(mission.approvals.some((item) => item.taskId === "d2" && item.status === "pending"), "d2 still needs its own decision");
+    assert.notEqual(after.status, "completed");
+  } finally { await close(); }
+});
+
+test("gate: a revoked approval cannot execute", async () => {
+  const { env, calls, close } = await setup();
+  try {
+    const missionId = await submit(env);
+    await parkAndApprove({ env, missionId });
+    const revoked = await env.missions.revoke({ missionId, taskId: "t2", reason: "owner withdrew the release" });
+    assert.equal(revoked.ok, true, JSON.stringify(revoked));
+    await env.pipeline.run(missionId, { maxRounds: 1 });
+    assert.equal(calls.byTask.t2 || 0, 0, "revoked work never executes");
+    const task = (await load(env, missionId)).tasks.find((item) => item.id === "t2");
+    assert.equal(task.error, "approval_revoked");
+    const events = await env.missions.events(missionId);
+    assert.ok(events.some((event) => event.type === "mission.approval_revoked" && event.taskId === "t2"));
+  } finally { await close(); }
+});
+
+test("gate: an approval expires across a database restart", async () => {
+  const tick = clock();
+  const base = await mkdtemp(path.join(os.tmpdir(), "habitat-approval-restart-"));
+  const dbPath = path.join(base, "db.sqlite");
+  const artifactsDir = path.join(base, "artifacts");
+  const calls = { compute: 0, byTask: {} };
+  const overrides = {
+    "eng.repo": async ({ task }) => {
+      calls.compute += 1;
+      calls.byTask[task.id] = (calls.byTask[task.id] || 0) + 1;
+      return { result: { status: "completed", evidence: ["spy:ran"], changedFiles: [], tests: { ran: 1, passed: 1, failed: 0 } } };
+    },
+    "verifier.recompute": async () => ({ ok: true, evidence: ["verifier:ok"], tests: { ran: 1, passed: 1, failed: 0 } })
+  };
+  const first = await buildMissionEnvironment({
+    rootDir: ROOT, artifactsDir, dbPath, now: tick.now,
+    ownerVerifier: { verify: () => ({ ok: true, code: "test_attestation" }) },
+    executorOverrides: overrides
+  });
+  let missionId;
+  try {
+    const outcome = await first.pipeline.submit({ objective: "Deploy release 9.0.0 to staging", acceptanceCriteria: ["Release prepared"], tasks: [{ ...TASKS[1], dependsOn: [], criteria: [0] }] });
+    assert.equal(outcome.ok, true, JSON.stringify(outcome));
+    missionId = outcome.missionId;
+    assert.equal((await first.pipeline.run(missionId, { maxRounds: 1 })).status, "approval_required");
+    const approved = await first.missions.approve({ missionId, taskId: "t2", decision: "approve" });
+    assert.equal(approved.ok, true, JSON.stringify(approved));
+    assert.equal(calls.byTask.t2 || 0, 0);
+  } finally {
+    first.close();
+  }
+
+  // A new process on the same database, after the approval's window has closed.
+  tick.advance(31 * 60_000);
+  const second = await buildMissionEnvironment({
+    rootDir: ROOT, artifactsDir, dbPath, now: tick.now,
+    ownerVerifier: { verify: () => ({ ok: true, code: "test_attestation" }) },
+    executorOverrides: overrides
+  });
+  try {
+    const run = await second.pipeline.run(missionId, { maxRounds: 1 });
+    assert.notEqual(run.status, "completed");
+    const mission = (await second.missions.get(missionId)).record;
+    assert.equal(mission.tasks.find((task) => task.id === "t2").error, "approval_expired");
+    assert.equal(calls.byTask.t2 || 0, 0, "the expired grant survived the restart but not the gate");
+  } finally {
+    second.close();
+    await rm(base, { recursive: true, force: true });
+  }
+});
+
+test("gate: prohibited work stays blocked even with a valid approval", async () => {
+  const { env, calls, close } = await setup();
+  try {
+    const intake = await env.missions.intake({
+      objective: "Remove production records",
+      acceptanceCriteria: ["Records removed"],
+      tasks: [{
+        id: "p1", title: "Delete production records", requires: ["engineering"], criteria: [0],
+        approvalRequired: true, action: "delete production records", target: "production", params: { table: "missions" }
+      }]
+    });
+    assert.equal(intake.ok, true, JSON.stringify(intake));
+    const missionId = intake.missionId;
+    await env.pipeline.run(missionId, { maxRounds: 1 });
+    const approved = await env.missions.approve({ missionId, taskId: "p1", decision: "approve" });
+    assert.equal(approved.ok, true, JSON.stringify(approved));
+    await env.pipeline.run(missionId, { maxRounds: 1 });
+    assert.equal(calls.byTask.p1 || 0, 0, "prohibited work never executes, approval or not");
+    const task = (await load(env, missionId)).tasks.find((item) => item.id === "p1");
+    assert.equal(task.error, "policy_denied");
+  } finally { await close(); }
+});
+
+test("gate: execute, recover and the pipeline all converge on the same refusal", async () => {
+  const { env, calls, close } = await setup();
+  try {
+    const makeTampered = async (suffix) => {
+      const outcome = await env.pipeline.submit({
+        objective: "Deploy release 4.2.0 to staging " + suffix,
+        acceptanceCriteria: ["Release prepared"],
+        tasks: [{ ...TASKS[1], dependsOn: [], criteria: [0] }]
+      });
+      assert.equal(outcome.ok, true, JSON.stringify(outcome));
+      const missionId = outcome.missionId;
+      await env.pipeline.run(missionId, { maxRounds: 1 });
+      await env.missions.approve({ missionId, taskId: "t2", decision: "approve" });
+      await mutate(env, missionId, (mission) => {
+        mission.tasks.find((task) => task.id === "t2").params = { region: "iad", replicas: 9 };
+      });
+      return missionId;
+    };
+    const paths = [
+      ["engine.execute", async (id) => env.missions.execute(id)],
+      ["engine.recover", async () => env.missions.recover({ limit: 5 })],
+      ["pipeline.run", async (id) => env.pipeline.run(id, { maxRounds: 1 })]
+    ];
+    for (const [index, [name, invoke]] of paths.entries()) {
+      const missionId = await makeTampered("via " + name + " " + index);
+      await invoke(missionId);
+      const mission = await load(env, missionId);
+      const task = mission.tasks.find((item) => item.id === "t2");
+      assert.equal(task.status, "blocked", name + " must refuse through the gate");
+      assert.equal(task.error, "approval_action_changed", name);
+      assert.notEqual(mission.status, "completed", name);
+    }
+    assert.equal(calls.byTask.t2 || 0, 0, "no path executed the tampered task");
   } finally { await close(); }
 });

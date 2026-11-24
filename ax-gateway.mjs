@@ -294,6 +294,8 @@ export function registerAxGateway(app, {
       decision: body.decision,
       attestation: body.attestation,
       reason: body.reason,
+      taskId: body.taskId ? String(body.taskId) : null,
+      approvalId: body.approvalId ? String(body.approvalId) : null,
       by: "owner"
     });
     if (!decided.ok) {
@@ -380,7 +382,7 @@ export const OPENAPI = Object.freeze({
       post: {
         tags: ["missions"], operationId: "decideMission", summary: "Approve or reject a pending mission (owner attestation required)",
         parameters: [{ $ref: "#/components/parameters/missionId" }, { $ref: "#/components/parameters/nonce" }, { $ref: "#/components/parameters/timestamp" }],
-        requestBody: { required: true, content: { "application/json": { schema: { type: "object", required: ["decision", "attestation"], properties: { decision: { type: "string", enum: ["approve", "reject"] }, attestation: { type: "object" }, reason: { type: "string" } } } } } },
+        requestBody: { required: true, content: { "application/json": { schema: { type: "object", required: ["decision", "attestation"], properties: { decision: { type: "string", enum: ["approve", "reject"] }, attestation: { type: "object" }, reason: { type: "string" }, taskId: { type: "string", description: "Names the one task approval this decision authorises; omit to answer only the mission-scope signal." }, approvalId: { type: "string" } } } } } },
         responses: { 200: jsonResponse("Decided", { ...OK_ENVELOPE, additionalProperties: true }), ...errorResponses({ 400: 1, 401: 1, 403: 1, 404: 1, 409: 1, 429: 1, 503: 1 }) }
       }
     },

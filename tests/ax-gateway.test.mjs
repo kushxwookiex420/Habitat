@@ -31,7 +31,7 @@ const executors = {
   "verifier-adapter": async () => ({ ok: true, evidence: ["independent 1/1"], tests: { ran: 1, passed: 1, failed: 0 } })
 };
 
-async function harness({ gatewayEnabled = true, rateLimit = { windowMs: 60_000, max: 60 } } = {}) {
+async function harness({ gatewayEnabled = true, rateLimit = { windowMs: 60_000, max: 60 }, executors: executorOverride = null } = {}) {
   const db = new DatabaseSync(":memory:");
   const query = queryFrom(db);
   const missionStore = createMissionRepository({ query, now });
@@ -67,7 +67,7 @@ async function harness({ gatewayEnabled = true, rateLimit = { windowMs: 60_000, 
     query,
     repository: missionStore,
     workforce,
-    executors,
+    executors: executorOverride || executors,
     verifierAgentId: "verifier.one",
     ownerVerifier,
     now: () => new Date(NOW).toISOString(),
@@ -105,7 +105,7 @@ async function harness({ gatewayEnabled = true, rateLimit = { windowMs: 60_000, 
   // A failed assertion must not keep the runner alive waiting for a socket that is never closed.
   server.unref();
   const base = "http://127.0.0.1:" + server.address().port;
-  return { db, query, gatewayRepo, missionRuntime, heartbeat, heartbeatRepository, ownerVerifier, server, base };
+  return { db, query, missionStore, gatewayRepo, missionRuntime, heartbeat, heartbeatRepository, ownerVerifier, server, base };
 }
 
 async function client(harness, scopes = ["status:read", "missions:read", "missions:write", "missions:approve", "recovery:write", "events:write"], expiresAt = null) {
@@ -434,4 +434,90 @@ test("the OpenAPI document is served for Action import", async () => {
   assert.ok(spec.paths["/ax/v1/missions"]);
   h.server.close();
   h.db.close();
+});
+
+test("gateway: an approval releases only the action it was signed for, and tampering is refused", async () => {
+  const calls = { byTask: {}, total: 0 };
+  const spyExecutors = {
+    "coder-adapter": async ({ task }) => {
+      calls.total += 1;
+      calls.byTask[task.id] = (calls.byTask[task.id] || 0) + 1;
+      return { result: { status: "completed", evidence: ["spy:" + task.id], tests: { ran: 1, passed: 1, failed: 0 } } };
+    },
+    "verifier-adapter": async () => ({ ok: true, evidence: ["independent 1/1"], tests: { ran: 1, passed: 1, failed: 0 } })
+  };
+  const h = await harness({ executors: spyExecutors });
+  try {
+    const issued = await client(h);
+    const headers = { authorization: "Bearer " + issued.token, "content-type": "application/json" };
+    const deploy = {
+      id: "d1",
+      title: "Deploy release 4.2.0 to production",
+      requires: ["coding"],
+      criteria: [1],
+      dependsOn: ["t1"],
+      approvalRequired: true,
+      action: "deploy release 4.2.0",
+      target: "staging",
+      params: { region: "iad", replicas: 2 }
+    };
+    const submitted = await (await fetch(h.base + "/ax/v1/missions", {
+      method: "POST",
+      headers: { ...headers, ...nonce() },
+      body: JSON.stringify({
+        objective: "Deploy release 4.2.0 to production after analysis",
+        acceptanceCriteria: ["Repository analysed", "Release prepared"],
+        tasks: [
+          { id: "t1", title: "Analyse the repository", requires: ["coding"], criteria: [0] },
+          deploy
+        ]
+      })
+    })).json();
+    assert.equal(submitted.missionId?.startsWith("msn_"), true, JSON.stringify(submitted));
+
+    const parked = await (await fetch(h.base + "/ax/v1/recover", { method: "POST", headers: { ...headers, ...nonce() } })).json();
+    assert.equal(parked.ok, true);
+    const afterPark = await (await fetch(h.base + "/ax/v1/missions/" + submitted.missionId, { headers })).json();
+    assert.equal(afterPark.mission.status, "approval_required");
+    assert.equal(calls.byTask.t1, 1, "the read-only task ran");
+    assert.equal(calls.byTask.d1 || 0, 0, "the consequential task did not run before approval");
+
+    // A bare decision answers the mission signal only; it must not approve the task too.
+    const sign = (kind) => h.ownerVerifier.sign({
+      operation: "mission.approve", project: "habitat", key: submitted.missionId,
+      kind, statement: "Checked the evidence.", tags: [], confidence: null
+    });
+    const bare = await (await fetch(h.base + "/ax/v1/missions/" + submitted.missionId + "/decision", {
+      method: "POST", headers: { ...headers, ...nonce() },
+      body: JSON.stringify({ decision: "approve", attestation: sign("approve").attestation, reason: "Checked the evidence." })
+    })).json();
+    assert.equal(bare.status, "running");
+    const afterBare = await (await fetch(h.base + "/ax/v1/missions/" + submitted.missionId, { headers })).json();
+    assert.equal(afterBare.mission.approvals.find((item) => item.taskId === "d1").status, "pending",
+      "one signature did not authorise the task");
+    await fetch(h.base + "/ax/v1/recover", { method: "POST", headers: { ...headers, ...nonce() } });
+    assert.equal(calls.byTask.d1 || 0, 0);
+
+    // Approve the task explicitly, then tamper with the persisted parameters.
+    const signed = await (await fetch(h.base + "/ax/v1/missions/" + submitted.missionId + "/decision", {
+      method: "POST", headers: { ...headers, ...nonce() },
+      body: JSON.stringify({ decision: "approve", taskId: "d1", attestation: sign("approve").attestation, reason: "Checked the evidence." })
+    })).json();
+    assert.equal(signed.status, "running", JSON.stringify(signed));
+    const loaded = await h.missionStore.get(submitted.missionId);
+    const record = loaded.record;
+    record.tasks.find((task) => task.id === "d1").params = { region: "iad", replicas: 9 };
+    assert.equal((await h.missionStore.save(record, loaded.version)).ok, true);
+
+    await fetch(h.base + "/ax/v1/recover", { method: "POST", headers: { ...headers, ...nonce() } });
+    const final = await (await fetch(h.base + "/ax/v1/missions/" + submitted.missionId, { headers })).json();
+    const task = final.mission.tasks.find((item) => item.id === "d1");
+    assert.equal(task.status, "blocked");
+    assert.equal(task.error, "approval_action_changed");
+    assert.equal(calls.byTask.d1 || 0, 0, "the gateway path never invoked the executor for the tampered task");
+    assert.notEqual(final.mission.status, "completed");
+  } finally {
+    h.server.close();
+    h.db.close();
+  }
 });
