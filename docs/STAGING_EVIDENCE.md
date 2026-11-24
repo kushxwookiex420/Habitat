@@ -4,6 +4,56 @@ This records what was actually executed against the isolated staging service and
 Production was never deployed to or reconfigured. No token, encryption key or signing material is
 reproduced here; only variable names and booleans appear.
 
+## Update — 2026-11-24 19:15Z: console fix `afa97af` is live
+
+The service no longer runs `7a2fab8`. The owner deployed `afa97afc9a72204fe964a7a7ad207d8e08ee2cde`
+manually (`dep-dc2u4mpksfps73drao1g`, `trigger: manual`, `status: live`, 19:15:39Z–19:18:59Z);
+`autoDeploy` is still `false` and no agent Render credential was used. `/health` reports that commit.
+
+Verified live and warm at 20:14Z, all read-only:
+
+| Request | Result |
+| --- | --- |
+| `GET /health` | 200, `commit: afa97af…`, `nexus.configured: false` |
+| startup log | `TASK_STORAGE: D1 ready`, `DEVICE_COMMAND_BRIDGE: durable D1 queue ready`, `NEXUS_RUNTIME: disabled`, no `STAGING_GUARD_REFUSED_START` |
+| `GET /bridge/console` | 200, page offers the paired-device fields (`#device-id`, `#device-token`) |
+| `GET /bridge/console/session` | 200 `login: operator_or_device`, `operatorConfigured: true`, `deviceLoginAvailable: true` |
+| `GET /bridge/console/dashboard` anonymous | **401** (was 503 before this commit) |
+| `POST /bridge/console/login` wrong token / unknown device / empty | 401 / 401 / 401, no `Set-Cookie` in any |
+| `POST /bridge/console/login` operator token | 200 `mode: operator`; `Set-Cookie` `HttpOnly; SameSite=Strict; Max-Age=28800` |
+| `GET /bridge/console/dashboard` authenticated | 200, `devices.link: LINKED`, `count: 1` |
+| paired device | `android-b01dcf50-4053-41af-ac89-ebfc1260cb70`, paired 05:23:36Z, last seen **18:50:50.105Z**, not revoked, `SM-S948U1` / app `0.8.6-staging` |
+
+Configuration as the live service reports it now (names and booleans only), superseding the
+`MISSING` cells in the table below: `CLOUDFLARE_ACCOUNT_ID` **configured**, `HABITAT_D1_API_TOKEN`
+**configured** (D1 access works: `storage.state: ready`, adapter `cloudflare-d1`), and
+`HABITAT_AX_BRIDGE_TOKEN` **configured** — that variable is what makes `operatorConfigured: true` and
+lets the console accept an operator token. Still not configured: `HABITAT_MCP_SECRET_KEY`,
+`HABITAT_OWNER_ATTESTATION_KEY`, the bootstrap pairing pair and `HABITAT_OWNER_DEVICE_ID`.
+
+Workforce stays degraded by design: `HABITAT_WORKFORCE_ENABLED=false`, `workforce.state: disabled`,
+and migrations 0017, 0018 and 0019 were **not** applied — this deploy was code-only. `/ax/v1/workforce*`
+remains unavailable (`503 workforce_leases_not_attached`) and no schema was touched.
+
+Two operational facts for later probes: the free instance sleeps when idle, so a cold start can take
+tens of seconds (it booted at 18:50:46Z and again at 19:09:55Z and 19:59:43Z during this run), and a
+sleeping instance's boot log is the only reliable evidence that something reached it.
+
+### Paired phone went silent at 18:50:50Z
+
+The instance booted at **18:50:46Z** (an inbound request woke it; the owner's probes did not start until
+19:09Z), the heartbeat landed at **18:50:50.105Z**, and after that the service saw no device traffic at
+all: it stayed asleep through the 15-minute job windows at ~19:05, ~19:20, ~19:35, ~19:50 and ~20:05Z,
+and only the owner's probes woke it (19:09:55Z, 19:59:43Z). So the phone stopped transmitting — the job
+never fired again. Note the logging gap: `requireDevice` answers an invalid or missing device token with
+`401` **without logging**, and only a thrown D1/verification error logs
+`DEVICE_COMMAND_AUTH_FAILED` (with `503`). The absence of that log line therefore does not exclude a
+rejected poll; it only excludes a storage-side failure. The D1 pairing row is intact and not revoked,
+so nothing revoked the phone server-side. Because `devices.link` is `LIVE` only when `lastSeenAt` is under 45 s old, the console correctly
+shows `LINKED`, not `LIVE`. The Android build in `app/` has two silent-stop paths worth fixing: a 401 in
+`pollOnce()` calls `clearCredentials()` (wipes the Keystore token, cancels the job, stops the service),
+and `readToken()` swallows decryption failures so the poll returns with no request and no error.
+
 ## Verified live target
 
 | Item | Value |
@@ -66,7 +116,10 @@ Verified against `server.mjs`, `ax-gateway.mjs`, `ax-mcp-events.mjs`, `ax-heartb
 | `NEXUS_RUNTIME_ENABLED` | command executor | present, `false` (verified via `requiredConfiguration`) |
 | `NEXUS_FREE_ONLY` | executor adapter policy | missing, correct while Nexus is off |
 
-Optional and intentionally absent: `HABITAT_AX_COMMAND_TOKEN` / `HABITAT_AX_BRIDGE_TOKEN` (legacy
+Now **present** on staging (observed 2026-11-24T20:14Z, superseding the earlier note):
+`HABITAT_AX_BRIDGE_TOKEN` is configured and is what the bridge console accepts as its operator
+credential; `CLOUDFLARE_ACCOUNT_ID` and `HABITAT_D1_API_TOKEN` are configured too, and D1 access works.
+Still intentionally absent: `HABITAT_AX_COMMAND_TOKEN` (legacy
 `/ax/command/*` and device bridge only; the ChatGPT gateway uses revocable `axg_` tokens in D1),
 `AX_NOTIFY_WEBHOOK_URL` / `AX_NOTIFY_WEBHOOK_SECRET` (legacy notifier), `AX_MCP_DELIVERY_OWNER`,
 `AX_HEARTBEAT_INTERVAL_MS`, `AX_MCP_DISPATCH_INTERVAL_MS`, `HABITAT_OWNER_ATTESTATION_ENFORCE`.
@@ -154,10 +207,11 @@ Rows created by the run were cleaned up; encryption keys were generated inside t
 
 ## Still not proven / blockers
 
-- **Live staging cannot reach D1 or MCP yet**: `CLOUDFLARE_ACCOUNT_ID`, `HABITAT_D1_API_TOKEN`,
-  `HABITAT_MCP_SECRET_KEY` and `HABITAT_OWNER_ATTESTATION_KEY` are absent. Owner action required.
-- Commit `0cc002a` is pushed but **not deployed**: `autoDeploy: false`, and this run has no Render
-  credential or deploy hook. The live service stays at `7a2fab8` until the owner deploys manually.
+- **D1 is reachable now; MCP is not**: `CLOUDFLARE_ACCOUNT_ID` and `HABITAT_D1_API_TOKEN` report
+  `configured: true` and storage is `ready` on `cloudflare-d1`. `HABITAT_MCP_SECRET_KEY` and
+  `HABITAT_OWNER_ATTESTATION_KEY` are still absent, so `/mcp` and owner-attested writes stay refused.
+- **Superseded:** the earlier notes that `0cc002a` was not deployed and that the service was stuck on
+  `7a2fab8`. The live commit is `afa97af`; see the 19:15Z update above.
 - Restart persistence on the live service is **NOT TESTED**, because it has no durable storage.
 - Cloudflare token permissions cannot be inspected from here; the owner must confirm D1 Read/Edit,
   staging-scoped.
