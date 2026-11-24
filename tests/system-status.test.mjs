@@ -116,8 +116,13 @@ test("status never contains environment values", () => {
     assert.equal(serialized.includes(value), false, "secret value leaked into status");
   }
   assert.equal(status.secretsExposed, false);
-  // Public payload: missing key *names* only. No per-key configured map and never a value.
-  assert.equal(status.requiredConfiguration.keys, undefined);
+  // Public payload: key *names* and booleans only, never a value. A key name is documented
+  // configuration, not a credential, and it is what makes a missing-config report actionable.
+  for (const entry of status.requiredConfiguration.keys) {
+    assert.deepEqual(Object.keys(entry).sort(), ["configured", "key", "purpose"]);
+    assert.equal(typeof entry.configured, "boolean");
+  }
+  assert.ok(status.requiredConfiguration.keys.length > 0, "the key inventory must not be empty");
   assert.equal(status.requiredConfiguration.allPresent, false);
   assert.equal(status.requiredConfiguration.missing.includes("NEXUS_RUNTIME_ENABLED"), true);
   assert.equal(status.requiredConfiguration.missing.includes("HABITAT_AX_BRIDGE_TOKEN"), false);
@@ -244,15 +249,19 @@ test("status exposes no task content, device identifiers or worker internals", (
     assert.equal(serialized.includes(privateValue), false, privateValue + " leaked into status");
   }
 
-  // Coarse presence is public; exact check-in time and identifiers are not.
-  assert.equal(status.components.device.lastSeenAt, undefined);
+  // Coarse presence and the last check-in time are public; identity is not.
+  assert.equal(status.components.device.lastSeenAt, "2026-11-23T19:59:00.000Z");
   assert.equal(status.components.device.deviceId, undefined);
   assert.equal(status.components.device.paired, 1);
 
+  // A capability claim must be checkable: names, model and last-run outcome are public. None of
+  // them carries task content or an identity.
   const worker = status.components.workers.items[0];
   for (const field of ["capabilities", "model", "lastRunAt", "lastStatus"]) {
-    assert.equal(field in worker, false, field + " must not be public");
+    assert.equal(field in worker, true, field + " must be public so the claim can be checked");
   }
+  assert.deepEqual(worker.capabilities, ["backend-health"], "the registry's capability names are the checkable claim");
   assert.equal(status.redaction.applied, true);
+  assert.equal(status.redaction.policyVersion, 2);
   assert.equal(status.secretsExposed, false);
 });

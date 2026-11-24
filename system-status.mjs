@@ -82,6 +82,7 @@ export function classifyWorkers({ registry, tasks = [], now = Date.now(), health
       id,
       name: worker?.name || id,
       kind: worker?.kind || "worker",
+      model: worker?.model || null,
       // `status` keeps the registry's availability word for older clients; `state` is what was
       // actually observed.
       status: availability || "unknown",
@@ -89,7 +90,10 @@ export function classifyWorkers({ registry, tasks = [], now = Date.now(), health
       state,
       configured: !unavailable,
       running: observed.running,
-      healthy: state === "healthy"
+      healthy: state === "healthy",
+      lastRunAt: observed.lastRunAt,
+      lastStatus: observed.lastStatus,
+      capabilities: Array.isArray(worker?.capabilities) ? worker.capabilities.slice(0, 20) : []
     };
   });
 }
@@ -194,6 +198,7 @@ export function buildSystemStatus({
     nexusRuntime: executionReport.configured
   };
   const paired = Number(devicePresence.paired || devicePresence.deviceCount || 0) || 0;
+  const lastSeenAt = devicePresence.lastSeenAt || null;
   const recentlySeen = devicePresence.recentlySeen === true;
   const unavailableKeys = REQUIRED_CONFIGURATION
     .filter(entry => !present(env, entry.key))
@@ -244,6 +249,7 @@ export function buildSystemStatus({
         state: recentlySeen ? "online" : paired > 0 ? "paired_offline" : "unpaired",
         paired,
         recentlySeen,
+        lastSeenAt,
         detail: recentlySeen
           ? "A paired phone checked in recently."
           : paired > 0
@@ -258,14 +264,25 @@ export function buildSystemStatus({
     },
     requiredConfiguration: {
       allPresent: unavailableKeys.length === 0,
-      missing: unavailableKeys
+      missing: unavailableKeys,
+      keys: REQUIRED_CONFIGURATION.map(entry => ({
+        key: entry.key,
+        purpose: entry.purpose,
+        configured: present(env, entry.key)
+      }))
     },
     // Public payload. Key names are documented configuration names, never values. Task text,
     // device identifiers and per-worker internals are excluded at the source.
+    //
+    // Policy v2 (reconciliation of the status branches): capability names, the provider model and
+    // last-run outcome are published because they are what makes a capability claim checkable, and
+    // a check-in timestamp is published because "paired but silent since" is the operational fact.
+    // What stays private is content and identity, not the ability to verify a claim.
     redaction: {
       applied: true,
-      policyVersion: 1,
-      excluded: ["secret values", "task content", "device identifiers", "worker internals"]
+      policyVersion: 2,
+      included: ["configuration key names", "worker capability names", "provider model names", "last-run outcome", "device last check-in timestamp"],
+      excluded: ["secret values", "task content", "objective and result text", "device identifiers", "device names"]
     },
     limits: [
       "This report does not spend model quota, so it cannot prove inference works.",
@@ -338,7 +355,7 @@ export function formatSystemStatus(status) {
     (counts.unverified || 0) + " unverified"
   );
   for (const item of (workers.items || []).slice(0, 8)) {
-    lines.push("  • " + item.id + " — " + state(item.state));
+    lines.push("  • " + item.id + " — " + state(item.state) + (item.lastRunAt ? " (last " + item.lastStatus + " at " + item.lastRunAt + ")" : " (no run recorded)"));
   }
   lines.push(
     "Execution: " + state(execution.state) + " — " + (execution.detail || "no executor report") +
@@ -346,7 +363,8 @@ export function formatSystemStatus(status) {
   );
   const device = components.device || {};
   lines.push(
-    "Device: " + state(device.state) + " — " + (device.paired || 0) + " paired"
+    "Device: " + state(device.state) + " — " + (device.paired || 0) + " paired" +
+    (device.lastSeenAt ? ", last check-in " + device.lastSeenAt : ", no check-in recorded")
   );
   const providers = components.providers?.configured || {};
   lines.push(
