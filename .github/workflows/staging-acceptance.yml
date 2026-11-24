@@ -1,0 +1,53 @@
+name: Staging acceptance (real D1)
+
+# One-shot, guarded acceptance against the verified non-production D1 database. Runs only for a push
+# whose commit message contains [staging-acceptance]. This is NOT a ChatGPT connection: no external
+# client is registered, and the report says so explicitly.
+
+on:
+  push:
+    branches: [staging/integration]
+    paths:
+      - ".github/workflows/staging-acceptance.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: habitat-staging-acceptance
+  cancel-in-progress: false
+
+jobs:
+  accept:
+    if: contains(github.event.head_commit.message, '[staging-acceptance]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: npm ci --no-audit --no-fund
+
+      - name: Generate ephemeral test keys
+        run: |
+          set -euo pipefail
+          echo "HABITAT_MCP_SECRET_KEY=$(openssl rand -base64 32)" >> "$GITHUB_ENV"
+          echo "HABITAT_MCP_SECRET_KEY_ALT=$(openssl rand -base64 32)" >> "$GITHUB_ENV"
+
+      - name: Real-D1 acceptance
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          HABITAT_D1_API_TOKEN: ${{ secrets.HABITAT_D1_API_TOKEN }}
+          STAGING_D1_DATABASE_ID: ${{ vars.HABITAT_STAGING_D1_DATABASE_ID }}
+          PRODUCTION_D1_DATABASE_ID: ${{ vars.HABITAT_D1_DATABASE_ID }}
+        run: node scripts/staging-acceptance.mjs | tee staging-acceptance-evidence.json
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: staging-acceptance-evidence
+          path: staging-acceptance-evidence.json
+          if-no-files-found: warn
+          retention-days: 30
