@@ -128,3 +128,32 @@ It has already produced successful APK runs. A dispatch from `main` fails with
 *"Workflow does not have 'workflow_dispatch' trigger"* because `main`'s copy of the workflow predates
 that trigger; dispatching against the branch that carries it works. Local reproduction needs the same
 three pins; nothing else is missing.
+
+## Reconciliation record: the status branch and the capability network
+
+`nexus/system-status-command-path` (#114) and `nexus/ax-capability-network-p0-p1` (#115) both forked
+from the deployed commit `0d5eb6e` and each independently created `system-status.mjs`. The two files
+differ by 78 diff lines out of ~410, so this was a duplicate, not two features. Resolved on
+`staging/integration` (merge `ff002f9`):
+
+- one `system-status.mjs`, taking #114's richer gather (worker model, last run and outcome, capability
+  names, device `lastSeenAt`, per-key configuration inventory) and restoring the redaction contract;
+- #115's `server.mjs` kept whole, because it already contains the status route, both chat intents and
+  the command authorisation gate that #114 does not have, and its `/workers` is the superset
+  (catalog-backed list plus `/workers/:id`);
+- the test file kept from #115, which already contained every test #114 had, plus the redaction test;
+- two policy clashes resolved explicitly rather than by deleting assertions: redaction policy v2
+  publishes configuration key names, capability names, model names, last-run outcome and a check-in
+  timestamp (they are what makes a capability claim checkable), and still excludes task text,
+  objective and result bodies, device identifiers and device names.
+
+Result: `npm run check` exit 0 and 1,011 tests pass at `staging/integration`.
+
+## Production branch is not `main`
+
+The live origin reports commit `0d5eb6e` (2026-11-23 04:49). `origin/main` is `4d1f2e5`
+(2026-11-22 11:32) and **does not contain** `0d5eb6e`, so the deployed service is building from a
+feature branch. No branch's head is `0d5eb6e` today, which means the tracked branch has advanced past
+the deployed commit or the deploy was a one-off. This must be read from the Render service's
+**Settings → Build & Deploy → Branch** before staging is created, because staging must not inherit a
+feature-branch trigger and production must not be promoted from an unreviewed branch.
