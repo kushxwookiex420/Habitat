@@ -69,6 +69,39 @@ test("an idempotency key returns the same task instead of a second one", async (
   assert.equal(repository.rows.size, 1);
 });
 
+test("a concurrent idempotent submission replays the winning row instead of failing the insert", async () => {
+  const { engine, repository } = setup();
+  // Simulate the other request winning after both callers read no existing row: the INSERT reports
+  // a duplicate, but the deterministic idempotency id is now present. The engine must replay it.
+  repository.create = async task => {
+    repository.rows.set(task.id, structuredClone(task));
+    throw new Error("UNIQUE constraint failed: habitat_command_tasks.id");
+  };
+  const outcome = await engine.submit({ objective: "Rotate the relay keys", idempotencyKey: "raced-key" });
+  assert.equal(outcome.ok, true);
+  assert.equal(outcome.replayed, true);
+  assert.equal(repository.rows.size, 1);
+});
+
+test("cancellation is explicit, terminal, and unavailable to a worker-owned task", async () => {
+  const { engine, repository } = setup();
+  const task = (await engine.submit({ objective: "Prepare a report" })).task;
+  const cancelled = await engine.cancel({ taskId: task.id, by: "owner", reason: "no longer needed" });
+  assert.equal(cancelled.ok, true);
+  assert.equal(cancelled.task.status, "cancelled");
+  assert.equal(cancelled.task.cancelReason, "no longer needed");
+  assert.equal(cancelled.task.statusHistory.at(-1).to, "cancelled");
+  assert.equal((await engine.complete({ taskId: task.id, result: { summary: "late", evidence: ["x"] } })).code, "invalid_transition");
+  assert.equal((await engine.checkpoint({ taskId: task.id, note: "late" })).code, "invalid_transition");
+  assert.equal((await engine.cancel({ taskId: task.id })).code, "invalid_transition");
+
+  const owned = (await engine.submit({ objective: "Worker-owned task" })).task;
+  repository.rows.get(owned.id).fence = "fence-live";
+  const refused = await engine.cancel({ taskId: owned.id });
+  assert.equal(refused.code, "claim_required");
+  assert.equal(repository.rows.get(owned.id).status, "queued");
+});
+
 test("a plan may reference an unavailable tool but must not claim it ran", async () => {
   const { engine } = setup();
   const task = (await engine.submit({ objective: "Research launcher options" })).task;

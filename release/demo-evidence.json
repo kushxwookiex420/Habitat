@@ -1,0 +1,200 @@
+{
+  "ok": true,
+  "generatedAt": "2026-11-22T03:16:41.619Z",
+  "environment": "local, isolated; node:sqlite is not involved; no provider or D1 call",
+  "objective": {
+    "id": "obj_1c5d2146da9e89ffeb1d13a3",
+    "status": "completed",
+    "verified": true,
+    "criteria": [
+      {
+        "id": "c1",
+        "met": true
+      },
+      {
+        "id": "c2",
+        "met": true
+      },
+      {
+        "id": "c3",
+        "met": true
+      }
+    ],
+    "evidenceCount": 3,
+    "accounting": {
+      "spentUsd": 0,
+      "executions": [
+        {
+          "executionId": "demo-run",
+          "runKey": "demo-run",
+          "runId": "run_demo_local",
+          "agentId": "engineering",
+          "provider": "none-local",
+          "reservedUsd": 0.005,
+          "actualUsd": 0,
+          "status": "settled",
+          "chargeId": "chg_40d796cf5bd7ec8ad8f3",
+          "reservedAt": "2026-11-22T03:16:41.440Z",
+          "settledAt": "2026-11-22T03:16:41.616Z",
+          "note": "local engineering adapter; no model provider called"
+        }
+      ]
+    },
+    "costUsd": 0
+  },
+  "engineering": {
+    "filesInspected": 1,
+    "checks": [
+      "/usr/local/nvm/versions/node/v26.13.1/bin/node --check ax-objectives.mjs → exit 0",
+      "/usr/local/nvm/versions/node/v26.13.1/bin/node --test tests/ax-objectives.test.mjs → exit 0"
+    ]
+  },
+  "memory": {
+    "recalled": 1,
+    "writtenKey": "run:run_demo_local"
+  },
+  "notification": {
+    "recorded": true,
+    "type": "objective.completed"
+  },
+  "security": {
+    "events": 1,
+    "chainVerified": true,
+    "headHash": "1d196f18eb8f00f85367f2c24a31e378819b915db65203a219e86cc71f6f9925"
+  },
+  "restart": {
+    "status": "completed",
+    "accountingPreserved": true
+  },
+  "recovery": {
+    "interrupted": true,
+    "recovered": 1
+  },
+  "simulated": [
+    "owner device identity",
+    "no model/provider call",
+    "no durable D1 store; memory repositories"
+  ],
+  "checks": [
+    {
+      "name": "approved memory retrieved",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "name": "durable objective created",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "name": "objective understood",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "name": "bounded plan recorded and approval required",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "name": "approval requested",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "name": "owner authorization recorded",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "name": "objective started with reservation possible",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "name": "budget reserved before execution",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "name": "engineering agent produced reviewable evidence",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "name": "real file digest present",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "name": "real checks exited zero",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "name": "evidence attached to the objective",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "name": "evidence ids resolve",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "name": "reservation settled at zero cost",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "name": "objective moved to verifying",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "name": "evidence independently checked",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "name": "objective completed only after verification",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "name": "verified outcome written to memory",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "name": "notification recorded",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "name": "security audit chain verified",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "name": "restart reconstructs the same objective",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "name": "restart preserves accounting",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "name": "objective interrupted",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "name": "interrupted objective recovered",
+      "ok": true,
+      "detail": null
+    }
+  ]
+}

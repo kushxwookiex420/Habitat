@@ -1,0 +1,84 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-11-22T08:06:06.679Z",
+  "origin": "https://habitat-1-szzd.onrender.com",
+  "health": {
+    "status": 200,
+    "version": "0.5.0",
+    "commit": null,
+    "startedAt": null,
+    "nexus": {
+      "configured": false,
+      "reason": "disabled_by_config"
+    }
+  },
+  "openapi": {
+    "status": 200,
+    "operations": 10,
+    "openapi": "3.1.0"
+  },
+  "status": "OUTDATED",
+  "current": false,
+  "version": "0.5.0",
+  "observedCommit": null,
+  "expectedCommit": "dfcfcf7",
+  "commitMatches": null,
+  "mission17Present": false,
+  "mission17Missing": [
+    "work",
+    "work_stop",
+    "agents_revoke"
+  ],
+  "mission19Present": false,
+  "routes": [
+    {
+      "key": "work",
+      "method": "POST",
+      "path": "/ax/command/objectives/probe/work",
+      "status": 404,
+      "classification": "missing",
+      "deployed": false,
+      "error": "route_not_deployed"
+    },
+    {
+      "key": "work_stop",
+      "method": "POST",
+      "path": "/ax/command/objectives/probe/work/stop",
+      "status": 404,
+      "classification": "missing",
+      "deployed": false,
+      "error": "route_not_deployed"
+    },
+    {
+      "key": "agents_revoke",
+      "method": "POST",
+      "path": "/ax/command/agents/revoke",
+      "status": 404,
+      "classification": "missing",
+      "deployed": false,
+      "error": "route_not_deployed"
+    },
+    {
+      "key": "agents_restore",
+      "method": "POST",
+      "path": "/ax/command/agents/restore",
+      "status": 404,
+      "classification": "missing",
+      "deployed": false,
+      "error": "route_not_deployed"
+    }
+  ],
+  "nexus": {
+    "configured": false,
+    "reason": "disabled_by_config"
+  },
+  "startedAt": null,
+  "authenticated": {
+    "attempted": false,
+    "credentialAccepted": null,
+    "note": "No token was supplied, so authenticated state is not claimed."
+  },
+  "blockers": [
+    "Mission 17 routes are absent: work, work_stop, agents_revoke."
+  ]
+}

@@ -59,6 +59,8 @@ async function invoke(app, key, req = {}) {
 function fakeStore(seed = []) {
   const pairings = new Map();
   const devices = new Map();
+  const rows = [];
+  const commands = new Map();
   for (const entry of seed) {
     pairings.set(digest(entry.code), {
       deviceId: entry.deviceId || "*",
@@ -69,6 +71,8 @@ function fakeStore(seed = []) {
   return {
     pairings,
     devices,
+    rows,
+    commands,
     async initialize() { return { ok: true, durable: true }; },
     async createPairing({ codeHash, deviceId, expiresAt }) {
       pairings.set(codeHash, { deviceId, expiresAt, consumedAt: null });
@@ -88,18 +92,64 @@ function fakeStore(seed = []) {
       row.consumedAt = consumedAt;
       return true;
     },
-    async registerDevice({ deviceId, tokenHash }) {
+    async registerDevice({ deviceId, tokenHash, createdAt }) {
       devices.set(deviceId, tokenHash);
+      const row = rows.find(entry => entry.device_id === deviceId);
+      if (row) row.revoked_at = null;
+      else rows.push({ device_id: deviceId, created_at: createdAt, last_seen_at: null, revoked_at: null, device_json: null });
       return true;
     },
     async verifyDeviceToken(token, deviceId) {
       return devices.get(deviceId) === digest(token);
     },
-    async touchDevice() { return true; },
+    async touchDevice(deviceId, seenAt) {
+      const row = rows.find(entry => entry.device_id === deviceId);
+      if (row) row.last_seen_at = seenAt;
+      return true;
+    },
     async updateDeviceInfo(deviceId, seenAt, details) {
       this.lastHeartbeat = { deviceId, seenAt, details };
+      const row = rows.find(entry => entry.device_id === deviceId);
+      if (row) {
+        row.last_seen_at = seenAt;
+        row.device_json = JSON.stringify(details);
+      }
       return true;
-    }
+    },
+    // Mirrors d1-device-command-repository: ISO timestamps compare lexicographically, a claim only
+    // takes a queued command that has not expired, and a result only completes a claimed command.
+    async enqueue(command) {
+      if (!command?.id || !command?.deviceId || !command?.type) throw new Error("A complete device command is required.");
+      commands.set(command.id, { ...command, status: "queued" });
+      return { ...command };
+    },
+    async claimNext(deviceId) {
+      const claimedAt = new Date().toISOString();
+      const next = [...commands.values()]
+        .filter((command) => command.deviceId === deviceId && command.status === "queued" && command.expiresAt > claimedAt)
+        .sort((left, right) => (left.createdAt < right.createdAt ? -1 : 1))[0];
+      if (!next) return null;
+      next.status = "claimed";
+      next.claimedAt = claimedAt;
+      return { ...next };
+    },
+    async complete({ id, deviceId, result, completedAt }) {
+      const command = commands.get(id);
+      if (!command || command.deviceId !== deviceId) return false;
+      if (command.status !== "claimed" || !(command.expiresAt > completedAt)) return false;
+      command.status = "completed";
+      command.result = result;
+      command.completedAt = completedAt;
+      return true;
+    },
+    async listCommands({ deviceId = null, limit = 20 } = {}) {
+      return [...commands.values()]
+        .filter((command) => !deviceId || command.deviceId === deviceId)
+        .sort((left, right) => (left.createdAt < right.createdAt ? 1 : -1))
+        .slice(0, limit)
+        .map((command) => ({ ...command }));
+    },
+    async listDevices() { return rows.slice(); }
   };
 }
 
@@ -248,4 +298,173 @@ test("the pairing response never contains the operator credential", async () => 
   assert.equal(JSON.stringify(pair.body).includes(OPERATOR), false);
   assert.equal(JSON.stringify(minted.body).includes(OPERATOR), false);
   assert.equal(JSON.stringify(pair.body).includes(CODE), false);
+});
+
+test("phone last check-in falls back to the device registry when the relay is unavailable", async () => {
+  // This harness mounts the bridge without HOME_BRIDGE_* roles, exactly like production.
+  const { app } = await setup([{ code: CODE, expiresAt: future() }]);
+  const minted = await invoke(app, "POST /bridge/console/pairing", { ...tokenHeaders(OPERATOR), body: { deviceId: "launcher-a" } });
+  assert.equal(minted.statusCode, 201);
+  const paired = await invoke(app, "POST /device/pair", { body: { deviceId: "launcher-a", code: minted.body.pairing.code } });
+  assert.equal(paired.statusCode, 200);
+  const heartbeat = await invoke(app, "POST /device/heartbeat", {
+    headers: { authorization: "Bearer " + paired.body.token },
+    body: { deviceId: "launcher-a", details: { model: "Pixel" } }
+  });
+  assert.equal(heartbeat.statusCode, 200);
+
+  const dashboard = await invoke(app, "GET /bridge/console/dashboard", tokenHeaders(OPERATOR));
+  assert.equal(dashboard.statusCode, 200);
+  assert.equal(dashboard.body.relay.health, "unavailable");
+  assert.equal(dashboard.body.phone.ok, true);
+  assert.equal(dashboard.body.phone.name, "launcher-a");
+  assert.equal(dashboard.body.phone.online, true);
+  assert.equal(dashboard.body.phone.lastSeen, dashboard.body.devices.device.lastSeenAt);
+  assert.equal(dashboard.body.phone.lastSeen, heartbeat.body.lastSeenAt);
+});
+
+test("durable status command lifecycle: queue, claim, result, completion, then no replay", async () => {
+  const { app } = await setup([{ code: CODE, expiresAt: future() }]);
+  const minted = await invoke(app, "POST /bridge/console/pairing", { ...tokenHeaders(OPERATOR), body: { deviceId: "launcher-a" } });
+  assert.equal(minted.statusCode, 201);
+  const paired = await invoke(app, "POST /device/pair", { body: { deviceId: "launcher-a", code: minted.body.pairing.code } });
+  assert.equal(paired.statusCode, 200);
+  const deviceAuth = { authorization: "Bearer " + paired.body.token };
+  const heartbeat = await invoke(app, "POST /device/heartbeat", { headers: deviceAuth, body: { deviceId: "launcher-a", details: { model: "Pixel" } } });
+  assert.equal(heartbeat.statusCode, 200);
+
+  // 1. the dashboard queues device.status in the durable queue; no HOME RELAY role is configured here
+  const queued = await invoke(app, "POST /bridge/console/send", { ...tokenHeaders(OPERATOR), body: { action: "status", arg: "" } });
+  assert.equal(queued.statusCode, 202);
+  assert.equal(queued.body.type, "device.status");
+  assert.equal(queued.body.deviceId, "launcher-a");
+
+  // 2. the paired phone claims it
+  const claimed = await invoke(app, "GET /device/commands/next", { headers: deviceAuth, query: { deviceId: "launcher-a" } });
+  assert.equal(claimed.statusCode, 200);
+  assert.equal(claimed.body.command.id, queued.body.id);
+  assert.equal(claimed.body.command.type, "device.status");
+
+  // 3. the phone submits its execution result
+  const summary = "Habitat Android device is online and responding";
+  const result = await invoke(app, "POST /device/commands/:id/result", {
+    headers: deviceAuth,
+    params: { id: queued.body.id },
+    body: { deviceId: "launcher-a", result: { ok: true, summary, details: { model: "Pixel" } } }
+  });
+  assert.equal(result.statusCode, 200);
+  assert.equal(result.body.status, "completed");
+
+  // 4. the server records completion and the dashboard shows the receipt read-only
+  const dashboard = await invoke(app, "GET /bridge/console/dashboard", tokenHeaders(OPERATOR));
+  assert.equal(dashboard.statusCode, 200);
+  assert.equal(dashboard.body.deviceCommands.available, true);
+  const receipt = dashboard.body.deviceCommands.items.find((item) => item.id === queued.body.id);
+  assert.ok(receipt, "the completed command appears as a receipt");
+  assert.equal(receipt.deviceId, "launcher-a");
+  assert.equal(receipt.type, "device.status");
+  assert.equal(receipt.state, "completed");
+  assert.equal(receipt.summary, summary);
+  assert.ok(receipt.receivedAt, "the claim time is recorded");
+  assert.ok(receipt.completedAt, "the completion time is recorded");
+
+  // 5. a later poll must not return the completed command again
+  const again = await invoke(app, "GET /device/commands/next", { headers: deviceAuth, query: { deviceId: "launcher-a" } });
+  assert.equal(again.statusCode, 200);
+  assert.equal(again.body.command, null);
+});
+
+test("the Control Center page exposes the pairing-code generator", async () => {
+  const { renderConsole } = await import("../home-bridge-console.mjs");
+  const html = renderConsole();
+  // Without these controls the owner has no way to mint the code the Bridge asks for.
+  assert.match(html, /id="pair-create"/);
+  assert.match(html, /id="pair-device"/);
+  assert.match(html, /id="pair-value"/);
+  assert.match(html, /\/bridge\/console\/pairing/);
+  // A code is only ever written from the API response, never rendered into the page on the server.
+  assert.match(html, /text\("pair-value",r\.pairing\.code\)/);
+  assert.equal(/id="pair-value"[^>]*>\s*[A-Za-z0-9_-]{20,}/.test(html), false);
+});
+
+test("the dashboard reports the registered phone and its confirmed timestamp without leaking secrets", async () => {
+  const { app } = await setup([{ code: CODE, expiresAt: future() }]);
+  const minted = await invoke(app, "POST /bridge/console/pairing", {
+    ...tokenHeaders(OPERATOR),
+    body: { deviceId: "launcher-a" }
+  });
+  assert.equal(minted.statusCode, 201);
+  const code = minted.body.pairing.code;
+
+  const before = await invoke(app, "GET /bridge/console/dashboard", tokenHeaders(OPERATOR));
+  assert.equal(before.statusCode, 200);
+  assert.equal(before.body.devices.link, "UNPAIRED");
+  assert.equal(before.body.devices.count, 0);
+
+  const paired = await invoke(app, "POST /device/pair", { body: { deviceId: "launcher-a", code } });
+  assert.equal(paired.statusCode, 200);
+  const token = paired.body.token;
+
+  const heartbeat = await invoke(app, "POST /device/heartbeat", {
+    headers: { authorization: "Bearer " + token },
+    body: { deviceId: "launcher-a", details: { model: "Pixel" } }
+  });
+  assert.equal(heartbeat.statusCode, 200);
+
+  const after = await invoke(app, "GET /bridge/console/dashboard", tokenHeaders(OPERATOR));
+  assert.equal(after.statusCode, 200);
+  assert.equal(after.body.devices.link, "LIVE");
+  assert.equal(after.body.devices.device.deviceId, "launcher-a");
+  assert.ok(after.body.devices.device.pairedAt, "paired timestamp is reported");
+  assert.equal(after.body.devices.device.lastSeenAt, heartbeat.body.lastSeenAt);
+
+  const serialized = JSON.stringify(after.body);
+  assert.equal(serialized.includes(code), false, "pairing code is never echoed to the console");
+  assert.equal(serialized.includes(token), false, "device token is never echoed to the console");
+  assert.equal(serialized.includes(OPERATOR), false, "operator credential is never echoed");
+});
+
+test("a dedicated operator token opens the console while the bridge token no longer does", async () => {
+  const BRIDGE = "ax_bridge_" + "b".repeat(40);
+  const OPERATOR_ONLY = "operator_" + "c".repeat(40);
+  const store = fakeStore();
+  const app = makeApp();
+  const bridge = registerDeviceCommandBridge(app, {
+    env: { HABITAT_AX_BRIDGE_TOKEN: BRIDGE, HABITAT_OPERATOR_TOKEN: OPERATOR_ONLY },
+    fetchImpl: async () => { throw new Error("network disabled in this test"); },
+    repository: store
+  });
+  await bridge.initialize();
+
+  // Separating the credentials must not leave the bridge token able to open the console.
+  const asBridge = await invoke(app, "POST /bridge/console/pairing", { ...tokenHeaders(BRIDGE), body: {} });
+  assert.equal(asBridge.statusCode, 401);
+  const bridgeCookie = await invoke(app, "POST /bridge/console/login", { body: { token: BRIDGE } });
+  assert.equal(bridgeCookie.statusCode, 401);
+
+  const login = await invoke(app, "POST /bridge/console/login", { body: { token: OPERATOR_ONLY } });
+  assert.equal(login.statusCode, 200);
+  const setCookie = String(login.headers["set-cookie"] || "");
+  assert.match(setCookie, /^habitat_bridge_session=/);
+  assert.match(setCookie, /HttpOnly/);
+  assert.match(setCookie, /SameSite=Strict/);
+
+  const session = { headers: { cookie: setCookie.split(";")[0] } };
+  const dashboard = await invoke(app, "GET /bridge/console/dashboard", session);
+  assert.equal(dashboard.statusCode, 200);
+
+  const minted = await invoke(app, "POST /bridge/console/pairing", { ...session, body: { deviceId: "launcher-a" } });
+  assert.equal(minted.statusCode, 201);
+  assert.equal(minted.headers["cache-control"], "no-store", "a short-lived code is never cached");
+  const code = minted.body.pairing.code;
+  assert.equal(code.length, 22, "16 random bytes encode to 22 base64url characters");
+  const ttlSeconds = Math.round((Date.parse(minted.body.pairing.expiresAt) - Date.now()) / 1000);
+  assert.ok(ttlSeconds > 590 && ttlSeconds <= 600, "the code expires in 600 seconds, got " + ttlSeconds);
+  assert.equal(minted.body.pairing.singleUse, true);
+
+  // The minted code exists only in that one response: not in the dashboard, not in the page.
+  const afterMint = await invoke(app, "GET /bridge/console/dashboard", session);
+  assert.equal(afterMint.statusCode, 200);
+  assert.equal(JSON.stringify(afterMint.body).includes(code), false);
+  assert.equal(JSON.stringify(afterMint.body).includes(OPERATOR_ONLY), false);
 });

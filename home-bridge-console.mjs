@@ -16,7 +16,7 @@
 // for a session cookie so a browser never stores a credential in JavaScript. The relay's own
 // role tokens (ax/buff) stay on the server and are never part of a response body.
 
-import { randomBytes, timingSafeEqual } from "node:crypto";
+import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { createHomeBridgeClient } from "./home-bridge-client.mjs";
 
 const SESSION_COOKIE = "habitat_bridge_session";
@@ -52,14 +52,17 @@ function short(value, max = 200) {
   return String(value == null ? "" : value).slice(0, max);
 }
 
-export function registerHomeBridgeConsole(app, { env = process.env, fetchImpl = fetch } = {}) {
+export function registerHomeBridgeConsole(app, { env = process.env, fetchImpl = fetch, deviceRepository = null, bridgeStatus = null } = {}) {
   const client = createHomeBridgeClient({
     baseUrl: env.HOME_BRIDGE_URL,
     axToken: env.HOME_BRIDGE_AX_TOKEN,
     buffToken: env.HOME_BRIDGE_BUFF_TOKEN,
     fetchImpl
   });
-  const operatorToken = String(env.HABITAT_AX_BRIDGE_TOKEN || "").trim();
+  // The console is the browser-facing surface, so it prefers its own credential. The bridge token
+  // that authenticates machine callers is only a compatibility fallback, which keeps an existing
+  // deployment working until HABITAT_OPERATOR_TOKEN is configured.
+  const operatorToken = String(env.HABITAT_OPERATOR_TOKEN || env.HABITAT_AX_BRIDGE_TOKEN || "").trim();
   const githubRepo = String(env.HABITAT_GITHUB_REPO || "kushxwookiex420/home-launcher").trim();
   const githubToken = String(env.GITHUB_TOKEN || "").trim();
   const sessions = new Map();
@@ -82,7 +85,7 @@ export function registerHomeBridgeConsole(app, { env = process.env, fetchImpl = 
 
   function requireOperator(req, res, next) {
     if (!operatorToken) {
-      return res.status(503).json({ ok: false, error: "HABITAT_AX_BRIDGE_TOKEN is not configured; console access is disabled." });
+      return res.status(503).json({ ok: false, error: "HABITAT_OPERATOR_TOKEN (or HABITAT_AX_BRIDGE_TOKEN) is not configured; console access is disabled." });
     }
     if (safeEqual(bearer(req), operatorToken) || operatorFromSession(req)) return next();
     return res.status(401).json({ ok: false, error: "Operator authentication required." });
@@ -97,7 +100,7 @@ export function registerHomeBridgeConsole(app, { env = process.env, fetchImpl = 
 
   app.post("/bridge/console/login", (req, res) => {
     if (!operatorToken) {
-      return res.status(503).json({ ok: false, error: "HABITAT_AX_BRIDGE_TOKEN is not configured; console access is disabled." });
+      return res.status(503).json({ ok: false, error: "HABITAT_OPERATOR_TOKEN (or HABITAT_AX_BRIDGE_TOKEN) is not configured; console access is disabled." });
     }
     const supplied = String(req.body?.token || bearer(req) || "").trim();
     if (!safeEqual(supplied, operatorToken)) {
@@ -163,15 +166,118 @@ export function registerHomeBridgeConsole(app, { env = process.env, fetchImpl = 
     }
   }
 
+  /**
+   * The device registry as the console can honestly show it: who is paired, when the pairing was
+   * recorded, and when the phone last authenticated. No token, hash or pairing code is included.
+   * When the store is unavailable the console says so instead of implying the phone is unpaired.
+   */
+  async function phoneRegistry() {
+    if (!deviceRepository || typeof deviceRepository.listDevices !== "function") {
+      return { ok: false, available: false, link: "UNKNOWN", devices: [], error: "phone pairing store is not available" };
+    }
+    try {
+      const rows = await deviceRepository.listDevices();
+      const devices = (rows || []).map((row) => ({
+        deviceId: row.device_id,
+        pairedAt: row.created_at || null,
+        lastSeenAt: row.last_seen_at || null,
+        revoked: Boolean(row.revoked_at),
+        deviceInfo: (() => { try { return row.device_json ? JSON.parse(row.device_json) : null; } catch { return null; } })()
+      }));
+      const active = devices.filter((row) => !row.revoked);
+      const ordered = (active.length ? active : devices).slice().sort((a, b) =>
+        Date.parse(b.lastSeenAt || b.pairedAt || 0) - Date.parse(a.lastSeenAt || a.pairedAt || 0)
+      );
+      const current = ordered[0] || null;
+      const live = Boolean(current?.lastSeenAt && Date.now() - Date.parse(current.lastSeenAt) < 45000);
+      return {
+        ok: true,
+        available: true,
+        link: !devices.length ? "UNPAIRED" : live ? "LIVE" : "LINKED",
+        count: devices.length,
+        device: current,
+        devices,
+        error: null
+      };
+    } catch (error) {
+      return { ok: false, available: true, link: "UNKNOWN", devices: [], error: "unable to read paired phones" };
+    }
+  }
+
+  /**
+   * AX Core credential reporting. The credential that matters for the phone is the device bridge's
+   * own inbound token, which is a different secret from the legacy Home Bridge relay role tokens.
+   * Only booleans leave this function; a probe that throws degrades to "unknown", never to present.
+   */
+  function deviceBridgeStatus() {
+    const unknown = { ok: false, available: false, ready: false, durable: false, axTokenConfigured: false, perDeviceTokens: false };
+    try {
+      const status = typeof bridgeStatus === "function" ? bridgeStatus() : bridgeStatus;
+      if (!status || typeof status !== "object") return unknown;
+      return {
+        ok: true,
+        available: true,
+        ready: Boolean(status.ready),
+        durable: Boolean(status.durable),
+        axTokenConfigured: Boolean(status.axTokenConfigured),
+        perDeviceTokens: Boolean(status.perDeviceTokens)
+      };
+    } catch {
+      return unknown;
+    }
+  }
+
+  /**
+   * Read-only receipts from the durable paired-device queue. They are the only honest evidence that
+   * a queued command was received and executed: the record carries the claim and completion times and
+   * the phone's own summary. Nothing here writes, and a receipt never contains a token.
+   */
+  async function deviceReceipts(deviceId) {
+    if (!deviceRepository || typeof deviceRepository.listCommands !== "function") {
+      return { ok: false, available: false, items: [], error: "durable command receipts are not available" };
+    }
+    try {
+      const rows = await deviceRepository.listCommands({ deviceId: deviceId || null, limit: 10 });
+      const items = (rows || []).map((record) => {
+        const completed = record.status === "completed";
+        const failed = completed && record.result && record.result.ok === false;
+        // A queued or claimed command that is past its deadline can never run. Reporting it as
+        // "queued" would be a misleading indicator, so it is labelled expired instead. A completed
+        // command keeps its real outcome even after the deadline.
+        const expired = !completed && Boolean(record.expiresAt) && Date.parse(record.expiresAt) <= Date.now();
+        return {
+          id: short(record.id, 64),
+          deviceId: short(record.deviceId, 64),
+          type: short(record.type, 40),
+          state: failed ? "failed" : completed ? "completed" : expired ? "expired" : record.status === "claimed" ? "received" : "queued",
+          queuedAt: record.createdAt || null,
+          receivedAt: record.claimedAt || null,
+          completedAt: record.completedAt || null,
+          expiresAt: record.expiresAt || null,
+          summary: record.result && record.result.summary ? short(record.result.summary, 200) : null
+        };
+      });
+      return { ok: true, available: true, items, error: null };
+    } catch (error) {
+      console.error("CONSOLE_DEVICE_RECEIPTS_READ_FAILED", JSON.stringify({
+        event: "device_receipts_read_failed",
+        code: short(error?.code || "unknown", 64),
+        message: short(error?.message || error, 200)
+      }));
+      return { ok: false, available: true, items: [], error: "unable to read durable command receipts" };
+    }
+  }
+
   async function dashboard() {
-    const [health, state, tasks, replies, files, queue, commits] = await Promise.all([
+    const [health, state, tasks, replies, files, queue, commits, phone] = await Promise.all([
       client.health(),
       client.state(),
       client.tasks({ limit: 20 }),
       client.replies({ limit: 20 }),
       client.listFiles(),
       client.configured("buff") ? client.queue() : Promise.resolve({ ok: false, status: 0, error: "buff credential not configured" }),
-      latestCommits()
+      latestCommits(),
+      phoneRegistry()
     ]);
 
     const taskRows = tasks.data?.tasks || [];
@@ -179,6 +285,7 @@ export function registerHomeBridgeConsole(app, { env = process.env, fetchImpl = 
     const queueRows = queue.data?.tasks || [];
     const fileRows = files.data?.files || [];
     const commands = state.data?.commands || [];
+    const deviceCommands = await deviceReceipts(phone.device?.deviceId || null);
 
     return {
       ok: true,
@@ -206,15 +313,21 @@ export function registerHomeBridgeConsole(app, { env = process.env, fetchImpl = 
         activity: replyRows.map((r) => ({ at: r.iso, text: short(r.text, 200), taskId: r.taskId, artifacts: r.artifacts || [] })),
         artifacts: replyRows.flatMap((r) => r.artifacts || [])
       },
+      // A healthy relay still wins. When the legacy relay has no role credential the durable
+      // paired-device registry is the honest source for the phone's presence, so the panel never
+      // reports "never" for a phone that is polling and heartbeating every minute.
       phone: {
-        ok: state.ok,
-        name: state.data?.name || null,
-        online: Boolean(state.data?.online),
-        lastSeen: state.data?.lastSeen || null,
-        lastSeenIso: state.data?.commands?.[0]?.iso || null,
+        ok: state.ok || phone.ok,
+        name: state.data?.name || phone.device?.deviceId || null,
+        online: Boolean(state.data?.online) || phone.link === "LIVE",
+        lastSeen: state.data?.lastSeen || phone.device?.lastSeenAt || null,
+        lastSeenIso: state.data?.commands?.[0]?.iso || phone.device?.lastSeenAt || null,
         commands,
         error: state.ok ? null : state.error
       },
+      devices: phone,
+      deviceBridge: deviceBridgeStatus(),
+      deviceCommands,
       cloud: {
         relayOk: health.ok,
         github: commits,
@@ -315,6 +428,66 @@ export function registerHomeBridgeConsole(app, { env = process.env, fetchImpl = 
     if (!ALLOWED_PHONE_ACTIONS.has(action)) {
       return res.status(400).json({ ok: false, error: `action must be one of ${[...ALLOWED_PHONE_ACTIONS].join(", ")}` });
     }
+
+    // "status" is the first command supported by the durable paired-device agent. Route it
+    // directly into the D1 device queue instead of the legacy HOME RELAY /send endpoint, whose
+    // HOME_BRIDGE_AX_TOKEN is intentionally independent from HABITAT_AX_BRIDGE_TOKEN.
+    if (action === "status") {
+      if (arg) return res.status(400).json({ ok: false, error: "status does not accept an argument." });
+      if (!deviceRepository ||
+          typeof deviceRepository.listDevices !== "function" ||
+          typeof deviceRepository.enqueue !== "function") {
+        return res.status(503).json({ ok: false, error: "Durable paired-device command queue is unavailable." });
+      }
+      let targetDeviceId = null;
+      try {
+        const rows = await deviceRepository.listDevices();
+        const active = (rows || []).filter((row) => !row.revoked_at).sort((left, right) =>
+          Date.parse(right.last_seen_at || right.created_at || 0) -
+          Date.parse(left.last_seen_at || left.created_at || 0)
+        );
+        const device = active[0];
+        if (!device?.device_id) {
+          return res.status(409).json({ ok: false, error: "No active paired phone is registered." });
+        }
+        targetDeviceId = device.device_id;
+        const createdAt = new Date().toISOString();
+        const command = {
+          id: "dc_" + randomUUID(),
+          deviceId: device.device_id,
+          type: "device.status",
+          payload: {},
+          status: "queued",
+          createdAt,
+          expiresAt: new Date(Date.now() + 5 * 60 * 1000).toISOString()
+        };
+        await deviceRepository.enqueue(command);
+        return res.status(202).json({
+          ok: true,
+          id: command.id,
+          action,
+          type: command.type,
+          deviceId: command.deviceId,
+          status: command.status,
+          expiresAt: command.expiresAt,
+          detail: "queued; phone execution is not yet confirmed"
+        });
+      } catch (error) {
+        // Structured, single-line and credential-free: the enqueue request contains no token, and
+        // both fields are bounded so a driver error cannot spill a payload into the log.
+        console.error("CONSOLE_DEVICE_COMMAND_ENQUEUE_FAILED", JSON.stringify({
+          event: "device_command_enqueue_failed",
+          action: "status",
+          type: "device.status",
+          deviceId: short(targetDeviceId, 64),
+          code: short(error?.code || "unknown", 64),
+          message: short(error?.message || error, 200)
+        }));
+        return res.status(503).json({ ok: false, error: "Unable to queue the paired-phone status command." });
+      }
+    }
+
+    // Other legacy actions still use HOME RELAY and require its separate role credential.
     const result = await client.sendPhoneAction({ action, arg });
     return res.status(result.ok ? 200 : 502).json({
       ok: result.ok,
@@ -395,12 +568,12 @@ footer{color:#527080;font-size:10px;letter-spacing:.1em;text-align:center;paddin
 <div class="wrap">
 <header class="top">
   <div class="brand"><span class="orb"></span>HABITAT · AX CORE</div>
-  <span class="chip" id="link-chip">LINK …</span>
+  <span class="chip" id="link-chip">HOME RELAY …</span>
 </header>
 
 <section id="login-view" class="panel login">
   <h2>OPERATOR ACCESS <span>session</span></h2>
-  <p class="note">Paste the Habitat operator token (HABITAT_AX_BRIDGE_TOKEN). It is sent once, exchanged for an HttpOnly session, and never stored in this page.</p>
+  <p class="note">Paste the Habitat operator token (HABITAT_OPERATOR_TOKEN). It is sent once, exchanged for an HttpOnly session, and never stored in this page.</p>
   <input id="token" type="password" autocomplete="off" placeholder="operator token" aria-label="Operator token">
   <div class="grid2"><button id="login">UNLOCK</button><button class="ghost" id="probe">CHECK RELAY</button></div>
   <div class="err" id="login-err"></div>
@@ -421,7 +594,10 @@ footer{color:#527080;font-size:10px;letter-spacing:.1em;text-align:center;paddin
 
   <div class="cols">
     <section class="panel" data-view="ax">
-      <h2>AX · BRAIN <span id="ax-status">—</span></h2>
+      <h2>AX · CORE <span id="ax-status">—</span></h2>
+      <div class="row"><span class="k">device bridge</span><span class="v" id="ax-bridge">—</span></div>
+      <div class="row"><span class="k">home relay</span><span class="v" id="ax-relay">—</span></div>
+      <p class="note">AX credential is this server's device bridge token, the one that authenticates the phone. HOME RELAY is the separate legacy relay; its own ax/buff role credentials are reported in CLOUD.</p>
       <div class="row"><span class="k">queued</span><span class="v" id="ax-queued">—</span></div>
       <div class="row"><span class="k">working</span><span class="v" id="ax-working">—</span></div>
       <div class="row"><span class="k">done</span><span class="v" id="ax-done">—</span></div>
@@ -455,6 +631,17 @@ footer{color:#527080;font-size:10px;letter-spacing:.1em;text-align:center;paddin
       <h2>PHONE · RELAY <span id="phone-status">—</span></h2>
       <div class="row"><span class="k">device</span><span class="v" id="phone-name">—</span></div>
       <div class="row"><span class="k">last check-in</span><span class="v" id="phone-seen">—</span></div>
+      <h2 style="margin-top:14px">PAIR PHONE <span id="pair-link">—</span></h2>
+      <div class="row"><span class="k">registered phone</span><span class="v" id="pair-device-id">—</span></div>
+      <div class="row"><span class="k">paired at</span><span class="v" id="pair-paired-at">—</span></div>
+      <div class="row"><span class="k">confirmed</span><span class="v" id="pair-confirmed">never</span></div>
+      <input id="pair-device" placeholder="optional: phone device ID to bind the code to" aria-label="Phone device ID">
+      <div class="grid2"><button id="pair-create">GENERATE PAIRING CODE</button><button class="ghost" id="pair-clear">CLEAR CODE</button></div>
+      <div class="err" id="pair-err"></div>
+      <div id="pair-code" class="hidden">
+        <div class="item cyan"><div class="meta" id="pair-meta"></div><div class="body" id="pair-value" style="font-size:16px;letter-spacing:.14em;user-select:all"></div></div>
+        <p class="note">Open the Bridge app → LINK → paste this as the one-time AX pairing code. Single use, shown only once, expires after 10 minutes.</p>
+      </div>
       <h2 style="margin-top:14px">APPROVED COMMAND</h2>
       <select id="cmd-action" aria-label="Action">
         <option value="status">status</option>
@@ -471,11 +658,15 @@ footer{color:#527080;font-size:10px;letter-spacing:.1em;text-align:center;paddin
       <div class="err" id="cmd-err"></div>
       <h2 style="margin-top:14px">RESULTS</h2>
       <div class="list" id="cmd-list"></div>
+      <h2 style="margin-top:14px">DURABLE DEVICE QUEUE <span id="device-cmd-count">—</span></h2>
+      <div class="list" id="device-cmd-list"></div>
+      <p class="note">Read-only receipts from the durable paired-device queue: queued, received by the phone, then completed or failed with the phone's own summary.</p>
     </section>
 
     <section class="panel hidden" data-view="cloud">
       <h2>CLOUD · SERVICES <span id="cloud-status">—</span></h2>
-      <div class="row"><span class="k">relay</span><span class="v" id="cloud-relay">—</span></div>
+      <div class="row"><span class="k">home relay</span><span class="v" id="cloud-relay">—</span></div>
+      <div class="row"><span class="k">home relay credentials</span><span class="v" id="cloud-relay-cred">—</span></div>
       <div class="row"><span class="k">github</span><span class="v" id="cloud-github">—</span></div>
       <h2 style="margin-top:14px">COMMITS</h2>
       <div class="list" id="commit-list"></div>
@@ -512,10 +703,15 @@ footer{color:#527080;font-size:10px;letter-spacing:.1em;text-align:center;paddin
   function render(data){
     state.data=data;
     var relay=data.relay||{},ax=data.ax||{},buff=data.buff||{},phone=data.phone||{},cloud=data.cloud||{},files=data.files||{};
-    text("link-chip",relay.health==="ok"?"RELAY ONLINE":"RELAY OFFLINE");
-    $("link-chip").className="chip "+(relay.health==="ok"?"on":"");
+    var bridge=data.deviceBridge||{},bridgeAx=bridge.axTokenConfigured===true,relayOk=relay.health==="ok",relayCred=relay.credentials||{};
+    var deviceCommands=data.deviceCommands||{};
+    text("link-chip",relayOk?"HOME RELAY ONLINE":"HOME RELAY OFFLINE");
+    $("link-chip").className="chip "+(relayOk?"on":"");
+    $("link-chip").title="home relay: "+(relay.healthDetail||(relayOk?"reachable":"unavailable"));
     text("stamp","SYNCED "+when(data.generatedAt));
-    text("ax-status","ax credential "+(relay.credentials&&relay.credentials.ax?"present":"missing"));
+    text("ax-status","device bridge ax credential "+(bridgeAx?"present":"missing"));
+    text("ax-bridge",bridge.ready?(bridge.durable?"ready · durable":"ready"):"not ready");
+    text("ax-relay",relayOk?"online":("offline · "+(relay.healthDetail||"unreachable")));
     text("ax-queued",(ax.counts&&ax.counts.queued)??"—");
     text("ax-working",(ax.counts&&ax.counts.working)??"—");
     text("ax-done",(ax.counts&&ax.counts.done)??"—");
@@ -524,16 +720,26 @@ footer{color:#527080;font-size:10px;letter-spacing:.1em;text-align:center;paddin
     text("phone-status",phone.online?"ONLINE":"LAST KNOWN");
     text("phone-name",phone.name||"—");
     text("phone-seen",phone.lastSeen?when(new Date(phone.lastSeen).toISOString()):"never");
-    text("cloud-status",relay.health==="ok"?"nominal":"degraded");
+
+    var devices=data.devices||{};
+    var current=devices.device||null;
+    text("pair-link",devices.link||"UNKNOWN");
+    text("pair-device-id",current?current.deviceId:"none registered");
+    text("pair-paired-at",current&&current.pairedAt?when(current.pairedAt):"—");
+    text("pair-confirmed",current&&current.lastSeenAt?when(current.lastSeenAt):"never");
+    if(devices.ok===false&&!$("pair-err").textContent)text("pair-err",devices.error||"pairing store unavailable");
+    $("pair-device").placeholder=current?("optional: bind the code to "+current.deviceId):"optional: phone device ID to bind the code to";
+    text("cloud-status",relayOk?"nominal":"degraded");
     text("cloud-relay",relay.url||"—");
+    text("cloud-relay-cred","ax "+(relayCred.ax?"present":"missing")+" · buff "+(relayCred.buff?"present":"missing"));
     text("cloud-github",(cloud.github&&cloud.github.ok)?((cloud.github.repo||"")+" · "+cloud.github.commits.length+" commits"):((cloud.github&&cloud.github.error)||"not configured"));
     text("files-count",(files.count||0)+" files");
 
     var workers=[
-      {name:"AX · brain",state:(relay.credentials&&relay.credentials.ax)&&ax.ok?"active":"offline",detail:"submits tasks, reads replies, queues phone commands"},
+      {name:"AX · relay tasks",state:(relayCred.ax&&ax.ok)?"active":"offline",detail:"relay task API · device bridge ax credential "+(bridgeAx?"present":"missing")},
       {name:"BUFF · agent",state:buff.ok?(buff.queue.length?"assigned":"idle"):"offline",detail:(buff.queue||[]).length+" queued · "+(buff.activity||[]).length+" replies on record"},
       {name:"PHONE · poller",state:phone.online?"polling":"idle",detail:phone.lastSeen?("last check-in "+when(phone.lastSeen)):"no check-in yet"},
-      {name:"RELAY · home bridge",state:relay.health==="ok"?"online":"unreachable",detail:relay.url||""},
+      {name:"HOME RELAY · legacy",state:relayOk?"online":"unreachable",detail:(relay.url||"")+(relayOk?"":" · "+(relay.healthDetail||"unavailable"))},
       {name:"GITHUB · commits",state:(cloud.github&&cloud.github.ok)?"online":"unavailable",detail:(cloud.github&&cloud.github.ok)?((cloud.github.repo||"")+" · "+cloud.github.commits.length+" commits"):((cloud.github&&cloud.github.error)||"not configured")}
     ];
     text("workers-status",workers.filter(function(w){return w.state!=="offline"&&w.state!=="unreachable"}).length+" reporting");
@@ -557,6 +763,14 @@ footer{color:#527080;font-size:10px;letter-spacing:.1em;text-align:center;paddin
     $("cmd-list").innerHTML=(phone.commands||[]).map(function(c){
       return '<div class="item '+(c.status==="done"?"done":"cyan")+'"><div class="meta">'+esc(c.action)+(c.arg?" · "+esc(c.arg):"")+' · '+esc(c.status||"")+' · '+when(c.iso)+'</div><div class="body">'+esc(c.output||"awaiting phone result")+'</div></div>'
     }).join("")||'<div class="item meta">no commands</div>';
+
+    var deviceItems=deviceCommands.items||[];
+    text("device-cmd-count",deviceItems.length+" recent");
+    $("device-cmd-list").innerHTML=deviceItems.map(function(c){
+      var state=String(c.state||"queued");
+      var times="queued "+when(c.queuedAt)+(c.receivedAt?" · received "+when(c.receivedAt):"")+(c.completedAt?" · completed "+when(c.completedAt):"")+(state==="expired"?" · expired "+when(c.expiresAt):"");
+      return '<div class="item '+(state==="completed"?"done":state==="failed"?"":"cyan")+'"><div class="meta">'+esc(state.toUpperCase())+' · '+esc(c.type||"")+' · '+esc(String(c.id||"").slice(0,14))+'</div><div class="body">'+esc(c.deviceId||"")+'</div><div class="meta">'+esc(times)+'</div>'+(c.summary?'<div class="meta">'+esc(c.summary)+'</div>':'')+'</div>'
+    }).join("")||(deviceCommands.available===false?'<div class="item meta">durable device queue not available</div>':'<div class="item meta">no durable device commands</div>');
 
     $("commit-list").innerHTML=((cloud.github&&cloud.github.commits)||[]).map(function(c){
       return '<div class="item"><div class="meta">'+esc(c.short)+' · '+when(c.date)+'</div><div class="body">'+esc(c.message)+'</div></div>'
@@ -592,13 +806,30 @@ footer{color:#527080;font-size:10px;letter-spacing:.1em;text-align:center;paddin
     }catch(e){text("login-err",e.message)}
   });
   $("probe").addEventListener("click",async function(){
-    try{var s=await api("/bridge/console/session");text("login-err","relay credentials: ax "+(s.relay.ax?"yes":"no")+", buff "+(s.relay.buff?"yes":"no"))}
+    try{var s=await api("/bridge/console/session");text("login-err","home relay credentials: ax "+(s.relay.ax?"yes":"no")+", buff "+(s.relay.buff?"yes":"no"))}
     catch(e){text("login-err",e.message)}
   });
   $("refresh").addEventListener("click",load);
   $("buff-refresh").addEventListener("click",load);
   $("phone-refresh").addEventListener("click",load);
-  $("logout").addEventListener("click",async function(ev){ev.preventDefault();try{await api("/bridge/console/logout",{method:"POST"})}catch(e){};location.reload()});
+  function clearPairingCode(){
+    $("pair-code").classList.add("hidden");
+    text("pair-value","");
+    text("pair-meta","");
+  }
+  $("pair-clear").addEventListener("click",clearPairingCode);
+  $("pair-create").addEventListener("click",async function(){
+    text("pair-err","");clearPairingCode();
+    var button=$("pair-create");button.disabled=true;button.textContent="GENERATING…";
+    try{
+      var r=await api("/bridge/console/pairing",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({deviceId:$("pair-device").value.trim()})});
+      text("pair-value",r.pairing.code);
+      text("pair-meta","single-use · expires "+when(new Date(r.pairing.expiresAt).toISOString())+(r.pairing.deviceId?" · bound to "+r.pairing.deviceId:" · binds to the first phone that uses it"));
+      $("pair-code").classList.remove("hidden");
+    }catch(e){text("pair-err",e.message)}
+    finally{button.disabled=false;button.textContent="GENERATE PAIRING CODE"}
+  });
+  $("logout").addEventListener("click",async function(ev){ev.preventDefault();clearPairingCode();try{await api("/bridge/console/logout",{method:"POST"})}catch(e){};location.reload()});
 
   $("submit-task").addEventListener("click",async function(){
     text("task-err","");
@@ -614,7 +845,7 @@ footer{color:#527080;font-size:10px;letter-spacing:.1em;text-align:center;paddin
   $("send-cmd").addEventListener("click",async function(){
     text("cmd-err","");
     try{var r=await api("/bridge/console/send",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({action:$("cmd-action").value,arg:$("cmd-arg").value.trim()})});
-      $("cmd-arg").value="";text("cmd-err","queued "+String(r.id).slice(0,8)+" — the phone executes it only while the launcher is on screen");await load();
+      $("cmd-arg").value="";text("cmd-err","queued "+String(r.id).slice(0,8)+" — waiting for Habitat Bridge to receive and acknowledge it");await load();
     }catch(e){text("cmd-err",e.message)}
   });
 

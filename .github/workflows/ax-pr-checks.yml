@@ -1,0 +1,59 @@
+name: AX PR checks
+
+# The existing Habitat CI and release-checks workflows only run for pull requests targeting
+# `main`. The AX line merges into release-candidate branches, so this workflow makes the
+# authorization, status and command-router tests run on the branch a PR actually targets.
+
+on:
+  pull_request:
+    branches:
+      - main
+      - rc/ax-full-stack
+      - integration/ax-stack
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ax-pr-checks-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ax-tests:
+    name: AX status, authorization and command tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # The package's postinstall runs the whole suite; this job must report its own focused
+      # result first, so lifecycle scripts are skipped deliberately.
+      - name: Install dependencies without project lifecycle hooks
+        run: npm install --ignore-scripts --no-audit --no-fund
+
+      - name: Parse the changed modules
+        run: |
+          node --check server.mjs
+          node --check system-status.mjs
+          node --check command-auth.mjs
+          node --check device-command-bridge.mjs
+
+      - name: Run the AX status, authorization and command tests
+        run: |
+          node --test \
+            tests/system-status.test.mjs \
+            tests/bridge-command-submit.test.mjs \
+            tests/command-routes.test.mjs \
+            tests/capability-status.test.mjs \
+            tests/command-authorization.test.mjs \
+            tests/chat-command-auth-http.test.mjs
+
+      - name: Run the full syntax gate used by production startup
+        run: npm run check

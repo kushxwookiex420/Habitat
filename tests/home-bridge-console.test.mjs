@@ -215,6 +215,310 @@ test("a missing relay credential is reported instead of faked", async () => {
   assert.ok(res.body.errors.length > 0);
 });
 
+test("AX Core reports the device bridge credential, not the legacy relay token", async () => {
+  const app = makeApp();
+  registerHomeBridgeConsole(app, {
+    env: { HABITAT_AX_BRIDGE_TOKEN: OPERATOR },
+    fetchImpl: async () => { throw new Error("should not be called"); },
+    bridgeStatus: () => ({ ready: true, durable: true, axTokenConfigured: true, perDeviceTokens: true })
+  });
+  const res = await invoke(app, "GET /bridge/console/dashboard", operator);
+  assert.equal(res.statusCode, 200);
+  // the surface the phone depends on
+  assert.equal(res.body.deviceBridge.available, true);
+  assert.equal(res.body.deviceBridge.axTokenConfigured, true);
+  assert.equal(res.body.deviceBridge.ready, true);
+  // the legacy relay keeps its own, separately reported credential state
+  assert.equal(res.body.relay.credentials.ax, false);
+  assert.equal(res.body.relay.credentials.buff, false);
+  assert.equal(res.body.relay.health, "unavailable");
+  const serialized = JSON.stringify(res.body);
+  assert.equal(serialized.includes(OPERATOR), false);
+  assert.equal(serialized.includes("hb_ax_"), false);
+});
+
+test("a device bridge status probe that fails degrades to missing, never to present", async () => {
+  const app = makeApp();
+  registerHomeBridgeConsole(app, {
+    env: { HABITAT_AX_BRIDGE_TOKEN: OPERATOR },
+    fetchImpl: async () => { throw new Error("no"); },
+    bridgeStatus: () => { throw new Error("store unavailable"); }
+  });
+  const res = await invoke(app, "GET /bridge/console/dashboard", operator);
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.body.deviceBridge.available, false);
+  assert.equal(res.body.deviceBridge.axTokenConfigured, false);
+});
+
+test("the console page separates AX Core from the legacy home relay", async () => {
+  const { app } = setup();
+  const res = await invoke(app, "GET /bridge/console", {});
+  const html = String(res.html);
+  assert.match(html, /AX · CORE/);
+  assert.match(html, /HOME RELAY/);
+  assert.match(html, /device bridge ax credential/);
+  assert.match(html, /home relay credentials/);
+  assert.equal(html.includes("AX · brain"), false);
+  assert.equal(html.includes("RELAY · home bridge"), false);
+});
+
+function registryStub(seenAt) {
+  return {
+    async listDevices() {
+      return [{ device_id: "android-87ccece6", created_at: "2026-11-23T20:00:00.000Z", last_seen_at: seenAt, device_json: null, revoked_at: null }];
+    }
+  };
+}
+
+test("phone last check-in falls back to the durable registry when the relay is down", async () => {
+  const seenAt = new Date().toISOString();
+  const app = makeApp();
+  // Same shape as production: the operator credential is set, the legacy relay roles are not.
+  registerHomeBridgeConsole(app, {
+    env: { HABITAT_AX_BRIDGE_TOKEN: OPERATOR },
+    fetchImpl: async () => { throw new Error("relay unreachable"); },
+    deviceRepository: registryStub(seenAt)
+  });
+  const res = await invoke(app, "GET /bridge/console/dashboard", operator);
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.body.relay.health, "unavailable", "relay health stays separately reported");
+  assert.equal(res.body.phone.ok, true);
+  assert.equal(res.body.phone.name, "android-87ccece6");
+  assert.equal(res.body.phone.lastSeen, seenAt);
+  assert.equal(res.body.phone.online, true);
+  assert.equal(res.body.devices.link, "LIVE");
+});
+
+test("a healthy relay still wins for the phone check-in values", async () => {
+  const seenAt = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+  const app = makeApp();
+  registerHomeBridgeConsole(app, {
+    env: {
+      HABITAT_AX_BRIDGE_TOKEN: OPERATOR,
+      HOME_BRIDGE_AX_TOKEN: "hb_ax_" + "1".repeat(48),
+      HOME_BRIDGE_BUFF_TOKEN: "hb_buff_" + "2".repeat(48),
+      HOME_BRIDGE_URL: "https://relay.test"
+    },
+    fetchImpl: relayStub([]),
+    deviceRepository: registryStub(seenAt)
+  });
+  const res = await invoke(app, "GET /bridge/console/dashboard", operator);
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.body.relay.health, "ok");
+  // The relay reports epoch milliseconds and the name "phone"; the registry would supply an ISO
+  // string and a device id, so these two assertions prove the relay path was taken.
+  assert.equal(typeof res.body.phone.lastSeen, "number");
+  assert.notEqual(res.body.phone.lastSeen, seenAt);
+  assert.equal(res.body.phone.name, "phone");
+  assert.equal(res.body.phone.online, true);
+});
+
+test("status commands use the durable paired-device queue without a HOME RELAY credential", async () => {
+  const app = makeApp();
+  const queued = [];
+  const calls = [];
+  const deviceRepository = {
+    async listDevices() {
+      return [
+        { device_id: "android-87ccece6-c9db-41c4-8956-b0e078b4d069", created_at: "2026-11-22T21:50:54.000Z", last_seen_at: new Date().toISOString(), revoked_at: null }
+      ];
+    },
+    async enqueue(command) { queued.push(command); return command; }
+  };
+  registerHomeBridgeConsole(app, {
+    env: { HABITAT_AX_BRIDGE_TOKEN: OPERATOR },
+    fetchImpl: relayStub(calls),
+    deviceRepository
+  });
+
+  const response = await invoke(app, "POST /bridge/console/send", {
+    ...operator,
+    body: { action: "status", arg: "" }
+  });
+
+  assert.equal(response.statusCode, 202);
+  assert.equal(response.body.ok, true);
+  assert.equal(response.body.action, "status");
+  assert.equal(response.body.type, "device.status");
+  assert.equal(response.body.deviceId, "android-87ccece6-c9db-41c4-8956-b0e078b4d069");
+  assert.equal(response.body.status, "queued");
+  assert.match(response.body.id, /^dc_/);
+  assert.equal(queued.length, 1);
+  assert.equal(queued[0].type, "device.status");
+  assert.deepEqual(queued[0].payload, {});
+  assert.equal(queued[0].status, "queued");
+  assert.equal(calls.some((call) => call.path === "/send"), false, "status must bypass legacy HOME RELAY");
+});
+
+test("status command rejects an unexpected argument", async () => {
+  const app = makeApp();
+  const deviceRepository = {
+    async listDevices() { return [{ device_id: "android-87", created_at: new Date().toISOString(), revoked_at: null }]; },
+    async enqueue() { assert.fail("invalid status argument must not enqueue"); }
+  };
+  registerHomeBridgeConsole(app, {
+    env: { HABITAT_AX_BRIDGE_TOKEN: OPERATOR },
+    fetchImpl: async () => { throw new Error("legacy relay must not be used"); },
+    deviceRepository
+  });
+  const response = await invoke(app, "POST /bridge/console/send", {
+    ...operator,
+    body: { action: "status", arg: "unexpected" }
+  });
+  assert.equal(response.statusCode, 400);
+  assert.match(response.body.error, /does not accept an argument/);
+});
+
+test("status command reports when no active paired phone exists", async () => {
+  const app = makeApp();
+  const deviceRepository = {
+    async listDevices() { return [{ device_id: "android-old", revoked_at: "2026-11-22T00:00:00.000Z" }]; },
+    async enqueue() { assert.fail("no active phone must not enqueue"); }
+  };
+  registerHomeBridgeConsole(app, {
+    env: { HABITAT_AX_BRIDGE_TOKEN: OPERATOR },
+    fetchImpl: async () => { throw new Error("legacy relay must not be used"); },
+    deviceRepository
+  });
+  const response = await invoke(app, "POST /bridge/console/send", {
+    ...operator,
+    body: { action: "status", arg: "" }
+  });
+  assert.equal(response.statusCode, 409);
+  assert.match(response.body.error, /No active paired phone/);
+});
+
+test("durable command receipts are read-only and map queued, received, completed and failed", async () => {
+  const seenAt = new Date().toISOString();
+  const t1 = new Date(Date.now() - 60_000).toISOString();
+  const t2 = new Date(Date.now() - 50_000).toISOString();
+  const t3 = new Date(Date.now() - 40_000).toISOString();
+  const t4 = new Date(Date.now() + 240_000).toISOString();
+  const past = new Date(Date.now() - 5_000).toISOString();
+  const queried = [];
+  const app = makeApp();
+  registerHomeBridgeConsole(app, {
+    env: { HABITAT_AX_BRIDGE_TOKEN: OPERATOR },
+    fetchImpl: async () => { throw new Error("relay unreachable"); },
+    deviceRepository: {
+      async listDevices() {
+        return [{ device_id: "android-87ccece6", created_at: t1, last_seen_at: seenAt, revoked_at: null }];
+      },
+      async listCommands(args) {
+        queried.push(args);
+        return [
+          { id: "dc_queued", deviceId: "android-87ccece6", type: "device.status", status: "queued", createdAt: t1, expiresAt: t4, payload: {} },
+          { id: "dc_received", deviceId: "android-87ccece6", type: "device.status", status: "claimed", createdAt: t1, claimedAt: t2, expiresAt: t4, payload: {} },
+          { id: "dc_completed", deviceId: "android-87ccece6", type: "device.status", status: "completed", createdAt: t1, claimedAt: t2, completedAt: t3, expiresAt: t4, result: { ok: true, summary: "Habitat Android device is online and responding" } },
+          { id: "dc_failed", deviceId: "android-87ccece6", type: "device.status", status: "completed", createdAt: t1, claimedAt: t2, completedAt: t3, expiresAt: t4, result: { ok: false, summary: "Unsupported command rejected by Android agent" } },
+          { id: "dc_expired_queued", deviceId: "android-87ccece6", type: "device.status", status: "queued", createdAt: t1, expiresAt: past },
+          { id: "dc_expired_claimed", deviceId: "android-87ccece6", type: "device.status", status: "claimed", createdAt: t1, claimedAt: t2, expiresAt: past },
+          { id: "dc_completed_after_deadline", deviceId: "android-87ccece6", type: "device.status", status: "completed", createdAt: t1, claimedAt: t2, completedAt: t3, expiresAt: past, result: { ok: true, summary: "done before the deadline mattered" } }
+        ];
+      }
+    }
+  });
+  const res = await invoke(app, "GET /bridge/console/dashboard", operator);
+  assert.equal(res.statusCode, 200);
+  assert.deepEqual(queried, [{ deviceId: "android-87ccece6", limit: 10 }], "receipts are scoped to the active phone and bounded");
+  assert.equal(res.body.deviceCommands.available, true);
+  assert.deepEqual(res.body.deviceCommands.items.map((item) => item.state), ["queued", "received", "completed", "failed", "expired", "expired", "completed"]);
+  assert.equal(res.body.deviceCommands.items.every((item) => item.state !== "expired" || item.completedAt === null), true, "an expired receipt never claims completion");
+  const completed = res.body.deviceCommands.items.find((item) => item.id === "dc_completed");
+  assert.equal(completed.deviceId, "android-87ccece6");
+  assert.equal(completed.queuedAt, t1);
+  assert.equal(completed.receivedAt, t2);
+  assert.equal(completed.completedAt, t3);
+  assert.equal(completed.summary, "Habitat Android device is online and responding");
+  const serialized = JSON.stringify(res.body.deviceCommands);
+  assert.equal(serialized.includes(OPERATOR), false);
+  assert.equal(serialized.includes("token"), false, "a receipt never carries a token field");
+});
+
+test("a receipt read failure is logged structurally and leaves the dashboard working", async () => {
+  const logs = [];
+  const original = console.error;
+  console.error = (...args) => { logs.push(args.map((value) => String(value)).join(" ")); };
+  try {
+    const app = makeApp();
+    registerHomeBridgeConsole(app, {
+      env: { HABITAT_AX_BRIDGE_TOKEN: OPERATOR },
+      fetchImpl: async () => { throw new Error("relay unreachable"); },
+      deviceRepository: {
+        async listDevices() { return []; },
+        async listCommands() { const error = new Error("D1 read failed for habitat_device_commands"); error.code = "D1_ERROR"; throw error; }
+      }
+    });
+    const res = await invoke(app, "GET /bridge/console/dashboard", operator);
+    assert.equal(res.statusCode, 200);
+    assert.equal(res.body.deviceCommands.available, true);
+    assert.deepEqual(res.body.deviceCommands.items, []);
+    assert.match(res.body.deviceCommands.error, /unable to read durable command receipts/);
+    const logged = logs.find((line) => line.includes("CONSOLE_DEVICE_RECEIPTS_READ_FAILED"));
+    assert.ok(logged, "the read failure is logged");
+    assert.match(logged, /device_receipts_read_failed/);
+    assert.match(logged, /D1_ERROR/);
+    assert.equal(logged.includes(OPERATOR), false);
+  } finally {
+    console.error = original;
+  }
+});
+
+test("receipts report unavailability when the store cannot list commands", async () => {
+  const app = makeApp();
+  registerHomeBridgeConsole(app, {
+    env: { HABITAT_AX_BRIDGE_TOKEN: OPERATOR },
+    fetchImpl: async () => { throw new Error("relay unreachable"); },
+    deviceRepository: { async listDevices() { return []; } }
+  });
+  const res = await invoke(app, "GET /bridge/console/dashboard", operator);
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.body.deviceCommands.available, false);
+  assert.deepEqual(res.body.deviceCommands.items, []);
+});
+
+test("an enqueue failure is logged structurally without credentials and returns 503", async () => {
+  const logs = [];
+  const original = console.error;
+  console.error = (...args) => { logs.push(args.map((value) => String(value)).join(" ")); };
+  try {
+    const app = makeApp();
+    registerHomeBridgeConsole(app, {
+      env: { HABITAT_AX_BRIDGE_TOKEN: OPERATOR },
+      fetchImpl: async () => { throw new Error("legacy relay must not be used"); },
+      deviceRepository: {
+        async listDevices() { return [{ device_id: "android-87ccece6", created_at: new Date().toISOString(), revoked_at: null }]; },
+        async enqueue() { const error = new Error("D1 write failed"); error.code = "D1_ERROR"; throw error; }
+      }
+    });
+    const res = await invoke(app, "POST /bridge/console/send", { ...operator, body: { action: "status", arg: "" } });
+    assert.equal(res.statusCode, 503);
+    assert.match(res.body.error, /Unable to queue the paired-phone status command/);
+    const logged = logs.find((line) => line.includes("CONSOLE_DEVICE_COMMAND_ENQUEUE_FAILED"));
+    assert.ok(logged, "the enqueue failure is logged");
+    assert.match(logged, /"event":"device_command_enqueue_failed"/);
+    assert.match(logged, /"type":"device.status"/);
+    assert.match(logged, /"deviceId":"android-87ccece6"/);
+    assert.match(logged, /D1_ERROR/);
+    assert.equal(logged.includes(OPERATOR), false);
+    assert.equal(logged.includes("Bearer"), false);
+    assert.equal(logged.includes("hb_ax_"), false);
+  } finally {
+    console.error = original;
+  }
+});
+
+test("the console page exposes a read-only durable command receipt panel", async () => {
+  const { app } = setup();
+  const res = await invoke(app, "GET /bridge/console", {});
+  const html = String(res.html);
+  assert.match(html, /DURABLE DEVICE QUEUE/);
+  assert.match(html, /id="device-cmd-list"/);
+  assert.match(html, /deviceCommands\.items/);
+  assert.match(html, /Read-only receipts from the durable paired-device queue/);
+  assert.match(html, /id="cmd-list"/, "the legacy relay results list is preserved");
+});
+
 test("phone actions are allowlisted and forwarded", async () => {
   const { app, calls } = setup();
   const bad = await invoke(app, "POST /bridge/console/send", { ...operator, body: { action: "shell", arg: "id" } });

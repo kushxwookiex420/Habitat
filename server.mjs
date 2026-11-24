@@ -1,5 +1,6 @@
 import { buildCapabilityStatus } from "./capability-status.mjs";
 import { registerDeviceCommandBridge } from "./device-command-bridge.mjs";
+import { projectDevicePresence, DEVICE_BRIDGE_HEARTBEAT_TTL_MS } from "./device-presence.mjs";
 import { claimTaskDispatch } from "./task-dispatch-guard.mjs";
 import { createD1TaskRepository } from "./d1-task-repository.mjs";
 import { createD1DispatchLeaseRepository } from "./d1-dispatch-lease-repository.mjs";
@@ -14,7 +15,12 @@ import { createD1SecretVault } from "./d1-secret-vault.mjs";
 import { registerTikTokOAuth } from "./tiktok-oauth.mjs";
 import { registerShopifyOAuth } from "./shopify-oauth.mjs";
 import { registerPublicPages } from "./public-pages.mjs";
+import { registerControlCenter } from "./control-center.mjs";
 import { readFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { buildSystemStatus, classifyWorkers, inferReadOnlyAdapter, isSystemStatusRequest, parseAxCommand, summarizeWorkerCounts } from "./system-status.mjs";
+import { buildWorkerList, buildWorkerDetail, resolveWorkerId, describeVerification, normalizeError } from "./worker-catalog.mjs";
+import { createChatCommandAuthorizer } from "./command-auth.mjs";
 
 import express from "express";
 
@@ -23,8 +29,12 @@ const app = express();
 app.use(express.json({ limit: "1mb" }));
 
 const deviceCommandBridge = registerDeviceCommandBridge(app);
+const chatCommandAuthorizer = createChatCommandAuthorizer({ env: process.env, deviceBridge: deviceCommandBridge });
 
 registerPublicPages(app);
+// Operational control center. The page is public but carries no data; every value it shows comes
+// from an authenticated Ax route with a token the owner enters in the browser.
+registerControlCenter(app, { version: process.env.HABITAT_VERSION || "0.5.0" });
 registerProductDemoResearch(app);
 registerPromotionEngine(app);
 registerProductDemoRenderer(app);
@@ -111,37 +121,31 @@ function canonicalTaskReport(task) {
   const status = task?.status || "unknown";
   const worker = task?.worker || "unknown";
   const result = String(task?.result || "");
-  const error = String(task?.error || "");
-  let verification = null;
-  try { verification = JSON.parse(result)?.verification || null; } catch (_) {}
+  const error = normalizeError(task?.error);
+  let parsed = null;
+  try { parsed = JSON.parse(result); } catch (_) {}
+  const verification = parsed?.verification || null;
 
   if (!verification) {
     return "Status: " + status + "\nWorker: " + worker + (error ? "\nError: " + error : "\nResult: " + (result || "No worker result."));
   }
 
+  // Every FAIL/UNKNOWN line explains itself. A blocked check with no reason is a reporting bug, so
+  // describeVerification substitutes an explicit "no reason was reported" instead of a blank.
+  const described = describeVerification(verification, parsed?.verificationDetails || {});
   const lines = [
     "Status: " + status,
     "Worker: " + worker,
     "",
     "CANONICAL MACHINE CHECKS:",
-    "Backend health: " + (verification.backendHealth || "UNKNOWN"),
-    "Model worker: " + (verification.modelWorker || "UNKNOWN"),
-    "Android heartbeat: " + (verification.androidHeartbeat || "UNKNOWN"),
-    "Android device access: " + (verification.androidDeviceAccess || "UNKNOWN"),
-    "Task creation: " + (verification.taskCreation || "UNKNOWN"),
-    "Storage: " + (verification.storage || "UNKNOWN")
+    ...described.lines
   ];
 
-  const verified =
-    status.toLowerCase() === "verified" &&
-    verification.backendHealth === "PASS" &&
-    verification.modelWorker === "PASS" &&
-    verification.androidHeartbeat === "PASS" &&
-    verification.androidDeviceAccess === "PASS" &&
-    verification.taskCreation === "PASS" &&
-    verification.storage === "PASS";
-
+  const verified = status.toLowerCase() === "verified" && described.verified;
   lines.push("", "CANONICAL RESULT: " + (verified ? "VERIFIED PASS" : "PARTIAL / BLOCKED"));
+  if (described.blockers.length > 0) {
+    lines.push("BLOCKERS: " + described.blockers.map((blocker) => blocker.check + ": " + blocker.detail).join(" | "));
+  }
   if (error) lines.push("Worker error: " + error);
   return lines.join("\n");
 }
@@ -514,27 +518,6 @@ app.get("/diagnostics/provider", async (req, res) => {
   }
 });
 
-app.post("/device/heartbeat", (req, res) => {
-  const packageName = String(req.body?.packageName || "").trim();
-  const deviceId = String(req.body?.deviceId || "").trim();
-  const deviceModel = String(req.body?.deviceModel || "").trim();
-  const appVersion = String(req.body?.appVersion || "").trim();
-
-  if (packageName !== "com.habitat" || !deviceId || !deviceModel) {
-    return res.status(400).json({ ok: false, error: "Valid Habitat Android identity required." });
-  }
-
-  const device = {
-    deviceId,
-    packageName,
-    deviceModel,
-    appVersion,
-    lastSeenAt: nowIso()
-  };
-  androidDevices.set(deviceId, device);
-  return res.json({ ok: true, androidDeviceAccess: "PASS", device });
-});
-
 app.get("/device/status", async (req, res) => {
   const access = await androidAccessStatus();
   return res.json({
@@ -557,11 +540,46 @@ app.get("/health", (req, res) => {
       axTokenConfigured: deviceBridge.axTokenConfigured,
       perDeviceTokens: deviceBridge.perDeviceTokens
     },
+    // Read-only worker status. `nexus.configured=false` means the optional command worker is not
+    // mounted; `configured=true, started=false` means it is mounted but has not started. Neither
+    // changes the health response, so Render readiness never depends on the worker.
+    nexus: deviceBridge.nexus || null,
+    // Public, non-sensitive pointers. Full probe-based diagnostics require the Ax credential at
+    // GET /ax/command/diagnostics; this endpoint never claims a subsystem is healthy.
+    version: process.env.HABITAT_VERSION || "0.5.0",
+    // Non-sensitive deployment identity. Render injects RENDER_GIT_COMMIT, so a verifier can
+    // distinguish "the route is missing" from "this is an older build" without a credential.
+    commit: process.env.RENDER_GIT_COMMIT || process.env.GIT_COMMIT || process.env.HABITAT_COMMIT || null,
+    startedAt: new Date(Date.now() - Math.round(process.uptime() * 1000)).toISOString(),
+    controlCenter: "/control",
     provider: "multi-provider",
     model,
     free_brain: true
   });
 });
+
+// /chat is unauthenticated: the installed Bridge sends no device credential on this route. Command
+// submission therefore gets a per-address budget. Execution being disabled does not make
+// unlimited durable writes harmless, so the bound applies even while NEXUS is off.
+const AX_CHAT_COMMAND_LIMIT = 10;
+const AX_CHAT_COMMAND_WINDOW_MS = 10 * 60 * 1000;
+const axChatCommandHits = new Map();
+function allowAxChatCommand(address, now = Date.now()) {
+  const key = String(address || "unknown");
+  const entry = axChatCommandHits.get(key);
+  if (!entry || now - entry.window >= AX_CHAT_COMMAND_WINDOW_MS) {
+    if (axChatCommandHits.size > 5000) {
+      for (const [candidate, value] of axChatCommandHits) {
+        if (now - value.window >= AX_CHAT_COMMAND_WINDOW_MS) axChatCommandHits.delete(candidate);
+      }
+    }
+    axChatCommandHits.set(key, { window: now, count: 1 });
+    return true;
+  }
+  if (entry.count >= AX_CHAT_COMMAND_LIMIT) return false;
+  entry.count += 1;
+  return true;
+}
 
 app.post("/chat", async (req, res) => {
   try {
@@ -667,6 +685,93 @@ app.post("/chat", async (req, res) => {
         habitat: "online",
         free_brain: true,
         deterministic: true
+      });
+    }
+
+    // "ask ax system status" must be telemetry, not a model answer. This runs before any prompt so
+    // the phone cannot receive an invented status table.
+    if (isSystemStatusRequest(message)) {
+      try {
+        const status = await collectSystemStatus();
+        return res.json({
+          response: status.report,
+          systemStatus: status,
+          deterministic: true,
+          habitat: "online",
+          secretsExposed: false
+        });
+      } catch (error) {
+        console.error("AX SYSTEM STATUS FAILED", String(error?.message || error));
+        return res.status(503).json({
+          response: "AX SYSTEM STATUS\nStatus: UNAVAILABLE\nThe status probe could not complete on this process.",
+          deterministic: true,
+          error: "status_probe_failed"
+        });
+      }
+    }
+
+    // Explicit Ax commands ("ax: …", "ask ax to …", "ax run …") go into the universal command
+    // router instead of a prompt. A task that is queued is reported as queued: no execution is
+    // claimed, and the executor's real state is included in the answer.
+    const axObjective = parseAxCommand(message);
+    if (axObjective) {
+      // A command objective creates a durable task, so it needs a real credential. Status and
+      // ordinary conversation above stay public; this write does not.
+      const authorization = await chatCommandAuthorizer.authorize({ headers: req.headers, message: axObjective });
+      if (!authorization.ok) {
+        console.warn("CHAT_COMMAND_UNAUTHORIZED", JSON.stringify({ code: authorization.code }));
+        return res.status(401).json({
+          response: "AX COMMAND AUTHORIZATION REQUIRED\n" +
+            "Command submission needs the owner Ax credential or a paired-device credential. " +
+            "This request carried neither, so nothing was queued. Status and conversation still work.",
+          deterministic: true,
+          code: authorization.code,
+          commandRouter: "unauthorized"
+        });
+      }
+      if (!allowAxChatCommand(req.ip)) {
+        return res.status(429).json({
+          response: "AX COMMAND RATE LIMITED\nAt most " + AX_CHAT_COMMAND_LIMIT + " command objectives per 10 minutes from this address.",
+          deterministic: true,
+          commandRouter: "rate_limited"
+        });
+      }
+      const adapter = inferReadOnlyAdapter(axObjective);
+      const submitted = await deviceCommandBridge.submitCommandObjective({
+        objective: axObjective,
+        requestedBy: "bridge-chat",
+        role: "ax",
+        // Only a read-only adapter this engine allowlists. Without one the task is queued but no
+        // worker may claim it, and the response says so.
+        adapter,
+        idempotencyKey: "bridge-chat:" + createHash("sha256")
+          .update(axObjective + "|" + Math.floor(Date.now() / 300000))
+          .digest("hex")
+          .slice(0, 32)
+      });
+      if (!submitted?.ok) {
+        return res.status(503).json({
+          response: "AX COMMAND NOT QUEUED\n" + (submitted?.error || "The AX command router rejected the objective."),
+          deterministic: true,
+          commandRouter: "unavailable"
+        });
+      }
+      const task = submitted.task || {};
+      const executor = deviceCommandBridge.status().nexus || null;
+      const executionNote = executor?.configured === true
+        ? "Executor is mounted; execution is not confirmed until a worker claims the task."
+        : "No executor is mounted (" + (executor?.reason || "disabled") + "); the task is queued and will not run yet.";
+      return res.status(202).json({
+        response: "AX COMMAND QUEUED\nTask: " + (task.id || "unknown") +
+          "\nStatus: " + (task.status || "queued") +
+          "\nAdapter: " + (adapter || "none — this objective names no read-only subject, so no worker will claim it") +
+          "\nObjective: " + axObjective + "\n" + executionNote,
+        taskId: task.id || null,
+        status: task.status || "queued",
+        replayed: submitted.replayed === true,
+        deterministic: true,
+        commandRouter: "connected",
+        habitat: "online"
       });
     }
     // Android connectivity is a deterministic backend/device check. Never send this to the LLM.
@@ -1097,6 +1202,35 @@ const workerRegistry = new Map([
     model,
     capabilities: ["topic-research", "content-planning"],
     lastRunAt: null
+  }],
+  // The Android worker mesh shows these three rows; without registry entries the detail page would
+  // have nothing real to report. They are execution profiles, not separate model providers.
+  ["dropilot-listing-optimizer", {
+    id: "dropilot-listing-optimizer",
+    name: "DropPilot Listing Optimizer",
+    kind: "specialist",
+    status: hasAnyAiProviderKey() ? "available" : "blocked",
+    model,
+    capabilities: ["listing-copy", "pricing-review", "conversion-audit"],
+    lastRunAt: null
+  }],
+  ["dropilot-growth-operator", {
+    id: "dropilot-growth-operator",
+    name: "DropPilot Growth Operator",
+    kind: "specialist",
+    status: hasAnyAiProviderKey() ? "available" : "blocked",
+    model,
+    capabilities: ["campaign-planning", "creator-outreach", "sales-tracking"],
+    lastRunAt: null
+  }],
+  ["habitat-orchestrator", {
+    id: "habitat-orchestrator",
+    name: "Ax Orchestrator",
+    kind: "orchestrator",
+    status: hasAnyAiProviderKey() ? "available" : "blocked",
+    model,
+    capabilities: ["planning", "delegation", "mission-control"],
+    lastRunAt: null
   }]
 ]);
 
@@ -1111,65 +1245,17 @@ function storageSelfTest() {
 
 function nowIso() { return new Date().toISOString(); }
 
-// Real Android app presence registry. A running Habitat APK posts a heartbeat;
-// system checks can verify that the Android client actually reached the backend.
-const androidDevices = new Map();
-const ANDROID_HEARTBEAT_TTL_MS = 120000;
-const DEVICE_BRIDGE_HEARTBEAT_TTL_MS = 45 * 60 * 1000;
-
-function pruneAndroidDevices() {
-  const cutoff = Date.now() - ANDROID_HEARTBEAT_TTL_MS;
-  for (const [id, device] of androidDevices.entries()) {
-    if (new Date(device.lastSeenAt).getTime() < cutoff) androidDevices.delete(id);
-  }
-}
-
+// Phone presence is read from the durable paired-device registry only. The legacy in-memory
+// heartbeat map was removed: its route was shadowed by the durable device bridge, so it could never
+// be written and only made /device/status report two competing sources of truth.
 async function androidAccessStatus() {
-  pruneAndroidDevices();
-  const legacyDevices = Array.from(androidDevices.values()).map(device => ({
-    ...device,
-    source: "legacy-heartbeat",
-    heartbeatTtlMs: ANDROID_HEARTBEAT_TTL_MS
-  }));
   let pairedDevices = [];
   try {
     pairedDevices = await deviceCommandBridge.listDevices();
   } catch (error) {
     console.warn("DEVICE_BRIDGE_INVENTORY_UNAVAILABLE", String(error?.message || error));
   }
-  const bridgeDevices = pairedDevices
-    .filter(row => !row.revoked_at && row.last_seen_at)
-    .map(row => {
-      let details = {};
-      try { details = row.device_json ? JSON.parse(row.device_json) : {}; } catch {}
-      const deviceModel = [details.manufacturer, details.model].filter(Boolean).join(" ") || "Paired Habitat Android device";
-      return {
-        deviceId: row.device_id,
-        packageName: "com.habitat.axbridge",
-        deviceModel,
-        appVersion: details.appVersion || "device-bridge",
-        androidSdk: details.androidSdk || null,
-        androidRelease: details.androidRelease || null,
-        batteryPercent: Number.isInteger(details.batteryPercent) ? details.batteryPercent : null,
-        charging: typeof details.charging === "boolean" ? details.charging : null,
-        interactive: typeof details.interactive === "boolean" ? details.interactive : null,
-        lastSeenAt: row.last_seen_at,
-        source: "secure-device-bridge",
-        heartbeatTtlMs: DEVICE_BRIDGE_HEARTBEAT_TTL_MS
-      };
-    });
-  const devices = [...legacyDevices, ...bridgeDevices]
-    .sort((a, b) => new Date(b.lastSeenAt).getTime() - new Date(a.lastSeenAt).getTime());
-  const active = devices.filter(device =>
-    Date.now() - new Date(device.lastSeenAt).getTime() <= (device.heartbeatTtlMs || ANDROID_HEARTBEAT_TTL_MS)
-  );
-  return {
-    status: active.length > 0 ? "PASS" : "UNVERIFIED",
-    detail: active.length > 0
-      ? "A Habitat Android device checked in recently (" + active[0].source + ")."
-      : "No Habitat Android device has checked in within its heartbeat window.",
-    devices
-  };
+  return projectDevicePresence(pairedDevices);
 }
 function makeTaskId() {
   return "task-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 8);
@@ -1262,7 +1348,7 @@ async function runSystemCheck() {
 
     const androidAccess = await androidAccessStatus();
     const latestDevice = androidAccess.devices.find(device =>
-      Date.now() - new Date(device.lastSeenAt).getTime() <= (device.heartbeatTtlMs || ANDROID_HEARTBEAT_TTL_MS)
+      Date.now() - new Date(device.lastSeenAt).getTime() <= (device.heartbeatTtlMs || DEVICE_BRIDGE_HEARTBEAT_TTL_MS)
     ) || null;
     const heartbeatAgeMs = latestDevice?.lastSeenAt
       ? Math.max(0, Date.now() - new Date(latestDevice.lastSeenAt).getTime())
@@ -1311,6 +1397,16 @@ async function runSystemCheck() {
       detail: "Real model-backed QA execution completed without an error."
     };
 
+    // Every check carries its own detail so a BLOCKED result can name the failing subsystem
+    // instead of surfacing a null placeholder.
+    const verificationDetails = Object.fromEntries(
+      Object.entries(checks).map(([name, check]) => [name, { status: check.status, detail: check.detail }])
+    );
+    const blockedReason = Object.entries(checks)
+      .filter(([, check]) => check.status !== "PASS")
+      .map(([name, check]) => name + ": " + check.detail)
+      .join(" | ");
+
     task.result = JSON.stringify({
       verification: {
         backendHealth: checks.backendHealth.status,
@@ -1320,6 +1416,8 @@ async function runSystemCheck() {
         taskCreation: checks.taskCreation.status,
         storage: checks.storage.status
       },
+      verificationDetails,
+      blockedReason: blockedReason || null,
       model: modelName,
       provider: providerName,
       latencyMs,
@@ -1362,6 +1460,113 @@ async function runSystemCheck() {
   return { task, checks, report, overall };
 }
 
+function configuredProviders(env = process.env) {
+  return {
+    groq: Boolean(String(env.GROQ_API_KEY || "").trim()),
+    gemini: Boolean(String(env.GEMINI_API_KEY || "").trim()),
+    openrouter: Boolean(String(env.OPENROUTER_API_KEY || "").trim()),
+    cerebras: Boolean(String(env.CEREBRAS_API_KEY || "").trim()),
+    cloudflare: Boolean(String(env.CLOUDFLARE_API_TOKEN || "").trim()) && Boolean(String(env.CLOUDFLARE_ACCOUNT_ID || "").trim())
+  };
+}
+
+/**
+ * One read-only status gather used by GET /system/status and the Bridge chat intent. It reports
+ * only what this process can observe; nothing is estimated and no secret value is copied.
+ */
+async function collectSystemStatus() {
+  const startedAt = Date.now();
+  let tasks = [];
+  try {
+    tasks = await listStoredTasks();
+  } catch {
+    tasks = Array.from(taskStore.values());
+  }
+
+  let devicePresence = { paired: 0, recentlySeen: false, lastSeenAt: null };
+  try {
+    const access = await androidAccessStatus();
+    const devices = Array.isArray(access?.devices) ? access.devices : [];
+    const lastSeenAt = devices
+      .map(device => device?.lastSeenAt)
+      .filter(Boolean)
+      .sort()
+      .pop() || null;
+    devicePresence = {
+      paired: devices.length,
+      recentlySeen: access?.status === "PASS",
+      lastSeenAt
+    };
+  } catch (error) {
+    console.warn("STATUS_DEVICE_PRESENCE_FAILED", String(error?.message || error));
+  }
+
+  const bridgeStatus = deviceCommandBridge.status();
+  let execution = bridgeStatus.nexus || null;
+  const runtime = typeof deviceCommandBridge.nexus === "function" ? deviceCommandBridge.nexus() : null;
+  if (runtime && typeof runtime.presence === "function") {
+    try {
+      const presence = await runtime.presence();
+      execution = {
+        configured: presence?.executor?.configured === true,
+        started: presence?.executor?.started === true,
+        canExecute: presence?.canExecute === true,
+        heartbeat: presence?.heartbeat || null,
+        queue: presence?.queue || null,
+        liveWorkers: presence?.heartbeat?.liveWorkers ?? null,
+        reason: presence?.executor?.reason || null
+      };
+    } catch (error) {
+      console.warn("STATUS_EXECUTOR_PRESENCE_FAILED", String(error?.message || error));
+    }
+  }
+
+  return buildSystemStatus({
+    env: process.env,
+    version: process.env.HABITAT_VERSION || "0.5.0",
+    commit: process.env.RENDER_GIT_COMMIT || process.env.GIT_COMMIT || process.env.HABITAT_COMMIT || null,
+    startedAtMs: Date.now() - Math.round(process.uptime() * 1000),
+    latencyMs: Date.now() - startedAt,
+    registry: workerRegistry,
+    tasks,
+    deviceBridge: bridgeStatus,
+    devicePresence,
+    storage: {
+      taskRepositoryReady: taskRepository && taskStorageReady,
+      contentJobRepositoryReady: contentStorageReady,
+      dispatchLeaseReady,
+      secretVaultReady: Boolean(secretVault)
+    },
+    providers: configuredProviders(),
+    routes: {
+      chat: true,
+      // These routes are registered by registerDeviceCommandBridge regardless of credentials or
+      // storage readiness; readiness is reported separately by the auth and storage components.
+      deviceCommands: true,
+      axCommand: true,
+      nexusRuntime: bridgeStatus.nexus?.configured === true
+    },
+    execution
+  });
+}
+
+// Public, redacted, read-only. It names configuration keys and reports booleans; it never returns a
+// value, and it does not probe providers, so it cannot spend quota.
+app.get("/system/status", async (_req, res) => {
+  try {
+    const status = await collectSystemStatus();
+    res.setHeader("cache-control", "no-store");
+    return res.json(status);
+  } catch (error) {
+    console.error("SYSTEM_STATUS_FAILED", String(error?.message || error));
+    return res.status(503).json({
+      ok: false,
+      error: "System status could not be assembled on this process.",
+      secretsExposed: false
+    });
+  }
+});
+
 app.get("/capabilities", async (_req, res) => {
   const device = await androidAccessStatus();
   return res.json(buildCapabilityStatus({
@@ -1374,11 +1579,40 @@ app.get("/capabilities", async (_req, res) => {
   }));
 });
 
-app.get("/workers", (req, res) => {
+// Truthful worker inventory: the catalog supplies per-worker detail from real task history, and
+// the counts come from observed state, not from registration. A registered worker is not health.
+app.get("/workers", async (_req, res) => {
+  let tasks = [];
+  try { tasks = await listStoredTasks(); } catch { tasks = []; }
+  const classified = classifyWorkers({ registry: workerRegistry, tasks });
   return res.json({
     ok: true,
-    workers: Array.from(workerRegistry.values()).map(w => ({ ...w }))
+    counts: summarizeWorkerCounts(classified),
+    workers: buildWorkerList({
+      workers: Array.from(workerRegistry.values()),
+      tasks,
+      providerConfigured: hasAnyAiProviderKey()
+    }),
+    note: "Counts are derived from registered workers and the task records this process holds. A registered worker is not proof of health."
   });
+});
+
+// Read-only worker detail used by the Android worker mesh: runtime status, capabilities, recent
+// jobs, an execution log and the real blocker. No credential is ever part of this payload.
+app.get("/workers/:id", async (req, res) => {
+  const id = resolveWorkerId(req.params.id);
+  const worker = workerRegistry.get(id);
+  if (!worker) {
+    return res.status(404).json({ ok: false, error: "worker not found", workerId: id });
+  }
+  let tasks = [];
+  try { tasks = await listStoredTasks(); } catch { tasks = []; }
+  const detail = buildWorkerDetail({
+    worker,
+    tasks,
+    providerConfigured: hasAnyAiProviderKey()
+  });
+  return res.json({ ok: true, worker: detail });
 });
 
 app.get("/storage/check", async (_req, res) => {
@@ -1646,7 +1880,7 @@ app.post("/tasks/:id/delegate", async (req, res) => {
 
     const androidAccess = await androidAccessStatus();
     const latestDevice = androidAccess.devices.find(device =>
-      Date.now() - new Date(device.lastSeenAt).getTime() <= (device.heartbeatTtlMs || ANDROID_HEARTBEAT_TTL_MS)
+      Date.now() - new Date(device.lastSeenAt).getTime() <= (device.heartbeatTtlMs || DEVICE_BRIDGE_HEARTBEAT_TTL_MS)
     ) || null;
     const heartbeatAgeMs = latestDevice?.lastSeenAt
       ? Math.max(0, Date.now() - new Date(latestDevice.lastSeenAt).getTime())
@@ -1663,6 +1897,23 @@ app.post("/tasks/:id/delegate", async (req, res) => {
       taskCreation,
       storage
     };
+    const verificationDetails = {
+      backendHealth: { status: "PASS", detail: "The local /health endpoint answered online and ready." },
+      modelWorker: { status: "PASS", detail: "The model returned a non-empty result after one real retry." },
+      androidHeartbeat: {
+        status: androidHeartbeat,
+        detail: latestDevice
+          ? "Last authenticated check-in " + latestDevice.lastSeenAt + " (" + Math.round((heartbeatAgeMs || 0) / 1000) + "s ago)."
+          : "No paired Android device checked in within the 45-minute heartbeat window, so device-dependent checks cannot pass. Open the Habitat app or check the bridge connection."
+      },
+      androidDeviceAccess: { status: androidAccess.status, detail: androidAccess.detail },
+      taskCreation: { status: taskCreation, detail: "The task record is present in the configured task store." },
+      storage: { status: storage, detail: "The task storage write/read self-test passed." }
+    };
+    const blockedReason = Object.entries(verificationDetails)
+      .filter(([, check]) => check.status !== "PASS")
+      .map(([name, check]) => name + ": " + check.detail)
+      .join(" | ");
 
     const fullyVerified =
       verification.backendHealth === "PASS" &&
@@ -1674,6 +1925,8 @@ app.post("/tasks/:id/delegate", async (req, res) => {
 
     task.result = JSON.stringify({
       verification,
+      verificationDetails,
+      blockedReason: blockedReason || null,
       androidDevice: latestDevice,
       heartbeatAgeMs,
       workerReport: result

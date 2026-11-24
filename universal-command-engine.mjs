@@ -12,8 +12,26 @@ import { getRole } from "./agent-roles.mjs";
  * Lifecycle: queued -> working -> needs_approval -> working -> done | failed
  * Retry returns a failed task to queued and is capped, so a broken objective cannot loop forever.
  */
-export const TASK_STATES = Object.freeze(["queued", "working", "needs_approval", "done", "failed"]);
-export const TERMINAL_STATES = Object.freeze(["done", "failed"]);
+export const TASK_STATES = Object.freeze(["queued", "working", "needs_approval", "done", "failed", "cancelled"]);
+export const TERMINAL_STATES = Object.freeze(["done", "failed", "cancelled"]);
+
+/**
+ * The id a submission with this idempotency key will receive. Exported so a caller can persist the
+ * id BEFORE submitting, which is what makes recovery adopt the existing task instead of creating a
+ * second one.
+ */
+export function taskIdForKey(key) {
+  return "cmd_" + createHash("sha256").update(String(key), "utf8").digest("hex").slice(0, 24);
+}
+
+/**
+ * Evidence is only meaningful for one task at one attempt. The digest is written by the engine when
+ * it closes a task and recomputed by any verifier, so edited, copied or stale evidence fails.
+ */
+export function evidenceDigest(taskId, attempt, evidence) {
+  const material = [String(taskId), String(Math.max(0, Number(attempt) || 0)), ...(evidence || []).map(String)].join("\n");
+  return "sha256:" + createHash("sha256").update(material, "utf8").digest("hex");
+}
 
 // Records written by the older worker-task routes still read correctly.
 const LEGACY_STATES = Object.freeze({
@@ -64,6 +82,48 @@ export function createUniversalCommandEngine({
     return stored || task;
   }
 
+  /**
+   * Fenced save: one conditional compare-and-set on the current claim (status working + fence +
+   * claimedBy). A mismatch writes nothing and is reported as stale. Only completion and failure
+   * use this; every other transition keeps the legacy unconditional save.
+   */
+  async function saveFenced(task, to, meta, claim) {
+    // Both fields are mandatory. A claim without them could otherwise match a fence-less working
+    // record (NULL IS NULL) and authorize a write it has no right to.
+    const fence = typeof claim?.fence === "string" ? claim.fence.trim() : "";
+    const workerId = typeof claim?.workerId === "string" ? claim.workerId.trim() : "";
+    if (!fence || !workerId) {
+      return { invalidClaim: true };
+    }
+    if (typeof repository.transition !== "function") {
+      return { unsupported: true };
+    }
+    transition(task, to, meta);
+    const stored = await repository.transition(task.id, {
+      expect: { status: "working", fence, claimedBy: workerId },
+      next: task
+    });
+    return stored ? { stored } : { stale: true, taskId: task.id };
+  }
+
+  /** Stale/unsupported results are reported without writing anything. */
+  async function fencedFailure(saved) {
+    if (saved.invalidClaim) {
+      return failure("invalid_claim", "A fenced transition requires a non-empty claim.fence and claim.workerId.");
+    }
+    if (saved.unsupported) {
+      return failure("fencing_unsupported", "This repository cannot enforce a fenced transition; refusing to write.");
+    }
+    if (saved.stale) {
+      // Report the state the row is actually in now, not the state the caller expected.
+      const current = await repository.get(saved.taskId);
+      return failure("stale_claim", "This task is owned by a newer claim; the transition was not applied.", {
+        status: current ? normalizeState(current.status) : "unknown"
+      });
+    }
+    return null;
+  }
+
   async function load(id) {
     if (!id) return null;
     const task = await repository.get(String(id));
@@ -71,23 +131,48 @@ export function createUniversalCommandEngine({
     return { ...task, status: normalizeState(task.status) };
   }
 
-  function validateObjective(objective) {
+  /**
+   * Ownership refusal for every non-fenced mutation path. A record that carries a worker fence may
+   * only be changed by that worker's fenced claim, so plan/checkpoint/approval/retry cannot disturb
+   * a live execution even when called in-process rather than through the Ax routes.
+   */
+  function ownershipRefusal(task, claim) {
+    if (!claim && task.fence) {
+      return failure("claim_required", "This task is owned by an active worker claim; only the fenced worker path may change it.", { status: task.status });
+    }
+    return null;
+  }
+
+  const SUBMIT_ADAPTERS = Object.freeze(["repo.inspect", "task.inspect", "runtime.health"]);
+
+function validateAdapter(adapter) {
+  if (adapter === null || adapter === undefined) return { ok: true, adapter: null };
+  if (typeof adapter !== "string" || adapter !== adapter.trim()) return { ok: false, error: "adapter must be one of " + SUBMIT_ADAPTERS.join(", ") + "." };
+  const name = adapter;
+  if (!SUBMIT_ADAPTERS.includes(name)) {
+    return { ok: false, error: "adapter must be one of " + SUBMIT_ADAPTERS.join(", ") + "." };
+  }
+  return { ok: true, adapter: name };
+}
+
+function validateObjective(objective) {
     const text = String(objective || "").trim();
     if (text.length < 3) return { ok: false, error: "An objective of at least 3 characters is required." };
     if (text.length > 2000) return { ok: false, error: "An objective must be 2000 characters or fewer." };
     return { ok: true, text };
   }
 
-  async function submit({ objective, requestedBy = "owner", role = "ax", idempotencyKey = null } = {}) {
+  async function submit({ objective, requestedBy = "owner", role = "ax", idempotencyKey = null, adapter = null } = {}) {
     const checked = validateObjective(objective);
     if (!checked.ok) return failure("invalid_objective", checked.error);
+    // Only an explicit, exact, allowlisted read-only adapter may be bound at submission time.
+    const adapterCheck = validateAdapter(adapter);
+    if (!adapterCheck.ok) return failure("adapter_not_allowed", adapterCheck.error);
     const chosen = getRole(role);
     if (!chosen) return failure("unknown_role", `Unknown role "${role}". Use one of the registered roles.`);
 
     const key = String(idempotencyKey || "").trim();
-    const id = key
-      ? "cmd_" + createHash("sha256").update(key, "utf8").digest("hex").slice(0, 24)
-      : newId();
+    const id = key ? taskIdForKey(key) : newId();
 
     if (key) {
       const existing = await load(id);
@@ -112,7 +197,20 @@ export function createUniversalCommandEngine({
       error: null,
       idempotencyKey: key || null
     };
-    await repository.create(task);
+    if (adapterCheck.adapter) task.adapter = adapterCheck.adapter;
+    try {
+      await repository.create(task);
+    } catch (error) {
+      // A concurrent submission with the same idempotency key can win the INSERT after both
+      // callers passed the read above. The database primary key is the final arbiter: if the
+      // now-existing task has our deterministic id, return it instead of surfacing a duplicate
+      // write as a 502. A different failure is re-thrown unchanged.
+      if (key) {
+        const raced = await load(id);
+        if (raced) return { ok: true, replayed: true, task: raced };
+      }
+      throw error;
+    }
     return { ok: true, replayed: false, task };
   }
 
@@ -120,6 +218,8 @@ export function createUniversalCommandEngine({
     const task = await load(taskId);
     if (!task) return failure("not_found", "No command task with that id.");
     if (TERMINAL_STATES.includes(task.status)) return failure("invalid_transition", `A ${task.status} task cannot be replanned.`, { status: task.status });
+    const planOwned = ownershipRefusal(task, null);
+    if (planOwned) return planOwned;
     if (!Array.isArray(steps) || steps.length === 0) return failure("invalid_plan", "A plan needs at least one step.");
     if (steps.length > 20) return failure("invalid_plan", "A plan is limited to 20 steps.");
 
@@ -184,6 +284,9 @@ export function createUniversalCommandEngine({
   async function checkpoint({ taskId, note, by = "ax" } = {}) {
     const task = await load(taskId);
     if (!task) return failure("not_found", "No command task with that id.");
+    if (TERMINAL_STATES.includes(task.status)) return failure("invalid_transition", `A ${task.status} task cannot accept a checkpoint.`, { status: task.status });
+    const checkpointOwned = ownershipRefusal(task, null);
+    if (checkpointOwned) return checkpointOwned;
     const text = String(note || "").trim();
     if (!text) return failure("invalid_checkpoint", "A checkpoint needs a note.");
     const at = now();
@@ -197,6 +300,8 @@ export function createUniversalCommandEngine({
     const task = await load(taskId);
     if (!task) return failure("not_found", "No command task with that id.");
     if (TERMINAL_STATES.includes(task.status)) return failure("invalid_transition", `A ${task.status} task cannot request approval.`, { status: task.status });
+    const approvalOwned = ownershipRefusal(task, null);
+    if (approvalOwned) return approvalOwned;
     const text = String(reason || "").trim();
     if (!text) return failure("invalid_approval", "An approval request needs a reason.");
     const at = now();
@@ -215,6 +320,8 @@ export function createUniversalCommandEngine({
     const task = await load(taskId);
     if (!task) return failure("not_found", "No command task with that id.");
     if (task.status !== "needs_approval") return failure("invalid_transition", "This task is not waiting for approval.", { status: task.status });
+    const decisionOwned = ownershipRefusal(task, null);
+    if (decisionOwned) return decisionOwned;
     const at = now();
     const approvals = [...(task.approvals || [])];
     const pending = [...approvals].reverse().find(entry => entry.state === "requested");
@@ -236,11 +343,16 @@ export function createUniversalCommandEngine({
     return { ok: true, approved: true, task: stored };
   }
 
-  async function complete({ taskId, result, verifiedBy = "ax" } = {}) {
+  async function complete({ taskId, result, verifiedBy = "ax", claim = null } = {}) {
     const task = await load(taskId);
     if (!task) return failure("not_found", "No command task with that id.");
     if (TERMINAL_STATES.includes(task.status)) return failure("invalid_transition", `A ${task.status} task cannot be completed again.`, { status: task.status });
     if (task.status === "needs_approval") return failure("approval_pending", "This task is waiting for owner approval and cannot be completed.", { status: task.status });
+    // A task that carries a worker fence may only be closed by that claim. Without this an
+    // in-process caller could overwrite a live worker's record through the legacy path.
+    if (!claim && task.fence) {
+      return failure("claim_required", "This task is owned by an active worker claim; close it through the fenced worker path.", { status: task.status });
+    }
 
     const summary = String(result?.summary || "").trim();
     if (summary.length < 3) return failure("result_required", "A completion needs a result summary.");
@@ -254,32 +366,72 @@ export function createUniversalCommandEngine({
     }
 
     const at = now();
+    const delivered = evidence.slice(0, 20);
     task.result = {
       summary: summary.slice(0, 2000),
-      evidence: evidence.slice(0, 20),
+      evidence: delivered,
       verifiedBy: String(verifiedBy || "ax").slice(0, 120),
-      completedAt: at
+      completedAt: at,
+      // Bound to this task and this attempt, so a verifier can prove the evidence belongs to the
+      // execution it is looking at instead of trusting a string that merely starts with "nexus-".
+      attempt: Number(task.attempts || 0),
+      evidenceDigest: evidenceDigest(task.id, task.attempts, delivered)
     };
     task.error = null;
+    if (claim) {
+      const saved = await saveFenced(task, "done", { by: verifiedBy, reason: "completed with evidence" }, claim);
+      const refused = await fencedFailure(saved);
+      if (refused) return refused;
+      return { ok: true, task: saved.stored };
+    }
     const stored = await save(task, "done", { by: verifiedBy, reason: "completed with evidence" });
     return { ok: true, task: stored };
   }
 
-  async function fail({ taskId, error, by = "system" } = {}) {
+  async function fail({ taskId, error, by = "system", claim = null } = {}) {
     const task = await load(taskId);
     if (!task) return failure("not_found", "No command task with that id.");
     if (TERMINAL_STATES.includes(task.status)) return failure("invalid_transition", `A ${task.status} task cannot fail again.`, { status: task.status });
+    if (!claim && task.fence) {
+      return failure("claim_required", "This task is owned by an active worker claim; fail it through the fenced worker path.", { status: task.status });
+    }
     const text = String(error || "").trim();
     if (!text) return failure("error_required", "A failure needs an error message.");
     task.error = text.slice(0, 1000);
+    if (claim) {
+      const saved = await saveFenced(task, "failed", { by, reason: task.error }, claim);
+      const refused = await fencedFailure(saved);
+      if (refused) return refused;
+      return { ok: true, task: saved.stored };
+    }
     const stored = await save(task, "failed", { by, reason: task.error });
     return { ok: true, task: stored };
+  }
+
+  async function cancel({ taskId, by = "owner", reason = null } = {}) {
+    const task = await load(taskId);
+    if (!task) return failure("not_found", "No command task with that id.");
+    if (TERMINAL_STATES.includes(task.status)) return failure("invalid_transition", `A ${task.status} task cannot be cancelled.`, { status: task.status });
+    // A worker-owned task can have a side effect in flight. Refuse to mark it cancelled from the
+    // owner API while the fenced worker may still finish; the worker/lease path owns that record.
+    const cancelOwned = ownershipRefusal(task, null);
+    if (cancelOwned) return cancelOwned;
+    const at = now();
+    const text = String(reason || "").trim();
+    task.cancelledAt = at;
+    task.cancelledBy = String(by || "owner").slice(0, 120);
+    task.cancelReason = text ? text.slice(0, 300) : null;
+    task.error = task.cancelReason ? "Cancelled: " + task.cancelReason : "Cancelled by " + task.cancelledBy;
+    const stored = await save(task, "cancelled", { by: task.cancelledBy, reason: task.error });
+    return { ok: true, cancelled: true, task: stored };
   }
 
   async function retry({ taskId, by = "owner" } = {}) {
     const task = await load(taskId);
     if (!task) return failure("not_found", "No command task with that id.");
     if (task.status !== "failed") return failure("invalid_transition", "Only a failed task can be retried.", { status: task.status });
+    const retryOwned = ownershipRefusal(task, null);
+    if (retryOwned) return retryOwned;
     const attempts = Number(task.attempts || 0);
     if (attempts >= maxAttempts) {
       return failure("attempt_limit_reached", `This task has used ${attempts} of ${maxAttempts} attempts. Review the failure before raising the limit.`);
@@ -289,6 +441,10 @@ export function createUniversalCommandEngine({
     task.attemptHistory = [...(task.attemptHistory || []).slice(-4), { error: task.error || null, failedAt: task.updatedAt }];
     task.error = null;
     task.result = null;
+    // A retried task must not keep a previous worker's ownership fields.
+    delete task.fence;
+    delete task.claimedBy;
+    delete task.leaseUntil;
     const stored = await save(task, "queued", { by, reason: `retry ${task.attempts} of ${maxAttempts}` });
     return { ok: true, task: stored, attempts: task.attempts };
   }
@@ -318,6 +474,7 @@ export function createUniversalCommandEngine({
     deny: options => decideApproval({ ...options, approved: false }),
     complete,
     fail,
+    cancel,
     retry,
     get,
     list

@@ -1,0 +1,129 @@
+{
+  "schemaVersion": 1,
+  "mission": "18",
+  "kind": "live-deployment-readiness",
+  "generatedAt": "2026-11-22T07:49:16.560Z",
+  "origin": "https://habitat-1-szzd.onrender.com",
+  "repository": {
+    "commit": "340a7ae0933e94d74cf1460943a09f04eb6992b5",
+    "branch": "ax-nexus/revision-4.6-nexus-mainline-integration",
+    "dirty": false
+  },
+  "live": {
+    "health": {
+      "status": 200,
+      "fields": [
+        "backend",
+        "brain",
+        "controlCenter",
+        "deviceBridge",
+        "free_brain",
+        "habitat",
+        "model",
+        "nexus",
+        "provider",
+        "version"
+      ],
+      "version": "0.5.0",
+      "nexus": {
+        "configured": false,
+        "reason": "disabled_by_config"
+      }
+    },
+    "openapi": {
+      "status": 200,
+      "operations": 10
+    },
+    "unauthenticated": {
+      "presence": 401,
+      "agents": 401
+    },
+    "routeFingerprint": {
+      "missionWork": 404,
+      "missionStop": 404,
+      "agentsRevoke": 404,
+      "interpretation": "401 means the authenticated route exists; 404 means the deployed build does not register it"
+    },
+    "deployedGeneration": "mission-14-to-16",
+    "nexusConfigured": false
+  },
+  "authenticated": {
+    "supplied": false,
+    "note": "Set HABITAT_AX_COMMAND_TOKEN in the environment to add authenticated reads. It is never written to this file."
+  },
+  "schema": {
+    "migrations": [
+      "0001_habitat_tasks.sql",
+      "0002_habitat_command_tasks.sql",
+      "0003_ax_memory_notifications.sql",
+      "0004_ax_objectives_incidents.sql",
+      "0005_ax_security_scheduler.sql",
+      "0006_ax_nexus_messages.sql"
+    ],
+    "tablesCreatedByMigration": [
+      "habitat_ax_incidents",
+      "habitat_ax_memory",
+      "habitat_ax_memory_revisions",
+      "habitat_ax_messages",
+      "habitat_ax_notifications",
+      "habitat_ax_objectives",
+      "habitat_ax_scheduler",
+      "habitat_ax_security_events",
+      "habitat_command_tasks",
+      "habitat_tasks"
+    ],
+    "tablesCreatedInCode": [
+      "habitat_ax_incidents",
+      "habitat_ax_memory",
+      "habitat_ax_memory_revisions",
+      "habitat_ax_messages",
+      "habitat_ax_notifications",
+      "habitat_ax_objectives",
+      "habitat_ax_runs",
+      "habitat_ax_scheduler",
+      "habitat_ax_security_events",
+      "habitat_command_tasks",
+      "habitat_content_jobs",
+      "habitat_device_commands",
+      "habitat_device_pairings",
+      "habitat_dispatch_leases",
+      "habitat_nexus_workers",
+      "habitat_paired_devices",
+      "habitat_secret_vault",
+      "habitat_tasks"
+    ],
+    "tablesReferenced": [
+      "habitat_ax_incidents",
+      "habitat_ax_memory",
+      "habitat_ax_memory_revisions",
+      "habitat_ax_messages",
+      "habitat_ax_notifications",
+      "habitat_ax_objectives",
+      "habitat_ax_runs",
+      "habitat_ax_scheduler",
+      "habitat_ax_security_events",
+      "habitat_command_tasks",
+      "habitat_content_jobs",
+      "habitat_device_commands",
+      "habitat_device_pairings",
+      "habitat_dispatch_leases",
+      "habitat_nexus_workers",
+      "habitat_paired_devices",
+      "habitat_secret_vault",
+      "habitat_tasks"
+    ],
+    "missingTables": [],
+    "additiveOnly": true,
+    "codeDdlAdditive": true,
+    "mission17Tables": [],
+    "mission17NewTables": [],
+    "note": "Mission 17 writes only to existing tables through the existing repositories; no migration is added."
+  },
+  "blocking": [
+    "Mission 17 code is not deployed at this origin (work/revoke routes answer 404).",
+    "The deployed service reports nexus.configured=false (disabled_by_config).",
+    "No authenticated token was supplied, so presence, agent capabilities and scheduler state were not read."
+  ],
+  "status": "BLOCKED_ON_OWNER_DEPLOY",
+  "secretsExposed": false
+}

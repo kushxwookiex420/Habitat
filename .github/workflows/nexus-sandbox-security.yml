@@ -1,0 +1,87 @@
+name: NEXUS Sandbox Security
+
+# The Linux isolation guarantees are the point of this workflow. GitHub-hosted runners block
+# unprivileged user namespaces, so the runner here can prove two separate things honestly:
+#
+#   1. the portable guarantees (checkout boundary, path handling, redaction, fail-closed detection)
+#   2. that the sandbox refuses to execute when a prerequisite is missing
+#
+# It does NOT claim the namespace guarantees were exercised on this runner. The report says so in the
+# job summary, and `npm run sandbox:check` reproduces the same verdict in a dedicated environment.
+
+on:
+  pull_request:
+    paths:
+      - "nexus-sandbox.mjs"
+      - "nexus-adapters.mjs"
+      - "nexus-adapter-registration.mjs"
+      - "sandbox/**"
+      - "scripts/sandbox-check.mjs"
+      - "tests/nexus-sandbox.test.mjs"
+      - "tests/nexus-adapters.test.mjs"
+      - "tests/sandbox-security-contract.test.mjs"
+      - "docs/SANDBOX_SECURITY.md"
+      - ".github/workflows/nexus-sandbox-security.yml"
+  push:
+    branches: ["ax-nexus/revision-4.6-nexus-mainline-integration"]
+    paths:
+      - "nexus-sandbox.mjs"
+      - "nexus-adapters.mjs"
+      - "sandbox/**"
+      - "scripts/sandbox-check.mjs"
+      - "tests/sandbox-security-contract.test.mjs"
+      - ".github/workflows/nexus-sandbox-security.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nexus-sandbox-security-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  sandbox:
+    name: sandbox guarantees (portable tier + honest capability report)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      # --ignore-scripts: the install must not run the whole suite before this job has reported
+      # what the host can actually do.
+      - name: Install dependencies without running project hooks
+        run: npm install --ignore-scripts --no-audit --no-fund
+      - name: Report sandbox capabilities
+        id: capabilities
+        run: |
+          set -euo pipefail
+          node scripts/sandbox-check.mjs | tee sandbox-report.json
+          node -e '
+            const fs = require("node:fs");
+            const report = JSON.parse(fs.readFileSync("sandbox-report.json", "utf8"));
+            const lines = [];
+            lines.push("## Sandbox capability report");
+            lines.push("");
+            lines.push("- backend: `" + report.backend + "`");
+            lines.push("- namespaces available on this runner: **" + report.available + "**");
+            lines.push("- reason: " + report.reason);
+            if (!report.available) {
+              lines.push("");
+              lines.push("> Isolation guarantees NOT verified on this runner. The sandbox refused to execute");
+              lines.push("> (fail-closed), the portable guarantees below still ran, and the namespace tier must be");
+              lines.push("> verified with `npm run sandbox:check` on a namespace-capable Linux host.");
+            }
+            fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, lines.join("\n") + "\n");
+            fs.appendFileSync(process.env.GITHUB_OUTPUT, "available=" + report.available + "\n");
+          '
+      - name: Verify the fail-closed contract and portable guarantees
+        run: node --test tests/sandbox-security-contract.test.mjs
+      - name: Run isolation tests when the host can support them
+        if: steps.capabilities.outputs.available == 'true'
+        run: node --test tests/nexus-sandbox.test.mjs tests/nexus-adapters.test.mjs
+      - name: Record that the namespace tier ran elsewhere
+        if: steps.capabilities.outputs.available != 'true'
+        run: |
+          echo "::warning::Namespace isolation tier was not exercised on this runner. Run 'npm run sandbox:check' (and the sandbox suites) on a namespace-capable Linux host before claiming isolation is proven."
