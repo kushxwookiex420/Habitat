@@ -63,10 +63,26 @@ build's certificate SHA-256:
 | `45296639342` (first with the cache) | `dc0c9c853f7d1192201f91e5c7278a82137b1732af78ec0487ee2dcac268fd3d` | a different throwaway key |
 | `45298386950` (second with the cache) | `ac30fae8718bbb31e38e2ee5f0771f53eef76876dbb63f5ab458a956219dcc91` | **also different** |
 
-So the `actions/cache` step did **not** give the builds one identity. Three builds, three
-certificates: the cache is not being restored (or is saved under a scope the next run misses), and the
-job still falls through to generating a keystore. The earlier claim that consecutive builds now share
-an identity was wrong and is corrected here.
+So the `actions/cache` step did **not** give the builds one identity: the cache was not restored and
+every job fell through to generating a keystore.
+
+### Resolved: the repository owns the identity
+
+The cache is gone. `debug-key.p12` is committed (a debug key with the public `android` password,
+referenced **only** by the debug build type) and `app/build.gradle.kts` pins the debug build to it.
+`EXPECTED_DEBUG_CERT_SHA256` records the certificate fingerprint, and the workflow fails the build if
+the APK does not carry it.
+
+Proof, not intent:
+
+| Check | Value |
+| --- | --- |
+| Keystore subject / validity | `CN=Android Debug, O=Android, C=US`, to 2056-11-16 |
+| Expected fingerprint | `791eacbc33fbfcdb770a4299342cb1ad8fc6d959325df75091a03004726eb258` |
+| CI run `45300974210` | `Verify the signing identity is the repository's` → **success** |
+| APK from that run | 930,401 bytes, fingerprint `791eacbc…eb258` — identical |
+
+Any future build from any machine now replaces the previous one.
 
 What this means for installing:
 
