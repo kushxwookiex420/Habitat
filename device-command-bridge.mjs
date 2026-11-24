@@ -408,6 +408,11 @@ export function registerDeviceCommandBridge(app, {
     const token = bearer(req);
     try {
       if (!validDeviceId(deviceId) || !token || !await store.verifyDeviceToken(token, deviceId)) {
+        // A rejected device credential used to leave no trace at all, which made "the phone stopped
+        // talking" indistinguishable from "the phone is being refused". Log the reason only: never the
+        // device id, the token or anything derived from them.
+        const reason = !validDeviceId(deviceId) ? "invalid_device_id" : !token ? "missing_token" : "token_mismatch";
+        console.warn("DEVICE_COMMAND_AUTH_REJECTED", JSON.stringify({ reason }));
         return res.status(401).json({ ok: false, error: "Paired device authentication required." });
       }
       await store.touchDevice(deviceId, new Date().toISOString());

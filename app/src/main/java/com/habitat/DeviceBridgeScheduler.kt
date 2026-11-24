@@ -22,6 +22,12 @@ object DeviceBridgeScheduler {
         scheduler.schedule(job)
     }
 
+    /** Re-arms the fallback job when it is missing, e.g. after a force-stop or an app update. */
+    fun ensureScheduled(context: Context) {
+        val scheduler = context.getSystemService(Context.JOB_SCHEDULER_SERVICE) as? JobScheduler ?: return
+        if (scheduler.getPendingJob(JOB_ID) == null) schedule(context)
+    }
+
     fun cancel(context: Context) {
         val scheduler = context.getSystemService(Context.JOB_SCHEDULER_SERVICE) as? JobScheduler ?: return
         scheduler.cancel(JOB_ID)
