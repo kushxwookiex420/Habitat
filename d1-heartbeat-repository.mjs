@@ -1,4 +1,4 @@
-import { createD1Query } from "./nexus-runtime.mjs";
+import { createD1RowQuery } from "./nexus-runtime.mjs";
 
 /**
  * Connection-monitor storage: heartbeat state, a durable event queue and delivery history.
@@ -199,6 +199,6 @@ export function createHeartbeatRepository({ query, now = () => new Date().toISOS
 
 export function createD1HeartbeatRepository({ accountId, databaseId, apiToken, fetchImpl } = {}) {
   return createHeartbeatRepository({
-    query: createD1Query({ accountId, databaseId, apiToken, fetchImpl })
+    query: createD1RowQuery({ accountId, databaseId, apiToken, fetchImpl })
   });
 }

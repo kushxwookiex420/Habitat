@@ -1,4 +1,4 @@
-import { createD1Query } from "./nexus-runtime.mjs";
+import { createD1RowQuery } from "./nexus-runtime.mjs";
 
 /**
  * Persistent state for the OpenAI MCP Events adapter.
@@ -276,7 +276,7 @@ export function createMcpRepository({ query, now = () => new Date().toISOString(
 
 export function createD1McpRepository({ accountId, databaseId, apiToken, fetchImpl, secretBox = null } = {}) {
   return createMcpRepository({
-    query: createD1Query({ accountId, databaseId, apiToken, fetchImpl }),
+    query: createD1RowQuery({ accountId, databaseId, apiToken, fetchImpl }),
     secretBox
   });
 }

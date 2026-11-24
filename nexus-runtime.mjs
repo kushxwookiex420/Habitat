@@ -216,6 +216,23 @@ export function createD1Query({ accountId, databaseId, apiToken, fetchImpl = fet
   };
 }
 
+/**
+ * Row-shaped D1 query for repositories written against plain rows.
+ *
+ * `createD1Query` returns the raw HTTP `result` array (`[{ results: [...] }]`). Task and scheduler
+ * repositories intentionally consume that shape, but gateway/MCP/heartbeat/mission repositories expect
+ * `rows[0]` to be a row. Flattening here keeps both contracts correct; a failed statement still throws in
+ * `createD1Query` before this wrapper sees it.
+ */
+export function createD1RowQuery({ accountId, databaseId, apiToken, fetchImpl = fetch } = {}) {
+  const query = createD1Query({ accountId, databaseId, apiToken, fetchImpl });
+  return async function rowQuery(sql, params = []) {
+    const result = await query(sql, params);
+    if (!Array.isArray(result)) return [];
+    return result.flatMap(item => Array.isArray(item?.results) ? item.results : []);
+  };
+}
+
 /*
  * There are no built-in adapters. The previous nexus.echo/nexus.inspect defaults fabricated
  * evidence from a task id, which let a task look completed without any real operation. An

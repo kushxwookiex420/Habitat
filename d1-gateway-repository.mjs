@@ -1,4 +1,4 @@
-import { createD1Query } from "./nexus-runtime.mjs";
+import { createD1RowQuery } from "./nexus-runtime.mjs";
 
 /**
  * Gateway storage: integration identities, single-use nonces and an append-only audit.
@@ -170,6 +170,6 @@ export function createGatewayRepository({ query, now = () => new Date().toISOStr
 }
 
 export function createD1GatewayRepository({ accountId, databaseId, apiToken, fetchImpl = fetch } = {}) {
-  const query = createD1Query({ accountId, databaseId, apiToken, fetchImpl });
+  const query = createD1RowQuery({ accountId, databaseId, apiToken, fetchImpl });
   return Object.freeze({ ...createGatewayRepository({ query }), adapter: "cloudflare-d1" });
 }

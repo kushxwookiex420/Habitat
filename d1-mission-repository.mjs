@@ -1,4 +1,4 @@
-import { createD1Query } from "./nexus-runtime.mjs";
+import { createD1RowQuery } from "./nexus-runtime.mjs";
 
 /**
  * Durable mission store.
@@ -139,6 +139,6 @@ export function createMissionRepository({ query, now = () => new Date().toISOStr
 }
 
 export function createD1MissionRepository({ accountId, databaseId, apiToken, fetchImpl = fetch } = {}) {
-  const query = createD1Query({ accountId, databaseId, apiToken, fetchImpl });
+  const query = createD1RowQuery({ accountId, databaseId, apiToken, fetchImpl });
   return Object.freeze({ ...createMissionRepository({ query }), adapter: "cloudflare-d1" });
 }

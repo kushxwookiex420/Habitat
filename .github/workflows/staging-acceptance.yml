@@ -2,7 +2,8 @@ name: Staging acceptance (real D1)
 
 # One-shot, guarded acceptance against the verified non-production D1 database. Runs only for a push
 # whose commit message contains [staging-acceptance]. This is NOT a ChatGPT connection: no external
-# client is registered, and the report says so explicitly.
+# client is registered, and the report says so explicitly. The real-D1 adapter is exercised here
+# because unit repositories use in-memory rows.
 
 on:
   push:
