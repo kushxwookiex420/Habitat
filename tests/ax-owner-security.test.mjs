@@ -5,6 +5,7 @@ import { createD1AxMemoryRepository } from "../d1-ax-memory-repository.mjs";
 import { createAxIdentity } from "../ax-identity.mjs";
 import { createOwnerAttestation } from "../ax-owner-attestation.mjs";
 import { backupDigest, exportMemory, restoreMemory } from "../ax-memory-backup.mjs";
+import { createAxIdentity as createIdentityForRecovery } from "../ax-identity.mjs";
 
 /**
  * The two boundaries this file exists to test:
@@ -193,6 +194,136 @@ test("a backup whose payload and digest were both rewritten is refused without t
   assert.equal(legitimate.macVerified, true);
   source.db.close();
   target.db.close();
+});
+
+const signedFields = {
+  operation: "memory.put",
+  project: "habitat",
+  key: "policy:approval",
+  kind: "verified_fact",
+  statement: "Production changes require owner approval.",
+  tags: ["policy", "approval"],
+  confidence: 1
+};
+
+const SECOND_SECRET = "owner-attestation-second-secret-9876543210";
+
+test("key rotation keeps old signatures verifiable and lets the new key sign", () => {
+  const original = createOwnerAttestation({ secret: SECRET, now: () => NOW });
+  const signed = original.sign(signedFields);
+  const rotated = createOwnerAttestation({
+    keys: [
+      { keyId: "owner-1", secret: SECRET, status: "retired" },
+      { keyId: "owner-2", secret: SECOND_SECRET, status: "active" }
+    ],
+    now: () => NOW
+  });
+  assert.equal(rotated.rotation().activeKeyId, "owner-2");
+  assert.equal(rotated.verify(signedFields, signed.attestation).ok, true, "a retired key still verifies old data");
+  assert.equal(rotated.sign(signedFields).attestation.keyId, "owner-2");
+
+  const revoked = createOwnerAttestation({
+    keys: [
+      { keyId: "owner-1", secret: SECRET, status: "active" },
+      { keyId: "owner-2", secret: SECOND_SECRET, status: "active" }
+    ],
+    revokedKeyIds: ["owner-1"],
+    now: () => NOW
+  });
+  assert.equal(revoked.rotation().activeKeyId, "owner-2");
+  assert.equal(revoked.verify(signedFields, signed.attestation).code, "owner_attestation_key_revoked");
+});
+
+test("an owner attestation is single-use", () => {
+  const attestation = createOwnerAttestation({ secret: SECRET, now: () => NOW });
+  const signed = attestation.sign(signedFields);
+  assert.equal(attestation.verify(signedFields, signed.attestation).ok, true);
+  assert.equal(attestation.verify(signedFields, signed.attestation).code, "owner_attestation_replayed");
+});
+
+test("an expired or incompatible backup is refused with zero writes", async () => {
+  const source = d1();
+  await source.repository.initialize();
+  await source.repository.put(ownerEntry({
+    provenance: { source: "system", actor: "habitat", ref: null, observedAt: "2026-11-24T16:00:00.000Z" }
+  }), { expectedVersion: 0 });
+  const key = "backup-signing-key-0123456789-abcdef";
+  const expired = await exportMemory({ repository: source.repository, project: "habitat", signingKey: key, expiresAt: new Date(NOW - 1000).toISOString() });
+  const target = d1();
+  await target.repository.initialize();
+  const refusal = await restoreMemory({ repository: target.repository, backup: expired, signingKey: key, now: () => new Date(NOW + 60_000).toISOString() });
+  assert.equal(refusal.code, "backup_expired");
+  assert.equal(refusal.writes, 0);
+
+  const incompatible = { ...expired, schema: 99, expiresAt: null, mac: null };
+  const wrongSchema = await restoreMemory({ repository: target.repository, backup: incompatible, signingKey: key });
+  assert.equal(wrongSchema.code, "backup_schema_unsupported");
+  assert.equal(wrongSchema.writes, 0);
+  assert.equal((await target.repository.list({ project: "habitat" })).length, 0);
+  source.db.close();
+  target.db.close();
+});
+
+test("a backup signed with a retired key restores through the keyring; a revoked key does not", async () => {
+  const keyOne = "backup-key-one-0123456789-abcdef";
+  const keyTwo = "backup-key-two-0123456789-abcdef";
+  const source = d1();
+  await source.repository.initialize();
+  await source.repository.put(ownerEntry({
+    provenance: { source: "system", actor: "habitat", ref: null, observedAt: "2026-11-24T16:00:00.000Z" }
+  }), { expectedVersion: 0 });
+  const backup = await exportMemory({ repository: source.repository, project: "habitat", signingKey: keyOne, keyId: "owner-1" });
+
+  const target = d1();
+  await target.repository.initialize();
+  const restored = await restoreMemory({ repository: target.repository, backup, signingKeys: { "owner-1": keyOne, "owner-2": keyTwo } });
+  assert.equal(restored.ok, true);
+  assert.equal(restored.macVerified, true);
+
+  const rejected = await restoreMemory({ repository: target.repository, backup, signingKeys: { "owner-1": keyOne }, revokedKeyIds: ["owner-1"] });
+  assert.equal(rejected.code, "backup_mac_key_revoked");
+  source.db.close();
+  target.db.close();
+});
+
+test("a signed backup restores into a separate database and survives a restart", async () => {
+  const key = "backup-recovery-key-0123456789-abcdef";
+  const source = d1();
+  await source.repository.initialize();
+  await source.repository.put(ownerEntry({
+    provenance: { source: "system", actor: "habitat", ref: null, observedAt: "2026-11-24T16:00:00.000Z" }
+  }), { expectedVersion: 0 });
+  const backup = await exportMemory({ repository: source.repository, project: "habitat", signingKey: key });
+
+  const recovered = new DatabaseSync(":memory:");
+  const recoveredQuery = async (sql, params = []) => {
+    const statement = recovered.prepare(sql);
+    if (/^\s*select/i.test(sql)) return statement.all(...params);
+    return [{ changes: Number(statement.run(...params).changes || 0) }];
+  };
+  const first = createD1AxMemoryRepository({ accountId: "a", databaseId: "recovered", apiToken: "token_" + "x".repeat(20), fetchImpl: async (_url, init = {}) => {
+    const { sql, params = [] } = JSON.parse(init.body || "{}");
+    const rows = recoveredQuery(sql, params);
+    return { ok: true, status: 200, json: async () => ({ success: true, result: [{ results: await rows }] }) };
+  } });
+  await first.initialize();
+  assert.equal((await restoreMemory({ repository: first, backup, signingKey: key })).ok, true);
+
+  // Restart: a new repository object over the same recovered database, with no in-memory carry-over.
+  const second = createD1AxMemoryRepository({ accountId: "a", databaseId: "recovered", apiToken: "token_" + "x".repeat(20), fetchImpl: async (_url, init = {}) => {
+    const { sql, params = [] } = JSON.parse(init.body || "{}");
+    const statement = recovered.prepare(sql);
+    const rows = /^\s*select/i.test(sql) ? statement.all(...params) : [{ changes: Number(statement.run(...params).changes || 0) }];
+    return { ok: true, status: 200, json: async () => ({ success: true, result: [{ results: rows }] }) };
+  } });
+  const recoveredEntry = await second.get({ project: "habitat", key: "policy:approval" });
+  assert.equal(recoveredEntry.statement, ownerEntry().statement);
+  const identity = createIdentityForRecovery({ repository: second, log: quiet });
+  assert.equal((await identity.status()).state, "not_yet_persisted");
+  const reexported = await exportMemory({ repository: second, project: "habitat", signingKey: key });
+  assert.equal(reexported.digest, backup.digest);
+  source.db.close();
+  recovered.close();
 });
 
 test("requiring signatures refuses an unsigned backup outright", async () => {

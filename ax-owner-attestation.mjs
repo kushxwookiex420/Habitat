@@ -52,46 +52,91 @@ export function attestationPayload({ operation = "memory.put", project, key, kin
 export function createOwnerAttestation({
   secret = process.env?.[OWNER_ATTESTATION_KEY_ENV] || "",
   keyId = "owner-1",
+  // Rotation: several keys may verify while exactly one signs. A retired key stays valid for
+  // verification so previously signed data does not become unverifiable during a rotation.
+  keys = null,
+  revokedKeyIds = [],
   now = () => Date.now(),
-  ttlMs = 5 * 60 * 1000
+  ttlMs = 5 * 60 * 1000,
+  replay = null
 } = {}) {
-  const configured = String(secret || "").trim().length >= 32;
-  const key = configured ? String(secret) : "";
+  const declared = Array.isArray(keys) && keys.length > 0
+    ? keys
+    : [{ keyId, secret, status: "active" }];
+  const keyring = new Map();
+  for (const entry of declared) {
+    const id = String(entry?.keyId || "").trim();
+    const value = String(entry?.secret || "");
+    if (!id || value.trim().length < 32) continue;
+    keyring.set(id, { keyId: id, secret: value, status: entry?.status === "active" ? "active" : "retired" });
+  }
+  const revoked = new Set((Array.isArray(revokedKeyIds) ? revokedKeyIds : []).map(item => String(item)));
+  for (const id of revoked) {
+    if (keyring.has(id)) keyring.get(id).status = "revoked";
+  }
+  const active = [...keyring.values()].find(entry => entry.status === "active") || null;
+  const configured = Boolean(active);
+  const signingKeyId = active?.keyId || keyId;
+  const key = active?.secret || "";
+  // Single-use nonces, bounded and pruned. In-process only: multi-instance replay protection needs a
+  // shared store, which the gateway supplies separately.
+  const seen = new Map();
+  const replayStore = replay || {
+    seen(id) { return seen.get(id) || 0; },
+    remember(id, expiresAt) {
+      const at = now();
+      for (const [candidate, expiry] of seen) if (expiry <= at) seen.delete(candidate);
+      while (seen.size >= 5000) seen.delete(seen.keys().next().value);
+      seen.set(id, expiresAt);
+    }
+  };
 
   function sign(fields = {}) {
     if (!configured) return { ok: false, code: "owner_attestation_not_configured" };
     const payload = attestationPayload(fields);
     const issuedAt = new Date(now()).toISOString();
     const nonce = randomBytes(12).toString("hex");
-    const mac = macFor(key, { ...payload, keyId, issuedAt, nonce });
-    return { ok: true, attestation: { v: OWNER_ATTESTATION_VERSION, keyId, issuedAt, nonce, mac } };
+    const mac = macFor(key, { ...payload, keyId: signingKeyId, issuedAt, nonce });
+    return { ok: true, attestation: { v: OWNER_ATTESTATION_VERSION, keyId: signingKeyId, issuedAt, nonce, mac } };
   }
 
-  function verify(fields = {}, attestation = null, { ttl = ttlMs } = {}) {
+  function verify(fields = {}, attestation = null, { ttl = ttlMs, trace = false } = {}) {
     if (!configured) return { ok: false, code: "owner_attestation_not_configured" };
     if (!attestation || typeof attestation !== "object") return { ok: false, code: "owner_attestation_required" };
     if (Number(attestation.v) !== OWNER_ATTESTATION_VERSION) return { ok: false, code: "owner_attestation_version_unsupported" };
-    if (String(attestation.keyId || "") !== String(keyId)) return { ok: false, code: "owner_attestation_unknown_key" };
+    const entry = keyring.get(String(attestation.keyId || ""));
+    if (!entry) return { ok: false, code: "owner_attestation_unknown_key" };
+    if (entry.status === "revoked") return { ok: false, code: "owner_attestation_key_revoked" };
     const issuedMs = Date.parse(String(attestation.issuedAt || ""));
     if (!Number.isFinite(issuedMs)) return { ok: false, code: "owner_attestation_invalid_time" };
     if (Math.abs(now() - issuedMs) > ttl) return { ok: false, code: "owner_attestation_expired" };
     if (!/^[a-f0-9]{16,64}$/i.test(String(attestation.nonce || ""))) return { ok: false, code: "owner_attestation_invalid_nonce" };
     const payload = attestationPayload(fields);
-    const expected = macFor(key, {
+    const expected = macFor(entry.secret, {
       ...payload,
       keyId: attestation.keyId,
       issuedAt: attestation.issuedAt,
       nonce: attestation.nonce
     });
     if (!safeEqual(expected, attestation.mac)) return { ok: false, code: "owner_attestation_invalid" };
-    return { ok: true, keyId, issuedAt: attestation.issuedAt };
+    const replayId = String(attestation.keyId) + ":" + String(attestation.nonce);
+    if (replayStore.seen(replayId) > now()) return { ok: false, code: "owner_attestation_replayed" };
+    replayStore.remember(replayId, issuedMs + ttl);
+    return { ok: true, keyId: entry.keyId, issuedAt: attestation.issuedAt, ...(trace ? { replayId } : {}) };
   }
 
   return Object.freeze({
     configured,
-    keyId,
+    keyId: signingKeyId,
     sign,
     verify,
+    rotation() {
+      return {
+        activeKeyId: signingKeyId,
+        keys: [...keyring.values()].map(entry => ({ keyId: entry.keyId, status: entry.status })),
+        revokedKeyIds: [...revoked]
+      };
+    },
     /** Convenience: verify a normalized memory entry written as owner. */
     verifyEntry(entry = {}, attestation = null, { operation = "memory.put" } = {}) {
       return verify({

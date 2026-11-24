@@ -136,6 +136,20 @@ export function createMissionRuntime({
     return engine.approve(input);
   }
 
+  async function missions({ status = null, limit = 50 } = {}) {
+    const allowed = guard();
+    if (!allowed.ok) return { ...allowed, missions: [] };
+    return { ok: true, missions: await engine.list({ status, limit }) };
+  }
+
+  async function mission(id) {
+    const allowed = guard();
+    if (!allowed.ok) return allowed;
+    const found = await engine.get(String(id));
+    if (!found) return { ok: false, code: "mission_not_found" };
+    return { ok: true, mission: found.record };
+  }
+
   async function status() {
     const counts = state.initialized ? await engine.status() : { total: 0, byStatus: {} };
     return {
@@ -156,7 +170,7 @@ export function createMissionRuntime({
     };
   }
 
-  return Object.freeze({ status, initialize, intake, tick, approve, configuration: () => ({ ...configuration }) });
+  return Object.freeze({ status, initialize, intake, tick, approve, missions, mission, configuration: () => ({ ...configuration }) });
 }
 
 function describe(status) {

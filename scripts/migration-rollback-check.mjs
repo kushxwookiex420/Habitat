@@ -57,6 +57,17 @@ export const WORKFORCE_INDEXES = Object.freeze([
   "habitat_ax_workers_specialty"
 ]);
 
+export const GATEWAY_TABLES = Object.freeze(["habitat_ax_gateway_audit", "habitat_ax_gateway_nonces", "habitat_ax_gateway_clients"]);
+
+export const GATEWAY_INDEXES = Object.freeze(["habitat_ax_gateway_clients_token"]);
+
+export function gatewayRollbackStatements() {
+  return [
+    ...GATEWAY_INDEXES.map(name => "DROP INDEX IF EXISTS " + name),
+    ...GATEWAY_TABLES.map(name => "DROP TABLE IF EXISTS " + name)
+  ];
+}
+
 export const MISSION_TABLES = Object.freeze(["habitat_ax_mission_events", "habitat_ax_missions"]);
 
 export const MISSION_INDEXES = Object.freeze(["habitat_ax_mission_events_mission", "habitat_ax_missions_status"]);
@@ -125,6 +136,7 @@ export async function runRollbackChecks() {
     await apply(db, later);
     check("0010 creates every workforce table", WORKFORCE_TABLES.every(name => tables(db).includes(name)));
     check("0011 creates every mission table", MISSION_TABLES.every(name => tables(db).includes(name)));
+    check("0012 creates every gateway table", GATEWAY_TABLES.every(name => tables(db).includes(name)));
 
     db.prepare("INSERT INTO habitat_ax_capabilities (id, kind, state, requires_approval, record_json, updated_at) VALUES (?, ?, ?, ?, ?, ?)")
       .run("cap_1", "fulfillment", "policy_only", 1, JSON.stringify({ id: "cap_1" }), stamp);
@@ -134,6 +146,10 @@ export async function runRollbackChecks() {
       .run("rev_1", "settled", "USD", 4500, stamp, JSON.stringify({ id: "rev_1" }), stamp);
 
     // Rollback: later groups first, then P1.
+    for (const statement of gatewayRollbackStatements()) db.exec(statement);
+    check("0012 rollback removes every gateway table and index",
+      GATEWAY_TABLES.every(name => !tables(db).includes(name)) &&
+      GATEWAY_INDEXES.every(name => objects(db).every(item => item !== "index:" + name)));
     for (const statement of missionRollbackStatements()) db.exec(statement);
     check("0011 rollback removes every mission table and index",
       MISSION_TABLES.every(name => !tables(db).includes(name)) &&
@@ -160,6 +176,7 @@ export async function runRollbackChecks() {
     check("P1 tables can be recreated after rollback", P1_TABLES.every(name => tables(db).includes(name)));
     check("workforce tables can be recreated after rollback", WORKFORCE_TABLES.every(name => tables(db).includes(name)));
     check("mission tables can be recreated after rollback", MISSION_TABLES.every(name => tables(db).includes(name)));
+    check("gateway tables can be recreated after rollback", GATEWAY_TABLES.every(name => tables(db).includes(name)));
     check("recreated P1 tables start empty", db.prepare("SELECT COUNT(*) AS n FROM habitat_ax_access_requests").get().n === 0);
     check("re-apply still preserves legacy rows", db.prepare("SELECT status FROM habitat_ax_objectives WHERE id = 'obj_legacy'").get()?.status === "executing");
   } finally {
@@ -173,6 +190,7 @@ export async function runRollbackChecks() {
     droppedTables: P1_TABLES.length,
     droppedWorkforceTables: WORKFORCE_TABLES.length,
     droppedMissionTables: MISSION_TABLES.length,
+    droppedGatewayTables: GATEWAY_TABLES.length,
     dataLoss: "P1 rows are discarded by rollback; export them first. Pre-0008 tables and rows are not touched.",
     environment: "node:sqlite in-memory (D1-compatible SQL only; not D1 itself)"
   };

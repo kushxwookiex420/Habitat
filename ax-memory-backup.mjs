@@ -51,6 +51,7 @@ export function backupMac(backup, { signingKey, keyId = "owner-1" } = {}) {
     v: MEMORY_BACKUP_MAC_VERSION,
     project: String(backup?.project || ""),
     exportedAt: String(backup?.exportedAt || ""),
+    expiresAt: backup?.expiresAt ? String(backup.expiresAt) : null,
     digest: String(backup?.digest || ""),
     entries: Number(backup?.entries?.length || 0),
     keyId: String(keyId)
@@ -62,12 +63,16 @@ export function backupMac(backup, { signingKey, keyId = "owner-1" } = {}) {
   };
 }
 
-export function verifyBackupMac(backup, { signingKey } = {}) {
-  if (!signingKey) return { ok: false, code: "backup_mac_unverifiable" };
+export function verifyBackupMac(backup, { signingKey = null, signingKeys = null, revokedKeyIds = [] } = {}) {
   const visible = backup?.mac;
   if (!visible || typeof visible !== "object") return { ok: false, code: "backup_unsigned" };
   if (Number(visible.v) !== MEMORY_BACKUP_MAC_VERSION) return { ok: false, code: "backup_mac_version_unsupported" };
-  const expected = backupMac(backup, { signingKey, keyId: visible.keyId || "owner-1" });
+  const keyId = String(visible.keyId || "owner-1");
+  if ((Array.isArray(revokedKeyIds) ? revokedKeyIds : []).includes(keyId)) return { ok: false, code: "backup_mac_key_revoked" };
+  const ringKey = signingKeys && typeof signingKeys === "object" ? signingKeys[keyId] : null;
+  const key = ringKey || signingKey;
+  if (!key) return { ok: false, code: "backup_mac_unverifiable" };
+  const expected = backupMac(backup, { signingKey: key, keyId });
   const left = Buffer.from(String(expected.mac), "utf8");
   const right = Buffer.from(String(visible.mac || ""), "utf8");
   if (left.length !== right.length || !timingSafeEqual(left, right)) return { ok: false, code: "backup_mac_invalid" };
@@ -85,7 +90,7 @@ export function backupDigest(entries = []) {
  * Export one project's active memory. Read-only; no query writes.
  * `historyLimit` bounds the revision arrays so a long-lived key cannot make an unbounded document.
  */
-export async function exportMemory({ repository, project, now = () => new Date().toISOString(), historyLimit = 50, signingKey = null, keyId = "owner-1" } = {}) {
+export async function exportMemory({ repository, project, now = () => new Date().toISOString(), historyLimit = 50, signingKey = null, keyId = "owner-1", expiresAt = null } = {}) {
   const projectId = String(project || "").trim().toLowerCase();
   if (!projectId) return { ok: false, code: "project_required" };
   if (!repository || typeof repository.list !== "function") return { ok: false, code: "memory_not_configured" };
@@ -113,7 +118,8 @@ export async function exportMemory({ repository, project, now = () => new Date()
         }, {})
       },
       entries: portable,
-      revisions
+      revisions,
+      expiresAt: expiresAt ? String(expiresAt) : null
     };
     if (signingKey) {
       document.mac = backupMac(document, { signingKey, keyId });
@@ -128,7 +134,7 @@ export async function exportMemory({ repository, project, now = () => new Date()
 }
 
 /** Check a backup without writing: schema, project, digest and per-entry shape. */
-export function verifyBackup(backup, { project = null, signingKey = null, requireSigned = false } = {}) {
+export function verifyBackup(backup, { project = null, signingKey = null, signingKeys = null, requireSigned = false, revokedKeyIds = [], now = () => new Date().toISOString() } = {}) {
   if (!backup || typeof backup !== "object") return { ok: false, code: "backup_invalid" };
   if (backup.schema !== MEMORY_BACKUP_SCHEMA) return { ok: false, code: "backup_schema_unsupported", schema: backup.schema ?? null };
   if (!Array.isArray(backup.entries)) return { ok: false, code: "backup_entries_missing" };
@@ -141,10 +147,13 @@ export function verifyBackup(backup, { project = null, signingKey = null, requir
   if (malformed.length) return { ok: false, code: "backup_entry_malformed", count: malformed.length };
   // Digest match is not authenticity: an editor can recompute it. A signed backup must also carry a
   // valid MAC, and a caller that requires signatures refuses an unsigned document outright.
+  if (backup.expiresAt && Date.parse(String(backup.expiresAt)) <= Date.parse(now())) {
+    return { ok: false, code: "backup_expired", expiresAt: backup.expiresAt };
+  }
   if (requireSigned && !backup.mac) return { ok: false, code: "backup_unsigned" };
   if (backup.mac) {
-    if (!signingKey) return { ok: false, code: "backup_mac_unverifiable" };
-    const mac = verifyBackupMac(backup, { signingKey });
+    if (!signingKey && !signingKeys) return { ok: false, code: "backup_mac_unverifiable" };
+    const mac = verifyBackupMac(backup, { signingKey, signingKeys, revokedKeyIds });
     if (!mac.ok) return { ok: false, ...mac };
   }
   return { ok: true, digest, entries: backup.entries.length, signed: Boolean(backup.mac), macVerified: Boolean(backup.mac) };
@@ -154,8 +163,8 @@ export function verifyBackup(backup, { project = null, signingKey = null, requir
  * Restore a backup into a repository. Idempotent and additive: it never deletes a local entry that the
  * backup does not contain, and it refuses to overwrite a locally newer version.
  */
-export async function restoreMemory({ repository, backup, now = () => new Date().toISOString(), dryRun = false, signingKey = null, requireSigned = false } = {}) {
-  const verified = verifyBackup(backup, { signingKey, requireSigned });
+export async function restoreMemory({ repository, backup, now = () => new Date().toISOString(), dryRun = false, signingKey = null, signingKeys = null, requireSigned = false, revokedKeyIds = [] } = {}) {
+  const verified = verifyBackup(backup, { signingKey, signingKeys, requireSigned, revokedKeyIds, now });
   if (!verified.ok) return { ok: false, ...verified, writes: 0 };
   if (!repository || typeof repository.put !== "function") return { ok: false, code: "memory_not_configured", writes: 0 };
 

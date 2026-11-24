@@ -89,7 +89,11 @@ export function createD1AxMemoryRepository({ accountId, databaseId, apiToken, fe
     if (!ownerVerifier) {
       return ownerRequired ? { ok: false, code: "owner_attestation_unavailable" } : { ok: true, unattested: true };
     }
-    return ownerVerifier.verifyEntry(entry, attestation || entry.attestation || null);
+    const supplied = attestation || entry.attestation || null;
+    // Optional policy keeps route-authenticated owner writes working; a supplied attestation is
+    // always verified, and `required` refuses an unsigned claim outright.
+    if (!supplied && !ownerRequired) return { ok: true, unattested: true };
+    return ownerVerifier.verifyEntry(entry, supplied);
   }
 
   async function query(sql, params = []) {

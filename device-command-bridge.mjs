@@ -104,6 +104,11 @@ export function registerDeviceCommandBridge(app, {
   // Mission coordination, also invoked under the scheduler lease. The runtime refuses when its flag
   // is off, so passing it is attachment, not activation.
   missionTick = null,
+  // Owner attestation for memory writes. Verification happens here when a key is configured;
+  // enforcement is a separate switch so an existing route-authenticated owner write is not silently
+  // broken by installing a key. Attestations that are supplied are always verified.
+  ownerVerifier = null,
+  ownerAttestationEnforce = false,
   // Optional injection points for tests and embedded use. In a deployment every one of these is
   // derived from the same env object, so /ax/command and the Nexus worker can only ever address
   // one database: the D1 id named by HABITAT_D1_DATABASE_ID.
@@ -147,7 +152,9 @@ export function registerDeviceCommandBridge(app, {
     accountId: env.CLOUDFLARE_ACCOUNT_ID,
     databaseId: env.HABITAT_D1_DATABASE_ID,
     apiToken: env.HABITAT_D1_API_TOKEN,
-    fetchImpl
+    fetchImpl,
+    ownerVerifier,
+    ownerPolicy: ownerVerifier && ownerAttestationEnforce ? "required" : "optional"
   }) : null);
   const notificationStore = notificationRepository || (hasD1 ? createD1AxNotificationRepository({
     accountId: env.CLOUDFLARE_ACCOUNT_ID,
@@ -1375,6 +1382,7 @@ export function registerDeviceCommandBridge(app, {
         // Mount facts only: whether the scheduler has workforce callbacks, not whether they will run.
         workforce: { intakeAttached: typeof workforceIntake === "function", runnerAttached: typeof workforceRunner === "function" },
         identity: { name: identity.core.name, repository: Boolean(memoryStore) },
+        ownerAuthentication: Boolean(memoryStore?.ownerAuthentication) ? memoryStore.ownerAuthentication() : { verifierConfigured: Boolean(ownerVerifier), policy: ownerAttestationEnforce ? "required" : "optional" },
         missions: { tickAttached: typeof missionTick === "function" }
       };
     },

@@ -511,6 +511,8 @@ export function createMissionEngine({
     execute,
     recover,
     approve,
+    list: options => store.list(options),
+    get: id => store.get(id),
     status: summary,
     events: missionId => store.events(missionId),
     _events: events

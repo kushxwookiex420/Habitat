@@ -23,6 +23,9 @@ import { buildWorkerList, buildWorkerDetail, resolveWorkerId, describeVerificati
 import { createChatCommandAuthorizer } from "./command-auth.mjs";
 import { createWorkforceRuntime } from "./ax-workforce-runtime.mjs";
 import { createMissionRuntime } from "./ax-mission-runtime.mjs";
+import { registerAxGateway, gatewayEnabled, GATEWAY_FLAG } from "./ax-gateway.mjs";
+import { createD1GatewayRepository } from "./d1-gateway-repository.mjs";
+import { ownerVerifierFromEnv } from "./ax-owner-attestation.mjs";
 
 import express from "express";
 
@@ -37,7 +40,40 @@ const workforceRuntime = createWorkforceRuntime({ env: process.env });
 // Missions are attached with their own flag, also off by default. No mission store is created while
 // HABITAT_MISSIONS_ENABLED is unset.
 const missionRuntime = createMissionRuntime({ env: process.env });
+const ownerVerifier = ownerVerifierFromEnv({ env: process.env });
+// Integration gateway storage. Built only when the gateway flag is on and the D1 binding is complete;
+// a missing 0012 schema leaves the repository null, so routes answer 503 instead of half-working.
+let gatewayRepository = null;
+if (gatewayEnabled()) {
+  const gatewayD1 = ["CLOUDFLARE_ACCOUNT_ID", "HABITAT_D1_DATABASE_ID", "HABITAT_D1_API_TOKEN"].every(key => String(process.env[key] || "").trim());
+  if (!gatewayD1) {
+    console.warn("AX_GATEWAY: enabled but the D1 binding is incomplete; every request will be refused");
+  } else {
+    try {
+      const candidate = createD1GatewayRepository({
+        accountId: process.env.CLOUDFLARE_ACCOUNT_ID,
+        databaseId: process.env.HABITAT_D1_DATABASE_ID,
+        apiToken: process.env.HABITAT_D1_API_TOKEN
+      });
+      const schema = await candidate.verifySchema();
+      if (schema.ok) gatewayRepository = candidate;
+      else console.warn("AX_GATEWAY_SCHEMA_MISSING", JSON.stringify({ migration: "0012_ax_gateway", missing: schema.missing }));
+    } catch (error) {
+      console.warn("AX_GATEWAY_STORAGE_UNAVAILABLE", String(error?.message || error));
+    }
+  }
+}
+registerAxGateway(app, {
+  enabled: gatewayEnabled(),
+  repository: gatewayRepository,
+  missionRuntime,
+  ownerVerifier,
+  statusProvider: collectSystemStatus,
+  log: console
+});
 const deviceCommandBridge = registerDeviceCommandBridge(app, {
+  ownerVerifier,
+  ownerAttestationEnforce: String(process.env.HABITAT_OWNER_ATTESTATION_ENFORCE || "").toLowerCase() === "true",
   // The improvement engine reads the real status report this process assembles, so its findings are
   // about observed state rather than a guess. It runs inside the existing scheduler tick.
   improvementSignals: async () => ({ systemStatus: await collectSystemStatus() }),
@@ -1565,6 +1601,8 @@ async function collectSystemStatus() {
     // Identity is reported apart from whichever provider supplies intelligence.
     identity,
     missions: await missionRuntime.status(),
+    // Mount facts only; the gateway refuses every request unless its own flag is on.
+    gateway: { enabled: gatewayEnabled(), repository: gatewayRepository !== null, flag: GATEWAY_FLAG },
     routes: {
       chat: true,
       // These routes are registered by registerDeviceCommandBridge regardless of credentials or

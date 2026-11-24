@@ -205,7 +205,8 @@ export function buildSystemStatus({
   execution = null,
   workforce = null,
   identity = null,
-  missions = null
+  missions = null,
+  gateway = null
 } = {}) {
   const items = classifyWorkers({ registry, tasks, now });
   const counts = summarizeWorkerCounts(items);
@@ -291,7 +292,18 @@ export function buildSystemStatus({
       workforce: summarizeWorkforce(workforce),
       // Identity and intelligence are reported separately: a provider is not who Ax is.
       identity: summarizeIdentity(identity),
-      missions: summarizeMissions(missions)
+      missions: summarizeMissions(missions),
+      gateway: {
+        state: gateway?.enabled ? (gateway.repository ? "enabled" : "enabled_unconfigured") : "disabled",
+        enabled: gateway?.enabled === true,
+        repository: gateway?.repository === true,
+        flag: gateway?.flag || "HABITAT_GATEWAY_ENABLED",
+        detail: gateway?.enabled
+          ? gateway.repository
+            ? "Integration gateway is enabled and its storage is available."
+            : "Gateway is enabled but its schema or binding is unavailable; requests are refused."
+          : "Integration gateway is disabled; every /ax/v1 route answers 503."
+      }
     },
     requiredConfiguration: {
       allPresent: unavailableKeys.length === 0,

@@ -35,6 +35,11 @@ deployed staging service exercised it; **production** = the live service; **phon
 | Mission Execution Engine | `ax-mission-engine.mjs` + migration `0011`: durable intake, requirements/criteria, dependency-aware milestones, workforce assignment, bounded retries, independent verification, acceptance-gap reporting, approval gate, restart recovery. 15 tests including restart without duplicate assignment, partial failure, worker loss/return, duplicate submission |
 | Missions are disabled by default | `HABITAT_MISSIONS_ENABLED` unset; runtime reads no schema and refuses (`missions_disabled`). Enabled without 0011 → `schema_missing`; enabled without a workforce → `worker_unavailable` |
 | Mission coordination is attached to the one scheduler | `missionTick` is invoked inside the existing lease; `/system/status` reports `components.missions` separately; a disabled runtime changes no route |
+| Owner attestation: rotation, revocation, replay | Keyring with one active key and retired keys that still verify old data; revoked keys refuse; single-use nonce; signed-field canonicalisation and constant-time compare; 13 owner-security tests |
+| Backup authenticity and recovery | HMAC over project/time/expiry/count/digest; expired, incompatible, forged, unsigned (under `requireSigned`) and revoked-key backups refused with zero writes; restore into a separate database then a fresh repository read reproduces the digest |
+| Ax ↔ Habitat gateway implemented, disabled | `ax-gateway.mjs` + `migrations/0012`: scoped hashed tokens, expiry/revocation, DB-level nonce replay guard, per-client rate limit, audit, status/missions/submit/recover/decision endpoints, OpenAPI at `/ax/v1/openapi.json`. 12 real-HTTP tests |
+| Gateway approvals cannot be self-issued | Approval requires a valid owner attestation; a client with `missions:approve` but no signature gets 403 and the mission stays `approval_required` |
+| Gateway default is off | `HABITAT_GATEWAY_ENABLED` unset → every `/ax/v1` route 503, no token checked, no store built; `/system/status` reports it as disabled |
 | End-to-end self-improvement cycle | `scripts/self-improvement-demo.mjs`: detected an unused export, implemented on `demo/self-improvement-*`, self-verification **refused**, independent verification passed 2/2, status `verified`, `approvalRequired: true` |
 
 ## Implemented, not deployed
@@ -73,9 +78,8 @@ compatible. The installed certificate has not been read.
 
 ## Next highest-value task
 
-Phases One and Two are complete and locally verified; Phase Three's mission engine is implemented and
-disabled by default, with deterministic planning and injected executors. The gap is now **environmental**:
-applying
+Phases One–Three are implemented and locally verified, and the integration gateway exists behind its own
+flag. Nothing is staging-verified. The gap is now **environmental and provider-facing**: applying
 0010 to the staging database using `docs/WORKFORCE_D1_STAGING_MIGRATION.md`, then — on separate owner
 approval — setting `HABITAT_WORKFORCE_ENABLED=true` in staging and observing `initialized`,
 `recoveredAssignments` after a restart, and a scheduler-driven cycle that reaches `verified` with
