@@ -36,6 +36,23 @@ export function validateEscalationBody(body, { taskId, attemptPattern = /Attempt
   return { ok: missing.length === 0, missing };
 }
 
+/**
+ * Retry increments `attempts`, and the escalation key is task+attempts, so a second failure is a
+ * different key by design: one message per attempt is correct, two messages for one attempt is not.
+ */
+export function summarizeAttempts(messages = []) {
+  const attempts = (Array.isArray(messages) ? messages : [])
+    .map((message) => Number(/Attempts:\s*(\d+)/.exec(String(message?.body || ""))?.[1] ?? Number.NaN))
+    .filter((value) => Number.isInteger(value));
+  const seen = new Set();
+  const duplicates = [];
+  for (const attempt of attempts) {
+    if (seen.has(attempt)) duplicates.push(attempt);
+    seen.add(attempt);
+  }
+  return { attempts, distinct: seen.size, duplicates };
+}
+
 function stagingOrigin() {
   const raw = String(process.env.STAGING_BASE_URL || ("https://" + STAGING_HOST)).trim();
   let url;
@@ -165,27 +182,39 @@ async function main() {
   report.phases.escalation = {
     count: firstMessages.length,
     ids: firstMessages.map((message) => message.id),
-    bodyCheck: firstMessages[0] ? validateEscalationBody(firstMessages[0].body, { taskId }) : null
+    bodyCheck: firstMessages[0] ? validateEscalationBody(firstMessages[0].body, { taskId }) : null,
+    attempts: summarizeAttempts(firstMessages).attempts
+  };
+  report.phases.sameAttemptReplay = {
+    note: "A repeated escalation of the same attempt cannot be produced through public routes; the deterministic key is covered by tests/ax-failure-escalation.test.mjs."
   };
 
-  // 5. Retry the task: it fails again, and the deterministic key must collapse it into the same message.
+  // 5. Retry the task. Retry moves attempts 0 -> 1, so this failure must escalate once more, under a
+  //    new key: two messages, one per attempt, and never two for the same attempt.
   const retried = await call(base.origin, "/ax/command/tasks/" + encodeURIComponent(taskId) + "/retry", { method: "POST", token, body: {} });
   report.phases.retry = { status: retried.status, code: retried.json?.code || null };
-  let secondCount = null;
+  let afterRetry = null;
   if (retried.ok && retried.status === 200) {
     const second = await waitForStatus(base.origin, token, taskId, ["failed", "done"], timeoutSeconds);
     report.phases.secondRun = { status: second?.status || null, attempts: second?.attempts ?? null };
     const listTwo = await call(base.origin, "/ax/command/messages?limit=200", { token });
-    secondCount = findEscalations(listTwo.json?.messages || [], taskId).length;
-    report.phases.dedupe = { countAfterRetry: secondCount, expected: 1 };
+    const messages = findEscalations(listTwo.json?.messages || [], taskId);
+    const summary = summarizeAttempts(messages);
+    afterRetry = { count: messages.length, attempts: summary.attempts, duplicates: summary.duplicates };
+    report.phases.attemptCoverage = { ...afterRetry, expected: 2 };
   } else {
-    report.phases.dedupe = { skipped: true, reason: retried.json?.code || "retry_unavailable" };
+    report.phases.attemptCoverage = { skipped: true, reason: retried.json?.code || "retry_unavailable" };
   }
 
+  const coverageOk = afterRetry === null ||
+    (afterRetry.count === 2 && afterRetry.duplicates.length === 0 && afterRetry.attempts.includes(0) && afterRetry.attempts.includes(1));
   report.ok = firstMessages.length === 1 &&
     report.phases.escalation.bodyCheck?.ok === true &&
-    (secondCount === null || secondCount === 1);
-  if (!report.ok) report.blocked = firstMessages.length > 1 ? "duplicate_escalation" : "escalation_missing_or_incomplete";
+    coverageOk;
+  if (!report.ok) {
+    const duplicates = firstMessages.length > 1 || (afterRetry?.duplicates.length || 0) > 0;
+    report.blocked = duplicates ? "duplicate_escalation" : "escalation_missing_or_incomplete";
+  }
 
   console.log(JSON.stringify(report, null, 2));
   if (!report.ok) process.exitCode = 1;

@@ -4,7 +4,7 @@ import { readFile } from "node:fs/promises";
 import {
   classifyDiff, deploymentProcedure, evaluatePreflight, parseStagingFlags
 } from "../scripts/staging-deploy-preflight.mjs";
-import { findEscalations, validateEscalationBody } from "../scripts/staging-escalation-check.mjs";
+import { findEscalations, summarizeAttempts, validateEscalationBody } from "../scripts/staging-escalation-check.mjs";
 
 test("the staging blueprint really keeps autonomy off", async () => {
   const yaml = await readFile(new URL("../render.staging.yaml", import.meta.url), "utf8");
@@ -72,4 +72,19 @@ test("escalation matching is per task and its body must carry the promised facts
   assert.ok(incomplete.missing.includes("task id"));
   assert.ok(incomplete.missing.includes("attempt count"));
   assert.equal(validateEscalationBody(null, { taskId: "t1" }).ok, false);
+
+  // One message per attempt is correct; two for one attempt is a duplicate.
+  const perAttempt = summarizeAttempts([
+    { body: "Attempts: 0" },
+    { body: "Attempts: 1" }
+  ]);
+  assert.deepEqual(perAttempt.attempts, [0, 1]);
+  assert.deepEqual(perAttempt.duplicates, []);
+
+  const duplicated = summarizeAttempts([
+    { body: "Attempts: 0" },
+    { body: "Attempts: 0" }
+  ]);
+  assert.deepEqual(duplicated.duplicates, [0]);
+  assert.deepEqual(summarizeAttempts([{ body: "no attempt line" }, null]).attempts, []);
 });

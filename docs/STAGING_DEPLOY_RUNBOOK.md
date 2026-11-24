@@ -48,3 +48,20 @@ check afterwards.
 
 The deploy does not enable autonomy. `NEXUS_RUNTIME_ENABLED` remains false until the authenticated round
 trip, the failure notification, approval enforcement and this rollback procedure are each verified.
+
+## 5. Credentials (values never in chat, logs, or the repository)
+
+**Dedicated staging bridge token.** Generate it on your own machine (`openssl rand -hex 32`), then set that
+one value in two places: Render → `habitat-staging-e3ie` → `HABITAT_AX_BRIDGE_TOKEN`, and GitHub →
+Settings → Secrets and variables → Actions → `HABITAT_AX_COMMAND_TOKEN`. Do not reuse production's bridge
+token: a staging incident must never force a production rotation, and a probe must never be able to reach
+production by accident. Both probes treat the value as opaque and stop at `401` before doing any work;
+neither prints it, and the round trip redacts the device id as well.
+
+**D1, CI only.** `HABITAT_D1_API_TOKEN` exists so CI can verify and read D1 metadata. The Render service's
+own D1 credential is separate and must not be changed to fix CI.
+
+**How to verify the token without seeing it.** Run the `Staging round trip` workflow (the round trip) and
+the `Staging device audit (read-only)` workflow (the token itself). The audit prints
+`/user/tokens/verify` status, its `expires_on`, and the D1 metadata status, which is what distinguishes an
+expired token (`1000:Invalid API Token`) from an under-scoped one (verify active, metadata refused).
