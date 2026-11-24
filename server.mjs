@@ -22,6 +22,7 @@ import { buildSystemStatus, classifyWorkers, inferReadOnlyAdapter, isSystemStatu
 import { buildWorkerList, buildWorkerDetail, resolveWorkerId, describeVerification, normalizeError } from "./worker-catalog.mjs";
 import { createChatCommandAuthorizer } from "./command-auth.mjs";
 import { createWorkforceRuntime } from "./ax-workforce-runtime.mjs";
+import { createMissionRuntime } from "./ax-mission-runtime.mjs";
 
 import express from "express";
 
@@ -33,12 +34,16 @@ app.use(express.json({ limit: "1mb" }));
 // HABITAT_WORKFORCE_ENABLED is "true" and migration 0010 exists, and its flag is independent of
 // NEXUS_RUNTIME_ENABLED. Attaching the callbacks changes no route and no behavior while it is off.
 const workforceRuntime = createWorkforceRuntime({ env: process.env });
+// Missions are attached with their own flag, also off by default. No mission store is created while
+// HABITAT_MISSIONS_ENABLED is unset.
+const missionRuntime = createMissionRuntime({ env: process.env });
 const deviceCommandBridge = registerDeviceCommandBridge(app, {
   // The improvement engine reads the real status report this process assembles, so its findings are
   // about observed state rather than a guess. It runs inside the existing scheduler tick.
   improvementSignals: async () => ({ systemStatus: await collectSystemStatus() }),
   workforceIntake: workforceRuntime.intake,
-  workforceRunner: workforceRuntime.run
+  workforceRunner: workforceRuntime.run,
+  missionTick: missionRuntime.tick
 });
 const chatCommandAuthorizer = createChatCommandAuthorizer({ env: process.env, deviceBridge: deviceCommandBridge });
 
@@ -1559,6 +1564,7 @@ async function collectSystemStatus() {
     workforce: workforceRuntime.status(),
     // Identity is reported apart from whichever provider supplies intelligence.
     identity,
+    missions: await missionRuntime.status(),
     routes: {
       chat: true,
       // These routes are registered by registerDeviceCommandBridge regardless of credentials or
@@ -2260,6 +2266,10 @@ if (secretVault) {
   console.warn("TIKTOK_TOKEN_VAULT: unavailable — OAuth cannot be marked connected until D1 and HABITAT_TOKEN_ENCRYPTION_KEY are configured");
 }
 // Refuses safely when disabled, unconfigured, or when migration 0010 is absent. Never applies DDL.
+const missionInit = await missionRuntime.initialize();
+if (missionInit.state !== "disabled") {
+  console.log("MISSIONS_STATUS", JSON.stringify(missionInit));
+}
 const workforceInit = await workforceRuntime.initialize();
 if (workforceInit.state !== "disabled") {
   console.log("WORKFORCE_STATUS", JSON.stringify(workforceInit));

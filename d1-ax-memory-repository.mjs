@@ -75,8 +75,22 @@ function parseRow(row) {
   };
 }
 
-export function createD1AxMemoryRepository({ accountId, databaseId, apiToken, fetchImpl = fetch } = {}) {
+export function createD1AxMemoryRepository({ accountId, databaseId, apiToken, fetchImpl = fetch, ownerVerifier = null, ownerPolicy = "optional" } = {}) {
   const endpoint = d1DatabaseEndpoint({ accountId, databaseId });
+  const ownerRequired = ownerPolicy === "required";
+
+  /**
+   * Owner writes are refused unless the attestation verifies. Without a verifier, `required` means
+   * refuse (an unverifiable owner claim is not an owner claim), while `optional` keeps the historic
+   * behavior for callers that authenticate at the route instead.
+   */
+  function checkOwner(entry, attestation) {
+    if (entry.provenance.source !== "owner") return { ok: true };
+    if (!ownerVerifier) {
+      return ownerRequired ? { ok: false, code: "owner_attestation_unavailable" } : { ok: true, unattested: true };
+    }
+    return ownerVerifier.verifyEntry(entry, attestation || entry.attestation || null);
+  }
 
   async function query(sql, params = []) {
     const response = await fetchImpl(endpoint, {
@@ -142,6 +156,8 @@ export function createD1AxMemoryRepository({ accountId, databaseId, apiToken, fe
       const normalized = normalizeMemoryEntry(input);
       if (!normalized.ok) return { ok: false, ...normalized };
       const entry = normalized.entry;
+      const ownerCheck = checkOwner(entry, entry.attestation);
+      if (!ownerCheck.ok) return { ok: false, ...ownerCheck };
       const id = memoryId(entry.project, entry.key);
       const existing = await readRow(id);
       const decision = evaluateWrite(existing, entry, { expectedVersion, allowKindChange });
@@ -282,9 +298,17 @@ export function createD1AxMemoryRepository({ accountId, databaseId, apiToken, fe
      * Owner-only soft delete. The row keeps its history; `status` becomes `deleted` and the delete is
      * itself a revision, so a correction is auditable rather than invisible.
      */
-    async remove({ project, key, expectedVersion, actor } = {}) {
+    async remove({ project, key, expectedVersion, actor, attestation = null } = {}) {
       if (String(actor || "").trim().toLowerCase() !== "owner") {
         return { ok: false, code: "owner_required" };
+      }
+      if (ownerVerifier) {
+        const removal = ownerVerifier.verifyEntry({
+          project, key, kind: "delete", statement: "delete", tags: [], confidence: null
+        }, attestation, { operation: "memory.remove" });
+        if (!removal.ok) return { ok: false, ...removal };
+      } else if (ownerRequired) {
+        return { ok: false, code: "owner_attestation_unavailable" };
       }
       const projectId = String(project || "").trim().toLowerCase();
       const memKey = String(key || "").trim().toLowerCase();
@@ -325,6 +349,10 @@ export function createD1AxMemoryRepository({ accountId, databaseId, apiToken, fe
     /** For tests and importers: the digest used to detect duplicate statements. */
     digest(statement) {
       return statementDigest(statement);
+    },
+
+    ownerAuthentication() {
+      return { verifierConfigured: Boolean(ownerVerifier), policy: ownerRequired ? "required" : "optional" };
     }
   });
 }

@@ -101,6 +101,9 @@ export function registerDeviceCommandBridge(app, {
   // so passing them here never activates the workforce by itself.
   workforceIntake = null,
   workforceRunner = null,
+  // Mission coordination, also invoked under the scheduler lease. The runtime refuses when its flag
+  // is off, so passing it is attachment, not activation.
+  missionTick = null,
   // Optional injection points for tests and embedded use. In a deployment every one of these is
   // derived from the same env object, so /ax/command and the Nexus worker can only ever address
   // one database: the D1 id named by HABITAT_D1_DATABASE_ID.
@@ -235,6 +238,7 @@ export function registerDeviceCommandBridge(app, {
       improvement: improvementSignals ? createImprovementMonitor({ readSignals: improvementSignals }).check : null,
       workforceIntake,
       workforceRunner,
+      mission: missionTick,
       // Approval-expiry monitoring rides this same tick and lease. It never decides an approval and
       // never starts work: it sweeps due expiries in the approval ledger and reports them.
       approvalExpiry: ({ withinMs } = {}) => (
@@ -1370,7 +1374,8 @@ export function registerDeviceCommandBridge(app, {
         nexus: nexusRuntime ? { configured: true, ...nexusRuntime.status() } : nexusMount,
         // Mount facts only: whether the scheduler has workforce callbacks, not whether they will run.
         workforce: { intakeAttached: typeof workforceIntake === "function", runnerAttached: typeof workforceRunner === "function" },
-        identity: { name: identity.core.name, repository: Boolean(memoryStore) }
+        identity: { name: identity.core.name, repository: Boolean(memoryStore) },
+        missions: { tickAttached: typeof missionTick === "function" }
       };
     },
     nexus() {

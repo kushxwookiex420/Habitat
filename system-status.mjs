@@ -170,6 +170,24 @@ function authentication(env, { deviceBridge } = {}) {
   };
 }
 
+function summarizeMissions(input) {
+  if (!input || typeof input !== "object") {
+    return { state: "not_configured", enabled: false, initialized: false, running: false, verified: false, counts: {}, detail: "No mission runtime is attached to this process." };
+  }
+  return {
+    state: input.state || "not_configured",
+    flag: input.flag || "HABITAT_MISSIONS_ENABLED",
+    enabled: input.enabled === true,
+    configured: input.configured === true,
+    initialized: input.initialized === true,
+    running: input.running === true,
+    verified: input.verified === true,
+    migration: { version: input.migration?.version || "0011_ax_missions", ready: input.migration?.ready ?? null, appliedByRuntime: false },
+    counts: { total: Number(input.counts?.total || 0), byStatus: { ...(input.counts?.byStatus || {}) } },
+    detail: input.detail || "No detail reported."
+  };
+}
+
 export function buildSystemStatus({
   env = process.env,
   now = Date.now(),
@@ -186,7 +204,8 @@ export function buildSystemStatus({
   routes = {},
   execution = null,
   workforce = null,
-  identity = null
+  identity = null,
+  missions = null
 } = {}) {
   const items = classifyWorkers({ registry, tasks, now });
   const counts = summarizeWorkerCounts(items);
@@ -271,7 +290,8 @@ export function buildSystemStatus({
       // running (the scheduler used it since boot) and verified (a result was independently verified).
       workforce: summarizeWorkforce(workforce),
       // Identity and intelligence are reported separately: a provider is not who Ax is.
-      identity: summarizeIdentity(identity)
+      identity: summarizeIdentity(identity),
+      missions: summarizeMissions(missions)
     },
     requiredConfiguration: {
       allPresent: unavailableKeys.length === 0,
@@ -372,6 +392,15 @@ export function formatSystemStatus(status) {
       " — providerIndependent=" + (identity.providerIndependent ? "yes" : "no") +
       ", persisted=" + (identity.persisted ? "yes" : "no") +
       ", directives=" + (identity.directives?.total ?? 0)
+    );
+  }
+  const missions = components.missions;
+  if (missions && missions.flag) {
+    lines.push(
+      "Missions: " + state(missions.state) +
+      " — enabled=" + (missions.enabled ? "yes" : "no") +
+      ", initialized=" + (missions.initialized ? "yes" : "no") +
+      ", total=" + (missions.counts?.total ?? 0)
     );
   }
   const workforce = components.workforce;

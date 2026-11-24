@@ -1,4 +1,6 @@
-import { createHash } from "node:crypto";
+import { createHash, createHmac, timingSafeEqual } from "node:crypto";
+
+export const MEMORY_BACKUP_MAC_VERSION = 1;
 
 /**
  * Memory export and recovery.
@@ -38,6 +40,40 @@ function canonical(value) {
   return JSON.stringify(value);
 }
 
+/**
+ * A digest detects corruption; it does not prove authenticity. An attacker who can edit the entries
+ * can also recompute an unkeyed digest. `backupMac` is the authenticity boundary: it covers the
+ * project, export time and digest, keyed with a secret the attacker does not have.
+ */
+export function backupMac(backup, { signingKey, keyId = "owner-1" } = {}) {
+  if (!signingKey) return null;
+  const material = {
+    v: MEMORY_BACKUP_MAC_VERSION,
+    project: String(backup?.project || ""),
+    exportedAt: String(backup?.exportedAt || ""),
+    digest: String(backup?.digest || ""),
+    entries: Number(backup?.entries?.length || 0),
+    keyId: String(keyId)
+  };
+  return {
+    v: MEMORY_BACKUP_MAC_VERSION,
+    keyId: String(keyId),
+    mac: createHmac("sha256", String(signingKey)).update(canonical(material)).digest("hex")
+  };
+}
+
+export function verifyBackupMac(backup, { signingKey } = {}) {
+  if (!signingKey) return { ok: false, code: "backup_mac_unverifiable" };
+  const visible = backup?.mac;
+  if (!visible || typeof visible !== "object") return { ok: false, code: "backup_unsigned" };
+  if (Number(visible.v) !== MEMORY_BACKUP_MAC_VERSION) return { ok: false, code: "backup_mac_version_unsupported" };
+  const expected = backupMac(backup, { signingKey, keyId: visible.keyId || "owner-1" });
+  const left = Buffer.from(String(expected.mac), "utf8");
+  const right = Buffer.from(String(visible.mac || ""), "utf8");
+  if (left.length !== right.length || !timingSafeEqual(left, right)) return { ok: false, code: "backup_mac_invalid" };
+  return { ok: true, keyId: visible.keyId || "owner-1" };
+}
+
 export function backupDigest(entries = []) {
   const rows = entries
     .map(essential)
@@ -49,7 +85,7 @@ export function backupDigest(entries = []) {
  * Export one project's active memory. Read-only; no query writes.
  * `historyLimit` bounds the revision arrays so a long-lived key cannot make an unbounded document.
  */
-export async function exportMemory({ repository, project, now = () => new Date().toISOString(), historyLimit = 50 } = {}) {
+export async function exportMemory({ repository, project, now = () => new Date().toISOString(), historyLimit = 50, signingKey = null, keyId = "owner-1" } = {}) {
   const projectId = String(project || "").trim().toLowerCase();
   if (!projectId) return { ok: false, code: "project_required" };
   if (!repository || typeof repository.list !== "function") return { ok: false, code: "memory_not_configured" };
@@ -63,7 +99,7 @@ export async function exportMemory({ repository, project, now = () => new Date()
       }
     }
     const portable = entries.map(essential);
-    return {
+    const document = {
       ok: true,
       schema: MEMORY_BACKUP_SCHEMA,
       project: projectId,
@@ -79,13 +115,20 @@ export async function exportMemory({ repository, project, now = () => new Date()
       entries: portable,
       revisions
     };
+    if (signingKey) {
+      document.mac = backupMac(document, { signingKey, keyId });
+      document.signed = true;
+    } else {
+      document.signed = false;
+    }
+    return document;
   } catch (error) {
     return { ok: false, code: "export_failed", error: String(error?.message || error).slice(0, 160) };
   }
 }
 
 /** Check a backup without writing: schema, project, digest and per-entry shape. */
-export function verifyBackup(backup, { project = null } = {}) {
+export function verifyBackup(backup, { project = null, signingKey = null, requireSigned = false } = {}) {
   if (!backup || typeof backup !== "object") return { ok: false, code: "backup_invalid" };
   if (backup.schema !== MEMORY_BACKUP_SCHEMA) return { ok: false, code: "backup_schema_unsupported", schema: backup.schema ?? null };
   if (!Array.isArray(backup.entries)) return { ok: false, code: "backup_entries_missing" };
@@ -96,19 +139,27 @@ export function verifyBackup(backup, { project = null } = {}) {
   if (digest !== backup.digest) return { ok: false, code: "backup_digest_mismatch", expected: backup.digest, actual: digest };
   const malformed = backup.entries.filter(entry => !entry || !entry.key || !entry.statement || !entry.kind);
   if (malformed.length) return { ok: false, code: "backup_entry_malformed", count: malformed.length };
-  return { ok: true, digest, entries: backup.entries.length };
+  // Digest match is not authenticity: an editor can recompute it. A signed backup must also carry a
+  // valid MAC, and a caller that requires signatures refuses an unsigned document outright.
+  if (requireSigned && !backup.mac) return { ok: false, code: "backup_unsigned" };
+  if (backup.mac) {
+    if (!signingKey) return { ok: false, code: "backup_mac_unverifiable" };
+    const mac = verifyBackupMac(backup, { signingKey });
+    if (!mac.ok) return { ok: false, ...mac };
+  }
+  return { ok: true, digest, entries: backup.entries.length, signed: Boolean(backup.mac), macVerified: Boolean(backup.mac) };
 }
 
 /**
  * Restore a backup into a repository. Idempotent and additive: it never deletes a local entry that the
  * backup does not contain, and it refuses to overwrite a locally newer version.
  */
-export async function restoreMemory({ repository, backup, now = () => new Date().toISOString(), dryRun = false } = {}) {
-  const verified = verifyBackup(backup);
+export async function restoreMemory({ repository, backup, now = () => new Date().toISOString(), dryRun = false, signingKey = null, requireSigned = false } = {}) {
+  const verified = verifyBackup(backup, { signingKey, requireSigned });
   if (!verified.ok) return { ok: false, ...verified, writes: 0 };
   if (!repository || typeof repository.put !== "function") return { ok: false, code: "memory_not_configured", writes: 0 };
 
-  const report = { ok: true, code: null, restored: 0, unchanged: 0, conflicts: [], refused: [], writes: 0, digest: verified.digest, dryRun };
+  const report = { ok: true, code: null, restored: 0, unchanged: 0, conflicts: [], refused: [], writes: 0, digest: verified.digest, signed: verified.signed === true, macVerified: verified.macVerified === true, dryRun };
   for (const entry of backup.entries) {
     let current = null;
     try {

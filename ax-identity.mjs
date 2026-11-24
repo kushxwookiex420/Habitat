@@ -74,6 +74,7 @@ export function createAxIdentity({
   repository = null,
   project = IDENTITY_PROJECT,
   core = AX_IDENTITY_CORE,
+  ownerVerifier = null,
   now = () => new Date().toISOString(),
   log = console
 } = {}) {
@@ -127,7 +128,7 @@ export function createAxIdentity({
    * Owner-approved instruction, preference or goal. Only an owner write is accepted: an agent may not
    * install a standing instruction for itself.
    */
-  async function setDirective({ statement, kind = "preference", key = null, actor = "owner", source = "owner", confidence = null } = {}) {
+  async function setDirective({ statement, kind = "preference", key = null, actor = "owner", source = "owner", confidence = null, attestation = null } = {}) {
     if (!repository || typeof repository.put !== "function") return { ok: false, code: "memory_not_configured" };
     if (source !== "owner") return { ok: false, code: "owner_required" };
     if (!DIRECTIVE_KINDS.includes(kind)) return { ok: false, code: "invalid_directive_kind", allowed: DIRECTIVE_KINDS };
@@ -135,6 +136,12 @@ export function createAxIdentity({
     if (!text) return { ok: false, code: "empty_statement" };
     const directiveKey = "directive:" + (slug(key || text) || "note");
     const existing = await repository.get({ project: projectId, key: directiveKey }).catch(() => null);
+    // A directive is a standing owner instruction. When an attestation key exists, an unsigned claim
+    // is refused: the string "owner" is not authentication.
+    const check = ownerVerifier
+      ? ownerVerifier.verifyEntry({ project: projectId, key: directiveKey, kind, statement: text, tags: ["directive", kind], confidence }, attestation)
+      : { ok: true, unattested: true };
+    if (!check.ok) return { ok: false, ...check };
     try {
       const written = await repository.put({
         project: projectId,
@@ -143,7 +150,8 @@ export function createAxIdentity({
         statement: text,
         provenance: { source: "owner", actor: clean(actor, 64) || "owner", ref: "directive", observedAt: now() },
         tags: ["directive", kind],
-        confidence
+        confidence,
+        attestation
       }, { expectedVersion: existing ? existing.version : 0, allowKindChange: false, now: now() });
       if (!written.ok) return { ok: false, code: written.code, reason: written.reason || null, current: written.current || null };
       return { ok: true, key: directiveKey, version: written.entry?.version ?? null, unchanged: Boolean(written.unchanged) };
@@ -187,6 +195,10 @@ export function createAxIdentity({
         goals: count("goal"),
         decisions: count("decision") - (record ? 1 : 0),
         total: list.filter(entry => typeof entry.key === "string" && entry.key.startsWith("directive:")).length
+      },
+      ownerAuthentication: {
+        verifierConfigured: Boolean(ownerVerifier),
+        policy: ownerVerifier ? "attested" : "unattested_allowed"
       },
       detail: repository
         ? (record

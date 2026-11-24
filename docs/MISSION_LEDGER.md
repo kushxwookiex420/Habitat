@@ -30,6 +30,11 @@ deployed staging service exercised it; **production** = the live service; **phon
 | Owner-only standing directives | Non-owner writes refused (`owner_required`); deletion owner-only and versioned; agent writes cannot change the code-defined digest |
 | Memory export and recovery | `ax-memory-backup.mjs`; digest verified before any write; restore reproduces the source digest in a fresh database; idempotent replay; local-newer conflicts and credential-bearing entries refused with zero writes (5 tests) |
 | Retention is a report, not a purge | `retentionReport` lists old entries and deletes nothing; deletion stays an owner action with a revision |
+| Owner provenance is authenticated, not asserted | Audit found `source: "owner"` was an ordinary string. `ax-owner-attestation.mjs` signs the exact fields (HMAC, TTL, constant-time); memory refuses unsigned owner writes under `ownerPolicy: "required"`; identity directives refuse unsigned owner claims when a verifier is configured. **Limitation recorded:** the bridge still builds memory in `optional` mode, so repository-level owner trust closes only when `HABITAT_OWNER_ATTESTATION_KEY` is set |
+| Backup authenticity is keyed, not digest-only | Audit found an edited payload plus recomputed digest passed. Backups now carry an HMAC over project/time/count/digest; a self-consistent forged backup is refused `backup_mac_invalid` with zero writes, and `requireSigned` refuses unsigned documents. Unsigned export is explicit (`signed: false`), never called authentic |
+| Mission Execution Engine | `ax-mission-engine.mjs` + migration `0011`: durable intake, requirements/criteria, dependency-aware milestones, workforce assignment, bounded retries, independent verification, acceptance-gap reporting, approval gate, restart recovery. 15 tests including restart without duplicate assignment, partial failure, worker loss/return, duplicate submission |
+| Missions are disabled by default | `HABITAT_MISSIONS_ENABLED` unset; runtime reads no schema and refuses (`missions_disabled`). Enabled without 0011 → `schema_missing`; enabled without a workforce → `worker_unavailable` |
+| Mission coordination is attached to the one scheduler | `missionTick` is invoked inside the existing lease; `/system/status` reports `components.missions` separately; a disabled runtime changes no route |
 | End-to-end self-improvement cycle | `scripts/self-improvement-demo.mjs`: detected an unused export, implemented on `demo/self-improvement-*`, self-verification **refused**, independent verification passed 2/2, status `verified`, `approvalRequired: true` |
 
 ## Implemented, not deployed
@@ -68,9 +73,9 @@ compatible. The installed certificate has not been read.
 
 ## Next highest-value task
 
-Phase One (server-side workforce) is complete and disabled by default; Phase Two's identity and memory
-continuity is implemented and locally verified, with the remaining gap being a deployed provider swap.
-What remains next is **staging execution**: applying
+Phases One and Two are complete and locally verified; Phase Three's mission engine is implemented and
+disabled by default, with deterministic planning and injected executors. The gap is now **environmental**:
+applying
 0010 to the staging database using `docs/WORKFORCE_D1_STAGING_MIGRATION.md`, then — on separate owner
 approval — setting `HABITAT_WORKFORCE_ENABLED=true` in staging and observing `initialized`,
 `recoveredAssignments` after a restart, and a scheduler-driven cycle that reaches `verified` with

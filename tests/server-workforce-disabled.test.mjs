@@ -58,6 +58,10 @@ test("the real server starts with the workforce disabled and existing routes sti
   );
   assert.equal(status.components.workforce.migration.appliedByRuntime, false);
   assert.equal(status.components.workforce.nexusRuntimeEnabled, false);
+  assert.equal(status.components.missions.state, "disabled");
+  assert.equal(status.components.missions.enabled, false);
+  assert.equal(status.components.missions.migration.appliedByRuntime, false);
+  assert.match(status.report, /Missions: DISABLED/);
 
   for (const route of ["/health", "/workers", "/capabilities", "/system/status", "/continuity/status"]) {
     const response = await fetch("http://127.0.0.1:" + port + route);

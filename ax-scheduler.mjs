@@ -50,6 +50,9 @@ export function createSchedulerService({
   // same tick and lease. Both are callbacks, so the scheduler still owns no provider and no workspace.
   workforceIntake = null,
   workforceRunner = null,
+  // Mission coordination rides the same tick and lease. The runtime refuses cheaply when disabled,
+  // so attaching it does not change a tick's behavior by itself.
+  mission = null,
   now = () => new Date().toISOString(),
   nowMs = () => Date.now(),
   leaseMs = SCHEDULER_LIMITS.leaseMs,
@@ -302,6 +305,17 @@ export function createSchedulerService({
       // Autonomous execution rides the same lease as recovery: at most one tick can advance queued
       // messages or eligible objectives at a time. A failure here is reported, never retried
       // blindly, and never changes a message to completed.
+      // Mission coordination is the last step inside the lease, so recovery finishes before new
+      // mission work starts. A disabled runtime refuses without touching storage.
+      let missionResult = null;
+      if (typeof mission === "function") {
+        try {
+          missionResult = await mission();
+        } catch (error) {
+          log.error?.("AX_SCHEDULER_MISSION_FAILED", clean(error?.message, 160));
+          missionResult = { ok: false, code: "mission_failed" };
+        }
+      }
       let autonomyResult = null;
       if (typeof autonomy === "function") {
         try {
@@ -406,6 +420,7 @@ export function createSchedulerService({
         approvals: approvalMonitor.report,
         improvement: improvementMonitor.report,
         workforce: { tasks: workforceTasks, run: workforceRun },
+        mission: missionResult,
         autonomy: autonomyResult,
         notification,
         startedAt: new Date(startedAtMs).toISOString(),
