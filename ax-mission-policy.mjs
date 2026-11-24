@@ -152,3 +152,36 @@ export function budgetState({ startedAt, now = Date.now(), maxRounds = 3, rounds
   if (repairsUsed > maxRepairs) return { exhausted: true, reason: "budget_repairs", roundsLeft: Math.max(0, maxRounds - roundsUsed), elapsedMs };
   return { exhausted: false, reason: null, roundsLeft: Math.max(0, maxRounds - roundsUsed), elapsedMs };
 }
+
+/**
+ * The execution gate. Called immediately before an executor would run, against the *persisted* mission and
+ * task, never against the request that created them. It recomputes the action class and the approval
+ * fingerprint, so changing a task's title, target or parameters after approval invalidates the approval.
+ *
+ * @returns {{ok: boolean, code: string, class: string, action?: string, target?: string|null, fingerprint?: string|null}}
+ */
+export function executionGate({ mission, task, now = new Date().toISOString(), maxAgeMs = 30 * 60_000 } = {}) {
+  const policy = classifyAction(task);
+  const action = clean(task?.action || task?.title, 200);
+  const target = task?.target === undefined ? null : task.target;
+  const params = task?.params === undefined ? null : task.params;
+  const base = { class: policy.class, action, target };
+  if (policy.class === ACTION_CLASSES.prohibited) {
+    return { ok: false, code: "policy_denied", ...base, fingerprint: null };
+  }
+  if (!(task?.approvalRequired === true || policy.requiresApproval)) {
+    return { ok: true, code: "approval_not_required", ...base, fingerprint: null };
+  }
+  if (!mission || !mission.id || !task?.id) return { ok: false, code: "approval_unbound", ...base, fingerprint: null };
+
+  const fingerprint = approvalBinding({ missionId: mission.id, taskId: task.id, action, target, params });
+  const candidates = (mission.approvals || []).filter((item) =>
+    String(item.missionId ?? mission.id) === String(mission.id) && String(item.taskId ?? "") === String(task.id));
+  if (candidates.length === 0) return { ok: false, code: "approval_missing", ...base, fingerprint };
+  const approval = candidates.find((item) => item.fingerprint === fingerprint);
+  if (!approval) return { ok: false, code: "approval_action_changed", ...base, fingerprint };
+  if (approval.status === "pending") return { ok: false, code: "approval_pending", ...base, fingerprint };
+  if (approval.status === "rejected" || approval.decision === "rejected") return { ok: false, code: "approval_rejected", ...base, fingerprint };
+  const verdict = approvalValid({ ...approval, decision: approval.decision || approval.status }, { fingerprint, now, maxAgeMs });
+  return { ok: verdict.ok, code: verdict.code === "approval_valid" ? "approval_valid" : verdict.code, ...base, fingerprint, grantedAt: approval.grantedAt || null, decidedBy: approval.decidedBy || null };
+}

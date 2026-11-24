@@ -47,7 +47,7 @@ test("the document describes only endpoints the real module registers", () => {
   // ChatGPT-facing document, so the advertised surface stays at ten operations.
   // 105 routes plus the three mission-pipeline routes. They are mounted but documented in
   // docs/openapi-missions.json, because this document may only describe /ax/command paths.
-  assert.equal(routeKeys.length, 108);
+  assert.equal(routeKeys.length, 109);
   const parity = compareSpecToRoutes(spec(), routeKeys);
   assert.equal(parity.ok, true, parity.errors.join("\n"));
   assert.equal(parity.documented.length, 10);

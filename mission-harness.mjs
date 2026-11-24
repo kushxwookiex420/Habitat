@@ -29,6 +29,8 @@ export async function buildMissionEnvironment({
   maxTaskAttempts = 1,
   maxRepairs = 1,
   verifierOverride = null,
+  executorOverrides = {},
+  ownerVerifier = null,
   dbPath = ":memory:",
   env = {}
 } = {}) {
@@ -65,7 +67,8 @@ export async function buildMissionEnvironment({
   const kit = createWorkerExecutors({ rootDir, artifactsDir, health, log, allowExternalArtifacts: true });
   const executors = {
     ...createMissionExecutors({ kit }),
-    ...(verifierOverride ? { "verifier.recompute": verifierOverride } : {})
+    ...(verifierOverride ? { "verifier.recompute": verifierOverride } : {}),
+    ...executorOverrides
   };
 
   const missions = createMissionEngine({
@@ -74,6 +77,7 @@ export async function buildMissionEnvironment({
     executors,
     maxAttempts: maxTaskAttempts,
     maxTasksPerRun: 5,
+    ownerVerifier,
     now,
     log
   });

@@ -303,3 +303,76 @@ test("HTTP: a dishonest verifier cannot produce a completed mission", async () =
     await rm(base, { recursive: true, force: true });
   }
 });
+
+test("HTTP: an approval authorises one action, and the API refuses a changed one", async () => {
+  const base = await workspace();
+  // The owner attestation is a test double here; the production verifier still requires a real signature.
+  const env = await buildMissionEnvironment({
+    rootDir: ROOT,
+    artifactsDir: path.join(base, "artifacts"),
+    dbPath: path.join(base, "db.sqlite"),
+    ownerVerifier: { verify: () => ({ ok: true, code: "test_attestation" }) }
+  });
+  const provider = {
+    submit: (spec) => env.pipeline.submit(spec),
+    run: (id, options) => env.pipeline.run(id, options),
+    approve: (spec) => env.missions.approve(spec),
+    get: async (id) => { const loaded = await env.missions.get(id); return loaded ? loaded.record : null; },
+    events: (id) => env.missions.events(id)
+  };
+  const server = await startServer({ provider });
+  const DEPLOY = {
+    id: "d1",
+    title: "Deploy to production",
+    requires: ["engineering"],
+    criteria: [0],
+    approvalRequired: true,
+    action: "deploy release 4.2.0",
+    target: "staging",
+    params: { region: "iad", replicas: 2 }
+  };
+  try {
+    // 1. A signed owner decision lets the bound action run, and the mission verifies to completion.
+    const created = await call(server.base, "POST", "/ax/missions", { body: {
+      objective: "Deploy release 4.2.0 to staging", acceptanceCriteria: ["Release prepared"], tasks: [DEPLOY], idempotencyKey: "approve-http-1"
+    } });
+    assert.equal(created.status, 201, JSON.stringify(created.json));
+    const missionId = created.json.mission.missionId;
+    const parked = await call(server.base, "POST", "/ax/missions/" + missionId + "/run", { body: {} });
+    assert.equal(parked.json.run.status, "approval_required");
+    const pending = await call(server.base, "GET", "/ax/missions/" + missionId);
+    assert.equal(pending.json.mission.tasks[0].status, "pending", "the action did not run before approval");
+
+    const decided = await call(server.base, "POST", "/ax/missions/" + missionId + "/approve", { body: { decision: "approve", taskId: "d1", reason: "release window agreed" } });
+    assert.equal(decided.status, 200, JSON.stringify(decided.json));
+    assert.equal(decided.json.mission.status, "running", "a signature releases the gate; it does not complete work");
+    const ran = await call(server.base, "POST", "/ax/missions/" + missionId + "/run", { body: { maxRounds: 2 } });
+    assert.equal(ran.json.run.status, "completed", JSON.stringify(ran.json.run));
+    const done = await call(server.base, "GET", "/ax/missions/" + missionId);
+    assert.equal(done.json.mission.tasks[0].status, "completed");
+    assert.ok(done.json.events.some((event) => event.type === "task.approval_cleared" && event.taskId === "d1"),
+      "the execution gate cleared the bound approval before the executor ran");
+
+    // 2. The same approval cannot authorise changed parameters.
+    const second = await call(server.base, "POST", "/ax/missions", { body: {
+      objective: "Deploy release 4.2.1 to staging", acceptanceCriteria: ["Release prepared"], tasks: [DEPLOY], idempotencyKey: "approve-http-2"
+    } });
+    const secondId = second.json.mission.missionId;
+    await call(server.base, "POST", "/ax/missions/" + secondId + "/run", { body: {} });
+    await call(server.base, "POST", "/ax/missions/" + secondId + "/approve", { body: { decision: "approve", taskId: "d1" } });
+    const loaded = await env.missionStore.get(secondId);
+    const record = loaded.record;
+    record.tasks.find((task) => task.id === "d1").params = { region: "iad", replicas: 9 };
+    assert.equal((await env.missionStore.save(record, loaded.version)).ok, true);
+    await call(server.base, "POST", "/ax/missions/" + secondId + "/run", { body: { maxRounds: 1 } });
+    const refused = await call(server.base, "GET", "/ax/missions/" + secondId);
+    assert.notEqual(refused.json.mission.status, "completed", "changed parameters do not execute");
+    assert.equal(refused.json.mission.tasks[0].status, "blocked");
+    assert.equal(refused.json.mission.tasks[0].error, "approval_action_changed");
+    assert.ok(refused.json.events.some((event) => event.type === "task.approval_refused" && event.code === "approval_action_changed"));
+  } finally {
+    await server.close();
+    await env.close();
+    await rm(base, { recursive: true, force: true });
+  }
+});

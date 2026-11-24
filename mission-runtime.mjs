@@ -125,6 +125,7 @@ export async function createMissionService({
   return Object.freeze({
     submit: (spec) => pipeline.submit(spec),
     run: (missionId, options) => pipeline.run(missionId, options),
+    approve: (spec) => missions.approve(spec),
     get: async (missionId) => {
       const loaded = await store.get(missionId);
       if (!loaded) return null;

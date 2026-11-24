@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { criterionStatements } from "./ax-mission-plan.mjs";
+import { approvalBinding, executionGate } from "./ax-mission-policy.mjs";
 
 /**
  * Mission Execution Engine.
@@ -212,7 +213,43 @@ export function createMissionEngine({
 
     const id = missionIdFor({ project, objective, idempotencyKey });
     const at = now();
-    const approvals = detectApprovals({ text: [objective, ...criteria, ...list(spec.constraints)].join(" ") });
+    const detected = detectApprovals({ text: [objective, ...criteria, ...list(spec.constraints)].join(" ") });
+    // One approval per approval-required task, bound to the exact action it authorises. The fingerprint is
+    // stored with the record, so an approval cannot be replayed for another mission, task or parameter set.
+    // A signal detected in the objective is a mission-scope approval: it gates the mission and is bound to
+    // the mission id, but it never authorises a particular task. Only a task-bound approval passes the gate.
+    const approvals = detected.map((item) => (item.taskId
+      ? item
+      : {
+          ...item,
+          missionId: id,
+          taskId: null,
+          scope: "mission",
+          fingerprint: approvalBinding({ missionId: id, taskId: "mission", action: "mission:" + objective, target: null, params: null }),
+          status: "pending",
+          decision: null
+        }));
+    for (const task of plan.tasks) {
+      if (task.approvalRequired !== true) continue;
+      if (approvals.some((item) => item.taskId === task.id)) continue;
+      const action = clean(task.title, 200) || "task:" + task.id;
+      approvals.push({
+        id: "apr:" + id + ":" + task.id,
+        missionId: id,
+        taskId: task.id,
+        action,
+        target: task.target === undefined ? null : task.target,
+        params: task.params === undefined ? null : task.params,
+        fingerprint: approvalBinding({ missionId: id, taskId: task.id, action, target: task.target ?? null, params: task.params ?? null }),
+        status: "pending",
+        decision: null,
+        reason: "consequential_action",
+        requestedAt: at,
+        expiresAt: new Date(Date.parse(at) + 30 * 60_000).toISOString(),
+        decidedAt: null,
+        decidedBy: null
+      });
+    }
     const record = {
       id,
       project,
@@ -282,6 +319,27 @@ export function createMissionEngine({
   }
 
   async function runTask(mission, task) {
+    // Mandatory security gate: the persisted task is re-validated immediately before any executor can run.
+    // A refusal is durable evidence and an audit event; nothing below this point executes.
+    const gate = executionGate({ mission, task, now: now() });
+    if (!gate.ok) {
+      task.status = "blocked";
+      task.error = gate.code;
+      task.evidence = [...(task.evidence || []), "approval:" + gate.code + "@" + (gate.fingerprint || "unbound")];
+      await emit(mission.id, "task.approval_refused", {
+        taskId: task.id,
+        code: gate.code,
+        action: gate.action,
+        target: gate.target,
+        fingerprint: gate.fingerprint,
+        class: gate.class
+      });
+      return;
+    }
+    if (task.approvalRequired === true) {
+      task.approval = { code: gate.code, fingerprint: gate.fingerprint, decidedBy: gate.decidedBy, grantedAt: gate.grantedAt };
+      await emit(mission.id, "task.approval_cleared", { taskId: task.id, fingerprint: gate.fingerprint });
+    }
     let assignmentId = task.assignmentId;
     let agent = task.agentId ? workforce.agent(task.agentId) : null;
     if (!assignmentId) {
@@ -483,7 +541,7 @@ export function createMissionEngine({
     return { ok: true, recovered: results.length, results };
   }
 
-  async function approve({ missionId, decision = "approve", by = "owner", attestation = null, reason = null } = {}) {
+  async function approve({ missionId, decision = "approve", by = "owner", attestation = null, reason = null, taskId = null, approvalId = null } = {}) {
     if (!["approve", "reject"].includes(decision)) return { ok: false, code: "decision_invalid" };
     const loaded = await store.get(missionId);
     if (!loaded) return { ok: false, code: "mission_not_found" };
@@ -501,12 +559,37 @@ export function createMissionEngine({
     }, attestation);
     if (!verified.ok) return { ok: false, ...verified };
 
-    for (const approval of mission.approvals) {
+    // A decision on this mission also answers the mission-scope signal: the owner reviewed this mission.
+    // Mission-scope approvals never authorise a task, so this cannot widen an approval's scope.
+    const selected = mission.approvals.filter((item) => {
+      const missionScope = !item.taskId;
+      if (approvalId) return item.id === approvalId || (missionScope && item.status === "pending");
+      if (taskId) return item.taskId === taskId || (missionScope && item.status === "pending");
+      return item.status === "pending";
+    });
+    if (selected.length === 0) return { ok: false, code: "approval_not_found" };
+    for (const approval of selected) {
+      // Bind the decision to the task as persisted right now, so an approval for an old plan cannot authorise
+      // the changed one. Missing bindings are recomputed rather than trusted.
+      const task = mission.tasks.find((item) => item.id === approval.taskId) || null;
+      if (task) {
+        const action = clean(task.action || task.title, 200);
+        approval.action = action;
+        approval.target = task.target === undefined ? null : task.target;
+        approval.params = task.params === undefined ? null : task.params;
+        approval.fingerprint = approvalBinding({ missionId: mission.id, taskId: task.id, action, target: approval.target, params: approval.params });
+      }
       approval.status = decision === "approve" ? "approved" : "rejected";
+      approval.decision = decision === "approve" ? "approved" : "rejected";
       approval.decidedAt = now();
       approval.decidedBy = clean(by, 64) || "owner";
+      if (decision === "approve") {
+        approval.grantedAt = now();
+        approval.expiresAt = new Date(Date.parse(now()) + 30 * 60_000).toISOString();
+      }
     }
-    mission.status = decision === "approve" ? "completed" : "rejected";
+    // An approved mission becomes runnable; it is never marked completed by a signature alone.
+    mission.status = decision === "approve" ? "running" : "rejected";
     const saved = await persist(mission);
     if (!saved.ok) return { ok: false, code: saved.code };
     await emit(mission.id, decision === "approve" ? "mission.approved" : "mission.rejected", { by: clean(by, 64) || "owner" });

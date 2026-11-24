@@ -237,9 +237,12 @@ test("an approval-required mission stops before completion and only a signed own
   });
   const approved = await engine2.approve({ missionId: intake.missionId, decision: "approve", attestation: signed.attestation, reason: "Reviewed the evidence." });
   assert.equal(approved.ok, true);
-  assert.equal(approved.status, "completed");
+  // An approval releases the gate; it does not complete work that never ran.
+  assert.equal(approved.status, "running");
   const stored = (await missionStore.get(intake.missionId)).record;
   assert.equal(stored.approvals[0].status, "approved");
+  assert.equal(stored.status, "running", "an approval releases the gate; it does not complete the mission");
+  assert.equal(stored.tasks.some((task) => task.status === "running"), false, "nothing was started by signing");
   db.close();
 });
 

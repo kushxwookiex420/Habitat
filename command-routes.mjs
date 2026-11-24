@@ -501,6 +501,24 @@ export function registerUniversalCommandRoutes(app, {
     return res.json({ ok: true, mission: missionView(mission), events: events.slice(-50) });
   }));
 
+  route.post("/ax/missions/:missionId/approve", requireAx, serviceGuard(async (req, res) => {
+    const missions = resolveService(missionProvider);
+    if (!missions || typeof missions.approve !== "function") return missionUnavailable(res);
+    const missionId = String(req.params?.missionId || "");
+    const existing = await missions.get(missionId);
+    if (!existing) return res.status(404).json({ ok: false, code: "mission_not_found" });
+    const decision = req.body?.decision === "reject" ? "reject" : "approve";
+    const outcome = await missions.approve({
+      missionId,
+      decision,
+      taskId: req.body?.taskId ? String(req.body.taskId) : null,
+      approvalId: req.body?.approvalId ? String(req.body.approvalId) : null,
+      reason: req.body?.reason ? String(req.body.reason).slice(0, 300) : null
+    });
+    if (!outcome.ok) return res.status(409).json({ ok: false, code: outcome.code });
+    res.json({ ok: true, decision, mission: outcome.mission });
+  }));
+
   route.post("/ax/missions/:missionId/run", requireAx, serviceGuard(async (req, res) => {
     const missions = resolveService(missionProvider);
     if (!missions || typeof missions.run !== "function") return missionUnavailable(res);

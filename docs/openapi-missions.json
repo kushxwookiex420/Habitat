@@ -1,12 +1,14 @@
 {
   "openapi": "3.1.0",
   "info": {
-    "title": "Habitat — mission pipeline",
+    "title": "Habitat \u2014 mission pipeline",
     "version": "1.0.0",
     "description": "Mission pipeline operator surface. Requires the Ax credential (HABITAT_AX_COMMAND_TOKEN or HABITAT_AX_BRIDGE_TOKEN). Separate from /ax/command/openapi.json, which is limited to /ax/command paths."
   },
   "servers": [
-    { "url": "https://habitat-staging-e3ie.onrender.com" }
+    {
+      "url": "https://habitat-staging-e3ie.onrender.com"
+    }
   ],
   "paths": {
     "/ax/missions": {
@@ -21,42 +23,109 @@
             "application/json": {
               "schema": {
                 "type": "object",
-                "required": ["objective", "acceptanceCriteria"],
+                "required": [
+                  "objective",
+                  "acceptanceCriteria"
+                ],
                 "properties": {
-                  "objective": { "type": "string", "maxLength": 2000 },
-                  "acceptanceCriteria": { "type": "array", "minItems": 1, "items": { "type": "string" } },
+                  "objective": {
+                    "type": "string",
+                    "maxLength": 2000
+                  },
+                  "acceptanceCriteria": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                      "type": "string"
+                    }
+                  },
                   "tasks": {
                     "type": "array",
                     "items": {
                       "type": "object",
-                      "required": ["id", "requires"],
+                      "required": [
+                        "id",
+                        "requires"
+                      ],
                       "properties": {
-                        "id": { "type": "string" },
-                        "title": { "type": "string" },
-                        "requires": { "type": "array", "items": { "type": "string" } },
-                        "dependsOn": { "type": "array", "items": { "type": "string" } },
-                        "criteria": { "type": "array", "items": { "type": "integer" } },
-                        "approvalRequired": { "type": "boolean" }
+                        "id": {
+                          "type": "string"
+                        },
+                        "title": {
+                          "type": "string"
+                        },
+                        "requires": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "dependsOn": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "criteria": {
+                          "type": "array",
+                          "items": {
+                            "type": "integer"
+                          }
+                        },
+                        "approvalRequired": {
+                          "type": "boolean"
+                        }
                       }
                     }
                   },
-                  "project": { "type": "string" },
-                  "constraints": { "type": "array", "items": { "type": "string" } },
-                  "priority": { "type": "integer", "minimum": 0, "maximum": 100 },
-                  "signals": { "type": ["object", "null"] },
-                  "idempotencyKey": { "type": "string", "maxLength": 160 }
+                  "project": {
+                    "type": "string"
+                  },
+                  "constraints": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "priority": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 100
+                  },
+                  "signals": {
+                    "type": [
+                      "object",
+                      "null"
+                    ]
+                  },
+                  "idempotencyKey": {
+                    "type": "string",
+                    "maxLength": 160
+                  }
                 }
               }
             }
           }
         },
         "responses": {
-          "201": { "description": "Mission created" },
-          "200": { "description": "Replayed: the idempotency key already named this mission" },
-          "400": { "description": "Objective or acceptance criteria missing, or the plan is invalid" },
-          "401": { "description": "Missing or invalid Ax credential" },
-          "409": { "description": "A consequential task was not marked for owner approval" },
-          "503": { "description": "The mission pipeline is not mounted (HABITAT_WORKFORCE_ENABLED or D1 binding missing)" }
+          "201": {
+            "description": "Mission created"
+          },
+          "200": {
+            "description": "Replayed: the idempotency key already named this mission"
+          },
+          "400": {
+            "description": "Objective or acceptance criteria missing, or the plan is invalid"
+          },
+          "401": {
+            "description": "Missing or invalid Ax credential"
+          },
+          "409": {
+            "description": "A consequential task was not marked for owner approval"
+          },
+          "503": {
+            "description": "The mission pipeline is not mounted (HABITAT_WORKFORCE_ENABLED or D1 binding missing)"
+          }
         }
       }
     },
@@ -67,13 +136,28 @@
         "description": "Returns the durable mission with approvals, milestones and per-task worker, verifier, evidence and test counts. Completed means every task was independently verified.",
         "x-openai-isConsequential": false,
         "parameters": [
-          { "name": "missionId", "in": "path", "required": true, "schema": { "type": "string" } }
+          {
+            "name": "missionId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
         ],
         "responses": {
-          "200": { "description": "Mission and its recent events" },
-          "401": { "description": "Missing or invalid Ax credential" },
-          "404": { "description": "No mission with that id" },
-          "503": { "description": "The mission pipeline is not mounted" }
+          "200": {
+            "description": "Mission and its recent events"
+          },
+          "401": {
+            "description": "Missing or invalid Ax credential"
+          },
+          "404": {
+            "description": "No mission with that id"
+          },
+          "503": {
+            "description": "The mission pipeline is not mounted"
+          }
         }
       }
     },
@@ -84,7 +168,14 @@
         "description": "Executes ready tasks, repairs failures within budget and escalates what it cannot verify. Rounds and repairs are bounded; completion always requires independent verification.",
         "x-openai-isConsequential": true,
         "parameters": [
-          { "name": "missionId", "in": "path", "required": true, "schema": { "type": "string" } }
+          {
+            "name": "missionId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
         ],
         "requestBody": {
           "required": false,
@@ -92,16 +183,100 @@
             "application/json": {
               "schema": {
                 "type": "object",
-                "properties": { "maxRounds": { "type": "integer", "minimum": 1, "maximum": 5 } }
+                "properties": {
+                  "maxRounds": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 5
+                  }
+                }
               }
             }
           }
         },
         "responses": {
-          "200": { "description": "Run result and the current mission" },
-          "401": { "description": "Missing or invalid Ax credential" },
-          "404": { "description": "No mission with that id" },
-          "503": { "description": "The mission pipeline is not mounted" }
+          "200": {
+            "description": "Run result and the current mission"
+          },
+          "401": {
+            "description": "Missing or invalid Ax credential"
+          },
+          "404": {
+            "description": "No mission with that id"
+          },
+          "503": {
+            "description": "The mission pipeline is not mounted"
+          }
+        }
+      }
+    },
+    "/ax/missions/{missionId}/approve": {
+      "post": {
+        "operationId": "decideMissionApproval",
+        "summary": "Approve or reject a bound mission action",
+        "description": "Records the owner decision against the approval bound to one consequential task. The approval expires and is invalidated if the task action, target or parameters change.",
+        "x-openai-isConsequential": true,
+        "parameters": [
+          {
+            "name": "missionId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "decision"
+                ],
+                "properties": {
+                  "decision": {
+                    "type": "string",
+                    "enum": [
+                      "approve",
+                      "reject"
+                    ]
+                  },
+                  "taskId": {
+                    "type": "string"
+                  },
+                  "approvalId": {
+                    "type": "string"
+                  },
+                  "reason": {
+                    "type": "string",
+                    "maxLength": 300
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Decision recorded"
+          },
+          "400": {
+            "description": "Decision invalid"
+          },
+          "401": {
+            "description": "Missing or invalid Ax credential"
+          },
+          "404": {
+            "description": "No mission or no matching approval"
+          },
+          "409": {
+            "description": "The mission is not awaiting an approval"
+          },
+          "503": {
+            "description": "The mission pipeline is not mounted"
+          }
         }
       }
     }

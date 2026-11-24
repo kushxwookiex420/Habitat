@@ -340,7 +340,8 @@ test("approval requires a signed owner attestation and cannot be self-issued by 
     body: JSON.stringify({ decision: "approve", attestation: signed.attestation, reason: "Checked the evidence." })
   });
   assert.equal(approved.status, 200);
-  assert.equal((await approved.json()).status, "completed");
+  // A signature releases the gate; completion still requires executed, independently verified tasks.
+  assert.equal((await approved.json()).status, "running");
   h.server.close();
   h.db.close();
 });

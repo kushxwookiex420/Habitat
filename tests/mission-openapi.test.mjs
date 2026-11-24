@@ -23,6 +23,7 @@ test("the mission OpenAPI document documents exactly the mission routes that are
   assert.deepEqual(mounted, [
     "get /ax/missions/{missionId}",
     "post /ax/missions",
+    "post /ax/missions/{missionId}/approve",
     "post /ax/missions/{missionId}/run"
   ], "the documented surface is the mounted surface");
 

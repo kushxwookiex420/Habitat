@@ -254,8 +254,7 @@ export function createMissionPipeline({
       // Owner control and budget are checked before any work starts, never after it has already run.
       const current = await missions.get(missionId);
       const status = (current?.record || current)?.status || null;
-      if (status === "paused") { stopReason = "paused"; break; }
-      if (status === "cancelled") { stopReason = "cancelled"; break; }
+      if (["paused", "cancelled", "rejected", "completed"].includes(status)) { stopReason = status; break; }
       const budget = budgetState({ startedAt, maxRounds: Math.max(1, maxRounds), roundsUsed: round - 1, maxRepairs, repairsUsed: repairs, maxDurationMs });
       if (budget.exhausted) { stopReason = budget.reason; break; }
       last = await missions.execute(missionId);
