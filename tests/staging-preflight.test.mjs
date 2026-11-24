@@ -9,6 +9,9 @@ const okFetch = async () => ({
 });
 
 const withEnv = (extra = {}) => ({ NEXUS_RUNTIME_ENABLED: "", ...extra });
+const STAGING = "baaa7965-c723-4d42-831c-a9530762f726";
+const PRODUCTION = "3a906029-bc64-4e2a-b648-163e34a2d502";
+const ACCOUNT = "e43f2644d05e76ecbcf537d67480d607";
 
 test("with no credentials the repository checks pass and only the staging checks block", async () => {
   const report = await runStagingPreflight({ env: withEnv(), fetchImpl: okFetch });
@@ -34,10 +37,10 @@ test("with no credentials the repository checks pass and only the staging checks
 test("a staging id equal to the production id is refused", async () => {
   const report = await runStagingPreflight({
     env: withEnv({
-      CLOUDFLARE_ACCOUNT_ID: "account",
+      CLOUDFLARE_ACCOUNT_ID: ACCOUNT,
       HABITAT_D1_API_TOKEN: "token-value",
-      STAGING_D1_DATABASE_ID: "same-id",
-      PRODUCTION_D1_DATABASE_ID: "same-id",
+      STAGING_D1_DATABASE_ID: PRODUCTION,
+      PRODUCTION_D1_DATABASE_ID: PRODUCTION,
       STAGING_D1_CONFIRM: "provision"
     }),
     fetchImpl: okFetch
@@ -52,10 +55,10 @@ test("a staging id equal to the production id is refused", async () => {
 test("complete, isolated configuration with an active token passes", async () => {
   const report = await runStagingPreflight({
     env: withEnv({
-      CLOUDFLARE_ACCOUNT_ID: "account",
+      CLOUDFLARE_ACCOUNT_ID: ACCOUNT,
       HABITAT_D1_API_TOKEN: "token-value",
-      STAGING_D1_DATABASE_ID: "staging-id",
-      PRODUCTION_D1_DATABASE_ID: "production-id",
+      STAGING_D1_DATABASE_ID: STAGING,
+      PRODUCTION_D1_DATABASE_ID: PRODUCTION,
       STAGING_D1_CONFIRM: "provision"
     }),
     fetchImpl: okFetch
@@ -68,10 +71,10 @@ test("complete, isolated configuration with an active token passes", async () =>
 test("a creating step is refused without the explicit confirmation flag", async () => {
   const report = await runStagingPreflight({
     env: withEnv({
-      CLOUDFLARE_ACCOUNT_ID: "account",
+      CLOUDFLARE_ACCOUNT_ID: ACCOUNT,
       HABITAT_D1_API_TOKEN: "token-value",
-      STAGING_D1_DATABASE_ID: "staging-id",
-      PRODUCTION_D1_DATABASE_ID: "production-id"
+      STAGING_D1_DATABASE_ID: STAGING,
+      PRODUCTION_D1_DATABASE_ID: PRODUCTION
     }),
     fetchImpl: okFetch
   });
@@ -83,10 +86,10 @@ test("an inactive token blocks and the credential value never reaches the report
   const secret = "super-secret-token-value-123456";
   const report = await runStagingPreflight({
     env: withEnv({
-      CLOUDFLARE_ACCOUNT_ID: "account",
+      CLOUDFLARE_ACCOUNT_ID: ACCOUNT,
       HABITAT_D1_API_TOKEN: secret,
-      STAGING_D1_DATABASE_ID: "staging-id",
-      PRODUCTION_D1_DATABASE_ID: "production-id",
+      STAGING_D1_DATABASE_ID: STAGING,
+      PRODUCTION_D1_DATABASE_ID: PRODUCTION,
       STAGING_D1_CONFIRM: "provision"
     }),
     fetchImpl: async () => ({ ok: false, status: 401, json: async () => ({ success: false, errors: [{ message: "Invalid API Token" }] }) })
@@ -105,10 +108,10 @@ test("enabling the NEXUS runtime blocks staging preflight", async () => {
 test("a token verification network failure is reported, not thrown", async () => {
   const report = await runStagingPreflight({
     env: withEnv({
-      CLOUDFLARE_ACCOUNT_ID: "account",
+      CLOUDFLARE_ACCOUNT_ID: ACCOUNT,
       HABITAT_D1_API_TOKEN: "token-value",
-      STAGING_D1_DATABASE_ID: "staging-id",
-      PRODUCTION_D1_DATABASE_ID: "production-id",
+      STAGING_D1_DATABASE_ID: STAGING,
+      PRODUCTION_D1_DATABASE_ID: PRODUCTION,
       STAGING_D1_CONFIRM: "provision"
     }),
     fetchImpl: async () => {

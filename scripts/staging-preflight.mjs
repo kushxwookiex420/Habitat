@@ -19,12 +19,9 @@ import { readFileSync, existsSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
-const REQUIRED_STAGING_NAMES = Object.freeze([
-  "CLOUDFLARE_ACCOUNT_ID",
-  "HABITAT_D1_API_TOKEN",
-  "STAGING_D1_DATABASE_ID",
-  "PRODUCTION_D1_DATABASE_ID"
-]);
+// D1 database ids are UUIDs. A guard against "staging is production" is worthless if one id is a
+// truncated string that can never match, so a malformed id blocks instead of silently passing.
+const D1_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const MIGRATIONS_FOR_P1 = Object.freeze([
   "0008_ax_capability_registry.sql",
@@ -138,16 +135,37 @@ export async function runStagingPreflight({ env = process.env, rootDir = process
     { blocking: true, code: nexus === "true" || nexus === "1" ? "nexus_runtime_enabled" : null }
   ));
 
-  const missingNames = REQUIRED_STAGING_NAMES.filter((name) => !value(name));
+  // The repository's D1 code reads HABITAT_D1_API_TOKEN; Wrangler and the REST API read
+  // CLOUDFLARE_API_TOKEN. Either name is accepted so the owner does not have to duplicate a secret.
+  const token = value("HABITAT_D1_API_TOKEN") || value("CLOUDFLARE_API_TOKEN");
+  const tokenSource = value("HABITAT_D1_API_TOKEN") ? "HABITAT_D1_API_TOKEN" : (value("CLOUDFLARE_API_TOKEN") ? "CLOUDFLARE_API_TOKEN" : null);
+  const missingNames = [];
+  if (!value("CLOUDFLARE_ACCOUNT_ID")) missingNames.push("CLOUDFLARE_ACCOUNT_ID");
+  if (!token) missingNames.push("HABITAT_D1_API_TOKEN (or CLOUDFLARE_API_TOKEN)");
+  if (!value("STAGING_D1_DATABASE_ID")) missingNames.push("STAGING_D1_DATABASE_ID");
+  if (!value("PRODUCTION_D1_DATABASE_ID")) missingNames.push("PRODUCTION_D1_DATABASE_ID");
   checks.push(check(
     "staging_credentials_present",
     missingNames.length === 0,
-    missingNames.length ? "missing: " + missingNames.join(", ") : "all staging variables present (values not printed)",
+    missingNames.length ? "missing: " + missingNames.join(", ") : "all staging variables present (values not printed; token from " + tokenSource + ")",
     { blocking: true, code: missingNames.length ? "credentials_missing" : null }
   ));
 
   const stagingId = value("STAGING_D1_DATABASE_ID");
   const productionId = value("PRODUCTION_D1_DATABASE_ID");
+  const malformed = [
+    ["STAGING_D1_DATABASE_ID", stagingId],
+    ["PRODUCTION_D1_DATABASE_ID", productionId]
+  ].filter(([, id]) => id && !D1_ID_PATTERN.test(id)).map(([name]) => name);
+  checks.push(check(
+    "database_id_format",
+    malformed.length === 0,
+    malformed.length
+      ? "not a D1 UUID: " + malformed.join(", ") + " — re-copy from the dashboard; the isolation guard cannot work with a malformed id"
+      : (stagingId && productionId ? "both ids are D1 UUIDs" : "cannot validate until both ids are present"),
+    { blocking: true, code: malformed.length ? "database_id_malformed" : null }
+  ));
+
   const isolated = Boolean(stagingId && productionId) && stagingId !== productionId;
   checks.push(check(
     "database_isolation",
@@ -168,12 +186,13 @@ export async function runStagingPreflight({ env = process.env, rootDir = process
 
   // --- read-only token verification (only when a token exists) ------------------------------
   let tokenVerification = { attempted: false, ok: false, status: null };
-  if (value("HABITAT_D1_API_TOKEN")) {
+  if (token) {
     tokenVerification.attempted = true;
+    tokenVerification.source = tokenSource;
     try {
       const response = await fetchImpl("https://api.cloudflare.com/client/v4/user/tokens/verify", {
         method: "GET",
-        headers: { authorization: "Bearer " + value("HABITAT_D1_API_TOKEN") }
+        headers: { authorization: "Bearer " + token }
       });
       tokenVerification.status = response.status;
       const body = await response.json().catch(() => null);

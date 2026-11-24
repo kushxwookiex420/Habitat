@@ -23,15 +23,27 @@ production, and step 0 refuses to continue if it would.
 echo "guard ok"
 ```
 
-Create the staging database once, in the account that owns Habitat:
+The non-production database **already exists** in the account that owns Habitat: `habitat-nonprod`.
+Reuse it. Do not create a second database and do not create a second Cloudflare account.
 
-```sh
-npx wrangler d1 create habitat-staging-p1     # copy the printed database_id into STAGING_D1_DATABASE_ID
-```
+- `CLOUDFLARE_ACCOUNT_ID` is the 32-character account id (the repository variable of that name).
+- `STAGING_D1_DATABASE_ID` is the `habitat-nonprod` UUID.
+- `PRODUCTION_D1_DATABASE_ID` is the production database UUID (repository variable
+  `HABITAT_D1_DATABASE_ID`).
 
-Keep `CLOUDFLARE_ACCOUNT_ID`, `HABITAT_D1_DATABASE_ID` and `HABITAT_D1_API_TOKEN` in the **staging
-environment only** (see `docs/D1_SETUP_AND_ROLLOUT.md`). The token must be scoped to D1 and to this
-database; do not reuse the Workers AI token.
+Do not confuse the two shapes: an account id is 32 hex characters with no dashes, a D1 database id
+is a UUID with dashes. `npm run staging:preflight` refuses a database id that is not a UUID, because
+a guard against "staging is production" is worthless if one side can never match.
+
+Credentials never belong in a file or a chat message. Two supported paths, in order of preference:
+
+1. **Repository secret + workflow.** `HABITAT_D1_API_TOKEN` already exists as a repository secret,
+   and `CLOUDFLARE_ACCOUNT_ID` / `HABITAT_D1_DATABASE_ID` as repository variables. Dispatch
+   `.github/workflows/d1-staging-verify.yml` with the `habitat-nonprod` id, `mode=verify` and
+   `confirm=nonprod`; the same workflow with `mode=migrate` applies the migrations. The secret is
+   injected by GitHub: it is never printed and never reaches an operator shell.
+2. **Local staging shell.** Export `CLOUDFLARE_ACCOUNT_ID`, `HABITAT_D1_API_TOKEN`,
+   `STAGING_D1_DATABASE_ID` and `PRODUCTION_D1_DATABASE_ID` for that shell only.
 
 Verify the flags of every `wrangler` command below with `npx wrangler d1 --help` before running it:
 the CLI changes, and this document is not a substitute for its `--help`.
@@ -39,14 +51,14 @@ the CLI changes, and this document is not a substitute for its `--help`.
 ## 1. Baseline before any migration
 
 ```sh
-npx wrangler d1 export habitat-staging-p1 --remote --output /tmp/staging-before-0008.sql
+npx wrangler d1 export habitat-nonprod --remote --output /tmp/staging-before-0008.sql
 date -u +%s        # record this timestamp for a Time Travel restore point
 ```
 
 Record in the evidence table: database name, export byte size, timestamp, and the object list:
 
 ```sh
-npx wrangler d1 execute habitat-staging-p1 --remote \
+npx wrangler d1 execute habitat-nonprod --remote \
   --command "SELECT type, name FROM sqlite_master WHERE name LIKE 'habitat_ax_%' ORDER BY name"
 ```
 
@@ -69,18 +81,18 @@ per-file loop used by `docs/HABITAT_ACTIVATION_RUNBOOK.md`:
 
 ```sh
 for f in migrations/0008_ax_capability_registry.sql migrations/0009_ax_fulfillment_treasury.sql; do
-  npx wrangler d1 execute habitat-staging-p1 --remote --file "$f"
+  npx wrangler d1 execute habitat-nonprod --remote --file "$f"
 done
 ```
 
 Once a staging `wrangler` config names the database, `npx wrangler d1 migrations apply
-habitat-staging-p1 --remote` is equivalent and records applied migrations in
+habitat-nonprod --remote` is equivalent and records applied migrations in
 `d1_migrations`. Record which path was used; do not mix them in one database.
 
 ## 4. Verify the resulting schema
 
 ```sh
-npx wrangler d1 execute habitat-staging-p1 --remote \
+npx wrangler d1 execute habitat-nonprod --remote \
   --command "SELECT type, name FROM sqlite_master WHERE name LIKE 'habitat_ax_%' ORDER BY name"
 ```
 
@@ -88,7 +100,7 @@ Expected: the 8 tables and 12 indexes that 0008 and 0009 declare. Compare agains
 asserted by `npm run migrations:check` rather than against this count, and record both lists.
 
 ```sh
-npx wrangler d1 execute habitat-staging-p1 --remote \
+npx wrangler d1 execute habitat-nonprod --remote \
   --command "SELECT COUNT(*) AS n FROM habitat_ax_capabilities"
 ```
 
@@ -114,8 +126,8 @@ INSERT INTO habitat_ax_payouts (id, record_json, state, created_at, updated_at)
 ```
 
 ```sh
-npx wrangler d1 execute habitat-staging-p1 --remote --file /tmp/probe.sql || echo "second insert failed, as designed"
-npx wrangler d1 execute habitat-staging-p1 --remote \
+npx wrangler d1 execute habitat-nonprod --remote --file /tmp/probe.sql || echo "second insert failed, as designed"
+npx wrangler d1 execute habitat-nonprod --remote \
   --command "SELECT COUNT(*) AS n FROM habitat_ax_payouts WHERE id = 'probe_atomic_marker'"
 ```
 
@@ -213,8 +225,8 @@ cat /tmp/rollback-p1.sql      # 8 DROP TABLE IF EXISTS statements, no production
 Apply it only to the staging database:
 
 ```sh
-npx wrangler d1 execute habitat-staging-p1 --remote --file /tmp/rollback-p1.sql
-npx wrangler d1 execute habitat-staging-p1 --remote \
+npx wrangler d1 execute habitat-nonprod --remote --file /tmp/rollback-p1.sql
+npx wrangler d1 execute habitat-nonprod --remote \
   --command "SELECT type, name FROM sqlite_master WHERE name LIKE 'habitat_ax_%' ORDER BY name"
 ```
 
@@ -234,7 +246,7 @@ Source: <https://developers.cloudflare.com/d1/reference/time-travel/>
 
 ```sh
 # Staging only. This overwrites the staging database in place.
-npx wrangler d1 time-travel restore habitat-staging-p1 --timestamp=<unix seconds from step 1>
+npx wrangler d1 time-travel restore habitat-nonprod --timestamp=<unix seconds from step 1>
 ```
 
 Use it as the recovery path when a probe leaves the staging database in a state an export cannot fix.
@@ -242,12 +254,9 @@ Never run it against production as part of this procedure.
 
 ## 10. Cleanup
 
-Leave the staging database in place for repeat runs, or delete it only with explicit owner
-authorisation:
-
-```sh
-npx wrangler d1 delete habitat-staging-p1     # staging only; never the production database
-```
+`habitat-nonprod` is permanent non-production infrastructure: leave it in place for repeat runs. Do
+not delete or recreate it, and never delete a database whose id you have not first compared against
+`PRODUCTION_D1_DATABASE_ID`.
 
 ## 11. Scheduled execution (no new scheduler)
 
