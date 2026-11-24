@@ -44,6 +44,29 @@ jobs:
         with:
           # The repository intentionally has no wrapper jar; pin the same Gradle line as the docs.
           gradle-version: "8.10.2"
+      # The runner otherwise generates a fresh debug keystore per job, so every build carries a
+      # different certificate and `adb install -r` over an earlier build fails with
+      # INSTALL_FAILED_UPDATE_INCOMPATIBLE. Caching one keystore makes consecutive debug builds share
+      # an identity. This does not change release signing, and it cannot retroactively match a build
+      # already installed on a phone — see docs/ANDROID_SIGNING_COMPATIBILITY.md.
+      - name: Stable debug keystore
+        uses: actions/cache@v4
+        with:
+          path: ~/.android/debug.keystore
+          key: android-debug-keystore-v1
+
+      - name: Create the debug keystore when the cache is cold
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.android"
+          if [ ! -f "$HOME/.android/debug.keystore" ]; then
+            keytool -genkeypair -noprompt -keystore "$HOME/.android/debug.keystore" \
+              -storepass android -keypass android -alias androiddebugkey \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -dname "CN=Android Debug,O=Android,C=US"
+          fi
+          keytool -list -keystore "$HOME/.android/debug.keystore" -storepass android
+
       - name: Build debug APK
         run: gradle :app:assembleDebug --no-daemon --console=plain
       - name: Build signed release when the owner has configured signing
