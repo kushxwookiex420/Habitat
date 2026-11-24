@@ -162,9 +162,23 @@ function validateObjective(objective) {
     return { ok: true, text };
   }
 
-  async function submit({ objective, requestedBy = "owner", role = "ax", idempotencyKey = null, adapter = null } = {}) {
+  // Priority is an ordering hint for the execution queue, never an authorization: a high-priority
+  // task still goes through the same approval gates. Bounded so a caller cannot sort itself above
+  // everything forever with an absurd value.
+  function validatePriority(value) {
+    if (value === undefined || value === null || value === "") return { ok: true, priority: 0 };
+    const numeric = Number(value);
+    if (!Number.isInteger(numeric) || numeric < 0 || numeric > 100) {
+      return { ok: false, error: "priority must be an integer from 0 to 100." };
+    }
+    return { ok: true, priority: numeric };
+  }
+
+  async function submit({ objective, requestedBy = "owner", role = "ax", idempotencyKey = null, adapter = null, priority = 0 } = {}) {
     const checked = validateObjective(objective);
     if (!checked.ok) return failure("invalid_objective", checked.error);
+    const priorityCheck = validatePriority(priority);
+    if (!priorityCheck.ok) return failure("invalid_priority", priorityCheck.error);
     // Only an explicit, exact, allowlisted read-only adapter may be bound at submission time.
     const adapterCheck = validateAdapter(adapter);
     if (!adapterCheck.ok) return failure("adapter_not_allowed", adapterCheck.error);
@@ -195,6 +209,9 @@ function validateObjective(objective) {
       statusHistory: [{ from: null, to: "queued", at, by: String(requestedBy || "owner").slice(0, 120), reason: null }],
       result: null,
       error: null,
+      // 0 is the default, so every queued task has an explicit sort key and the executor's
+      // ORDER BY never depends on an absent field.
+      priority: priorityCheck.priority,
       idempotencyKey: key || null
     };
     if (adapterCheck.adapter) task.adapter = adapterCheck.adapter;

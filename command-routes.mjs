@@ -565,7 +565,8 @@ export function registerUniversalCommandRoutes(app, {
       requestedBy: "ax",
       role: req.body?.role || "ax",
       idempotencyKey: req.body?.idempotencyKey || null,
-      adapter: req.body?.adapter ?? null
+      adapter: req.body?.adapter ?? null,
+      priority: req.body?.priority ?? 0
     });
     if (outcome.ok && !outcome.replayed) {
       res.status(201).json(outcome);

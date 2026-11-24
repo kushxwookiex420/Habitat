@@ -486,3 +486,25 @@ test("Ax routes cannot plan, checkpoint or request approval on a worker-owned ta
     assert.equal(stored.approvals.length, 0);
   }
 });
+
+test("the task route carries owner priority into the queue and refuses an out-of-range value", async () => {
+  const app = makeApp();
+  const repository = memoryRepository();
+  mountTestApp(app, repository);
+
+  const submitted = await invoke(app, "POST /ax/command/tasks", {
+    headers: auth,
+    body: { objective: "Repair the staging bridge", priority: 40, idempotencyKey: "priority-route-1" }
+  });
+  assert.equal(submitted.statusCode, 201);
+  assert.equal(submitted.body.task.priority, 40, "priority survives the route, not just the engine");
+  assert.equal(repository.rows.get(submitted.body.task.id).priority, 40, "and is what was persisted");
+
+  const rejected = await invoke(app, "POST /ax/command/tasks", {
+    headers: auth,
+    body: { objective: "Repair the staging bridge", priority: 500, idempotencyKey: "priority-route-2" }
+  });
+  assert.equal(rejected.statusCode, 400);
+  assert.equal(rejected.body.code, "invalid_priority");
+  assert.equal(repository.rows.size, 1, "the refused task was never stored");
+});

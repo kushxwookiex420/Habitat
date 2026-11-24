@@ -188,3 +188,22 @@ test("D1/SQLite: concurrent fenced transitions allow exactly one winner", () => 
   assert.equal(first.length, 1);
   assert.equal(second.length, 0);
 });
+
+test("D1/SQLite: the claim statement honours owner priority before arrival order", () => {
+  const database = db();
+  // Same arrival time for the top and the bottom of the queue: only priority can order them.
+  insert(database, "low-a", { id: "low-a", status: "queued", adapter: "runtime.health", priority: 0, updatedAt: T0 });
+  insert(database, "high", { id: "high", status: "queued", adapter: "runtime.health", priority: 50, updatedAt: T0 });
+  insert(database, "low-b", { id: "low-b", status: "queued", adapter: "runtime.health", priority: 0, updatedAt: "2026-11-21T00:02:00.000Z" });
+  insert(database, "mid", { id: "mid", status: "queued", adapter: "runtime.health", priority: 10, updatedAt: "2026-11-21T00:01:00.000Z" });
+  // A row written before priorities existed must still be claimable, sorted as priority 0.
+  insert(database, "legacy-priority", { id: "legacy-priority", status: "queued", adapter: "runtime.health", updatedAt: "2026-11-21T00:03:00.000Z" });
+
+  const order = [];
+  for (let round = 0; round < 5; round += 1) {
+    const rows = database.prepare(NEXUS_CLAIM_SQL).all("w" + round, "2026-11-21T00:09:00.000Z", "fence-" + round, T0, T0);
+    assert.equal(rows.length, 1, "one claim per round");
+    order.push(JSON.parse(rows[0].record_json).id);
+  }
+  assert.deepEqual(order, ["high", "mid", "low-a", "low-b", "legacy-priority"]);
+});

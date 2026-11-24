@@ -159,7 +159,9 @@ export const NEXUS_CLAIM_SQL =
   "OR (status = 'working' AND json_extract(record_json, '$.fence') IS NULL)) " +
   "AND json_extract(record_json, '$.adapter') IS NOT NULL " +
   "AND json_extract(record_json, '$.adapter') <> '' " +
-  "ORDER BY updated_at ASC LIMIT 1) " +
+  // Owner-assigned priority decides order first; equal priorities keep FIFO by updated_at. A task
+  // without a priority field sorts as 0, so old rows are unaffected.
+  "ORDER BY COALESCE(json_extract(record_json, '$.priority'), 0) DESC, updated_at ASC LIMIT 1) " +
   "AND (status = 'queued' OR (status = 'working' AND json_extract(record_json, '$.fence') IS NULL)) " +
   "AND json_extract(record_json, '$.adapter') IS NOT NULL " +
   "AND json_extract(record_json, '$.adapter') <> '' " +

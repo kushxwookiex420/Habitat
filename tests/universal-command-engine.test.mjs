@@ -250,3 +250,32 @@ test("the role listing does not claim deployed agents", () => {
   assert.deepEqual(listing.deployedAgents, []);
   assert.ok(listing.roles.every(role => role.deployed === false));
 });
+
+test("priority is persisted, defaults to zero, and is bounded", async () => {
+  const { engine } = setup();
+  const normal = await engine.submit({ objective: "Run the nightly health sweep" });
+  assert.equal(normal.task.priority, 0, "an unspecified priority is an explicit 0, not missing");
+
+  const urgent = await engine.submit({ objective: "Restore the staging database", priority: 100 });
+  assert.equal(urgent.task.priority, 100);
+
+  const numericString = await engine.submit({ objective: "Fix the pairing dialog", priority: "25" });
+  assert.equal(numericString.task.priority, 25, "a numeric string from JSON clients is accepted");
+
+  for (const bad of [-1, 101, 2.5, "high", {}]) {
+    const refused = await engine.submit({ objective: "Whatever this is", priority: bad });
+    assert.equal(refused.ok, false, "priority " + JSON.stringify(bad) + " is refused");
+    assert.equal(refused.code, "invalid_priority");
+  }
+});
+
+test("a high priority is an ordering hint only, not an authorization bypass", async () => {
+  const { engine } = setup();
+  const outcome = await engine.submit({ objective: "Publish the store listing", priority: 100 });
+  // Still queued with no plan and no approval: the ordering hint bought nothing executable.
+  assert.equal(outcome.task.status, "queued");
+  assert.deepEqual(outcome.task.approvals, []);
+  const planned = await engine.plan({ taskId: outcome.task.id, steps: [{ step: "Draft the listing copy", role: "ax" }] });
+  assert.equal(planned.ok, true);
+  assert.equal(planned.task.status !== "completed", true);
+});
