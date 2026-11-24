@@ -65,12 +65,25 @@ export function createMissionRepository({ query, now = () => new Date().toISOStr
     /** Insert once. A duplicate submission returns the stored record rather than creating another. */
     async create(record) {
       const at = now();
-      await query(
-        "INSERT INTO habitat_ax_missions (id, project, status, version, record_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO NOTHING",
-        [record.id, record.project, record.status, Number(record.version) || 1, JSON.stringify(record), record.createdAt || at, record.updatedAt || at]
-      );
+      // Check first as well as relying on the primary key: duplicate detection must not depend on how a
+      // particular driver reports a constraint error.
+      const existing = await this.get(record.id);
+      if (existing) return { created: false, record: existing.record || null, version: existing.record?.version ?? null };
+      let inserted = false;
+      try {
+        // A duplicate id raises on both SQLite and D1; that is how a duplicate submission is detected
+        // without trusting a RETURNING shape that differs between drivers.
+        await query(
+          "INSERT INTO habitat_ax_missions (id, project, status, version, record_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+          [record.id, record.project, record.status, Number(record.version) || 1, JSON.stringify(record), record.createdAt || at, record.updatedAt || at]
+        );
+        inserted = true;
+      } catch (error) {
+        const stored = await this.get(record.id);
+        if (!stored) throw error;
+      }
       const stored = await this.get(record.id);
-      return { created: stored?.record?.version === record.version && JSON.stringify(stored.record) === JSON.stringify(record), record: stored?.record || null, version: stored?.record?.version ?? null };
+      return { created: inserted, record: stored?.record || null, version: stored?.record?.version ?? null };
     },
 
     async get(id) {
