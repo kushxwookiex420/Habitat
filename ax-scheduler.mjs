@@ -46,6 +46,10 @@ export function createSchedulerService({
   // only the process that assembles the status report can say what is actually true, and this
   // scheduler must not invent an operational signal.
   improvement = null,
+  // Workforce integration: findings become assigned tasks, and the runner executes them inside this
+  // same tick and lease. Both are callbacks, so the scheduler still owns no provider and no workspace.
+  workforceIntake = null,
+  workforceRunner = null,
   now = () => new Date().toISOString(),
   nowMs = () => Date.now(),
   leaseMs = SCHEDULER_LIMITS.leaseMs,
@@ -121,6 +125,9 @@ export function createSchedulerService({
           title: clean(item?.title, 160) || "Improvement finding",
           detail: item?.detail ? clean(item.detail, 300) : null,
           recommendation: clean(item?.recommendation, 200) || "Read the finding evidence before acting on it.",
+          // The evidence travels with the finding: intake refuses a task it cannot tie to an observed
+          // signal, so dropping it here would make every intake fail for the wrong reason.
+          evidence: (Array.isArray(item?.evidence) ? item.evidence : []).map(entry => clean(entry, 200)).filter(Boolean).slice(0, 6),
           safeAction: null,
           source: "improvement"
         })),
@@ -341,6 +348,29 @@ export function createSchedulerService({
       findings.push(...approvalMonitor.findings);
       const improvementMonitor = await improvementFindings();
       findings.push(...improvementMonitor.findings);
+      const workforceTasks = [];
+      let workforceRun = null;
+      if (typeof workforceIntake === "function" && improvementMonitor.findings.length > 0) {
+        for (const finding of improvementMonitor.findings) {
+          try {
+            const intake = await workforceIntake(finding);
+            workforceTasks.push(intake?.ok
+              ? { taskId: intake.taskId, assignmentId: intake.assignmentId || null, agentId: intake.agentId || null, replay: intake.replay === true }
+              : { taskId: intake?.taskId || null, code: intake?.code || "intake_failed" });
+          } catch (error) {
+            log.error?.("AX_SCHEDULER_INTAKE_FAILED", clean(error?.message, 160));
+            workforceTasks.push({ taskId: null, code: "intake_failed" });
+          }
+        }
+        if (typeof workforceRunner === "function" && workforceTasks.some(item => item.assignmentId)) {
+          try {
+            workforceRun = await workforceRunner();
+          } catch (error) {
+            log.error?.("AX_SCHEDULER_WORKFORCE_RUN_FAILED", clean(error?.message, 160));
+            workforceRun = { ok: false, code: "runner_failed" };
+          }
+        }
+      }
       const high = findings.filter(item => ["high", "critical"].includes(item.severity));
       const deadLetters = findings.filter(item => !item.safeAction);
       let notification = null;
@@ -375,6 +405,7 @@ export function createSchedulerService({
         reconciledReservations: reconciled,
         approvals: approvalMonitor.report,
         improvement: improvementMonitor.report,
+        workforce: { tasks: workforceTasks, run: workforceRun },
         autonomy: autonomyResult,
         notification,
         startedAt: new Date(startedAtMs).toISOString(),

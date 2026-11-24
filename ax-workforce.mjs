@@ -376,6 +376,33 @@ export function createWorkforce({ log = console, now = () => new Date().toISOStr
     };
   }
 
+  /**
+   * Rehydrate persisted state. Used by the durable wrapper only: these records were validated before
+   * they were written, and re-validating a historical record against today's rules could silently
+   * drop work that is still in flight.
+   */
+  function restore({ agents: storedAgents = [], assignments: storedAssignments = [], results: storedResults = [], audit: storedAudit = [] } = {}) {
+    for (const agent of storedAgents) if (agent?.id) agentMap.set(agent.id, agent);
+    for (const item of storedAssignments) if (item?.id) assignments.set(item.id, item);
+    for (const item of storedResults) if (item?.id) results.push(item);
+    for (const entry of storedAudit) audit.push(entry);
+    const highest = (list, prefix) => list.reduce((max, item) => {
+      const match = new RegExp("^" + prefix + "_(\\d+)$").exec(String(item.id || ""));
+      return match ? Math.max(max, Number(match[1])) : max;
+    }, 0);
+    sequence = Math.max(highest(storedAssignments, "asg"), highest(storedResults, "res"));
+    return { ok: true, agents: agentMap.size, assignments: assignments.size, results: results.length, audit: audit.length };
+  }
+
+  function snapshot() {
+    return {
+      agents: Array.from(agentMap.values()).map(agent => ({ ...agent })),
+      assignments: Array.from(assignments.values()).map(item => ({ ...item })),
+      results: results.map(item => ({ ...item })),
+      audit: audit.map(item => ({ ...item }))
+    };
+  }
+
   function agents({ specialty = null, capability = null, healthyOnly = false } = {}) {
     return Array.from(agentMap.values())
       .filter(agent => (specialty ? agent.specialty === specialty : true))
@@ -397,6 +424,8 @@ export function createWorkforce({ log = console, now = () => new Date().toISOStr
     finalize,
     recommendConcurrency,
     agents,
+    restore,
+    snapshot,
     adapters: () => Array.from(adapterMap.values()).map(({ execute, health, ...rest }) => rest),
     agent: id => agentMap.get(text(id, 120)) || null,
     assignments: () => Array.from(assignments.values()).map(item => ({ ...item })),

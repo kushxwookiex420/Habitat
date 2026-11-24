@@ -37,6 +37,33 @@ export function rollbackStatements() {
   return P1_TABLES.map(name => "DROP TABLE IF EXISTS " + name);
 }
 
+/**
+ * 0010 is a later, independent group. It gets its own rollback statements so this harness can still
+ * prove the stronger pre-0008 claim without pretending the workforce tables are part of P1.
+ */
+export const WORKFORCE_TABLES = Object.freeze([
+  "habitat_ax_worker_audit",
+  "habitat_ax_worker_results",
+  "habitat_ax_worker_assignments",
+  "habitat_ax_workers",
+  "habitat_ax_worker_adapters"
+]);
+
+export const WORKFORCE_INDEXES = Object.freeze([
+  "habitat_ax_worker_audit_action",
+  "habitat_ax_worker_results_task",
+  "habitat_ax_worker_assignments_agent",
+  "habitat_ax_worker_assignments_active_task",
+  "habitat_ax_workers_specialty"
+]);
+
+export function workforceRollbackStatements() {
+  return [
+    ...WORKFORCE_INDEXES.map(name => "DROP INDEX IF EXISTS " + name),
+    ...WORKFORCE_TABLES.map(name => "DROP TABLE IF EXISTS " + name)
+  ];
+}
+
 async function migrationFiles() {
   const names = (await readdir(MIGRATIONS_DIR)).filter(name => name.endsWith(".sql")).sort();
   return names.map(name => ({ name, path: path.join(MIGRATIONS_DIR, name), version: Number(name.slice(0, 4)) }));
@@ -58,7 +85,8 @@ function tables(db) {
 export async function runRollbackChecks() {
   const files = await migrationFiles();
   const before = files.filter(file => file.version <= 7);
-  const p1 = files.filter(file => file.version >= 8);
+  const p1 = files.filter(file => file.version === 8 || file.version === 9);
+  const later = files.filter(file => file.version >= 10);
   const report = { ok: true, files: files.map(file => file.name), checks: [] };
   const check = (name, condition, detail = null) => {
     report.checks.push({ name, ok: Boolean(condition), detail });
@@ -83,6 +111,8 @@ export async function runRollbackChecks() {
 
     await apply(db, p1);
     check("0008 and 0009 create every P1 table", P1_TABLES.every(name => tables(db).includes(name)));
+    await apply(db, later);
+    check("0010 creates every workforce table", WORKFORCE_TABLES.every(name => tables(db).includes(name)));
 
     db.prepare("INSERT INTO habitat_ax_capabilities (id, kind, state, requires_approval, record_json, updated_at) VALUES (?, ?, ?, ?, ?, ?)")
       .run("cap_1", "fulfillment", "policy_only", 1, JSON.stringify({ id: "cap_1" }), stamp);
@@ -91,7 +121,11 @@ export async function runRollbackChecks() {
     db.prepare("INSERT INTO habitat_ax_revenue_events (id, state, currency, amount_cents, occurred_at, record_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
       .run("rev_1", "settled", "USD", 4500, stamp, JSON.stringify({ id: "rev_1" }), stamp);
 
-    // Rollback.
+    // Rollback: later groups first, then P1.
+    for (const statement of workforceRollbackStatements()) db.exec(statement);
+    check("0010 rollback removes every workforce table and index",
+      WORKFORCE_TABLES.every(name => !tables(db).includes(name)) &&
+      WORKFORCE_INDEXES.every(name => objects(db).every(item => item !== "index:" + name)));
     for (const statement of rollbackStatements()) db.exec(statement);
 
     check("rollback removes every P1 table", P1_TABLES.every(name => !tables(db).includes(name)));
@@ -106,7 +140,9 @@ export async function runRollbackChecks() {
 
     // Re-applying after a rollback must be clean and must not resurrect old P1 rows.
     await apply(db, p1);
+    await apply(db, later);
     check("P1 tables can be recreated after rollback", P1_TABLES.every(name => tables(db).includes(name)));
+    check("workforce tables can be recreated after rollback", WORKFORCE_TABLES.every(name => tables(db).includes(name)));
     check("recreated P1 tables start empty", db.prepare("SELECT COUNT(*) AS n FROM habitat_ax_access_requests").get().n === 0);
     check("re-apply still preserves legacy rows", db.prepare("SELECT status FROM habitat_ax_objectives WHERE id = 'obj_legacy'").get()?.status === "executing");
   } finally {
@@ -118,6 +154,7 @@ export async function runRollbackChecks() {
     passed: report.checks.filter(item => item.ok).length,
     failed: report.checks.filter(item => !item.ok).length,
     droppedTables: P1_TABLES.length,
+    droppedWorkforceTables: WORKFORCE_TABLES.length,
     dataLoss: "P1 rows are discarded by rollback; export them first. Pre-0008 tables and rows are not touched.",
     environment: "node:sqlite in-memory (D1-compatible SQL only; not D1 itself)"
   };

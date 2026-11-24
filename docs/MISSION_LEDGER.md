@@ -16,6 +16,10 @@ deployed staging service exercised it; **production** = the live service; **phon
 | Reconciliation of the two status implementations | One `system-status.mjs`, redaction policy v2, #115 7/7 green |
 | Finance ledger and prioritisation modules | 25 tests; evidence-required rejections, verified-only net worth |
 | Replaceable-agent workforce registry | 20 tests; adapters, agent records, capacity, conflict, retry, handoff, independent verification |
+| Workforce survives a process restart | 6 tests in `tests/ax-workforce-durable.test.mjs` against real SQLite: agents, in-flight assignment, verified result, audit and pending approval all reload into a new engine; self-verification refused after reload |
+| Finding → task → verified without a script | 15 tests (`ax-workforce-pipeline`, `ax-scheduler-workforce`): one scheduler tick converts a real `execution_blocked` finding into an assigned task, executes it, obtains independent verification and stops at approval-required; the tick's second run does not duplicate it |
+| Workforce write-through store | `d1-workforce-repository.mjs` + `migrations/0010_ax_workforce.sql`; idempotent upserts, append-only audit, partial unique index allowing one active assignment per task; `migrations:rollback` 14/14 |
+| Restart demonstrated end to end | `npm run workforce:demo`: closed the first instance at `countsBefore {agents:2, assignments:1, results:0, audit:5}`, hydrated the second to the same counts with `activeRecovered: 1`, then verified 20/20 real tests, `approvalState: "required"`, `costMeasured: false` |
 | End-to-end self-improvement cycle | `scripts/self-improvement-demo.mjs`: detected an unused export, implemented on `demo/self-improvement-*`, self-verification **refused**, independent verification passed 2/2, status `verified`, `approvalRequired: true` |
 
 ## Implemented, not deployed
@@ -54,11 +58,11 @@ compatible. The installed certificate has not been read.
 
 ## Next highest-value task
 
-The single change that most increases what can be verified is **a staging service**, because it is the
-first environment where the improvement engine, scheduler ticks, notifications and recovery can be
-exercised as a deployed system rather than as a module with tests. The workforce registry now exists as
-records with adapters, capacity, conflict detection and independent verification, and one real
-self-improvement cycle has run. The next highest-value step is making that registry **durable** (a D1
-repository mirroring the objective store) so agents, assignments and verified results survive a
-restart, followed by wiring `assign()` to the real scheduler so a detected finding becomes an assigned
-task without a human starting the script.
+The registry is now durable and the scheduler delegates on its own, so the remaining gap between this
+branch and a continuously improving system is **runtime attachment**: `server.mjs` does not yet build
+the durable workforce from its D1 binding, register real adapters, or pass `workforceIntake` and
+`workforceRunner` into the scheduler. Until that is done the delegation path is proven by tests and by
+`npm run workforce:demo`, not by a running deployment — and runtime activation is withheld pending
+owner approval (`NEXUS_RUNTIME_ENABLED=false`). The second gap is a staging service, which is what would
+turn this evidence into deployed evidence. Adapters must stay replaceable while that happens: the intake
+and runner never name a provider, only the agent's `adapterId`.
