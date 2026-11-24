@@ -293,3 +293,36 @@ test("status exposes no task content, device identifiers or worker internals", (
   assert.equal(status.redaction.policyVersion, 2);
   assert.equal(status.secretsExposed, false);
 });
+
+test("environment reports whether the production-database guard is actually in force", () => {
+  const PRODUCTION = "3a906029-bc64-4e2a-b648-163e34a2d502";
+  const STAGING = "0fdf1ac9-65a3-4e83-8042-f3fa52282068";
+
+  const stagingRefused = buildSystemStatus({
+    env: { HABITAT_ENVIRONMENT: "staging", HABITAT_D1_DATABASE_ID: PRODUCTION }, now: NOW
+  }).components.environment;
+  assert.equal(stagingRefused.name, "staging");
+  assert.equal(stagingRefused.marked, true);
+  assert.equal(stagingRefused.databaseGuardActive, true);
+  assert.equal(stagingRefused.productionDatabaseRefused, true);
+
+  const stagingIsolated = buildSystemStatus({
+    env: { HABITAT_ENVIRONMENT: "staging", HABITAT_D1_DATABASE_ID: STAGING }, now: NOW
+  }).components.environment;
+  assert.equal(stagingIsolated.name, "staging");
+  assert.equal(stagingIsolated.productionDatabaseRefused, false);
+
+  const unmarked = buildSystemStatus({
+    env: { HABITAT_D1_DATABASE_ID: PRODUCTION }, now: NOW
+  }).components.environment;
+  assert.equal(unmarked.name, "production");
+  assert.equal(unmarked.marked, false);
+  assert.equal(unmarked.databaseGuardActive, false);
+
+  // The report may say which environment it is; it must never echo a database id.
+  const serialized = JSON.stringify(buildSystemStatus({
+    env: { HABITAT_ENVIRONMENT: "staging", HABITAT_D1_DATABASE_ID: STAGING }, now: NOW
+  }));
+  assert.equal(serialized.includes(STAGING), false);
+  assert.equal(serialized.includes(PRODUCTION), false);
+});

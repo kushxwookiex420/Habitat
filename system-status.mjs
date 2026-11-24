@@ -15,6 +15,7 @@
 // Nothing here probes the network, writes storage or spends model quota.
 
 import { summarizeWorkforce } from "./ax-workforce-status.mjs";
+import { databaseAllowed, stagingEnvironment, STAGING_ENVIRONMENT_VALUE } from "./staging-guard.mjs";
 import { summarizeIdentity } from "./ax-identity-status.mjs";
 
 const HEALTH_WINDOW_MS = 30 * 60 * 1000;
@@ -170,6 +171,27 @@ function authentication(env, { deviceBridge } = {}) {
   };
 }
 
+/**
+ * Say which environment this process believes it is, and whether the production-database guard was in
+ * force. Without this an operator cannot tell a properly isolated staging service from one that was
+ * labelled staging and quietly pointed at production data.
+ */
+function environmentReport(env) {
+  const markedStaging = stagingEnvironment(env);
+  const guard = databaseAllowed({ env, databaseId: env?.HABITAT_D1_DATABASE_ID || "" });
+  return {
+    name: markedStaging ? STAGING_ENVIRONMENT_VALUE : "production",
+    marked: present(env, "HABITAT_ENVIRONMENT"),
+    databaseGuardActive: markedStaging,
+    productionDatabaseRefused: guard.ok === false,
+    detail: markedStaging
+      ? (guard.ok === false
+        ? "Marked staging while pointed at the production database; this process must refuse to start."
+        : "Marked staging; the production database is refused by this process.")
+      : "Not marked as staging, so the production-database guard is inactive for this process."
+  };
+}
+
 function summarizeMissions(input) {
   if (!input || typeof input !== "object") {
     return { state: "not_configured", enabled: false, initialized: false, running: false, verified: false, counts: {}, detail: "No mission runtime is attached to this process." };
@@ -252,6 +274,9 @@ export function buildSystemStatus({
         detail: "Routes are reported from this process's mount facts; a missing route is reported, never assumed."
       },
       authentication: auth,
+      // Which environment this process was labelled as, and whether the production-database guard
+      // was actually in force. Names and booleans only: the database id is never reported.
+      environment: environmentReport(env),
       storage: {
         state: storageDurable ? "ready" : "degraded",
         taskRepositoryReady: storageDurable,
@@ -488,6 +513,12 @@ export function formatSystemStatus(status) {
   lines.push(
     "Execution: " + state(execution.state) + " — " + (execution.detail || "no executor report") +
     (execution.liveWorkers != null ? " liveWorkers=" + execution.liveWorkers : "")
+  );
+  const environment = components.environment || {};
+  lines.push(
+    "Environment: " + state(environment.name) + " — guard=" +
+    (environment.databaseGuardActive ? "active" : "inactive") +
+    ", productionDatabaseRefused=" + (environment.productionDatabaseRefused ? "yes" : "no")
   );
   const device = components.device || {};
   lines.push(
