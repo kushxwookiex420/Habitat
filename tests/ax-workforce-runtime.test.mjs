@@ -120,7 +120,9 @@ test("with the schema present the runtime hydrates, registers its agents and rep
   assert.equal(status.initialized, true);
   assert.equal(status.running, false);
   assert.equal(status.verified, false);
-  assert.equal(status.counts.agents, 2);
+  // Two default workforce agents plus the seven specialist agents the mounted mission service registers
+  // into this same durable workforce; the count is the registry, not a wish.
+  assert.equal(status.counts.agents, 9);
   assert.equal(status.migration.ready, true);
   db.close();
 });

@@ -1,4 +1,5 @@
 import os from "node:os";
+import { mkdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { createMissionRepository } from "./d1-mission-repository.mjs";
 import { createMissionEngine } from "./ax-mission-engine.mjs";
@@ -51,6 +52,19 @@ export async function createMissionService({
   if (!initialized?.ok) throw new Error("The mission store could not be initialised.");
 
   const directory = artifactsDir || resolveArtifactsDir(env);
+  // A directory existing is not persistence. Probe it: configured by the operator, and actually writable now.
+  const artifactsConfigured = Boolean(String(env[MISSION_ENV.artifacts] || "").trim());
+  let artifactsWritable = false;
+  let artifactsError = null;
+  try {
+    await mkdir(directory, { recursive: true });
+    const probe = path.join(directory, ".habitat-write-probe");
+    await writeFile(probe, "ok", "utf8");
+    await rm(probe, { force: true });
+    artifactsWritable = true;
+  } catch (error) {
+    artifactsError = String(error?.message || error).slice(0, 160);
+  }
   const kit = createWorkerExecutors({
     rootDir,
     artifactsDir: directory,
@@ -123,7 +137,15 @@ export async function createMissionService({
       agents: registered.agents.filter((entry) => entry.ok).length,
       adapters: registered.adapters.filter((entry) => entry.ok).length,
       artifactsDir: directory,
-      artifactsPersistent: Boolean(String(env[MISSION_ENV.artifacts] || "").trim()),
+      artifactsConfigured,
+      artifactsWritable,
+      artifactsError,
+      // Persistent means: the operator named a durable location AND it is writable now. A temporary
+      // directory is reported as not persistent, because on Render it is lost on every deploy.
+      artifactsPersistent: artifactsConfigured && artifactsWritable,
+      artifactsNote: artifactsConfigured && artifactsWritable
+        ? "Artifacts are stored in the configured directory; durability depends on that path being a mounted disk or shared volume."
+        : "Artifacts are NOT durable: set HABITAT_MISSION_ARTIFACTS_DIR to a mounted persistent disk, or they are lost on redeploy.",
       rootDir
     })
   });
