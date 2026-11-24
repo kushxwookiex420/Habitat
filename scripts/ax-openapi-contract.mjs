@@ -64,6 +64,10 @@ const EXCLUSIONS = Object.freeze([
   {
     test: key => key === "GET /ax/command/messages/:id",
     reason: "single-message read is covered by getNexusThread; keeps the Action surface minimal"
+  },
+  {
+    test: key => key.includes(" /ax/missions"),
+    reason: "mission pipeline operator route, documented in docs/openapi-missions.json"
   }
 ]);
 
