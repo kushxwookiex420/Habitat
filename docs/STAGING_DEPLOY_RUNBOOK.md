@@ -65,3 +65,13 @@ own D1 credential is separate and must not be changed to fix CI.
 the `Staging device audit (read-only)` workflow (the token itself). The audit prints
 `/user/tokens/verify` status, its `expires_on`, and the D1 metadata status, which is what distinguishes an
 expired token (`1000:Invalid API Token`) from an under-scoped one (verify active, metadata refused).
+
+## 6. Observed preflight results
+
+| Target | Deployed | Migrations | Deployment files | Production config | Blockers | Warnings |
+| --- | --- | --- | --- | --- | --- | --- |
+| `76e9330` | `efcf65c` | 0 | 0 | 0 | none | none |
+| `ee467a3` | `efcf65c` | 0 | 0 | 0 | none | none |
+
+Both runs read the deployed commit from the live `/health`, and both found `environment=staging` with
+`nexus`, `missions` and `workforce` false.

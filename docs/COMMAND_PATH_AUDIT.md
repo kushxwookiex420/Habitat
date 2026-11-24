@@ -132,3 +132,19 @@ curl -sS -H "Authorization: Bearer $AX" \
 Acceptance: `status: completed`, `result.ok: true`, `result.details.model` matches the phone, inside one
 claim window. On the current APK the claim can take up to 15 minutes when the app is closed, and longer if
 the instance is asleep.
+
+## Escalation probe, live gate (2026-11-24T06:54Z)
+
+Run `45343907879` against staging at `efcf65c` with the repository credential present:
+
+| Reading | Value | Meaning |
+| --- | --- | --- |
+| `/system/status` reachable | `200` | the service answers |
+| `workers.execution.canExecute` | `false` | the executor is not mounted |
+| verdict | `blocked: "nexus_runtime_disabled"` | the probe refused to submit a task it could not observe |
+
+The probe therefore submitted nothing: no task row, no message. This is the gate working, not the
+escalation being verified — the escalation itself still needs a deploy with `NEXUS_RUNTIME_ENABLED=true`.
+
+The first attempt of the same probe (`45343730333`) was handed `HABITAT_BASE_URL`, which is the production
+origin, and answered `blocked: "refuses_production"`. Neither attempt touched production.
