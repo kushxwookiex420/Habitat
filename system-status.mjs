@@ -15,6 +15,7 @@
 // Nothing here probes the network, writes storage or spends model quota.
 
 import { summarizeWorkforce } from "./ax-workforce-status.mjs";
+import { summarizeIdentity } from "./ax-identity-status.mjs";
 
 const HEALTH_WINDOW_MS = 30 * 60 * 1000;
 const RUNNING_STATES = new Set(["working", "running", "delegated", "in_progress", "dispatched", "claimed"]);
@@ -184,7 +185,8 @@ export function buildSystemStatus({
   providers = {},
   routes = {},
   execution = null,
-  workforce = null
+  workforce = null,
+  identity = null
 } = {}) {
   const items = classifyWorkers({ registry, tasks, now });
   const counts = summarizeWorkerCounts(items);
@@ -267,7 +269,9 @@ export function buildSystemStatus({
       // Five words that are routinely conflated are reported as five separate facts: configured
       // (binding present), initialized (hydrated from the store), enabled (the operator's flag),
       // running (the scheduler used it since boot) and verified (a result was independently verified).
-      workforce: summarizeWorkforce(workforce)
+      workforce: summarizeWorkforce(workforce),
+      // Identity and intelligence are reported separately: a provider is not who Ax is.
+      identity: summarizeIdentity(identity)
     },
     requiredConfiguration: {
       allPresent: unavailableKeys.length === 0,
@@ -305,6 +309,9 @@ const LABEL = {
   healthy: "HEALTHY",
   disabled: "DISABLED",
   initialized: "INITIALIZED",
+  persistent: "PERSISTENT",
+  committed_only: "COMMITTED ONLY",
+  not_yet_persisted: "NOT YET PERSISTED",
   schema_missing: "SCHEMA MISSING",
   initialization_failed: "INITIALIZATION FAILED",
   not_configured: "NOT CONFIGURED",
@@ -358,6 +365,15 @@ export function formatSystemStatus(status) {
     "Storage: " + state(storage.state) + " — " + (storage.adapter || "unknown") +
     (storage.durable ? " (durable)" : " (not durable)")
   );
+  const identity = components.identity;
+  if (identity && identity.name) {
+    lines.push(
+      "Identity: " + identity.name + " " + state(identity.state) +
+      " — providerIndependent=" + (identity.providerIndependent ? "yes" : "no") +
+      ", persisted=" + (identity.persisted ? "yes" : "no") +
+      ", directives=" + (identity.directives?.total ?? 0)
+    );
+  }
   const workforce = components.workforce;
   if (workforce && workforce.flag) {
     lines.push(

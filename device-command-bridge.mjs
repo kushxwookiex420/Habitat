@@ -16,6 +16,7 @@ import {
 import { createD1AxRunRepository } from "./d1-ax-run-repository.mjs";
 import { createD1AxMemoryRepository } from "./d1-ax-memory-repository.mjs";
 import { createAxMemoryContext } from "./ax-memory-context.mjs";
+import { createAxIdentity } from "./ax-identity.mjs";
 import { createD1AxNotificationRepository } from "./d1-ax-notification-repository.mjs";
 import { createNotificationService } from "./ax-notifications.mjs";
 import { createAxDiagnostics } from "./ax-diagnostics.mjs";
@@ -153,6 +154,8 @@ export function registerDeviceCommandBridge(app, {
   }) : null);
   const notifications = notificationStore ? createNotificationService({ repository: notificationStore, project: memoryProject, log }) : null;
   const memoryContext = memoryStore ? createAxMemoryContext({ repository: memoryStore, project: memoryProject, log }) : null;
+  // Identity lives beside memory, not inside a provider. Without a store it still exists from code.
+  const identity = createAxIdentity({ repository: memoryStore, project: "ax", log });
 
   // Mission 10 additive stores: durable objective lifecycles and incident history. Both live on the
   // same D1 database as everything else and neither replaces a task table.
@@ -1195,6 +1198,8 @@ export function registerDeviceCommandBridge(app, {
     // Read-only accessor for embedders and tests; the channel itself is only reachable through the
     // authenticated routes.
     messageChannel: () => messages,
+    // Read-only identity facts for /system/status: name, digest and persistence, never a provider.
+    identityStatus: () => identity.status(),
     async initialize({ startWorker = true } = {}) {
       if (initialized) {
         // A deferred or failed Nexus startup is retryable without restarting the process.
@@ -1227,6 +1232,14 @@ export function registerDeviceCommandBridge(app, {
         } catch (error) {
           console.error(label + "_INIT_FAILED", String(error?.message || error));
         }
+      }
+      // Persist the identity record once memory exists. A failure here is reported and does not
+      // stop device commands: identity is readable from code even when it cannot be stored.
+      try {
+        const identityEnsured = await identity.ensure();
+        console.log("AX_IDENTITY", JSON.stringify({ ok: identityEnsured.ok, state: identityEnsured.ok ? "persistent" : identityEnsured.code, digest: identity.digest.slice(0, 16) }));
+      } catch (error) {
+        console.error("AX_IDENTITY_INIT_FAILED", String(error?.message || error));
       }
       const bootstrapHash = String(env.HABITAT_DEVICE_PAIRING_BOOTSTRAP_CODE_HASH || "").trim().toLowerCase();
       const bootstrapExpiresAt = String(env.HABITAT_DEVICE_PAIRING_BOOTSTRAP_EXPIRES_AT || "").trim();
@@ -1356,7 +1369,8 @@ export function registerDeviceCommandBridge(app, {
         // HTTP success condition, so a Render health check stays up while an optional worker is off.
         nexus: nexusRuntime ? { configured: true, ...nexusRuntime.status() } : nexusMount,
         // Mount facts only: whether the scheduler has workforce callbacks, not whether they will run.
-        workforce: { intakeAttached: typeof workforceIntake === "function", runnerAttached: typeof workforceRunner === "function" }
+        workforce: { intakeAttached: typeof workforceIntake === "function", runnerAttached: typeof workforceRunner === "function" },
+        identity: { name: identity.core.name, repository: Boolean(memoryStore) }
       };
     },
     nexus() {

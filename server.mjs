@@ -1513,6 +1513,12 @@ async function collectSystemStatus() {
   }
 
   const bridgeStatus = deviceCommandBridge.status();
+  let identity = null;
+  try {
+    identity = typeof deviceCommandBridge.identityStatus === "function" ? await deviceCommandBridge.identityStatus() : null;
+  } catch (error) {
+    console.warn("STATUS_IDENTITY_FAILED", String(error?.message || error));
+  }
   let execution = bridgeStatus.nexus || null;
   const runtime = typeof deviceCommandBridge.nexus === "function" ? deviceCommandBridge.nexus() : null;
   if (runtime && typeof runtime.presence === "function") {
@@ -1551,6 +1557,8 @@ async function collectSystemStatus() {
     providers: configuredProviders(),
     // Read-only snapshot: configured, initialized, enabled, running and verified are separate facts.
     workforce: workforceRuntime.status(),
+    // Identity is reported apart from whichever provider supplies intelligence.
+    identity,
     routes: {
       chat: true,
       // These routes are registered by registerDeviceCommandBridge regardless of credentials or

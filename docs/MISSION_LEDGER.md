@@ -25,6 +25,11 @@ deployed staging service exercised it; **production** = the live service; **phon
 | Scheduler runs the attached runtime | Scheduler tick over the runtime reaches `verified` with `verified: true`, `counts.approvalRequired: 1`; `/system/status` reports `running` only after a step actually happens |
 | Disabled mode leaves existing behavior intact | Real server start (`tests/server-workforce-disabled.test.mjs`): `/health`, `/workers`, `/capabilities`, `/system/status`, `/continuity/status` all 200; workforce `disabled`; log shows memory-only storage and no `WORKFORCE_STATUS` |
 | Staging migration procedure prepared, not applied | `docs/WORKFORCE_D1_STAGING_MIGRATION.md`; read-only `npm run workforce:preflight` (SELECT only, exits non-zero when 0010 is absent) |
+| Ax identity is independent of the provider | `ax-identity.mjs`; digest identical under different providers, `coupled: false`; 8 tests; `/system/status` reports name, digest, persistence and directives |
+| Identity persists and survives restart | Stored in memory project `ax`; a new instance reports `persistent`; a rewritten record is reported `not_yet_persisted`, never believed |
+| Owner-only standing directives | Non-owner writes refused (`owner_required`); deletion owner-only and versioned; agent writes cannot change the code-defined digest |
+| Memory export and recovery | `ax-memory-backup.mjs`; digest verified before any write; restore reproduces the source digest in a fresh database; idempotent replay; local-newer conflicts and credential-bearing entries refused with zero writes (5 tests) |
+| Retention is a report, not a purge | `retentionReport` lists old entries and deletes nothing; deletion stays an owner action with a revision |
 | End-to-end self-improvement cycle | `scripts/self-improvement-demo.mjs`: detected an unused export, implemented on `demo/self-improvement-*`, self-verification **refused**, independent verification passed 2/2, status `verified`, `approvalRequired: true` |
 
 ## Implemented, not deployed
@@ -63,7 +68,9 @@ compatible. The installed certificate has not been read.
 
 ## Next highest-value task
 
-Runtime attachment is complete and disabled by default. What remains is **staging execution**: applying
+Phase One (server-side workforce) is complete and disabled by default; Phase Two's identity and memory
+continuity is implemented and locally verified, with the remaining gap being a deployed provider swap.
+What remains next is **staging execution**: applying
 0010 to the staging database using `docs/WORKFORCE_D1_STAGING_MIGRATION.md`, then — on separate owner
 approval — setting `HABITAT_WORKFORCE_ENABLED=true` in staging and observing `initialized`,
 `recoveredAssignments` after a restart, and a scheduler-driven cycle that reaches `verified` with
