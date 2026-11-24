@@ -6,6 +6,8 @@ name: Staging device audit (read-only)
 # [staging-audit].
 
 on:
+  # Manual dispatch so a credential can be re-tested from a fresh runner without a code change.
+  workflow_dispatch:
   push:
     branches: [staging/integration]
     paths:
