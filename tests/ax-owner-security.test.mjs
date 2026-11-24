@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { createD1AxMemoryRepository } from "../d1-ax-memory-repository.mjs";
 import { createAxIdentity } from "../ax-identity.mjs";
-import { createOwnerAttestation } from "../ax-owner-attestation.mjs";
+import { createOwnerAttestation, ownerVerifierFromEnv, OWNER_ATTESTATION_KEYS_ENV, OWNER_ATTESTATION_REVOKED_ENV } from "../ax-owner-attestation.mjs";
 import { backupDigest, exportMemory, restoreMemory } from "../ax-memory-backup.mjs";
 import { createAxIdentity as createIdentityForRecovery } from "../ax-identity.mjs";
 
@@ -207,6 +207,41 @@ const signedFields = {
 };
 
 const SECOND_SECRET = "owner-attestation-second-secret-9876543210";
+
+test("owner configuration comes from the environment and a malformed keyring yields no verifier", () => {
+  assert.equal(ownerVerifierFromEnv({ env: {} }), null);
+  assert.equal(ownerVerifierFromEnv({ env: { HABITAT_OWNER_ATTESTATION_KEY: "short" } }), null);
+  assert.equal(ownerVerifierFromEnv({ env: { [OWNER_ATTESTATION_KEYS_ENV]: "{not json" } }), null);
+  assert.equal(ownerVerifierFromEnv({ env: { [OWNER_ATTESTATION_KEYS_ENV]: JSON.stringify([{ keyId: "a", secret: SECRET, status: "active" }, { keyId: "b", secret: SECOND_SECRET, status: "active" }]) } }), null, "two active keys are ambiguous");
+
+  const single = ownerVerifierFromEnv({ env: { HABITAT_OWNER_ATTESTATION_KEY: SECRET }, now: () => NOW });
+  assert.ok(single);
+  const signed = single.sign(signedFields);
+  assert.equal(single.verify(signedFields, signed.attestation).ok, true);
+});
+
+test("an environment keyring signs with the active key and refuses a revoked key", () => {
+  const env = {
+    [OWNER_ATTESTATION_KEYS_ENV]: JSON.stringify([
+      { keyId: "owner-1", secret: SECRET, status: "retired" },
+      { keyId: "owner-2", secret: SECOND_SECRET, status: "active" }
+    ])
+  };
+  const verifier = ownerVerifierFromEnv({ env, now: () => NOW });
+  assert.ok(verifier);
+  assert.equal(verifier.rotation().activeKeyId, "owner-2");
+
+  const old = createOwnerAttestation({ secret: SECRET, now: () => NOW }).sign(signedFields);
+  assert.equal(verifier.verify(signedFields, old.attestation).ok, true, "a retired key keeps old signatures verifiable");
+  assert.equal(verifier.sign(signedFields).attestation.keyId, "owner-2");
+
+  const revoked = ownerVerifierFromEnv({
+    env: { ...env, [OWNER_ATTESTATION_REVOKED_ENV]: "owner-1" },
+    now: () => NOW
+  });
+  assert.ok(revoked);
+  assert.equal(revoked.verify(signedFields, old.attestation).code, "owner_attestation_key_revoked");
+});
 
 test("key rotation keeps old signatures verifiable and lets the new key sign", () => {
   const original = createOwnerAttestation({ secret: SECRET, now: () => NOW });

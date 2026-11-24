@@ -2,7 +2,9 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { createHeartbeatRepository } from "../d1-heartbeat-repository.mjs";
-import { createHeartbeatMonitor, TRIGGER_MESSAGE, summarizeSnapshot } from "../ax-heartbeat.mjs";
+import { createHeartbeatMonitor, TRIGGER_MESSAGE, summarizeSnapshot, createWebhookNotifier } from "../ax-heartbeat.mjs";
+import { createServer } from "node:http";
+import { createHmac } from "node:crypto";
 
 const quiet = { log() {}, warn() {}, error() {} };
 const START = Date.parse("2026-11-24T18:00:00.000Z");
@@ -220,6 +222,39 @@ test("delivery recovers after an outage without losing the queued event", async 
   assert.equal(events[0].status, "delivered");
   assert.equal(events[0].attempts, 3);
   h.database.close();
+});
+
+test("the webhook notifier delivers a signed trigger over real HTTP, exactly once per event", async () => {
+  const secret = "webhook-test-secret-0123456789";
+  const received = [];
+  const server = createServer((req, res) => {
+    let body = "";
+    req.on("data", chunk => { body += chunk; });
+    req.on("end", () => {
+      const expected = createHmac("sha256", secret).update(req.headers["webhook-id"] + "." + req.headers["webhook-timestamp"] + "." + body).digest("base64");
+      received.push({ body: JSON.parse(body), signatureOk: req.headers["webhook-signature"] === "v1," + expected });
+      res.writeHead(202);
+      res.end("ok");
+    });
+  });
+  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+  const url = "http://127.0.0.1:" + server.address().port + "/events";
+
+  const notifier = createWebhookNotifier({ url, secret });
+  const h = await harness({ notifier });
+  await h.monitor.beat();
+  const delivered = await h.monitor.deliver();
+  assert.equal(delivered.delivered, 1);
+  assert.equal(received.length, 1);
+  assert.equal(received[0].body.trigger, TRIGGER_MESSAGE);
+  assert.equal(received[0].body.event.kind, "mission_status");
+  assert.equal(received[0].signatureOk, true);
+
+  // A second delivery pass must not resend an event already marked delivered.
+  assert.equal((await h.monitor.deliver()).attempted, 0);
+  assert.equal(received.length, 1);
+  h.database.close();
+  await new Promise(resolve => server.close(resolve));
 });
 
 test("snapshot summarisation never invents completion or turns a claim into a verified result", () => {

@@ -43,6 +43,8 @@ deployed staging service exercised it; **production** = the live service; **phon
 | ChatGPT reconnection trigger | `GET /ax/v1/heartbeat` returns the exact `AX RECONNECT — HABITAT HEARTBEAT.` trigger with active/completed/failed/approval context and queued changes; ack is scoped and idempotent |
 | Event-triggered, not chat spam | Events are derived from mission/approval state with unique dedupe keys; repeated beats and restarts enqueue nothing new; 10 monitor tests + 2 HTTP tests |
 | Delivery is not availability | Webhook 2xx → delivered, owner ack → acknowledged, bounded failures → dead; with no notifier events stay queued. No wake of an inactive ChatGPT is claimed |
+| Gateway, owner and staging readiness | Keyring loaded from env with one active key, revocation list and `/system/status` owner state; shared rate limiting table 0014 with local fallback; exported OpenAPI 3.1 + smoke runner; migration 0014 prepared, not applied |
+| Integration is still not operational | No public HTTPS origin, staging D1 credentials, owner key or ChatGPT workspace in this environment; acceptance runbook and runner exist, real end-to-end remains owner-gated |
 | Gateway default is off | `HABITAT_GATEWAY_ENABLED` unset → every `/ax/v1` route 503, no token checked, no store built; `/system/status` reports it as disabled |
 | End-to-end self-improvement cycle | `scripts/self-improvement-demo.mjs`: detected an unused export, implemented on `demo/self-improvement-*`, self-verification **refused**, independent verification passed 2/2, status `verified`, `approvalRequired: true` |
 

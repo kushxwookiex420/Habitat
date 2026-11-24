@@ -58,7 +58,11 @@ if (gatewayEnabled()) {
         apiToken: process.env.HABITAT_D1_API_TOKEN
       });
       const schema = await candidate.verifySchema();
-      if (schema.ok) gatewayRepository = candidate;
+      if (schema.ok) {
+        const rateSchema = await candidate.verifyRateLimitSchema();
+        if (!rateSchema.ok) console.warn("AX_GATEWAY_RATE_LIMIT_SCHEMA_MISSING", JSON.stringify({ migration: "0014_ax_gateway_rate_limits", fallback: "process-local limiter" }));
+        gatewayRepository = candidate;
+      }
       else console.warn("AX_GATEWAY_SCHEMA_MISSING", JSON.stringify({ migration: "0012_ax_gateway", missing: schema.missing }));
     } catch (error) {
       console.warn("AX_GATEWAY_STORAGE_UNAVAILABLE", String(error?.message || error));
@@ -1647,6 +1651,12 @@ async function collectSystemStatus() {
     missions: await missionRuntime.status(),
     // Mount facts only; the gateway refuses every request unless its own flag is on.
     gateway: { enabled: gatewayEnabled(), repository: gatewayRepository !== null, flag: GATEWAY_FLAG },
+    ownerAuthentication: ownerVerifier ? {
+      verifierConfigured: true,
+      activeKeyId: ownerVerifier.rotation?.().activeKeyId || null,
+      enforce: String(process.env.HABITAT_OWNER_ATTESTATION_ENFORCE || "").toLowerCase() === "true",
+      policy: String(process.env.HABITAT_OWNER_ATTESTATION_ENFORCE || "").toLowerCase() === "true" ? "required" : "optional"
+    } : { verifierConfigured: false, enforce: false, policy: "optional", detail: "No owner attestation key is configured." },
     heartbeat: heartbeatMonitor ? await heartbeatMonitor.status() : { enabled: false, flag: HEARTBEAT_FLAG, connection: "disabled" },
     routes: {
       chat: true,

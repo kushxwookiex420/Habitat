@@ -123,7 +123,15 @@ export function registerAxGateway(app, {
     return res.status(status).json(payload);
   }
 
-  function rateLimited(clientId) {
+  async function rateLimited(clientId) {
+    // Prefer the shared counter: with more than one gateway instance, a process-local window lets each
+    // instance spend the full budget. Fall back to memory only when 0014 is absent.
+    if (repository && typeof repository.consumeRateLimit === "function") {
+      try {
+        const shared = await repository.consumeRateLimit({ clientId, windowMs: rateLimit.windowMs, max: rateLimit.max, at: now() });
+        if (shared.shared) return !shared.ok;
+      } catch { /* fall through to the in-process window */ }
+    }
     const at = now();
     const current = windows.get(clientId);
     if (!current || current.resetAt <= at) {
@@ -147,7 +155,7 @@ export function registerAxGateway(app, {
     if (!safeEqualHex(client.tokenHash, hashToken(match[2]))) return { ok: false, response: fail(res, req, 401, "gateway_token_invalid") };
     if (client.revokedAt) return { ok: false, response: fail(res, req, 401, "gateway_client_revoked") };
     if (client.expiresAt && Date.parse(client.expiresAt) <= now()) return { ok: false, response: fail(res, req, 401, "gateway_client_expired") };
-    if (rateLimited(client.id)) return { ok: false, response: fail(res, req, 429, "gateway_rate_limited") };
+    if (await rateLimited(client.id)) return { ok: false, response: fail(res, req, 429, "gateway_rate_limited") };
     if (scope && !client.scopes.includes(scope)) return { ok: false, response: fail(res, req, 403, "gateway_scope_required", { required: scope, granted: client.scopes }) };
 
     req.axClient = client;
@@ -304,44 +312,63 @@ export function registerAxGateway(app, {
 }
 
 /** Minimal, real OpenAPI 3.1 description that ChatGPT Actions can import. */
+const ERROR_SCHEMA = { type: "object", required: ["ok", "code"], properties: { ok: { type: "boolean" }, code: { type: "string" }, requestId: { type: ["string", "null"] } } };
+const MISSION_SUBMISSION_SCHEMA = { type: "object", required: ["objective", "acceptanceCriteria"], additionalProperties: false, properties: { project: { type: "string" }, objective: { type: "string", maxLength: 2000 }, acceptanceCriteria: { type: "array", minItems: 1, items: { type: "string" } }, requirements: { type: "array", items: { type: "string" } }, constraints: { type: "array", items: { type: "string" } }, risks: { type: "array", items: { type: "string" } }, tasks: { type: "array", items: { type: "object" } } } };
+const OK_ENVELOPE = { type: "object", required: ["ok"], properties: { ok: { type: "boolean" }, requestId: { type: "string" } } };
+
+function jsonResponse(description, schema, extra = {}) {
+  return { description, content: { "application/json": { schema: schema || { ...OK_ENVELOPE, additionalProperties: true } } }, ...extra };
+}
+
+function errorResponses(statuses = {}) {
+  const base = { 400: "Bad request", 401: "Unauthorized", 403: "Scope or attestation refused", 409: "Replay or conflict", 429: "Rate limited", 503: "Disabled or storage unavailable" };
+  return Object.fromEntries(Object.keys(statuses).map(code => [code, jsonResponse(base[code] || "Error", ERROR_SCHEMA)]));
+}
+
 export const OPENAPI = Object.freeze({
   openapi: "3.1.0",
-  info: { title: "Ax ↔ Habitat Gateway", version: "1.0.0", description: "Scoped, authenticated access to Habitat: status, missions, approvals and recovery. Disabled unless HABITAT_GATEWAY_ENABLED=true." },
-  servers: [{ url: "/" }],
+  info: {
+    title: "Ax ↔ Habitat Gateway",
+    version: "1.0.0",
+    summary: "Scoped, authenticated access to Habitat.",
+    description: "Read status, mission results and heartbeat events; submit missions, decide approvals with an owner attestation, and run bounded recovery. Disabled unless HABITAT_GATEWAY_ENABLED=true. Every POST requires x-ax-timestamp and x-ax-nonce. A 202 means received, not executed; a completed mission is verified only when its detail reports verification evidence."
+  },
+  servers: [{ url: "/", description: "Set this to the public HTTPS origin of the Habitat gateway before importing into ChatGPT." }],
+  tags: [{ name: "status" }, { name: "missions" }, { name: "heartbeat" }, { name: "audit" }],
   components: {
-    securitySchemes: { bearerAuth: { type: "http", scheme: "bearer", bearerFormat: "axg_<client>_<secret>" } },
+    securitySchemes: { bearerAuth: { type: "http", scheme: "bearer", bearerFormat: "axg_<client>_<secret>", description: "Dedicated integration token, shown once, stored hashed, revocable." } },
     parameters: {
-      nonce: { name: "x-ax-nonce", in: "header", required: true, schema: { type: "string" } },
-      timestamp: { name: "x-ax-timestamp", in: "header", required: true, schema: { type: "integer" } },
-      idempotency: { name: "Idempotency-Key", in: "header", required: false, schema: { type: "string" } }
-    }
+      nonce: { name: "x-ax-nonce", in: "header", required: true, description: "16-128 chars, single use within the timestamp window.", schema: { type: "string", pattern: "^[A-Za-z0-9_-]{16,128}$" } },
+      timestamp: { name: "x-ax-timestamp", in: "header", required: true, description: "Epoch milliseconds, within five minutes.", schema: { type: "integer" } },
+      idempotency: { name: "Idempotency-Key", in: "header", required: false, description: "Same key returns the same mission; duplicate:true.", schema: { type: "string" } },
+      missionId: { name: "id", in: "path", required: true, schema: { type: "string" } }
+    },
+    schemas: { Error: ERROR_SCHEMA, MissionSubmission: MISSION_SUBMISSION_SCHEMA, OkEnvelope: OK_ENVELOPE }
   },
   security: [{ bearerAuth: [] }],
   paths: {
-    "/ax/v1/status": { get: { operationId: "getStatus", summary: "Habitat status (identity, workforce, missions, storage)", responses: { 200: { description: "Status" }, 401: { description: "Unauthorized" } } } },
+    "/ax/v1/status": { get: { tags: ["status"], operationId: "getStatus", summary: "Habitat status (identity, workforce, missions, storage, heartbeat)", responses: { 200: jsonResponse("Status", { ...OK_ENVELOPE, additionalProperties: true }), ...errorResponses({ 401: 1, 429: 1, 503: 1 }) } } },
     "/ax/v1/missions": {
-      get: { operationId: "listMissions", summary: "List missions", responses: { 200: { description: "Missions" } } },
+      get: { tags: ["missions"], operationId: "listMissions", summary: "List missions", parameters: [{ name: "status", in: "query", required: false, schema: { type: "string" } }, { name: "limit", in: "query", required: false, schema: { type: "integer", minimum: 1, maximum: 50 } }], responses: { 200: jsonResponse("Missions", { ...OK_ENVELOPE, properties: { ...OK_ENVELOPE.properties, missions: { type: "array", items: { type: "object" } }, count: { type: "integer" } } }), ...errorResponses({ 401: 1, 429: 1, 503: 1 }) } },
       post: {
-        operationId: "submitMission",
-        summary: "Submit a mission",
+        tags: ["missions"], operationId: "submitMission", summary: "Submit a mission",
         parameters: [{ $ref: "#/components/parameters/nonce" }, { $ref: "#/components/parameters/timestamp" }, { $ref: "#/components/parameters/idempotency" }],
-        requestBody: { required: true, content: { "application/json": { schema: { type: "object", required: ["objective", "acceptanceCriteria"], properties: { objective: { type: "string" }, acceptanceCriteria: { type: "array", items: { type: "string" } }, requirements: { type: "array", items: { type: "string" } }, constraints: { type: "array", items: { type: "string" } }, risks: { type: "array", items: { type: "string" } }, tasks: { type: "array", items: { type: "object" } } } } } } },
-        responses: { 202: { description: "Accepted (received, not yet executed)" }, 409: { description: "Replay" } }
+        requestBody: { required: true, content: { "application/json": { schema: { $ref: "#/components/schemas/MissionSubmission" } } } },
+        responses: { 202: jsonResponse("Accepted: received, not yet executed", { ...OK_ENVELOPE, properties: { ...OK_ENVELOPE.properties, missionId: { type: "string" }, status: { type: "string" }, duplicate: { type: "boolean" }, delivery: { type: "object", properties: { received: { type: "boolean" }, executed: { type: "boolean" }, verified: { type: "boolean" } } } } }), ...errorResponses({ 400: 1, 401: 1, 403: 1, 409: 1, 429: 1, 503: 1 }) }
       }
     },
-    "/ax/v1/missions/{id}": { get: { operationId: "getMission", summary: "Mission detail with evidence", parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }], responses: { 200: { description: "Mission" }, 404: { description: "Not found" } } } },
+    "/ax/v1/missions/{id}": { get: { tags: ["missions"], operationId: "getMission", summary: "Mission detail with evidence", parameters: [{ $ref: "#/components/parameters/missionId" }], responses: { 200: jsonResponse("Mission", { ...OK_ENVELOPE, additionalProperties: true }), ...errorResponses({ 401: 1, 404: 1, 429: 1, 503: 1 }) } } },
     "/ax/v1/missions/{id}/decision": {
       post: {
-        operationId: "decideMission",
-        summary: "Approve or reject a pending mission (requires owner attestation)",
-        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }, { $ref: "#/components/parameters/nonce" }, { $ref: "#/components/parameters/timestamp" }],
+        tags: ["missions"], operationId: "decideMission", summary: "Approve or reject a pending mission (owner attestation required)",
+        parameters: [{ $ref: "#/components/parameters/missionId" }, { $ref: "#/components/parameters/nonce" }, { $ref: "#/components/parameters/timestamp" }],
         requestBody: { required: true, content: { "application/json": { schema: { type: "object", required: ["decision", "attestation"], properties: { decision: { type: "string", enum: ["approve", "reject"] }, attestation: { type: "object" }, reason: { type: "string" } } } } } },
-        responses: { 200: { description: "Decided" }, 403: { description: "Attestation rejected" } }
+        responses: { 200: jsonResponse("Decided", { ...OK_ENVELOPE, additionalProperties: true }), ...errorResponses({ 400: 1, 401: 1, 403: 1, 404: 1, 409: 1, 429: 1, 503: 1 }) }
       }
     },
-    "/ax/v1/heartbeat": { get: { operationId: "getHeartbeat", summary: "Reconnect trigger with current status, missions, pending work and queued events", responses: { 200: { description: "Reconnect payload" }, 401: { description: "Unauthorized" }, 503: { description: "Heartbeat not attached" } } } },
-    "/ax/v1/heartbeat/ack": { post: { operationId: "acknowledgeHeartbeatEvents", summary: "Acknowledge delivered events", parameters: [{ $ref: "#/components/parameters/nonce" }, { $ref: "#/components/parameters/timestamp" }], requestBody: { required: true, content: { "application/json": { schema: { type: "object", required: ["eventIds"], properties: { eventIds: { type: "array", items: { type: "string" } } } } } } }, responses: { 200: { description: "Acknowledged" } } } },
-    "/ax/v1/recover": { post: { operationId: "recoverMissions", summary: "Bounded mission recovery", parameters: [{ $ref: "#/components/parameters/nonce" }, { $ref: "#/components/parameters/timestamp" }], responses: { 200: { description: "Recovered" } } } },
-    "/ax/v1/audit": { get: { operationId: "gatewayAudit", summary: "Recent gateway requests", responses: { 200: { description: "Audit" } } } }
+    "/ax/v1/heartbeat": { get: { tags: ["heartbeat"], operationId: "getHeartbeat", summary: "Reconnect trigger with current status, missions, pending work and queued events", responses: { 200: jsonResponse("Reconnect payload", { ...OK_ENVELOPE, properties: { ...OK_ENVELOPE.properties, trigger: { type: "string" }, generatedAt: { type: "string" }, connection: { type: "string" }, missions: { type: "object" }, queued: { type: "array", items: { type: "object" } }, delivery: { type: "object" } } }), ...errorResponses({ 401: 1, 429: 1, 503: 1 }) } } },
+    "/ax/v1/heartbeat/ack": { post: { tags: ["heartbeat"], operationId: "acknowledgeHeartbeatEvents", summary: "Acknowledge delivered events", parameters: [{ $ref: "#/components/parameters/nonce" }, { $ref: "#/components/parameters/timestamp" }], requestBody: { required: true, content: { "application/json": { schema: { type: "object", required: ["eventIds"], properties: { eventIds: { type: "array", minItems: 1, maxItems: 100, items: { type: "string" } } } } } } }, responses: { 200: jsonResponse("Acknowledged", { ...OK_ENVELOPE, properties: { ...OK_ENVELOPE.properties, acknowledged: { type: "integer" }, duplicate: { type: "boolean" } } }), ...errorResponses({ 400: 1, 401: 1, 403: 1, 429: 1, 503: 1 }) } } },
+    "/ax/v1/recover": { post: { tags: ["missions"], operationId: "recoverMissions", summary: "Bounded mission recovery (never approves or deploys)", parameters: [{ $ref: "#/components/parameters/nonce" }, { $ref: "#/components/parameters/timestamp" }], responses: { 200: jsonResponse("Recovered", { ...OK_ENVELOPE, additionalProperties: true }), ...errorResponses({ 400: 1, 401: 1, 403: 1, 429: 1, 503: 1 }) } } },
+    "/ax/v1/audit": { get: { tags: ["audit"], operationId: "gatewayAudit", summary: "Recent gateway requests", responses: { 200: jsonResponse("Audit", { ...OK_ENVELOPE, properties: { ...OK_ENVELOPE.properties, entries: { type: "array", items: { type: "object" } } } }), ...errorResponses({ 401: 1, 429: 1, 503: 1 }) } } }
   }
 });

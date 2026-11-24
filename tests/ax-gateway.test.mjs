@@ -5,6 +5,7 @@ import express from "express";
 import { createWorkforceRepository } from "../d1-workforce-repository.mjs";
 import { createMissionRepository } from "../d1-mission-repository.mjs";
 import { createGatewayRepository } from "../d1-gateway-repository.mjs";
+import { runGatewaySmoke } from "../scripts/ax-gateway-smoke.mjs";
 import { createDurableWorkforce } from "../ax-durable-workforce.mjs";
 import { createMissionRuntime } from "../ax-mission-runtime.mjs";
 import { createOwnerAttestation } from "../ax-owner-attestation.mjs";
@@ -358,6 +359,35 @@ test("heartbeat acknowledgement needs its own scope and is idempotent", async ()
   });
   assert.equal(second.status, 200);
   assert.equal((await second.json()).duplicate, true);
+  h.server.close();
+  h.db.close();
+});
+
+test("the acceptance runner performs the ChatGPT sequence end to end over HTTP", async () => {
+  const h = await harness();
+  const issued = await client(h);
+  const result = await runGatewaySmoke({ baseUrl: h.base, token: issued.token, now: () => NOW, pollDelayMs: 5, pollAttempts: 10 });
+  assert.equal(result.ok, true, JSON.stringify(result.steps));
+  assert.equal(result.triggerSeen, true);
+  assert.equal(result.missionStatus, "completed");
+  assert.equal(result.verified, true);
+  assert.ok(result.followUpMissionId);
+  assert.equal(result.steps.filter(step => !step.ok).length, 0);
+  h.server.close();
+  h.db.close();
+});
+
+test("rate limiting is shared across gateway repository instances on one database", async () => {
+  const h = await harness();
+  const at = NOW;
+  const repoA = createGatewayRepository({ query: h.query, now: () => new Date(at).toISOString() });
+  const repoB = createGatewayRepository({ query: h.query, now: () => new Date(at).toISOString() });
+  assert.equal((await repoA.consumeRateLimit({ clientId: "shared-client", windowMs: 60_000, max: 2, at })).ok, true);
+  assert.equal((await repoB.consumeRateLimit({ clientId: "shared-client", windowMs: 60_000, max: 2, at })).ok, true);
+  const third = await repoB.consumeRateLimit({ clientId: "shared-client", windowMs: 60_000, max: 2, at });
+  assert.equal(third.ok, false);
+  assert.equal(third.shared, true);
+  assert.equal(third.count, 3);
   h.server.close();
   h.db.close();
 });

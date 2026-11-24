@@ -34,8 +34,9 @@ caller cannot mistake acceptance for completion.
   a memory cache.
 - `Idempotency-Key` on mission submission is passed to the mission engine, which derives the mission id
   from it; a replay returns 202 with `duplicate: true` and the original mission id.
-- Rate limiting is per client and in-memory (`rateLimit` option, default 60/min). **Single-instance
-  only** — with several replicas each has its own window. Documented, not hidden.
+- Rate limiting is per client and shared through D1 once migration 0014 is applied
+  (`habitat_ax_gateway_rate_limits`), so replicas enforce one combined window. Without 0014 it falls back
+  to an in-memory window and logs the missing schema; the limit is a safety valve, not billing.
 - No anonymous fallback, no IP trust, no credential in any response.
 
 ## Permission matrix
@@ -99,6 +100,7 @@ clients, per-client rate limiting, signed approval vs self-issued approval, and 
 - No live ChatGPT request has been made from this environment; there is no public staging origin and no
   ChatGPT account access here. That end-to-end step remains open.
 - No OAuth, no per-user sign-in; one token per integration client.
-- Rate limiting is per process.
+- Rate limiting is shared only when 0014 is applied; otherwise per process.
+- No real ChatGPT import or request has been made; see `docs/CHATGPT_INTEGRATION_RUNBOOK.md`.
 - The gateway can submit and inspect missions, but mission execution still needs an enabled mission
   runtime with a workforce and an executor; none is activated.

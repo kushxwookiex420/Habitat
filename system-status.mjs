@@ -207,7 +207,8 @@ export function buildSystemStatus({
   identity = null,
   missions = null,
   gateway = null,
-  heartbeat = null
+  heartbeat = null,
+  ownerAuthentication = null
 } = {}) {
   const items = classifyWorkers({ registry, tasks, now });
   const counts = summarizeWorkerCounts(items);
@@ -315,6 +316,18 @@ export function buildSystemStatus({
         detail: heartbeat && heartbeat.enabled !== false
           ? "Habitat heartbeat is running; the integration has been seen " + (heartbeat.lastSeenAt || "never") + "."
           : "Connection monitor is disabled (HABITAT_HEARTBEAT_ENABLED is not \"true\")."
+      },
+      ownerAuthentication: {
+        state: ownerAuthentication?.verifierConfigured ? (ownerAuthentication.enforce ? "enforced" : "configured_optional") : "not_configured",
+        verifierConfigured: ownerAuthentication?.verifierConfigured === true,
+        enforce: ownerAuthentication?.enforce === true,
+        policy: ownerAuthentication?.policy || "optional",
+        activeKeyId: ownerAuthentication?.activeKeyId || null,
+        detail: ownerAuthentication?.verifierConfigured
+          ? ownerAuthentication.enforce
+            ? "Owner attestation is required for owner writes, directives and approvals."
+            : "A verifier is configured, supplied attestations are verified, but unsigned route-authenticated owner writes remain allowed."
+          : "No owner attestation key is configured; protected owner actions that need it are refused."
       }
     },
     requiredConfiguration: {

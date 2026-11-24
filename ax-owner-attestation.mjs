@@ -156,8 +156,36 @@ export function createOwnerAttestation({
  * Build a verifier from the environment. Returns null when no key is configured, which callers must
  * treat as "owner writes cannot be authenticated" rather than "owner writes are allowed".
  */
+export const OWNER_ATTESTATION_KEYS_ENV = "HABITAT_OWNER_ATTESTATION_KEYS";
+export const OWNER_ATTESTATION_REVOKED_ENV = "HABITAT_OWNER_ATTESTATION_REVOKED";
+
+/**
+ * Build a verifier from the environment. A single key is the simple form; a JSON keyring enables
+ * rotation without invalidating data signed by a retired key, and a comma-separated list revokes key
+ * ids. A malformed keyring yields no verifier rather than silently falling back to the single key.
+ */
 export function ownerVerifierFromEnv({ env = process.env, now, ttlMs } = {}) {
   const secret = String(env?.[OWNER_ATTESTATION_KEY_ENV] || "").trim();
-  if (secret.length < 32) return null;
-  return createOwnerAttestation({ secret, now, ttlMs });
+  const rawKeys = String(env?.[OWNER_ATTESTATION_KEYS_ENV] || "").trim();
+  const revokedKeyIds = String(env?.[OWNER_ATTESTATION_REVOKED_ENV] || "")
+    .split(",")
+    .map(item => item.trim())
+    .filter(Boolean);
+
+  let keys = null;
+  if (rawKeys) {
+    try {
+      const parsed = JSON.parse(rawKeys);
+      if (!Array.isArray(parsed)) return null;
+      keys = parsed
+        .filter(entry => entry && String(entry.keyId || "").trim() && String(entry.secret || "").trim().length >= 32)
+        .map(entry => ({ keyId: String(entry.keyId).trim(), secret: String(entry.secret), status: entry.status === "retired" ? "retired" : "active" }));
+      if (keys.length === 0 || keys.filter(entry => entry.status === "active").length !== 1) return null;
+    } catch {
+      return null;
+    }
+  }
+
+  if (!keys && secret.length < 32) return null;
+  return createOwnerAttestation({ secret, keys, revokedKeyIds, now, ttlMs });
 }

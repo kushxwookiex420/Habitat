@@ -13,11 +13,15 @@ export const GATEWAY_TABLE_NAMES = Object.freeze([
   "habitat_ax_gateway_audit"
 ]);
 
+export const GATEWAY_RATE_TABLE = "habitat_ax_gateway_rate_limits";
+export const GATEWAY_RATE_MIGRATION = "0014_ax_gateway_rate_limits";
+
 export const GATEWAY_DDL = Object.freeze([
   "CREATE TABLE IF NOT EXISTS habitat_ax_gateway_clients (id TEXT PRIMARY KEY NOT NULL, label TEXT NOT NULL, token_hash TEXT NOT NULL, scopes TEXT NOT NULL, created_at TEXT NOT NULL, expires_at TEXT, revoked_at TEXT, last_used_at TEXT)",
   "CREATE UNIQUE INDEX IF NOT EXISTS habitat_ax_gateway_clients_token ON habitat_ax_gateway_clients(token_hash)",
   "CREATE TABLE IF NOT EXISTS habitat_ax_gateway_nonces (client_id TEXT NOT NULL, nonce TEXT NOT NULL, expires_at TEXT NOT NULL, PRIMARY KEY (client_id, nonce))",
-  "CREATE TABLE IF NOT EXISTS habitat_ax_gateway_audit (seq INTEGER PRIMARY KEY AUTOINCREMENT, client_id TEXT, at TEXT NOT NULL, method TEXT NOT NULL, path TEXT NOT NULL, status INTEGER NOT NULL, outcome TEXT NOT NULL, detail_json TEXT NOT NULL)"
+  "CREATE TABLE IF NOT EXISTS habitat_ax_gateway_audit (seq INTEGER PRIMARY KEY AUTOINCREMENT, client_id TEXT, at TEXT NOT NULL, method TEXT NOT NULL, path TEXT NOT NULL, status INTEGER NOT NULL, outcome TEXT NOT NULL, detail_json TEXT NOT NULL)",
+  "CREATE TABLE IF NOT EXISTS habitat_ax_gateway_rate_limits (client_id TEXT NOT NULL, window_start INTEGER NOT NULL, count INTEGER NOT NULL, PRIMARY KEY (client_id, window_start))"
 ]);
 
 function parseClient(row) {
@@ -87,6 +91,31 @@ export function createGatewayRepository({ query, now = () => new Date().toISOStr
       if (!(rows || []).length) return { ok: false, code: "client_not_found_or_already_revoked" };
       await this.appendAudit({ clientId: id, method: "ADMIN", path: "client:revoke", status: 200, outcome: "revoked", detail: { reason } });
       return { ok: true };
+    },
+
+    /**
+     * Shared, database-backed fixed-window rate limiting. Atomic increment means two gateway instances
+     * on the same database enforce one combined budget instead of one budget each.
+     */
+    async consumeRateLimit({ clientId, windowMs = 60_000, max = 60, at = Date.now() } = {}) {
+      const windowStart = Math.floor(Number(at) / Math.max(1000, Number(windowMs) || 60_000));
+      try {
+        await query(
+          "INSERT INTO habitat_ax_gateway_rate_limits (client_id, window_start, count) VALUES (?, ?, 1) ON CONFLICT(client_id, window_start) DO UPDATE SET count = count + 1",
+          [String(clientId), windowStart]
+        );
+        const rows = await query("SELECT count FROM habitat_ax_gateway_rate_limits WHERE client_id = ? AND window_start = ?", [String(clientId), windowStart]);
+        const count = Number(rows?.[0]?.count || 0);
+        return { ok: count <= Number(max), shared: true, count, windowStart };
+      } catch (error) {
+        // A deployment without migration 0014 keeps the in-memory limiter instead of refusing all traffic.
+        return { ok: true, shared: false, error: String(error?.message || error).slice(0, 160) };
+      }
+    },
+
+    async verifyRateLimitSchema() {
+      const rows = await query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?", [GATEWAY_RATE_TABLE]);
+      return { ok: (rows || []).length === 1, missing: (rows || []).length === 1 ? [] : [GATEWAY_RATE_TABLE] };
     },
 
     async touchClient(id, at = now()) {
