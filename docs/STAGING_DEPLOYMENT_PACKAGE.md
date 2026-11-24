@@ -1,8 +1,10 @@
 # Habitat staging deployment package
 
 Everything needed to stand up an isolated staging service for the first real ChatGPT integration.
-**Nothing here has been executed.** Production is untouched, no paid resource is created, and all
-runtimes remain disabled until explicitly enabled.
+Production is untouched, no paid resource is created, and all runtimes remain disabled until explicitly
+enabled. Migrations 0010–0016 **have** been applied to staging and real-D1 acceptance passed; see
+`docs/STAGING_EVIDENCE.md`. The application deployment and real ChatGPT registration are still pending —
+follow `docs/STAGING_OWNER_CHECKLIST.md`.
 
 ## 1. Environment variables
 
