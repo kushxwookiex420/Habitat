@@ -8,9 +8,11 @@ from the development workspace: there is no `adb`, no USB device and no owner ke
 | Field | Value |
 | --- | --- |
 | Artifact | `habitat-apk/debug/app-debug.apk` from the **Android APK** workflow |
-| Build run | `45291043269` (`workflow_dispatch`, branch `nexus/ax-capability-network-p0-p1`) |
+| Build run | `45295570521` (`workflow_dispatch`, branch `staging/integration`, commit `50e9c74`) |
 | Size | 930,401 bytes |
-| SHA-256 | `aed019782197895ee363baa477a2d0d9fdb403e29957207dbe21589a3e6ac6ff` |
+| SHA-256 | `c39463da90a073e001855bb6ab54e83648bd5afca49ecdf3490f8e84f0135113` |
+| Package | `com.habitat.axbridge`, `versionName` 0.8.6, `minSdk` 26, `targetSdk` 35 (S26 Ultra on API 36 is in range) |
+| Earlier run | `45291043269`, same size, SHA-256 `aed01978…ac6ff` — the two builds are **not** byte-identical |
 | Signing | **debug key only** — not the production identity |
 | Contents verified | `AndroidManifest.xml`, `classes.dex`, `classes2.dex`, `classes3.dex`, `res/xml/habitat_accessibility_service.xml` |
 
@@ -18,8 +20,13 @@ Download it from the run's artifacts, then verify before installing:
 
 ```sh
 sha256sum app-debug.apk
-# must print aed019782197895ee363baa477a2d0d9fdb403e29957207dbe21589a3e6ac6ff
+# run 45295570521 must print c39463da90a073e001855bb6ab54e83648bd5afca49ecdf3490f8e84f0135113
 ```
+
+Two debug builds of the same commit produce the same size but different digests (run `45291043269`
+and `45295570521` both report 930,401 bytes with different hashes), so a debug APK is not
+byte-reproducible. Verify the digest **of the run you downloaded**; do not treat a stored digest as
+an identity check across builds. A reproducible identity needs the release signing step below.
 
 A debug-signed APK is installed by sideload and is **not** upgrade-compatible with a release-signed
 build. If the phone already has a release build, uninstalling it first is required, which also clears
