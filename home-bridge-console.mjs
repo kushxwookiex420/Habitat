@@ -12,9 +12,19 @@
 //   GET  /bridge/console/file        one shared file
 //   POST /bridge/console/send        queue an allowlisted phone command (ax credential)
 //
-// Operator authentication is HABITAT_AX_BRIDGE_TOKEN, accepted as a Bearer header or exchanged
-// for a session cookie so a browser never stores a credential in JavaScript. The relay's own
-// role tokens (ax/buff) stay on the server and are never part of a response body.
+// Two credentials can open the console, and both are exchanged for an HttpOnly session cookie so a
+// browser never stores either in JavaScript:
+//
+//   operator token   HABITAT_OPERATOR_TOKEN, or the legacy HABITAT_AX_BRIDGE_TOKEN
+//   paired phone     the device id + device token the phone already polls with (verified against the
+//                    same device store as /ax/device/*, so an existing pairing is enough)
+//
+// The second path exists because a staging deployment can be fully paired without ever setting the
+// legacy bridge token: the phone authenticates per-device, and requiring a machine token on top of
+// that made the console answer "not configured" forever. Device login grants nothing the paired
+// owner does not already have, and it mints nothing: it verifies an existing credential.
+//
+// The relay's own role tokens (ax/buff) stay on the server and are never part of a response body.
 
 import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { createHomeBridgeClient } from "./home-bridge-client.mjs";
@@ -63,6 +73,8 @@ export function registerHomeBridgeConsole(app, { env = process.env, fetchImpl = 
   // that authenticates machine callers is only a compatibility fallback, which keeps an existing
   // deployment working until HABITAT_OPERATOR_TOKEN is configured.
   const operatorToken = String(env.HABITAT_OPERATOR_TOKEN || env.HABITAT_AX_BRIDGE_TOKEN || "").trim();
+  // A device store that can verify a token is what makes the existing pairing usable for login.
+  const deviceLoginAvailable = Boolean(deviceRepository && typeof deviceRepository.verifyDeviceToken === "function");
   const githubRepo = String(env.HABITAT_GITHUB_REPO || "kushxwookiex420/home-launcher").trim();
   const githubToken = String(env.GITHUB_TOKEN || "").trim();
   const sessions = new Map();
@@ -83,11 +95,29 @@ export function registerHomeBridgeConsole(app, { env = process.env, fetchImpl = 
     return id;
   }
 
+  /**
+   * How this deployment can be unlocked. Reported, never guessed: an operator who sees "disabled" knows
+   * the service has neither a token nor a usable pairing store, which is a configuration fact rather
+   * than a wrong password.
+   */
+  function loginMode() {
+    if (operatorToken && deviceLoginAvailable) return "operator_or_device";
+    if (operatorToken) return "operator";
+    if (deviceLoginAvailable) return "device";
+    return "disabled";
+  }
+
+  function loginDisabled(res) {
+    return res.status(503).json({
+      ok: false,
+      error: "Console access is not configured: set HABITAT_OPERATOR_TOKEN (or HABITAT_AX_BRIDGE_TOKEN), or attach the phone pairing store so a paired device can unlock it."
+    });
+  }
+
   function requireOperator(req, res, next) {
-    if (!operatorToken) {
-      return res.status(503).json({ ok: false, error: "HABITAT_OPERATOR_TOKEN (or HABITAT_AX_BRIDGE_TOKEN) is not configured; console access is disabled." });
-    }
-    if (safeEqual(bearer(req), operatorToken) || operatorFromSession(req)) return next();
+    if (loginMode() === "disabled") return loginDisabled(res);
+    if (operatorToken && safeEqual(bearer(req), operatorToken)) return next();
+    if (operatorFromSession(req)) return next();
     return res.status(401).json({ ok: false, error: "Operator authentication required." });
   }
 
@@ -98,20 +128,34 @@ export function registerHomeBridgeConsole(app, { env = process.env, fetchImpl = 
     );
   }
 
-  app.post("/bridge/console/login", (req, res) => {
-    if (!operatorToken) {
-      return res.status(503).json({ ok: false, error: "HABITAT_OPERATOR_TOKEN (or HABITAT_AX_BRIDGE_TOKEN) is not configured; console access is disabled." });
-    }
+  app.post("/bridge/console/login", async (req, res) => {
+    if (loginMode() === "disabled") return loginDisabled(res);
     const supplied = String(req.body?.token || bearer(req) || "").trim();
-    if (!safeEqual(supplied, operatorToken)) {
-      return res.status(401).json({ ok: false, error: "Invalid operator token." });
+    const deviceId = String(req.body?.deviceId || "").trim();
+    const deviceToken = String(req.body?.deviceToken || "").trim();
+
+    let authenticated = Boolean(operatorToken) && safeEqual(supplied, operatorToken);
+    let mode = authenticated ? "operator" : null;
+    if (!authenticated && deviceLoginAvailable && deviceId && (deviceToken || supplied)) {
+      try {
+        // Same verification the phone's own /ax/device/* requests use. Nothing is created, rotated or
+        // re-paired here; an unknown or revoked device simply fails.
+        authenticated = (await deviceRepository.verifyDeviceToken(String(deviceToken || supplied), deviceId)) === true;
+        if (authenticated) mode = "device";
+      } catch {
+        authenticated = false;
+      }
     }
+    if (!authenticated) {
+      return res.status(401).json({ ok: false, error: "Invalid operator token or paired device credential." });
+    }
+
     const now = Date.now();
     pruneSessions(now);
     const id = sessionId();
     sessions.set(id, now + SESSION_TTL_MS);
     setSessionCookie(res, id);
-    return res.json({ ok: true, expiresInSeconds: Math.floor(SESSION_TTL_MS / 1000) });
+    return res.json({ ok: true, mode, expiresInSeconds: Math.floor(SESSION_TTL_MS / 1000) });
   });
 
   app.post("/bridge/console/logout", (req, res) => {
@@ -122,8 +166,16 @@ export function registerHomeBridgeConsole(app, { env = process.env, fetchImpl = 
   });
 
   app.get("/bridge/console/session", (req, res) => {
-    const active = Boolean(operatorFromSession(req)) || (operatorToken && safeEqual(bearer(req), operatorToken));
-    return res.json({ ok: true, authenticated: Boolean(active), relay: client.roles });
+    const active = Boolean(operatorFromSession(req)) || Boolean(operatorToken && safeEqual(bearer(req), operatorToken));
+    return res.json({
+      ok: true,
+      authenticated: Boolean(active),
+      // Which unlock paths exist — booleans only, never a value or a hint about one.
+      login: loginMode(),
+      operatorConfigured: Boolean(operatorToken),
+      deviceLoginAvailable,
+      relay: client.roles
+    });
   });
 
   // ---- read models -------------------------------------------------------
@@ -573,8 +625,15 @@ footer{color:#527080;font-size:10px;letter-spacing:.1em;text-align:center;paddin
 
 <section id="login-view" class="panel login">
   <h2>OPERATOR ACCESS <span>session</span></h2>
-  <p class="note">Paste the Habitat operator token (HABITAT_OPERATOR_TOKEN). It is sent once, exchanged for an HttpOnly session, and never stored in this page.</p>
-  <input id="token" type="password" autocomplete="off" placeholder="operator token" aria-label="Operator token">
+  <div id="operator-field">
+    <p class="note">Operator token (HABITAT_OPERATOR_TOKEN or the legacy HABITAT_AX_BRIDGE_TOKEN). It is sent once, exchanged for an HttpOnly session, and never stored in this page.</p>
+    <input id="token" type="password" autocomplete="off" placeholder="operator token" aria-label="Operator token">
+  </div>
+  <div id="device-fields" class="hidden">
+    <p class="note">Or unlock with the phone that is already paired: its device id and device token, the same credential the Control Center keeps under Memory → Owner controls. No new pairing code is needed and nothing is issued.</p>
+    <input id="device-id" autocomplete="off" spellcheck="false" placeholder="paired device id" aria-label="Paired device id">
+    <input id="device-token" type="password" autocomplete="off" spellcheck="false" placeholder="device token" aria-label="Device token">
+  </div>
   <div class="grid2"><button id="login">UNLOCK</button><button class="ghost" id="probe">CHECK RELAY</button></div>
   <div class="err" id="login-err"></div>
 </section>
@@ -597,7 +656,7 @@ footer{color:#527080;font-size:10px;letter-spacing:.1em;text-align:center;paddin
       <h2>AX · CORE <span id="ax-status">—</span></h2>
       <div class="row"><span class="k">device bridge</span><span class="v" id="ax-bridge">—</span></div>
       <div class="row"><span class="k">home relay</span><span class="v" id="ax-relay">—</span></div>
-      <p class="note">AX credential is this server's device bridge token, the one that authenticates the phone. HOME RELAY is the separate legacy relay; its own ax/buff role credentials are reported in CLOUD.</p>
+      <p class="note">Machine callers use this server's Ax bridge token; a paired phone uses its own per-device token and does not need that bridge token to exist. HOME RELAY is the separate legacy relay; its own ax/buff role credentials are reported in CLOUD.</p>
       <div class="row"><span class="k">queued</span><span class="v" id="ax-queued">—</span></div>
       <div class="row"><span class="k">working</span><span class="v" id="ax-working">—</span></div>
       <div class="row"><span class="k">done</span><span class="v" id="ax-done">—</span></div>
@@ -709,7 +768,7 @@ footer{color:#527080;font-size:10px;letter-spacing:.1em;text-align:center;paddin
     $("link-chip").className="chip "+(relayOk?"on":"");
     $("link-chip").title="home relay: "+(relay.healthDetail||(relayOk?"reachable":"unavailable"));
     text("stamp","SYNCED "+when(data.generatedAt));
-    text("ax-status","device bridge ax credential "+(bridgeAx?"present":"missing"));
+    text("ax-status",bridgeAx?"device bridge ax credential present":((bridge.perDeviceTokens===true)?"per-device phone tokens":"device bridge ax credential missing"));
     text("ax-bridge",bridge.ready?(bridge.durable?"ready · durable":"ready"):"not ready");
     text("ax-relay",relayOk?"online":("offline · "+(relay.healthDetail||"unreachable")));
     text("ax-queued",(ax.counts&&ax.counts.queued)??"—");
@@ -801,10 +860,26 @@ footer{color:#527080;font-size:10px;letter-spacing:.1em;text-align:center;paddin
   $("login").addEventListener("click",async function(){
     text("login-err","");
     try{
-      await api("/bridge/console/login",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({token:$("token").value.trim()})});
-      $("token").value="";await load();
+      var r=await api("/bridge/console/login",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({token:$("token").value.trim(),deviceId:$("device-id").value.trim(),deviceToken:$("device-token").value.trim()})});
+      $("token").value="";$("device-token").value="";text("login-err",r.mode==="device"?"unlocked by paired device":"");await load();
     }catch(e){text("login-err",e.message)}
   });
+  /**
+   * Ask the service which unlock paths exist before showing any input. An existing session skips this
+   * entirely; a deployment with no operator token and no pairing store says so instead of asking for a
+   * credential that cannot work.
+   */
+  async function describeLogin(){
+    try{
+      var s=await api("/bridge/console/session");
+      var op=s.operatorConfigured===true,dev=s.deviceLoginAvailable===true;
+      $("operator-field").classList.toggle("hidden",!op);
+      $("device-fields").classList.toggle("hidden",!dev);
+      if(!op&&!dev){$("login").disabled=true;text("login-err","Console access is not configured on this service: no operator token and no phone pairing store.")}
+      else if(!op){$("login").disabled=false}
+    }catch(e){}
+  }
+  describeLogin();
   $("probe").addEventListener("click",async function(){
     try{var s=await api("/bridge/console/session");text("login-err","home relay credentials: ax "+(s.relay.ax?"yes":"no")+", buff "+(s.relay.buff?"yes":"no"))}
     catch(e){text("login-err",e.message)}
