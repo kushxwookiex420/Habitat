@@ -313,7 +313,12 @@ test("HTTP: an approval authorises one action, and the API refuses a changed one
     rootDir: ROOT,
     artifactsDir: path.join(base, "artifacts"),
     dbPath: path.join(base, "db.sqlite"),
-    ownerVerifier: { verify: () => ({ ok: true, code: "test_attestation" }) }
+    ownerVerifier: { verify: () => ({ ok: true, code: "test_attestation" }) },
+    // Deterministic seams: this test asserts approval binding, not artifact recomputation.
+    executorOverrides: {
+      "eng.repo": async ({ task }) => ({ result: { status: "completed", evidence: ["spy:" + task.id], changedFiles: [], tests: { ran: 1, passed: 1, failed: 0 } } }),
+      "verifier.recompute": async () => ({ ok: true, evidence: ["verifier:ok"], tests: { ran: 1, passed: 1, failed: 0 } })
+    }
   });
   const provider = {
     submit: (spec) => env.pipeline.submit(spec),
